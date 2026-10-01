@@ -21,6 +21,7 @@ import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
 } from "./placement-record.js";
+import type { WorkerPlacementCancellationTarget } from "./placement-target.js";
 import type {
   WorkerEnvironmentAttachment,
   WorkerEnvironmentAttachmentRecord,
@@ -244,10 +245,6 @@ export type WorkerPlacementMoveRequest = Pick<
 
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */
 export type WorkerPlacementAuthorization = () => void;
-
-export type WorkerPlacementCancellationTarget = Readonly<
-  Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
->;
 
 /** Exact source eligibility may follow only transitions published by captured predecessors. */
 export type WorkerPlacementReclaimSourceCheck = (

@@ -157,6 +157,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
+      ownsWarmBoot: startsApplicationRouter,
       resourceBasePath,
       getModelCatalogTarget: (gatewayUrl) =>
         resolveBootstrapModelCatalogTarget(history.location(), basePath, gatewayUrl),
@@ -182,25 +183,33 @@ export function bootstrapApplication(): ApplicationRuntime {
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
-  const bootRecord = readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
-    if (startup.pendingBootstrapToken || startup.password) {
-      return null;
-    }
-    // An explicit token takes precedence over paired-device auth on the next connect.
-    return method === "token"
-      ? settings.token
-      : settings.token.trim()
-        ? null
-        : loadCurrentDeviceAuthToken(settings.gatewayUrl);
-  });
-  const warmBoot = bootRecord !== null && startsApplicationRouter && !hasPendingGateway;
-  if (warmBoot) {
+  const bootRecord =
+    startsApplicationRouter && !hasPendingGateway
+      ? readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
+          if (startup.pendingBootstrapToken || startup.password) {
+            return null;
+          }
+          if (["trusted-proxy", "tailscale", "password"].includes(method)) {
+            return settings.token.trim() ? null : "";
+          }
+          // An explicit token takes precedence over paired-device auth on the next connect.
+          return method === "token"
+            ? settings.token
+            : settings.token.trim()
+              ? null
+              : loadCurrentDeviceAuthToken(settings.gatewayUrl);
+        })
+      : null;
+  let warmBoot = bootRecord !== null && startsApplicationRouter && !hasPendingGateway;
+  const warmBootConnectionRevision = gateway.connectionRevision;
+  if (warmBoot && bootRecord) {
     prewarmBootChat(bootRecord, settings.sessionKey);
   }
-  const stopWarmBootConnection = subscribeWarmBootConnection(
-    gateway,
-    startsApplicationRouter && !hasPendingGateway ? bootRecord?.profileId : undefined,
-  );
+  const stopWarmBootConnection = startsApplicationRouter
+    ? subscribeWarmBootConnection(gateway, bootRecord, () => {
+        warmBoot = false;
+      })
+    : undefined;
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
   const parsedInitialSession = parseAgentSessionKey(settings.sessionKey);
@@ -291,7 +300,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     bootRecord,
     connectionBootstrap,
   });
-  const stopBootRecordPersistence = subscribeBootRecordPersistence({ gateway, agents, sessions });
+  const bootRecordPersistence = startsApplicationRouter
+    ? subscribeBootRecordPersistence({ gateway, agents, sessions }, bootRecord)
+    : undefined;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
@@ -488,6 +499,11 @@ export function bootstrapApplication(): ApplicationRuntime {
     gateway,
     connectionBootstrap,
     agents,
+    get offlineSessionDefaults() {
+      return warmBoot && gateway.connectionRevision === warmBootConnectionRevision
+        ? (bootRecordPersistence?.readSessionDefaults() ?? null)
+        : null;
+    },
     agentIdentity,
     agentSelection,
     settingsAgentSelection,
@@ -530,7 +546,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     context,
     router,
     documentMode,
-    warmBoot,
+    get warmBoot() {
+      return warmBoot && gateway.connectionRevision === warmBootConnectionRevision;
+    },
     focusLocation,
     get pendingGatewayConnection() {
       return pendingGatewayConnection;
@@ -644,8 +662,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     stop: () => {
       stopBrowserAuthRecovery();
       startupLifecycle.stop();
-      stopWarmBootConnection();
-      stopBootRecordPersistence();
+      stopWarmBootConnection?.();
+      bootRecordPersistence?.dispose();
       stopPostConnect();
       stopForegroundBootstrap();
       connectionBootstrap.reset();

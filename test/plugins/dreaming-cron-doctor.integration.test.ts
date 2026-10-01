@@ -3,11 +3,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import memoryCore from "../../extensions/memory-core/index.js";
+import {
+  inspectCronJobsForDoctor,
+  repairCronJobsForDoctor,
+} from "../../src/commands/doctor/cron/store-repair.js";
 import type { OpenClawConfig } from "../../src/config/types.js";
 import { CronService, type CronEvent } from "../../src/cron/service.js";
 import { createNoopLogger } from "../../src/cron/service.test-harness.js";
 import { getCronJobsStoreRevision } from "../../src/cron/store.js";
-import { inspectCronJobsForDoctor, repairCronJobsForDoctor } from "../../src/cron/store/doctor.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import * as sqliteSnapshot from "../../src/infra/sqlite-snapshot.js";
 import { createPluginDoctorStateMigrationContext } from "../../src/infra/state-migrations.plugin-doctor-context.js";

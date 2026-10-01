@@ -125,6 +125,21 @@ function readRuntimes() {
   });
 }
 
+/** Retire cached workers only after every independently admitted reader has joined. */
+export async function retireIdleOpenClawStateReadWorkers(
+  nativeSource: RetainedNativeWorkerSource,
+): Promise<boolean> {
+  const state = readRuntimes().get(nativeSource);
+  if (!state) {
+    return true;
+  }
+  if (state.operations.size > 0) {
+    return false;
+  }
+  await closeReadPool(state);
+  return true;
+}
+
 function readPool(state: ReadRuntime, admitted: boolean): ReadPool {
   // Accepted owners may still need a final read while generation admission is sealed.
   if ((state.sealed && !admitted) || state.closing) {

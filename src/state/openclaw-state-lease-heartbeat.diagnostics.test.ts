@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { LeaseHeartbeatWorkerData } from "./openclaw-state-lease-heartbeat-shared.js";

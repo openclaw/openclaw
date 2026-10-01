@@ -5,6 +5,7 @@ const HEALTH_KEYS = new Set(["intervalMs", "timeoutMs"]);
 const RECORDER_READY_KEYS = new Set(["schemaVersion", "startedAtUnixMs", "chatId"]);
 const ACTION_KEYS = {
   send: new Set(["type", "atMs", "text", "forumTopicId", "photo", "replyToPrevious", "awaitReply"]),
+  forwardBurst: new Set(["type", "atMs", "text", "photo"]),
   click: new Set(["type", "atMs", "messageText", "buttonText", "timeoutMs"]),
   restartGateway: new Set(["type", "atMs", "graceMs"]),
   patchConfig: new Set(["type", "atMs", "patch"]),
@@ -82,6 +83,14 @@ export function parseScenario(value) {
     }
     assertKnownKeys(action, allowed, label);
     const atMs = nonNegativeInteger(action.atMs, `${label}.atMs`, 0);
+    if (action.type === "forwardBurst") {
+      return {
+        type: action.type,
+        atMs,
+        text: nonEmptyString(action.text, `${label}.text`),
+        photo: nonEmptyString(action.photo, `${label}.photo`),
+      };
+    }
     if (action.type === "send" || action.type === "systemEvent") {
       // A photo send may carry an empty caption; every other send needs text.
       const photo =
@@ -236,7 +245,9 @@ export function parseScenario(value) {
   let hasSent = false;
   const replyMarkers = new Set();
   for (const action of orderedActions) {
-    if (action.type !== "send") continue;
+    if (action.type !== "send" && action.type !== "forwardBurst") {
+      continue;
+    }
     if (action.replyToPrevious && !hasSent) {
       throw new Error("replyToPrevious needs an earlier send action.");
     }

@@ -1,6 +1,10 @@
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { mutateRequesterSettleWakeBatch } from "../completion/subagent-completion-admission.store.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import {
+  mutateRequesterSettleWakeBatch,
+  settleRequesterCompletionBatch,
+} from "../completion/subagent-completion-admission.store.js";
 import type { RequesterWakeMutation } from "../completion/subagent-completion-mutation.types.js";
 import type {
   PendingRequesterSettleWakeCommit,
@@ -39,7 +43,7 @@ export const isCurrentRequesterSettleWakeBatch = (
   }
 };
 
-export function assertRequesterWakeCommitCurrent(
+function assertRequesterWakeCommitCurrent(
   context: SubagentLifecycleWakeContext,
   entries: readonly SubagentRunRecord[],
   stateContext: OpenClawStateWorkerContext,
@@ -61,30 +65,49 @@ export function assertRequesterWakeCommitCurrent(
 export async function commitRequesterSettleWakeMutation(
   context: SubagentLifecycleWakeContext,
   entries: readonly SubagentRunRecord[],
-  operation: RequesterWakeMutation,
+  operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult },
   stateContext: OpenClawStateWorkerContext,
   pending: PendingRequesterSettleWakeCommit,
 ): Promise<boolean> {
+  const visibleFinalDelivered =
+    operation.kind === "settle" &&
+    operation.outcome.delivered &&
+    operation.outcome.requesterVisibleFinalDelivered === true;
   if (
     !pending.committedWake &&
-    !isCurrentRequesterSettleWakeBatch(context, entries, pending.generation)
+    !isCurrentRequesterSettleWakeBatch(context, entries, pending.generation, visibleFinalDelivered)
   ) {
     return false;
   }
   const assertCurrent = () =>
-    assertRequesterWakeCommitCurrent(context, entries, stateContext, pending);
+    assertRequesterWakeCommitCurrent(
+      context,
+      entries,
+      stateContext,
+      pending,
+      visibleFinalDelivered,
+    );
   assertCurrent();
-  const result = await mutateRequesterSettleWakeBatch({
-    entries,
-    operation,
+  const options = {
     committed: pending.committedWake,
     context: stateContext,
     assertCurrent,
-    onCommitted: (write) => {
+    onCommitted: (write: NonNullable<PendingRequesterSettleWakeCommit["committedWake"]>) => {
       pending.committedWake = write;
     },
     onPublished: () => pending.adoptPublished(entries),
     retiredPreimages: new Set(entries.filter((entry) => pending.isPublishedRetirement(entry))),
-  });
+  };
+  const result = await (operation.kind === "settle"
+    ? settleRequesterCompletionBatch({
+        ...options,
+        entries: entries.map((subagent) => ({ subagent })),
+        outcome: operation.outcome,
+        isCurrent: () => {
+          assertCurrent();
+          return true;
+        },
+      })
+    : mutateRequesterSettleWakeBatch({ ...options, entries, operation }));
   return result.applied === true && result.publication === "published";
 }

@@ -75,14 +75,21 @@ function locationWithoutNavigationHints(location: RouteLocation): RouteLocation 
 }
 
 function configuredMainKey(context: ApplicationContext): string {
-  return resolveUiConfiguredMainKey({
-    agentsList: context.agents.state.agentsList,
-    hello: context.gateway.snapshot.hello,
-  });
+  if (!hasConfiguredMainKey(context) && context.sessions.cachedRoutingDefaults) {
+    return context.sessions.cachedRoutingDefaults.mainKey;
+  }
+  return (
+    context.offlineSessionDefaults?.mainKey ??
+    resolveUiConfiguredMainKey({
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    })
+  );
 }
 
 function hasConfiguredMainKey(context: ApplicationContext): boolean {
   return Boolean(
+    context.offlineSessionDefaults?.mainKey.trim() ||
     context.agents.state.agentsList?.mainKey?.trim() ||
     (context.gateway.snapshot.phase === "connected" && context.gateway.snapshot.hello),
   );
@@ -324,7 +331,8 @@ export async function loadChatRoute(
     throw new Error("The Gateway connection changed while resolving the session.");
   }
   const defaultsUsable =
-    hasConfiguredMainKey(context) && context.agents.state.agentsList?.scope !== "global";
+    hasConfiguredMainKey(context) &&
+    (context.offlineSessionDefaults?.scope ?? context.agents.state.agentsList?.scope) !== "global";
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
     const sessionKey = buildCatalogSessionKey(catalogKey);
@@ -509,12 +517,17 @@ export async function loadChatRoute(
     };
   }
   let localRow = cached?.row;
-  if (!cached && defaultsUsable && !preferenceDerived && !revalidation) {
+  if (!cached && !preferenceDerived && !revalidation) {
     await context.sessions.whenCachedRosterSettled();
     signal.throwIfAborted();
     // Only the pre-hello cached roster resolves a short id locally; a connected
-    // load keeps the Gateway's authoritative sessions.resolve answer.
-    if (context.sessions.state.resultCached) {
+    // load keeps the Gateway's authoritative sessions.resolve answer. Routing
+    // hints belong to the same cache lifecycle, independently of agent discovery.
+    if (
+      context.gateway.snapshot.phase !== "connected" &&
+      (defaultsUsable || context.sessions.cachedRoutingDefaults?.scope === "per-sender") &&
+      context.sessions.state.resultCached
+    ) {
       localRow = findLocalSessionReference(
         context.sessions.state.result?.sessions ?? [],
         target,

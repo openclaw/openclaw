@@ -1,8 +1,3 @@
-/**
- * Subagent run manager.
- *
- * Waits for child runs, records native terminal outcomes, and archives completed sessions.
- */
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,

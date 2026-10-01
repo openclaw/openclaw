@@ -305,6 +305,8 @@ export function subscribeForegroundChatBootstrap({
           : match.status === "success" && key && !parseCatalogSessionKey(key)
             ? resolveChatSnapshotKey(
                 {
+                  settings: gateway.connection,
+                  client: gateway.snapshot.client,
                   agentsList: agents.state.agentsList,
                   hello: gateway.snapshot.hello,
                   assistantAgentId: agentSelection.state.selectedId,

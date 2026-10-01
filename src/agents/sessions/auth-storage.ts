@@ -85,8 +85,7 @@ export { OAuthProviderConfiguredUnavailableError };
 export const AUTH_STORAGE_CREATE_DEPRECATION_CODE = "AUTH_STORAGE_CREATE_DEPRECATED" as const;
 export const FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE =
   "FILE_AUTH_STORAGE_BACKEND_DEPRECATED" as const;
-let authStorageCreateWarningEmitted = false;
-let fileAuthStorageBackendWarningEmitted = false;
+const emittedAuthStorageWarnings = new Set<string>();
 
 function emitAuthStorageDeprecationWarning(params: {
   message: string;
@@ -94,6 +93,10 @@ function emitAuthStorageDeprecationWarning(params: {
     | typeof AUTH_STORAGE_CREATE_DEPRECATION_CODE
     | typeof FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE;
 }): void {
+  if (emittedAuthStorageWarnings.has(params.code)) {
+    return;
+  }
+  emittedAuthStorageWarnings.add(params.code);
   process.emitWarning(params.message, { code: params.code, type: "DeprecationWarning" });
 }
 
@@ -330,14 +333,11 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
   private readonly agentDir: string;
 
   constructor(authPath?: string) {
-    if (!fileAuthStorageBackendWarningEmitted) {
-      fileAuthStorageBackendWarningEmitted = true;
-      emitAuthStorageDeprecationWarning({
-        code: FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE,
-        message:
-          "FileAuthStorageBackend(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
-      });
-    }
+    emitAuthStorageDeprecationWarning({
+      code: FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE,
+      message:
+        "FileAuthStorageBackend(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
+    });
     assertDeprecatedAuthStoragePathAbsent(authPath);
     this.agentDir = authPath ? dirname(authPath) : getAgentDir();
   }
@@ -417,14 +417,11 @@ export class AuthStorage {
    * reader sweep; it no longer reads or writes JSON.
    */
   static create(authPath?: string): AuthStorage {
-    if (!authStorageCreateWarningEmitted) {
-      authStorageCreateWarningEmitted = true;
-      emitAuthStorageDeprecationWarning({
-        code: AUTH_STORAGE_CREATE_DEPRECATION_CODE,
-        message:
-          "AuthStorage.create(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
-      });
-    }
+    emitAuthStorageDeprecationWarning({
+      code: AUTH_STORAGE_CREATE_DEPRECATION_CODE,
+      message:
+        "AuthStorage.create(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
+    });
     assertDeprecatedAuthStoragePathAbsent(authPath);
     return AuthStorage.forAgent(authPath ? dirname(authPath) : getAgentDir(), undefined);
   }

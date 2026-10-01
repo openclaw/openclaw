@@ -58,7 +58,6 @@ export function migrateTelegramGroupConfig(params: {
   newChatId: string;
 }): TelegramGroupMigrationResult {
   const scopes: MigrationScope[] = [];
-  let migrated = false;
   let skippedExisting = false;
 
   const migrationTargets: Array<{
@@ -72,7 +71,6 @@ export function migrateTelegramGroupConfig(params: {
   for (const target of migrationTargets) {
     const result = migrateTelegramGroupsInPlace(target.groups, params.oldChatId, params.newChatId);
     if (result.migrated) {
-      migrated = true;
       scopes.push(target.scope);
     }
     if (result.skippedExisting) {
@@ -80,5 +78,5 @@ export function migrateTelegramGroupConfig(params: {
     }
   }
 
-  return { migrated, skippedExisting, scopes };
+  return { migrated: scopes.length > 0, skippedExisting, scopes };
 }

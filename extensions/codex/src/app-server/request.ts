@@ -8,6 +8,7 @@ import type {
   CodexGetAccountResponse,
   JsonValue,
 } from "./protocol.js";
+import { createCodexRequestTimeoutDiagnostics } from "./request-diagnostics.js";
 import type {
   CodexControlRequestFailureCategory,
   CodexControlRequestObservation,
@@ -302,6 +303,7 @@ export async function withCodexAppServerJsonClient<T>(
 ): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
   const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
+  const timeoutDiagnostics = createCodexRequestTimeoutDiagnostics(timeoutMs);
   let activePhase: CodexControlRequestPhase = "prepare";
   let errorPhase: CodexControlRequestPhase | undefined;
   observeControlPhase(params.controlObservation, activePhase);
@@ -367,7 +369,9 @@ export async function withCodexAppServerJsonClient<T>(
           };
           activePhase = "acquire-client";
           observeControlPhase(params.controlObservation, activePhase);
+          timeoutDiagnostics?.beginAttempt(attempt + 1);
           const client = await acquireClient(acquireOptions);
+          timeoutDiagnostics?.acquired(client);
           let scopeActive = true;
           const assertCurrent = () => {
             throwIfAbandoned();
@@ -422,7 +426,12 @@ export async function withCodexAppServerJsonClient<T>(
               };
               activePhase = "client-request";
               observeControlPhase(params.controlObservation, activePhase);
-              return await client.request<R>(method, requestParams, requestOptions);
+              const settled = timeoutDiagnostics?.request(method);
+              try {
+                return await client.request<R>(method, requestParams, requestOptions);
+              } finally {
+                settled?.();
+              }
             };
             return await run(scopedRequest, client, {
               assertCurrent,
@@ -457,6 +466,7 @@ export async function withCodexAppServerJsonClient<T>(
             scopeActive = false;
             activePhase = "release-client";
             observeControlPhase(params.controlObservation, activePhase);
+            timeoutDiagnostics?.release();
             const requestErrorPhase = errorPhase;
             errorPhase = activePhase;
             if (params.isolated) {
@@ -488,6 +498,7 @@ export async function withCodexAppServerJsonClient<T>(
       deadlineObserved,
     );
     if (deadlineObserved) {
+      timeoutDiagnostics?.timeout();
       throw new Error(timeoutMessage, { cause: error });
     }
     throw error;

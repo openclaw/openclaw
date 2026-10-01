@@ -468,15 +468,12 @@ export function loadBundledEntryExportSync<T>(
   return record[reference.exportName] as T;
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic entry export loaders use caller-supplied export types.
 function createOptionalBundledEntryLoader<T>(
   importMetaUrl: string,
   reference: BundledEntryModuleRef | undefined,
-) {
-  return reference
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<T>(importMetaUrl, reference, options)
-    : undefined;
+  loadExport: typeof loadBundledEntryExportSync<T>,
+): ((options?: BundledEntryModuleLoadOptions) => T) | undefined {
+  return reference ? (options) => loadExport(importMetaUrl, reference, options) : undefined;
 }
 
 function createBundledEntryRuntimeSetter(
@@ -514,17 +511,21 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   const getConfigSchema = createCachedLazyValueGetter(configSchema ?? emptyChannelConfigSchema);
   const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
     loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
-  const loadChannelOutbound = createOptionalBundledEntryLoader<ChannelOutboundAdapter | undefined>(
+  const loadChannelOutbound = createOptionalBundledEntryLoader(
     importMetaUrl,
     outbound,
+    loadBundledEntryExportSync<ChannelOutboundAdapter | undefined>,
   );
-  const loadChannelSecrets = createOptionalBundledEntryLoader<ChannelPlugin["secrets"]>(
+  const loadChannelSecrets = createOptionalBundledEntryLoader(
     importMetaUrl,
     secrets,
+    loadBundledEntryExportSync<ChannelPlugin["secrets"]>,
   );
-  const loadChannelAccountInspector = createOptionalBundledEntryLoader<
-    NonNullable<ChannelPlugin["config"]["inspectAccount"]>
-  >(importMetaUrl, accountInspect);
+  const loadChannelAccountInspector = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    accountInspect,
+    loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>,
+  );
   const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
 
   return {
@@ -586,20 +587,21 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   // Setup loads stay light; expose only the setter needed to inject the active runtime
   // without importing the full channel entry.
   const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
-  const loadSetupSecrets = createOptionalBundledEntryLoader<ChannelPlugin["secrets"]>(
+  const loadSetupSecrets = createOptionalBundledEntryLoader(
     importMetaUrl,
     secrets,
+    loadBundledEntryExportSync<ChannelPlugin["secrets"]>,
   );
-  const loadLegacyStateMigrationDetector =
-    createOptionalBundledEntryLoader<BundledChannelLegacyStateMigrationDetector>(
-      importMetaUrl,
-      legacyStateMigrations,
-    );
-  const loadLegacySessionSurface =
-    createOptionalBundledEntryLoader<BundledChannelLegacySessionSurface>(
-      importMetaUrl,
-      legacySessionSurface,
-    );
+  const loadLegacyStateMigrationDetector = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    legacyStateMigrations,
+    loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>,
+  );
+  const loadLegacySessionSurface = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    legacySessionSurface,
+    loadBundledEntryExportSync<BundledChannelLegacySessionSurface>,
+  );
 
   return {
     kind: "bundled-channel-setup-entry",

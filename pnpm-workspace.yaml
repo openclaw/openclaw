@@ -10,8 +10,6 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
-  # Maintainer-approved for Bun-only npm plugin installs; remove after 2026-09-29T21:29:31.258Z.
-  - npm@11.20.0
   - "@openai/codex"
   - "@openai/codex-*"
   # Reviewed fs-safe 0.22.0 release and native helpers; remove after 2026-10-08T06:00:12.449Z.
@@ -118,10 +116,10 @@ packageExtensions:
 
 patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
-  "chrome-devtools-mcp@1.9.0": patches/chrome-devtools-mcp@1.9.0.patch
   "matrix-js-sdk@42.4.0": patches/matrix-js-sdk@42.4.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
   vitest@5.0.1: patches/vitest@5.0.1.patch
   "@awesome.me/webawesome@3.13.0": patches/@awesome.me__webawesome@3.13.0.patch
   "@openclaw/proxyline@0.3.12": patches/@openclaw__proxyline@0.3.12.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
+  chrome-devtools-mcp@1.10.1: patches/chrome-devtools-mcp@1.10.1.patch

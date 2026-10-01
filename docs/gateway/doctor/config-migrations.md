@@ -41,6 +41,10 @@ silently discard persisted data.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
+migration/import writers can preserve null, `deliver`, or mixed-case delivery
+modes. Those cron repairs remain supported; this change retires no cron format.
+
 Doctor refuses these retired inputs:
 
 - `agents.defaults.llm`.
@@ -55,6 +59,61 @@ succeed. Doctor preserves the config and stops with recovery guidance instead
 of stripping these settings or replacing them with a backup. For an older installation,
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
+
+## Cron ownership before roster migration
+
+Before retiring a legacy agent roster's default marker, Doctor pins ownerless
+cron jobs to that historical agent. This also applies when a different system
+agent is selected. Explicit job owners and agent-qualified session keys remain
+unchanged. Doctor saves a verified SQLite backup and rechecks the stored owner
+and definition before committing. If ownership cannot be repaired, it preserves
+the roster marker and reports the condition to resolve.
+
+When legacy import or delivery normalization precedes ownership repair, each
+stage saves its own verified snapshot. The earliest backup preserves the original
+persisted cron definitions, ownership, and runtime state; the later backup also
+includes imported jobs before their owners are pinned. Archived legacy JSON keeps
+its original bytes.
+
+An owner recorded only in the SQLite owner column is copied into the job's
+canonical definition by Doctor. Its agent identity and runtime state stay the
+same; a different system-agent selection does not override it.
+
+Ordinary config writes do not repair cron ownership. A roster change that would
+lose the historical owner is refused with `openclaw doctor --fix` guidance.
+Run Doctor before updating or removing an unresolved historical job. Agent-scoped
+management does not inherit these jobs from the currently selected system agent;
+operators with unrestricted session access can still inspect them. Restricted
+profile and agent views wait for `openclaw doctor --fix` when ownership is
+unresolved; runtime does not infer sharing permission from a legacy SQL owner or
+default marker. Explicit creator and agent-qualified session ownership keep their
+existing sharing checks. Deleting another agent leaves unresolved rows intact.
+The normal `openclaw update` Doctor phase performs this repair before saving
+the migrated config, including its early preflight and include-recovery writes.
+During the earlier update rehearsal, Doctor can import and normalize cron rows in
+the private database copy. It preserves uncopied legacy files, including linked
+state, quarantine, and run-log files, and reports their deferred archival. The
+live Doctor phase imports those sources and archives them after package installation. This
+also protects updates started by supported older releases.
+
+## Legacy cron delivery settings
+
+A stored delivery object must name its mode: `none`, `announce`, or `webhook`.
+Doctor repairs a missing or null mode and the retired `deliver` value to
+`announce`. It also trims and lowercases recognized modes. Unknown modes stay
+unchanged with guidance to review the intended route.
+
+The scheduler keeps unrepaired jobs visible and reports `openclaw doctor --fix`;
+it withholds their execution while healthy jobs continue. Doctor repairs known
+legacy values. For an unknown value, explicitly edit the delivery mode after
+reviewing the intended route. Unrelated edits cannot silently discard it.
+Wholly omitted delivery still uses the job's normal defaults; optional failure
+notification fields still inherit their configured defaults.
+
+Gateway `cron.add` and `cron.update` requests still accept the deprecated
+`delivery.mode: "deliver"` spelling and persist `announce`. Clients should send
+`announce`. This request adapter does not repair stored `deliver` values; those
+still require Doctor.
 
 ## Channel ownership during an update
 
@@ -135,6 +194,24 @@ Microsoft Teams uses the same owner: Doctor moves explicit
 wildcard bind. After verifying the Azure Bot endpoint through the Gateway port,
 set `channels.msteams.legacyWebhook: false` to close the compatibility listener.
 Teams keeps its Express body parser and SDK authentication on both listeners.
+
+## Talk realtime inheritance
+
+Doctor copies previously inherited Voice Call realtime provider settings into
+`talk.realtime` through its normal validated, backed-up config write. Explicit
+Talk settings win, including whole provider blocks and a sole configured Talk
+provider. SecretRefs remain references. Voice Call's own realtime and streaming
+settings stay unchanged for telephony and Talk transcription.
+
+After repair, realtime Talk reads only `talk.realtime`; changing Voice Call
+settings no longer changes Talk sessions. A sole migrated provider follows Talk's
+normal single-provider selection rule. Doctor fills missing Talk provider settings
+when the Voice Call inputs remain, and repeated repair is unchanged until those
+inputs or missing destinations change. This repair also runs during updates driven
+by a published updater that invokes Doctor without `--fix`.
+Voice Call-only settings remain valid configuration. Doctor detects this pending
+inheritance repair independently of schema errors; ordinary config reads never
+copy the settings into Talk.
 
 ## ACP agents' model precedence
 
@@ -330,6 +407,43 @@ changing the chat model. Downloads require setup consent. In the July provider,
 Doctor therefore preserves both fields instead of silently turning an ignored
 model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp).
 
+## Auth credential fields
+
+Doctor owns legacy credential-field conversion in both JSON imports and existing
+SQLite auth stores, including stores whose profile IDs already use current
+provider names. Field-only SQLite repair saves a private, verified backup and
+preserves profile IDs, credential material, unknown metadata, and rotation state.
+Malformed credential values and unreadable rotation-state JSON remain intact;
+they do not block repairs to supported fields. Alias renames still require valid
+complete stores and rotation state. Doctor defers affected config, session, and
+personal-account references whenever an owner cannot safely rename its IDs.
+An occupied alias destination or changed account receipt defers that mapping
+without preventing independent credential-field repairs or safe aliases.
+
+The conversion moves a recognized `mode` to a missing `type`, changes
+`type: "apiKey"` to `api_key`, and moves usable `apiKey` or `api_key` values to
+`key`. Usable canonical keys and references take precedence; empty or malformed
+keys do not discard a usable legacy value. These aliases may also hold SecretRefs.
+A SecretRef in the credential type's `key` or `token` moves to the matching
+`keyRef` or `tokenRef` only when that reference is missing or invalid. Fields for
+other credential types and aliases that did not supply a replacement stay intact.
+Doctor removes converted field names, verifies source rows before
+committing, and does nothing on a second run. Runtime rejects convertible legacy
+fields with `openclaw doctor --fix` instructions. Malformed extras do not prevent
+an otherwise valid canonical credential from loading.
+
+JSON import retains its existing canonical projection: recognized credential
+types and supported fields enter SQLite, string metadata is retained, and unknown
+fields or malformed sibling entries are omitted from the active import. The
+original JSON bytes are archived exactly with the existing migration receipt, so
+those omitted values remain recoverable. This differs from field-only repair of
+existing SQLite rows, which preserves unknown and malformed values in place.
+
+The installed updater invokes candidate Doctor before activation, so the same
+conversion runs during an update. Mixed JSON and SQLite stores are normalized
+before their credential sets are merged, and supplied alias mappings are checked
+against the current SQLite owners before the import can rename profiles.
+
 ## Checks 0-2
 
 <AccordionGroup>
@@ -447,6 +561,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | `plugins.entries.codex.config.codexDynamicToolsProfile`                                          | removed (Codex app-server always keeps Codex-native workspace tools native) |
     | `commands.modelsWrite`                                                                           | removed (`/models add` is deprecated)                                       |
     | `agents.defaults/list[].silentReplyRewrite`, `surfaces.*.silentReplyRewrite`                     | removed (exact `NO_REPLY` is no longer rewritten to visible fallback text)  |
+    | `agents.defaults.silentReply.direct/internal`, `surfaces.*.silentReply.direct/internal`          | removed (only external channel groups may opt into silent replies)          |
     | `agents.defaults/list[].systemPromptOverride`                                                    | removed (OpenClaw owns the generated system prompt)                        |
     | top-level `memorySearch`, `agents.defaults.memorySearch`                                         | `memory.search`                                                             |
     | `agents.entries.*.memorySearch`                                                                     | `agents.entries.*.memory.search`                                               |
@@ -461,6 +576,8 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
+
+    Doctor removes retired `silentReply.direct` and `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Direct chats and internal sessions, including subagents, require a result; only external channel groups can opt into `NO_REPLY`.
 
     Doctor names the retired tuning paths it actually removes in one notice, including explicit `false` values: `Removed retired runtime tuning knobs: diagnostics.memoryPressureSnapshot; built-in defaults now apply.` Run `openclaw doctor --fix` before starting with these retired keys. Memory-pressure events remain available; use [diagnostics export or manual allocation profiling](/gateway/diagnostics) for current evidence.
 

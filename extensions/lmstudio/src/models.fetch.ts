@@ -9,7 +9,7 @@ import {
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   mapLmstudioWireModels,
@@ -161,10 +161,7 @@ export async function fetchLmstudioModels(params: {
         "LM Studio model list",
         "models",
       );
-      const validModels = models.filter(
-        (model): model is LmstudioModelWire =>
-          typeof model === "object" && model !== null && !Array.isArray(model),
-      );
+      const validModels = models.filter(isRecord);
       if (models.length > 0 && validModels.length === 0) {
         throw new Error("LM Studio model list: malformed JSON response");
       }

@@ -8,6 +8,7 @@ import type { CronStatus, ModelAuthStatusResult } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
+import { outboxStorageScope } from "../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
@@ -978,6 +979,7 @@ describe("sidebar attention source publication", () => {
     };
     const row = {
       id: "local-review",
+      storageScope: outboxStorageScope(host),
       text: "private submission",
       createdAt: 1,
       sendState: "unconfirmed" as const,

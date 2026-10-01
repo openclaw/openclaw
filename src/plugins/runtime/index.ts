@@ -51,7 +51,12 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       return runtime.readTrustedPluginSessionFacts(params);
     },
     withUserProfileIdentity: async (params, run) => {
-      const captured = { profileId: params.profileId, emails: params.emails.slice() };
+      const captured = {
+        profileId: params.profileId,
+        emails: params.emails.slice(),
+        githubAccountIds:
+          params.githubAccountIds === undefined ? undefined : params.githubAccountIds.slice(),
+      };
       const runtime = await loadGatewayPluginRuntime();
       return runtime.withTrustedPluginUserProfileIdentity(captured, run);
     },

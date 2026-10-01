@@ -45,6 +45,7 @@ import type { SessionOrganizerController } from "./session-organizer-controller.
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
+import { sessionRunVisibility } from "./session-run-visibility.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
 import "./elapsed-time.ts";
@@ -225,6 +226,7 @@ function renderSidebarSessionIndicators(
     settings: gateway?.connection,
     password: gateway?.connection.password,
   });
+  const runVisibility = sessionRunVisibility();
   const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
     session,
     leadingOwner,
@@ -233,6 +235,7 @@ function renderSidebarSessionIndicators(
     channelAvatarAuth,
     team,
     icon,
+    runVisibility,
   );
   const stateDescription = describeSessionState(session);
   const snoozed =
@@ -315,7 +318,13 @@ function renderSidebarSessionIndicators(
       ${team ? trail : nothing}
       ${
         team
-          ? renderTeamSessionSlots([session], !childrenExpanded, session.childSessionKeys.length)
+          ? renderTeamSessionSlots(
+              [session],
+              !childrenExpanded,
+              session.childSessionKeys.length,
+              0,
+              runVisibility,
+            )
           : nothing
       }
       ${!team && stateDescription ? html`<span class="sr-only" id=${stateId} aria-hidden="true">${stateDescription}</span>` : nothing}

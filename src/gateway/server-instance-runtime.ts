@@ -186,6 +186,7 @@ export function createGatewayInstanceRuntime(
         dispatchOptions.internalDeliveryMediaUrls ||
         dispatchOptions.runtimeContextFragments ||
         dispatchOptions.internalDeliverySuppressText === true ||
+        dispatchOptions.internalDeliverySuppressErrors === true ||
         delegatedToolPolicyHandoffId ||
         dispatchOptions.scopes ||
         dispatchOptions.syntheticScopes,
@@ -201,6 +202,7 @@ export function createGatewayInstanceRuntime(
               internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
               runtimeContextFragments: dispatchOptions.runtimeContextFragments,
               internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
+              internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
               delegatedToolPolicyHandoffId,
               scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
             }),

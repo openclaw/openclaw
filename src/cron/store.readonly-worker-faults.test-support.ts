@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 type FaultStage = "staging-rm" | "read-query" | "copy-open";
@@ -73,18 +74,17 @@ DatabaseSync.prototype.prepare = function (sql, ...args) {
 };
 `
         : `
+import { __setFsSafeTestHooksForTest } from ${JSON.stringify(import.meta.resolve("@openclaw/fs-safe/test-hooks"))};
 process.env.NODE_OPTIONS = (process.env.NODE_OPTIONS ?? "") + " --import=" + import.meta.url;
 if (isMainThread) {
-  const open = fs.openSync.bind(fs);
-  fs.openSync = (target, flags, ...args) => {
-    if (denied() && typeof target === "string" && flags === "wx" &&
-        ["database.sqlite.partial", "first"].includes(path.basename(target)) &&
-        isSnapshotDirectory(path.dirname(target))) {
-      record("copy-open", "EACCES");
-      throw Object.assign(new Error("controlled worker snapshot copy failure"), { code: "EACCES" });
-    }
-    return open(target, flags, ...args);
-  };
+  __setFsSafeTestHooksForTest({
+    beforeOpen(target) {
+      if (denied() && target === ${JSON.stringify(fs.realpathSync(resolveOpenClawStateSqlitePath(state.env)))}) {
+        record("copy-open", "EACCES");
+        throw Object.assign(new Error("controlled worker snapshot copy failure"), { code: "EACCES" });
+      }
+    },
+  });
 }
 `;
     cronPreload = pathToFileURL(

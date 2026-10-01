@@ -1,5 +1,6 @@
 // Shared fixtures for session-history sanitization tests.
 import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { SessionManager } from "./sessions/index.js";
 

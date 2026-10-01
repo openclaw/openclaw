@@ -11,15 +11,6 @@ import {
 } from "./helper-results.js";
 import type { FaceTimeDialRequest } from "./outbound-call.js";
 
-export {
-  FaceTimeHelperAmbiguousError,
-  FaceTimeHelperUnavailableError,
-  projectCompleteFaceTimeAbsence,
-  projectFaceTimeNativeAction,
-  readHelperResults,
-  type HelperActionResult,
-} from "./helper-results.js";
-
 type HelperSocketServerParams = {
   host: string;
   port: number;
@@ -583,10 +574,7 @@ export class FaceTimeHelperSocketServer {
     );
     if (fulfilled.length > 0) {
       const fulfilledProcessIds = new Set(
-        fulfilled.flatMap((result) => {
-          const peer = result.helperPeer;
-          return peer && typeof peer === "object" && "processId" in peer ? [peer.processId] : [];
-        }),
+        fulfilled.flatMap(({ helperPeer }) => (helperPeer ? [helperPeer.processId] : [])),
       );
       return {
         helpersContacted: sockets.length,

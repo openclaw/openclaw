@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -19,6 +20,7 @@ import {
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -104,6 +106,111 @@ describe("canary teardown evidence", () => {
   beforeEach(() => {
     mocks.port.mockResolvedValue(43_123);
     stubHealthyGateway();
+  });
+
+  it("propagates initial progress refusal before snapshot admission", async () => {
+    const refusal = new Error("initial progress receipt was refused");
+    const onStep = vi.fn();
+    await expect(
+      validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        onProgress: vi.fn().mockRejectedValue(refusal),
+        onStep,
+      }),
+    ).rejects.toBe(refusal);
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(onStep).not.toHaveBeenCalled();
+  });
+
+  it.each(["candidate-state-snapshot", "candidate-doctor", "candidate-gateway-startup"])(
+    "propagates a settled %s receipt refusal once after owned cleanup",
+    async (stepName) => {
+      let copiedStateDir: string | undefined;
+      mocks.snapshot.mockImplementation(async (_command, options: { input: string }) => {
+        const request: unknown = JSON.parse(options.input);
+        if (isRecord(request) && request.mode === "snapshot") {
+          if (typeof request.targetStateDir !== "string") {
+            throw new Error("Snapshot fixture requires its owned target directory");
+          }
+          copiedStateDir = request.targetStateDir;
+        }
+        return createCanarySnapshotResult(options.input);
+      });
+      const refusal = new Error("completion receipt was refused");
+      let refused = false;
+      const onStep = vi.fn(async (step: UpdateStepResult) => {
+        if (step.name === stepName && !refused) {
+          refused = true;
+          throw refusal;
+        }
+      });
+      await expect(
+        validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), onStep }),
+      ).rejects.toBe(refusal);
+      expect(onStep.mock.calls.filter(([step]) => step.name === stepName)).toEqual([
+        [expect.objectContaining({ exitCode: 0 })],
+      ]);
+      for (const child of children.values()) {
+        expect(child.exitCode).toBe(0);
+      }
+      if (!copiedStateDir) {
+        throw new Error("Candidate did not create its private state copy");
+      }
+      await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("retains integrity progress and the timeout cause when teardown closes the child with zero", async () => {
+    let now = 2_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const waiting = createDeferredCore();
+    const progress =
+      "SQLite integrity check still running: agent database (400 MiB, 10s elapsed, phase=checking).";
+    mocks.spawn.mockImplementationOnce(() => {
+      const child = new FakeChild(nextPid++);
+      children.set(child.pid, child);
+      queueMicrotask(() => {
+        child.stderr.write(`[state/sqlite] ${progress}\n`);
+        waiting.resolve();
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      now += 899;
+      return child;
+    });
+    try {
+      const pending = validateUpdateCandidateCanary(canaryStateOptions(1_000));
+      await waiting.promise;
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      const cause = "candidate-migration-rehearsal: doctor exceeded budget after 1 s";
+      expect(result).toMatchObject({
+        status: "error",
+        phase: "doctor",
+        reason: "candidate-checks-timeout",
+      });
+      expect(result.logTail.join("\n")).toContain(`${cause} ([state/sqlite] ${progress})`);
+      expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
+      expect(result.steps.at(-1)?.failureFacts).toEqual([
+        expect.objectContaining({
+          check: "doctor",
+          code: "candidate-checks-timeout",
+          message: expect.stringContaining(cause),
+        }),
+      ]);
+      const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
+      expect(result.steps.at(-1)?.stderrTail).toContain("phase=checking");
+      expect(detail).toContain(cause);
+      const report = renderUpdateRunReport(
+        updateRunReportInputFromResult({ ...result, mode: "git", root }),
+      );
+      expect(report.markdown).toContain(cause);
+      expect(report.markdown).toContain("phase=checking");
+      expect(report.markdown).not.toContain("usable inference route");
+    } finally {
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it.each(["before-deadline", "after-deadline"] as const)(
@@ -474,10 +581,11 @@ describe("canary teardown evidence", () => {
             {
               check: "lint",
               code: "candidate-checks-timeout",
-              message: "Update lint checks phase timed out (899ms)",
+              message:
+                "candidate-migration-rehearsal: lint exceeded budget after 1 s (└  Doctor complete.)",
             },
           ]);
-          expect(rendered.markdown).toContain("checks phase");
+          expect(rendered.markdown).toContain("lint exceeded budget after 1 s");
           expect(JSON.stringify(result)).not.toContain("exit phase");
         }
       } finally {

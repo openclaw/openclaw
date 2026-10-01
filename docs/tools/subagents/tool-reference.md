@@ -32,7 +32,7 @@ still stops it. Codex native `spawn_agent` rejects multi-person turns; use
 
 Starts a sub-agent run on the spawning session's sub-agent queue, with
 [per-session concurrency](/tools/subagents/operations#concurrency). Ordinary one-shot runs
-use `deliver: false` and return through an announce step; collectors, quiet
+use `deliver: false` and return through completion delivery to the requester; collectors, quiet
 runs, and direct thread replies use the
 [completion paths](/tools/subagents/slash-command#spawn-behavior).
 
@@ -211,7 +211,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Set `false` for fire-and-forget children. When the child finishes, OpenClaw skips the completion handoff to the requester (no announce or steer turn), records the delivery as not required, and still runs child cleanup. Inspect such children with `subagents` or `sessions_history`. `collect: true` always uses `false`.
 </ParamField>
 <ParamField path="completionTarget" type='"parent"'>
-  Return the result in a private requester turn with no automatic channel delivery. The parent may continue work or remain silent. If the parent yielded while waiting, it resumes and answers under the conversation's normal reply rules (message-tool-only rooms still require the `message` tool; `NO_REPLY` stays silent). Supported only for hidden native `mode: "run"` children; unavailable with ACP, `collect`, `visible`, `thread`, session mode, or `expectsCompletionMessage: false`. Omit to keep normal completion delivery. See [Private parent completion](/tools/subagents/announce#private-parent-completion).
+  Return the result in a private requester turn with no automatic channel delivery. The parent reviews the result, continues unfinished work, and records the outcome internally. If the parent yielded while waiting, it resumes and answers under the conversation's normal reply rules; message-tool-only rooms still require the `message` tool. Supported only for hidden native `mode: "run"` children; unavailable with ACP, `collect`, `visible`, `thread`, session mode, or `expectsCompletionMessage: false`. Omit to keep normal completion delivery. See [Private parent completion](/tools/subagents/announce#private-parent-completion).
 </ParamField>
 <ParamField path="sandbox" type='"inherit" | "require"' default="inherit">
   `require` rejects the spawn unless the target child runtime is sandboxed.
@@ -440,7 +440,7 @@ and older queued events can be evicted when the queue fills. Exact-incarnation
 access grants cannot enqueue notifications beyond their lifetime. Omitting
 `mode` preserves automatic routing. Its
 `targetDisposition` describes admission, while its `delivery.status` describes
-the later reply announcement. Neither proves completion. At the Gateway,
+the later reply delivery. Neither proves completion. At the Gateway,
 `chat.send` with `queueMode: "steer"` gives guidance at the supported runtime
 boundary; `queueMode: "interrupt"` replaces active execution. The deprecated
 `sessions.steer` RPC retains its documented interrupt behavior. An operator's

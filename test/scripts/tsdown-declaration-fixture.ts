@@ -183,6 +183,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "generate-kysely-types.mts",
     "tsdown-build.mts",
     "pnpm-runner.mts",
+    "run-node-watch-paths.mts",
     "windows-cmd-helpers.mjs",
     "write-plugin-sdk-entry-dts.ts",
     "write-unified-entry-dts.ts",

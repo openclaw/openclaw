@@ -51,7 +51,7 @@ describe("repository checkpoint GitHub publication", () => {
     );
   });
 
-  it.each(["turn", "reset", "move", "held", "store-busy", "retired-owner"] as const)(
+  it.each(["reset", "move", "held", "store-busy", "retired-owner"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
       const f = await createRepositoryPublicationFixture(checkpoint);

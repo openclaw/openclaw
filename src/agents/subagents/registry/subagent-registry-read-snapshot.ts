@@ -288,7 +288,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
     assertSubagentReadContext(context);
   };
   let changed: (ids: readonly string[] | undefined) => void = () => {};
-  const unsubscribe = subscribeSubagentRunChanges((ids) => changed(ids));
+  const unsubscribe = subscribeSubagentRunChanges("projection", ({ runIds }) => changed(runIds));
   const dispose = () => {
     disposed = true;
     unsubscribe();
@@ -442,7 +442,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
   let published: (runIds: readonly string[] | undefined) => void = () => {
     invalidated = true;
   };
-  const unsubscribe = subscribeSubagentRunChanges((runIds) => published(runIds));
+  const unsubscribe = subscribeSubagentRunChanges("projection", ({ runIds }) => published(runIds));
   const dispose = () => {
     disposed = true;
     unsubscribe();

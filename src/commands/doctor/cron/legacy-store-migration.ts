@@ -17,6 +17,7 @@ import type {
 import type { CronStoreFile } from "../../../cron/types.js";
 import { syncDirectoryIfSupported } from "../../../infra/directory-durability.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { isUpdateRehearsalReadOnlyPath } from "../../../infra/update-rehearsal-paths.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 const LEGACY_CRON_ARCHIVE_SUFFIX = ".migrated";
@@ -89,7 +90,9 @@ async function legacyCronFileExists(filePath: string): Promise<boolean> {
   }
 }
 
-type ArchiveOutcome = { ok: true; archivePath?: string } | { ok: false; reason: string };
+type ArchiveOutcome =
+  | { ok: true; archivePath?: string }
+  | { ok: false; reason: string; deferred?: true };
 
 async function sha256File(filePath: string): Promise<string> {
   return createHash("sha256")
@@ -268,6 +271,13 @@ export async function archiveLegacyCronFile(
     return { ok: false, reason: formatErrorMessage(err) };
   }
 
+  if (isUpdateRehearsalReadOnlyPath(filePath, process.env)) {
+    return {
+      ok: false,
+      deferred: true,
+      reason: `Update rehearsal retained legacy cron source at ${filePath}; Doctor will archive it during the live update.`,
+    };
+  }
   try {
     await fs.rename(filePath, archivePath);
   } catch (err) {
@@ -462,7 +472,7 @@ export async function legacyCronStoreFilesExist(storePath: string): Promise<bool
 
 type LegacyCronArchiveResult =
   | { ok: true }
-  | { ok: false; failures: Array<{ path: string; reason: string }> };
+  | { ok: false; failures: Array<{ path: string; reason: string; deferred?: true }> };
 
 /** Archive legacy cron JSON/state files after successful migration. */
 export async function archiveLegacyCronStoreForMigration(
@@ -471,7 +481,7 @@ export async function archiveLegacyCronStoreForMigration(
 ): Promise<LegacyCronArchiveResult> {
   const resolvedStorePath = path.resolve(storePath);
   const statePath = resolveLegacyCronStatePath(resolvedStorePath);
-  const failures: Array<{ path: string; reason: string }> = [];
+  const failures: Array<{ path: string; reason: string; deferred?: true }> = [];
   const archived: Array<{ path: string; archivePath: string; sha256?: string }> = [];
   const rollbackArchived = async (): Promise<void> => {
     for (const target of archived.toReversed()) {
@@ -509,7 +519,11 @@ export async function archiveLegacyCronStoreForMigration(
   for (const target of targets) {
     const outcome = await archiveLegacyCronFile(target.path, target.sha256);
     if (!outcome.ok) {
-      failures.push({ path: target.path, reason: outcome.reason });
+      failures.push({
+        path: target.path,
+        reason: outcome.reason,
+        ...(outcome.deferred ? { deferred: true } : {}),
+      });
       await rollbackArchived();
       break;
     }

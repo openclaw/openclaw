@@ -20,13 +20,6 @@ import { resolveMusicGenerationOverrides } from "./normalization.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
 
-/**
- * Music generation runtime orchestration.
- *
- * The runtime resolves provider/model candidates, applies capability-based
- * normalization, invokes providers, and records fallback attempts consistently
- * with other media generation capabilities.
- */
 const log = createSubsystemLogger("music-generation");
 
 /** Injectable dependencies used by tests and alternate runtime hosts. */

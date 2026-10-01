@@ -1,8 +1,3 @@
-/**
- * Process-local live subagent run map.
- *
- * Shared by registry read/write helpers for active in-memory run state.
- */
 import { isDeepStrictEqual } from "node:util";
 import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -461,7 +456,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 export const subagentRuns = new SubagentRunMap();
 
 // In-place owner publications refresh keyed membership; replacements invalidate it.
-subscribeSubagentRunChanges((ids) => {
+subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {
   if (!ids) {
     subagentRuns.sessionReadLookup = undefined;
   } else {

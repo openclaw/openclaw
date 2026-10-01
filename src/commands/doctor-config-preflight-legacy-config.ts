@@ -17,7 +17,10 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import { resolveHomeDir } from "../utils.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
 import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
-import { planAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
+import {
+  canPlanAutomaticConfigRepair,
+  planAutomaticConfigRepair,
+} from "./doctor/shared/automatic-config-repair.js";
 import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
 import {
   prepareDoctorConfigRecoverySnapshot,
@@ -48,7 +51,7 @@ export function createDoctorConfigRepairPlanner(params: {
   ) =>
     (params.options.repairPrefixedConfig === true ||
       (params.stateMigrationsRequested && params.options.migrateLegacyConfig !== false)) &&
-    !snapshot.valid &&
+    canPlanAutomaticConfigRepair(snapshot) &&
     !params.skipLegacyParentConfigWrite &&
     (params.options.repairPrefixedConfig === true ||
       !shouldSkipPluginValidationForDoctorConfigPreflight()) &&

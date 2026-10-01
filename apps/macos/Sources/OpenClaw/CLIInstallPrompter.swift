@@ -383,7 +383,7 @@ final class CLIInstallPrompter {
         return location == CLIInstaller.managedExecutableLocation()
     }
 
-    static func isManagedUpgrade(found: String, required: String) -> Bool {
+    nonisolated static func isManagedUpgrade(found: String, required: String) -> Bool {
         guard let foundVersion = Semver.parse(found),
               let requiredVersion = Semver.parse(required)
         else { return false }
@@ -400,7 +400,7 @@ final class CLIInstallPrompter {
         }
     }
 
-    private static func prereleaseTail(_ version: String) -> String? {
+    private nonisolated static func prereleaseTail(_ version: String) -> String? {
         let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let separator = trimmed.firstIndex(of: "-") else { return nil }
         let tail = String(trimmed[trimmed.index(after: separator)...])

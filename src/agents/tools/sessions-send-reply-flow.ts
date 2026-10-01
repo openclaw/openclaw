@@ -1,17 +1,22 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import type {
-  FollowupReply,
-  FollowupCompletionOwner,
-} from "../subagents/completion/session-followup-completion.types.js";
+import { waitForAgentRunReply } from "../run-wait.js";
+import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
+import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
 import {
+  callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
-  type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 const log = createSubsystemLogger("agents/sessions-send");
@@ -19,9 +24,7 @@ const log = createSubsystemLogger("agents/sessions-send");
 /** Await custody transfer before returning the tool; result observation stays detached. */
 export function startSessionsSendReplyFlow(
   params: Parameters<typeof runSessionsSendA2AFlow>[0] & {
-    runId: string;
     skip: boolean;
-    reply?: FollowupReply;
     completion?: FollowupCompletionOwner;
   },
 ) {
@@ -33,55 +36,139 @@ export function startSessionsSendReplyFlow(
     completion ? completion.request.custody.run(run) : runWithGatewayToolContinuationContext(run);
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
-    const callGateway: AgentToolGatewayRequestCaller | undefined =
-      completion && params.callGateway
-        ? <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
-            if (request.method === "agent" && !isRecord(request.params)) {
-              throw new Error("Missing completion turn parameters.");
+    const deliverRequesterReply: Parameters<
+      typeof runSessionsSendA2AFlow
+    >[0]["deliverRequesterReply"] = completion
+      ? async ({ message, extraSystemPrompt }) => {
+          const {
+            runAnnounceAgentCall,
+            isGatewayAgentRunPending,
+            resolvePrivateCompletionDeliveryResult,
+          } = await import("../subagents/announce/subagent-announce-completion-delivery.js");
+          completion.assertCurrent();
+          const request = completion.request;
+          const idempotencyKey = `announce:sessions-send:${request.runId}:completion`;
+          const timeoutMs = resolveSubagentAnnounceTimeoutMs(getRuntimeConfig());
+          let accepted = false;
+          const inputProvenance = {
+            kind: "inter_session" as const,
+            sourceSessionKey: request.targetSessionKey,
+            sourceTool: "subagent_announce",
+            sourceRole: "subagent" as const,
+          };
+          const isCurrent = () => {
+            try {
+              request.custody.assertCurrent();
+              return true;
+            } catch {
+              return false;
             }
-            const dispatch = () =>
-              params.callGateway!<T>({
-                ...request,
-                assertDispatchCurrent: () => {
-                  completion.assertCurrent();
-                  request.assertDispatchCurrent?.();
-                },
-                params:
-                  request.method === "agent" && isRecord(request.params)
-                    ? {
-                        ...request.params,
-                        expectedExistingSessionId: completion.request.requesterSessionId,
-                      }
-                    : request.params,
+          };
+          const dispatch = () =>
+            runAnnounceAgentCall({
+              agentParams: {
+                message: annotateInterSessionPromptText(message, inputProvenance),
+                extraSystemPrompt,
+                agentId: request.requesterAgentId,
+                sessionKey: request.requesterSessionKey,
+                expectedExistingSessionId: request.requesterSessionId,
+                expectedExistingSessionLifecycleRevision:
+                  params.requesterSession?.lifecycleRevision ?? null,
+                idempotencyKey,
+                inputProvenance,
+                deliver: false,
+                sourceReplyDeliveryMode: "message_tool_only",
+                channel: params.requesterOrigin?.channel ?? INTERNAL_MESSAGE_CHANNEL,
+                accountId: params.requesterOrigin?.accountId,
+                to: params.requesterOrigin?.to,
+                threadId: stringifyRouteThreadId(params.requesterOrigin?.threadId),
+              },
+              privateCompletion: true,
+              expectFinal: true,
+              onAccepted: (payload) => {
+                const receipt = asOptionalRecord(payload);
+                if (receipt?.runId !== idempotencyKey) {
+                  throw new Error("Private completion acceptance does not identify its input.");
+                }
+                accepted ||= receipt.admissionPending !== true;
+              },
+              signal: request.custody.signal,
+              isExecutionAllowed: isCurrent,
+              isSourceSessionAdmissionAllowed: isCurrent,
+            });
+          const deliver = async () => {
+            let response: unknown;
+            let responseLost = false;
+            try {
+              response = await dispatch();
+            } catch (error) {
+              // Authoritative failures keep their interrupted private input for
+              // explicit recovery. A lost response may still own an active turn.
+              if (!accepted || isGatewayProtocolResponseError(error)) {
+                throw error;
+              }
+              request.custody.assertCurrent();
+              responseLost = true;
+            }
+            const readReceipt = () => {
+              const receipt = asOptionalRecord(response);
+              if (receipt?.runId !== idempotencyKey) {
+                throw new Error("Private completion response belongs to another input.");
+              }
+              return receipt;
+            };
+            if (responseLost || isGatewayAgentRunPending(readReceipt())) {
+              const result = await waitForAgentRunReply({
+                runId: idempotencyKey,
+                timeoutMs,
+                untilTerminal: true,
+                callGateway: <T>(options: Parameters<typeof callAgentToolGatewayRequest>[0]) =>
+                  callAgentToolGatewayRequest<T>({
+                    ...options,
+                    signal: options.signal
+                      ? AbortSignal.any([request.custody.signal, options.signal])
+                      : request.custody.signal,
+                    assertDispatchCurrent: () => {
+                      request.custody.assertCurrent();
+                      options.assertDispatchCurrent?.();
+                    },
+                  }),
               });
-            const authority = completion.request.requesterAuthority;
-            if (request.method !== "agent" || !authority) {
-              return dispatch();
+              request.custody.assertCurrent();
+              if (result.status !== "ok") {
+                throw new Error(
+                  result.error ?? `Private requester turn ended with ${result.status}.`,
+                );
+              }
+              // A successful run permits receipt-only replay of this exact
+              // input. Failed or timed-out processing must never execute again here.
+              response = await dispatch();
             }
-            const input = request.params;
-            if (
-              !isRecord(input) ||
-              input.sessionKey !== completion.request.requesterSessionKey ||
-              input.agentId !== completion.request.requesterAgentId ||
-              typeof input.idempotencyKey !== "string" ||
-              !isRecord(input.inputProvenance) ||
-              input.inputProvenance.kind !== "inter_session" ||
-              input.inputProvenance.sourceTool !== "subagent_announce" ||
-              input.inputProvenance.sourceSessionKey !== completion.request.targetSessionKey
-            ) {
-              throw new Error("Followup authority cannot leave its original requester.");
+            const delivery = resolvePrivateCompletionDeliveryResult(readReceipt());
+            if (!delivery.delivered) {
+              throw new Error(delivery.error ?? "Private requester input was not processed.");
             }
-            return authority.run(input.idempotencyKey, dispatch);
+          };
+          const promptedAt = Date.now();
+          await (request.requesterAuthority
+            ? request.requesterAuthority.run(idempotencyKey, deliver)
+            : deliver());
+          const requester = params.requesterDeliveryGeneration;
+          if (requester) {
+            recordSessionParticipantBestEffort({
+              agentId: requester.agentId,
+              sessionKey: requester.sessionKey,
+              storePath: requester.storePath,
+              identity: { type: "agent", id: request.targetAgentId },
+              promptedAt,
+            });
           }
-        : params.callGateway;
+        }
+      : undefined;
     return runSessionsSendA2AFlow({
       ...params,
-      callGateway,
-      roundOneReply: settledReply?.replyText,
-      sourceReplyDelivered: settledReply?.sourceReplyDelivered,
-      settledReply,
-      waitRunId: settledReply || completion ? undefined : params.runId,
-      replyRunId: params.runId,
+      deliverRequesterReply,
+      reply: settledReply,
     });
   };
   // No caller-owned transcript/resource scope may survive in the detached turn.
@@ -100,7 +187,7 @@ export function startSessionsSendReplyFlow(
     .catch((error: unknown) => {
       completion?.close(error);
       admitted.resolve();
-      log.warn("sessions_send announce flow admission failed", {
+      log.warn("sessions_send reply flow admission failed", {
         runId: params.runId,
         error: formatErrorMessage(error),
       });

@@ -594,6 +594,7 @@ describe("syncWorkspaceSkills", () => {
     "refreshes prior read-only copies without changing linked targets or the skills mount",
     async () => {
       const sourceWorkspace = await cloneSourceTemplate();
+      await fs.chmod(path.join(sourceWorkspace, "skills", "demo-skill"), 0o755);
       const targetWorkspace = await createCaseDir("target");
       const targetSkillsDir = path.join(targetWorkspace, "skills");
       const staleDir = path.join(targetSkillsDir, "demo-skill");
@@ -612,7 +613,6 @@ describe("syncWorkspaceSkills", () => {
       await fs.chmod(nestedDir, 0o555);
       await fs.chmod(staleDir, 0o555);
       const before = await fs.stat(targetSkillsDir);
-
       try {
         await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
         expect((await fs.stat(targetSkillsDir)).ino).toBe(before.ino);

@@ -17,7 +17,10 @@ import {
   canonicalMigrationFilePath,
   type SessionSqliteMigrationTargetInput,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqlitePath,
+} from "../infra/session-sqlite-migration-readers.js";
 import {
   hasOrphanedSqliteSidecars,
   resolveSqliteDatabaseFilePaths,
@@ -29,8 +32,47 @@ import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteOptions,
 } from "./doctor-session-sqlite-types.js";
+import {
+  assertDoctorSqliteMaintenancePathsNotAliased,
+  isDestructiveDoctorSessionSqliteMode,
+  type DoctorSqliteMaintenanceAuthority,
+} from "./doctor-sqlite-maintenance-lock.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+export async function prepareDoctorSessionSqliteTargets(
+  params: DoctorSessionSqliteOptions & {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    authority?: DoctorSqliteMaintenanceAuthority;
+  },
+) {
+  const resolved = resolveDoctorSessionSqliteTargets(params);
+  if (isDestructiveDoctorSessionSqliteMode(params.mode)) {
+    assertDoctorSqliteMaintenancePathsNotAliased(
+      `session SQLite ${params.mode}`,
+      resolveDoctorSessionSqliteMaintenancePaths(resolved.targets),
+      resolveDoctorSessionSqliteMaintenanceRoots(resolved.targets, params.env),
+    );
+  }
+  const repairEntryStates = async (targets: readonly SessionStoreTarget[]) => {
+    params.authority?.assertCurrent();
+    const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
+    return await repairLegacySessionEntryStates({
+      apply: true,
+      cfg: params.cfg,
+      env: params.env,
+      authority: params.authority,
+      targets: projectExistingAgentDatabaseTargets(targets, params.env, params.cfg),
+      deferSchemaRepair: params.mode === "import",
+    });
+  };
+  if (params.mode === "import") {
+    await repairEntryStates(resolved.targets);
+  }
+  // Recovery reuses this preparation only after restoring or repairing each physical target.
+  return { ...resolved, repairEntryStates };
+}
 
 export function createMigrationTargetInput(
   target: SessionStoreTarget,

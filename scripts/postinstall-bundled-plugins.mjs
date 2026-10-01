@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Package lifecycle cleanup and completion touch only this installed package.
+// Package lifecycle cleanup touches this package and its verified Bun global bin.
 // Doctor owns operator-state migration and genuinely dangling runtime-link repair;
 // shared caches outside this package can still serve other installs or profiles.
 import {
@@ -408,6 +408,22 @@ export function completePackageLifecycle(params = {}, reportError = console.erro
 
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
+  if (
+    process.versions.bun &&
+    process.env.OPENCLAW_PACKAGE_BUN_LAUNCHER &&
+    !isSourceCheckoutRoot({ packageRoot: DEFAULT_PACKAGE_ROOT })
+  ) {
+    try {
+      const { installPackageBunCliLauncher } = await import(
+        pathToFileURL(join(DEFAULT_PACKAGE_ROOT, "scripts/postinstall-bun-cli-launcher.mjs")).href
+      );
+      installPackageBunCliLauncher({ packageRoot: DEFAULT_PACKAGE_ROOT });
+    } catch (error) {
+      console.warn(
+        `[postinstall] Bun CLI launcher repair deferred: ${String(error)}. Run Bun with this package's openclaw.mjs doctor --fix.`,
+      );
+    }
+  }
   let admitted = true;
   if (
     process.platform === "win32" &&
