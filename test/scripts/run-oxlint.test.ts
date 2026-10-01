@@ -1,11 +1,21 @@
 // Run Oxlint tests cover run oxlint script behavior.
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
+import { waitForManagedProcessGroupExit } from "../../scripts/lib/managed-child-process.mts";
 import {
   createOxlintShards,
+  createOxlintFileScope,
   filterOxlintShards,
   parseShardRunnerArgs,
   createExtensionOxlintShards,
@@ -16,6 +26,7 @@ import {
   resolveWindowsExtensionChunkSize,
   runShard,
   selectCoreOxlintStripe,
+  splitCoreOxlintSelections,
   selectExtensionOxlintStripe,
   shouldPrepareExtensionPackageBoundaryArtifactsForShards,
   shouldRunOxlintShardsSerial,
@@ -24,7 +35,12 @@ import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mts";
-import { waitForDead, waitForFile, waitForPidFile } from "../helpers/process-wait.js";
+import {
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -402,7 +418,7 @@ describe("run-oxlint", () => {
     }
   });
 
-  it.each([false, true])(
+  it.each([false, true, "stripe"])(
     "retains the canonical budget after file selection (splitCore=%s)",
     (splitCore) => {
       const cwd = createTempDir("openclaw-oxlint-file-budget-");
@@ -412,6 +428,7 @@ describe("run-oxlint", () => {
       }
       mkdirSync(join(cwd, "scripts"));
       const files = ["src/agents/selected.ts", "src/gateway/selected.ts"];
+      writeFileSync(join(cwd, ".gitignore"), "**/selected.ts\n");
       for (const file of files) {
         writeFileSync(join(cwd, file), "export {};\n");
       }
@@ -430,7 +447,7 @@ describe("run-oxlint", () => {
            os.availableParallelism = () => 4;
            syncBuiltinESMExports();
            const { main } = await import(${JSON.stringify(RUN_OXLINT_SHARDS_URL)});
-           await main(['--only=core', ...${JSON.stringify(splitCore ? ["--split-core"] : [])}, '--files-json', ${JSON.stringify(JSON.stringify(files))}]);`,
+           await main(['--only=core', ...${JSON.stringify(splitCore ? ["--split-core", ...(splitCore === "stripe" ? ["--core-stripe=1/1"] : [])] : [])}, '--files-json', ${JSON.stringify(JSON.stringify(files))}]);`,
         ],
         {
           cwd,
@@ -905,6 +922,540 @@ describe("run-oxlint", () => {
       selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps physical core selections in their canonical stripe after file projection",
+    async () => {
+      const cwd = createTempDir("openclaw-oxlint-core-parts-");
+      const files = [
+        "src/agents/root.ts",
+        "src/agents/nested/child.ts",
+        "src/agents/new-owner/another.ts",
+        "src/gateway/root.ts",
+        "src/gateway/server/child.ts",
+        "ui/src/pages/chat/view.ts",
+        "ui/src/components/view.ts",
+        "ui/src/root.ts",
+        "ui/config.ts",
+        "ui/public/sw.js",
+      ];
+      for (const file of files) {
+        mkdirSync(join(cwd, file, ".."), { recursive: true });
+        writeFileSync(join(cwd, file), "export {};\n");
+      }
+      const shards = filterOxlintShards(
+        createOxlintShards({ cwd, splitCore: true }),
+        new Set(["core"]),
+      );
+      const stripes = [];
+      for (const index of [1, 2, 3]) {
+        stripes.push(
+          await splitCoreOxlintSelections(
+            selectCoreOxlintStripe(shards, { index, total: 3 }, { isolateLargeTargets: true }),
+            { cwd, platform: "linux" },
+          ),
+        );
+      }
+      const projected = stripes.map((stripe) =>
+        createOxlintFileScope(files, cwd).selectShards(stripe),
+      );
+      expect(
+        projected.flatMap((stripe) => stripe.flatMap((shard) => shard.args.slice(2))).toSorted(),
+      ).toEqual(files.toSorted());
+      for (const [index, stripe] of projected.entries()) {
+        const canonical = selectCoreOxlintStripe(
+          shards,
+          { index: index + 1, total: 3 },
+          { isolateLargeTargets: true },
+        );
+        for (const shard of stripe) {
+          expect(
+            canonical.some((owner) => owner.args.slice(2).includes(shard.canonicalTargets![0]!)),
+          ).toBe(true);
+        }
+      }
+      const parts = stripes.flat().filter((shard) => shard.canonicalTargets);
+      expect(
+        parts
+          .map((shard) => shard.canonicalTargets)
+          .toSorted((left, right) => left![0]!.localeCompare(right![0]!)),
+      ).toEqual([["src/agents"], ["src/agents"], ["src/gateway"], ["src/gateway"], ["ui"], ["ui"]]);
+      for (const file of files) {
+        const selected = createOxlintFileScope([file], cwd).selectShards(parts);
+        expect(selected).toHaveLength(1);
+        expect(selected[0]!.args.slice(2)).toEqual([file]);
+        expect(selected[0]!.canonicalTargets).toEqual([
+          file.startsWith("ui/") ? "ui" : file.split("/").slice(0, 2).join("/"),
+        ]);
+      }
+    },
+  );
+
+  it("projects present source files when a sparse checkout omits UI", async () => {
+    const cwd = createTempDir("openclaw-oxlint-core-sparse-");
+    const file = "src/agents/root.ts";
+    mkdirSync(join(cwd, "src/agents"), { recursive: true });
+    writeFileSync(join(cwd, file), "export {};\n");
+    const shards = filterOxlintShards(
+      createOxlintShards({ cwd, splitCore: true }),
+      new Set(["core"]),
+    );
+    const selected = await splitCoreOxlintSelections(
+      selectCoreOxlintStripe(shards, { index: 1, total: 1 }, { isolateLargeTargets: true }),
+      { cwd, platform: process.platform === "win32" ? "win32" : "linux" },
+    );
+    expect(
+      createOxlintFileScope([file], cwd)
+        .selectShards(selected)
+        .map((shard) => shard.args.slice(2)),
+    ).toEqual([[file]]);
+  });
+
+  it.each(["win32", "darwin"] as const)("retains directory arguments on %s", async (platform) => {
+    const shards = [
+      {
+        name: "core:src:agents",
+        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/agents"],
+      },
+    ];
+    let reads = 0;
+    const readDir = () => {
+      reads++;
+      throw new Error("non-Linux selections must not expand root files");
+    };
+    const selected = await splitCoreOxlintSelections(
+      selectCoreOxlintStripe(shards, { index: 1, total: 1 }, { isolateLargeTargets: true }),
+      { platform, readDir },
+    );
+    expect(selected[0]!.args).toEqual(shards[0]!.args);
+    expect(reads).toBe(0);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves native file coverage, symlinks and ignores across physical core parts",
+    async () => {
+      const cwd = createTempDir("openclaw-oxlint-core-native-parts-");
+      const included = [
+        "src/agents/root.ts",
+        "src/agents/space name.mts",
+        "src/agents/nested/child.cts",
+        "src/agents/nested/view.vue",
+        "src/gateway/root.ts",
+        "src/gateway/server/child.mts",
+        "ui/src/pages/chat/view.tsx",
+        "ui/src/components/view.ts",
+        "ui/src/root.ts",
+        "ui/config.ts",
+        "ui/public/sw.js",
+      ];
+      const ignored = [
+        "src/agents/eslint-ignored.ts",
+        "src/agents/git-ignored.ts",
+        "src/gateway/git-ignored.ts",
+        "ui/git-ignored.ts",
+        "ui/src/git-ignored.ts",
+        "src/gateway/eslint-ignored.ts",
+        "src/gateway/server/git-ignored.ts",
+        "src/gateway/server/config-ignored.ts",
+        "src/agents/nested/git-ignored.ts",
+        "src/agents/nested/config-ignored.ts",
+        "ui/src/pages/eslint-ignored.ts",
+        "ui/src/components/git-ignored.ts",
+        "ui/src/components/config-ignored.ts",
+        "ui/node_modules/example/index.ts",
+        "src/agents/unsupported.txt",
+        "src/agents/generated/ignored.ts",
+        "src/gateway/generated/ignored.ts",
+        "ui/generated/ignored.ts",
+        "ui/src/generated/ignored.ts",
+      ];
+      for (const file of [...included, ...ignored]) {
+        mkdirSync(join(cwd, file, ".."), { recursive: true });
+        writeFileSync(join(cwd, file), "export {};\n");
+      }
+      writeFileSync(join(cwd, ".oxlintrc.json"), "{}");
+      writeFileSync(join(cwd, ".eslintignore"), "**/eslint-ignored.ts\n**/generated/\n");
+      writeFileSync(join(cwd, ".gitignore"), "node_modules/\n**/git-ignored.ts\n");
+      for (const directory of ["src/agents/nested", "src/gateway/server", "ui/src/components"]) {
+        writeFileSync(join(cwd, directory, ".gitignore"), "git-ignored.ts\n");
+        writeFileSync(
+          join(cwd, directory, ".oxlintrc.json"),
+          JSON.stringify({ ignorePatterns: ["config-ignored.ts"] }),
+        );
+      }
+      mkdirSync(join(cwd, "linked-source"));
+      writeFileSync(join(cwd, "linked-source/linked.ts"), "export {};\n");
+      symlinkSync(join(cwd, "linked-source"), join(cwd, "src/agents/linked"), "dir");
+      symlinkSync(join(cwd, "linked-source/linked.ts"), join(cwd, "ui/src/linked.ts"), "file");
+      const inventory = (targets: string[]) => {
+        const result = spawnSync(
+          resolveRepoToolBinPath("oxlint"),
+          ["--debug", "files", ...targets],
+          { cwd, encoding: "utf8", timeout: 10_000 },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        return result.stdout.trim().split(/\r?\n/u).filter(Boolean).toSorted();
+      };
+      const shards = filterOxlintShards(
+        createOxlintShards({ cwd, splitCore: true }),
+        new Set(["core"]),
+      );
+      const selections = [];
+      for (const index of [1, 2, 3, 4, 5]) {
+        selections.push(
+          ...(await splitCoreOxlintSelections(
+            selectCoreOxlintStripe(shards, { index, total: 5 }, { isolateLargeTargets: true }),
+            { cwd, platform: "linux" },
+          )),
+        );
+      }
+      for (const target of ["src/agents", "src/gateway", "ui"]) {
+        const parts = selections.filter((shard) => shard.canonicalTargets?.includes(target));
+        expect(parts).toHaveLength(2);
+        const baseline = inventory([target]);
+        const split = parts.flatMap((part) => inventory(part.args.slice(2))).toSorted();
+        expect(split).toEqual(baseline);
+        expect(new Set(split).size).toBe(split.length);
+        expect(split).toEqual(
+          included
+            .filter((file) => file.startsWith(target + "/"))
+            .concat(
+              target === "ui"
+                ? ["ui/src/linked.ts"]
+                : target === "src/agents"
+                  ? ["src/agents/linked/linked.ts"]
+                  : [],
+            )
+            .toSorted(),
+        );
+      }
+
+      // Root ignores prefilter explicit files before nested negations can restore
+      // them. This selection must retain the native directory walk.
+      writeFileSync(join(cwd, ".eslintignore"), "**/*.ts\n");
+      writeFileSync(join(cwd, "src/agents/.eslintignore"), "!*.ts\n");
+      const target = "src/agents";
+      const canonical = {
+        name: "core:src:agents",
+        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", target],
+      };
+      const baseline = inventory([target]);
+      expect(baseline).toContain("src/agents/root.ts");
+      const retained = await splitCoreOxlintSelections([canonical], { cwd, platform: "linux" });
+      expect(retained).toEqual([canonical]);
+      expect(retained.flatMap((part) => inventory(part.args.slice(2))).toSorted()).toEqual(
+        baseline,
+      );
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "bounds physical core discovery by the command deadline",
+    async () => {
+      const cwd = createTempDir("openclaw-oxlint-discovery-deadline-");
+      for (const owner of ["agents", "gateway"]) {
+        mkdirSync(join(cwd, "src", owner), { recursive: true });
+        writeFileSync(join(cwd, "src", owner, "root.ts"), "export {};\n");
+      }
+      mkdirSync(join(cwd, "node_modules/.bin"), { recursive: true });
+      writeFileSync(
+        join(cwd, "node_modules/.bin/oxlint"),
+        `#!${process.execPath}\n` +
+          "const fs = require('node:fs');\n" +
+          "fs.appendFileSync('discoveries', process.pid + '\\n');\n" +
+          "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n",
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { main } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)}; await main(['--only=core', '--split-core', '--core-stripe=1/1']);`,
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          timeout: 5_000,
+          env: {
+            ...process.env,
+            OPENCLAW_LOCAL_CHECK: "0",
+            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "500",
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ETIMEDOUT");
+      const pids = readFileSync(join(cwd, "discoveries"), "utf8").trim().split("\n").map(Number);
+      expect(pids).toHaveLength(1);
+      await waitForDead(pids[0]!, 1_000);
+      const shards = [
+        {
+          name: "core:src:agents",
+          args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/agents"],
+        },
+      ];
+      await expect(
+        splitCoreOxlintSelections(shards, {
+          cwd,
+          platform: "linux",
+          deadline: 0,
+        }),
+      ).rejects.toThrow("core stripe deadline expired before file discovery");
+      expect(readFileSync(join(cwd, "discoveries"), "utf8").trim().split("\n")).toHaveLength(1);
+    },
+  );
+
+  it.runIf(process.platform === "linux").each(["signal", "overflow", "failure"])(
+    "joins physical core discovery and stops before shards on %s",
+    async (mode) => {
+      const cwd = createTempDir("openclaw-oxlint-discovery-stop-");
+      for (const owner of ["agents", "gateway"]) {
+        mkdirSync(join(cwd, "src", owner), { recursive: true });
+        writeFileSync(join(cwd, "src", owner, "root.ts"), "export {};\n");
+      }
+      mkdirSync(join(cwd, "node_modules/.bin"), { recursive: true });
+      const descendant =
+        "const fs = require('node:fs'); fs.writeFileSync('descendant.pid.tmp', String(process.pid)); fs.renameSync('descendant.pid.tmp', 'descendant.pid'); " +
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');";
+      writeModule(join(cwd, "node_modules/.bin/oxlint"), [
+        `#!${process.execPath}`,
+        "const fs = require('node:fs');",
+        "fs.appendFileSync('discoveries', process.pid + '\\n');",
+        mode === "failure"
+          ? "fs.writeFileSync('ready', JSON.stringify([process.pid])); process.stdout.write('src/agents/root.ts\\n', () => process.exit(7));"
+          : [
+              "process.on('SIGTERM', () => {});",
+              `const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
+              "child.once('message', () => {",
+              "fs.writeFileSync('ready.tmp', JSON.stringify([process.pid, child.pid])); fs.renameSync('ready.tmp', 'ready');",
+              mode === "overflow" ? "process.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1));" : "",
+              "}); setInterval(() => {}, 1000);",
+            ].join("\n"),
+      ]);
+      // The discovery shim must be executable for the same native-bin entry point.
+      chmodSync(join(cwd, "node_modules/.bin/oxlint"), 0o755);
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { main } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)}; process.exitCode = await main(['--only=core', '--split-core', '--core-stripe=1/1']);`,
+        ],
+        {
+          cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            OPENCLAW_LOCAL_CHECK: "0",
+            OPENCLAW_CI_STATIC_EVIDENCE: "1",
+            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "3000",
+            OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
+          },
+        },
+      );
+      const completion = waitForChildClose(child, 7_000);
+      void completion.catch(() => undefined);
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      let pids: number[] = [];
+      try {
+        await waitForFile(join(cwd, "ready"), 3_000);
+        pids = JSON.parse(readFileSync(join(cwd, "ready"), "utf8")) as number[];
+        if (mode === "signal") {
+          process.kill(child.pid!, "SIGTERM");
+        }
+        const result = await completion;
+        expect(result, stderr).toEqual({ code: mode === "signal" ? 143 : 1, signal: null });
+        if (mode === "overflow") {
+          expect(stderr).toContain("core file discovery exceeded 4 MiB output");
+        }
+        if (mode === "failure") {
+          expect(stderr).toContain("core file discovery failed (exit 7)");
+        }
+        expect(stdout).not.toContain("[ci-static:oxlint:");
+        expect(stderr).not.toContain("[oxlint] shard concurrency");
+        expect(readFileSync(join(cwd, "discoveries"), "utf8").trim().split("\n")).toHaveLength(1);
+        for (const pid of pids) {
+          await waitForDead(pid, 1_000);
+        }
+      } finally {
+        // Keep the cleanup owner alive even when readiness or the assertion times out.
+        // A rejected timeout promise does not prove that the wrapper has closed.
+        if (child.exitCode === null && child.signalCode === null) {
+          const closed = waitForChildClose(child, 2_000);
+          child.kill("SIGTERM");
+          try {
+            await closed;
+          } catch {
+            const killed = waitForChildClose(child, 2_000);
+            child.kill("SIGKILL");
+            await killed;
+          }
+        }
+        const discoveries = existsSync(join(cwd, "discoveries"))
+          ? readFileSync(join(cwd, "discoveries"), "utf8")
+              .trim()
+              .split("\n")
+              .map(Number)
+              .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+          : [];
+        const descendantPid = existsSync(join(cwd, "descendant.pid"))
+          ? Number(readFileSync(join(cwd, "descendant.pid"), "utf8"))
+          : undefined;
+        for (const pid of discoveries) {
+          // The managed discovery child owns this group; join it even if its
+          // leader exited before publishing the separate readiness receipt.
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch (error) {
+            expect((error as NodeJS.ErrnoException).code).toBe("ESRCH");
+          }
+          expect(
+            await waitForManagedProcessGroupExit({ pid }, 1_000, { errorPolicy: "alive-on-eperm" }),
+          ).toBe(true);
+        }
+        for (const pid of new Set([
+          ...pids,
+          ...discoveries,
+          ...(descendantPid ? [descendantPid] : []),
+        ])) {
+          if (isProcessAlive(pid)) {
+            process.kill(pid, "SIGKILL");
+          }
+          await waitForDead(pid, 1_000);
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "preserves a single JSON report for a split-eligible core target",
+    () => {
+      const cwd = createTempDir("openclaw-oxlint-core-json-");
+      for (const directory of ["src/agents/nested", "scripts"]) {
+        mkdirSync(join(cwd, directory), { recursive: true });
+      }
+      symlinkSync(join(process.cwd(), "node_modules"), join(cwd, "node_modules"), "junction");
+      writeFileSync(join(cwd, "src/agents/root.ts"), "export {};\n");
+      writeFileSync(join(cwd, "src/agents/nested/child.ts"), "export {};\n");
+      writeModule(join(cwd, "scripts/run-oxlint.mts"), [
+        "console.log(JSON.stringify({ diagnostics: [], args: process.argv.slice(2) }));",
+      ]);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { main } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)}; process.exitCode = await main(['--only=core:src:agents','--split-core','--core-stripe=1/1','--threads=1','--format=json']);`,
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          timeout: 15_000,
+          env: { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        diagnostics: [],
+        args: [
+          "--tsconfig",
+          "config/tsconfig/oxlint.core.json",
+          "src/agents",
+          "--threads=1",
+          "--format=json",
+        ],
+      });
+    },
+  );
+
+  it.runIf(process.platform === "linux").each([0, 7, 124])(
+    "joins core parts serially, sharing their deadline and stopping on exit %s",
+    (exitCode) => {
+      const cwd = createTempDir("openclaw-oxlint-core-parts-execution-");
+      for (const directory of ["src/agents/nested", "scripts"]) {
+        mkdirSync(join(cwd, directory), { recursive: true });
+      }
+      symlinkSync(join(process.cwd(), "node_modules"), join(cwd, "node_modules"), "junction");
+      writeFileSync(join(cwd, "src/agents/root.ts"), "export {};\n");
+      writeFileSync(join(cwd, "src/agents/nested/child.ts"), "export {};\n");
+      writeModule(join(cwd, "scripts/run-oxlint.mts"), [
+        "import { appendFileSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';",
+        "const previous = existsSync('events.jsonl') ? readFileSync('events.jsonl', 'utf8').trim().split('\\n').map(JSON.parse).at(-1) : undefined;",
+        "if (previous) { try { process.kill(previous.pid, 0); throw new Error('previous child is still alive'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }",
+        "writeFileSync('active.lock', String(process.pid), { flag: 'wx' });",
+        "appendFileSync('events.jsonl', JSON.stringify({pid:process.pid,args:process.argv.slice(2),budget:Number(process.env.OPENCLAW_OXLINT_SHARD_TIMEOUT_MS),concurrency:process.env.OPENCLAW_OXLINT_BATCH_CONCURRENCY,bounded:process.env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(process.argv.slice(2))})+'\\n');",
+        `await new Promise(resolve => setTimeout(resolve, ${exitCode === 124 ? 10000 : 100}));`,
+        "unlinkSync('active.lock');",
+        `process.exitCode = ${exitCode};`,
+      ]);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { main } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)}; process.exitCode = await main(['--only=core:src:agents','--split-core','--core-stripe=1/1','--threads=1']);`,
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          timeout: 15_000,
+          env: {
+            ...process.env,
+            OPENCLAW_LOCAL_CHECK: "0",
+            OPENCLAW_OXLINT_SHARDS_SERIAL: "0",
+            OPENCLAW_OXLINT_SHARD_CONCURRENCY: "8",
+            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: exitCode === 124 ? "1000" : "10000",
+            OPENCLAW_CI_STATIC_EVIDENCE: "1",
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(exitCode);
+      const events = readFileSync(join(cwd, "events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              args: string[];
+              budget: number;
+              concurrency: string;
+              bounded: boolean;
+            },
+        );
+      expect(events).toHaveLength(exitCode === 0 ? 2 : 1);
+      expect(events.every((event) => event.concurrency === "1" && event.bounded)).toBe(true);
+      expect(events[0]!.args).toContain("src/agents/root.ts");
+      expect(events[0]!.budget).toBeLessThanOrEqual(10_000);
+      const completions = result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("[ci-static:oxlint:completion] "));
+      if (exitCode === 0) {
+        expect(events[1]!.args).toContain("src/agents/nested");
+        expect(events[1]!.budget).toBeLessThan(events[0]!.budget - 90);
+        expect(completions).toHaveLength(1);
+        const completion = JSON.parse(
+          completions[0]!.slice("[ci-static:oxlint:completion] ".length),
+        ) as { planned: number; completed: number; leaves: string[] };
+        expect([completion.planned, completion.completed, new Set(completion.leaves).size]).toEqual(
+          [2, 2, 2],
+        );
+      } else {
+        expect(completions).toEqual([]);
+      }
+    },
+  );
 
   it.each([
     { name: "constrained CI", hostResources: CONSTRAINED_HOST, env: { CI: "true" } },

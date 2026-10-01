@@ -60,6 +60,7 @@ export function waitForFile(file) {
     "lib/dist-artifact-lock.mts",
     "lib/record-shared.mjs",
     "lib/failed-trailer.mts",
+    "lib/cancelable-command.mts",
     "lib/managed-child-process.mts",
     "lib/managed-memory.mts",
     "lib/managed-memory-entrypoint.mts",

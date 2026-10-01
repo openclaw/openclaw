@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isCommandCancellation, runCancelableCommand } from "./lib/cancelable-command.mts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -14,6 +15,7 @@ import {
   isConstrainedCiCheckHost,
   resolveCheckMemoryCapacityBytes,
   resolveLocalCheckEnv,
+  resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
 import {
   inspectManagedProcessGroup,
@@ -69,6 +71,8 @@ type ShardBatchOptions = RunnerOptions & {
   concurrency: number;
   entries: OxlintShard[];
   evidenceId?: string;
+  deadline?: number;
+  stopOnFailure: boolean;
 };
 type ActiveShardChild = { child: ChildProcess; killGraceMs: number };
 
@@ -324,6 +328,9 @@ export async function main(
   const runner = path.resolve("scripts", "run-oxlint.mts");
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
+  const timeoutMs = resolveShardTimeoutMs(env);
+  const deadline =
+    shardArgs.coreStripe && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
   const hostResources = resolveHostResources();
   const splitExtensions = shardArgs.extensionStripe !== undefined;
   const shards = createOxlintShards({
@@ -334,12 +341,29 @@ export async function main(
     splitCore: shardArgs.splitCore,
     splitExtensions,
   });
-  const stripedShards = selectExtensionOxlintStripe(
-    selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe, {
-      isolateLargeTargets: true,
-    }),
-    shardArgs.extensionStripe,
+  let coreShards = selectCoreOxlintStripe(
+    filterOxlintShards(shards, shardArgs.only),
+    shardArgs.coreStripe,
+    { isolateLargeTargets: true },
   );
+  // Discovery owns cancellation before shards start. Explicit files retain their
+  // gitignore bypass; explicit JSON retains one native report per selection.
+  if (
+    shardArgs.coreStripe &&
+    !shardArgs.files &&
+    !shardArgs.oxlintArgs.includes("--format=json") &&
+    hasBoundedOxlintArgs(shardArgs.oxlintArgs)
+  ) {
+    const status = await runCancelableCommand(async (signal) => {
+      coreShards = await splitCoreOxlintSelections(coreShards, { deadline, env, signal });
+      signal.throwIfAborted();
+      return 0;
+    });
+    if (status !== 0) {
+      return status;
+    }
+  }
+  const stripedShards = selectExtensionOxlintStripe(coreShards, shardArgs.extensionStripe);
   const selectedShards = shardArgs.files
     ? createOxlintFileScope(shardArgs.files).selectShards(stripedShards)
     : stripedShards;
@@ -366,13 +390,15 @@ export async function main(
         return code;
       }
     }
-    const shardConcurrency = resolveOxlintShardConcurrency({
-      env,
-      platform: process.platform,
-      hostResources,
-      splitCore: shardArgs.splitCore,
-      splitExtensions,
-    });
+    const shardConcurrency = shardArgs.coreStripe
+      ? 1
+      : resolveOxlintShardConcurrency({
+          env,
+          platform: process.platform,
+          hostResources,
+          splitCore: shardArgs.splitCore,
+          splitExtensions,
+        });
     // stderr: stdout may carry machine-readable oxlint output for callers.
     console.error(
       `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
@@ -385,6 +411,8 @@ export async function main(
       extraArgs: shardArgs.oxlintArgs,
       runner,
       evidenceId,
+      deadline,
+      stopOnFailure: shardArgs.coreStripe !== undefined,
     });
     completed = results.completed;
     return results.statuses.find((status) => status !== 0) ?? 0;
@@ -575,6 +603,164 @@ export function selectCoreOxlintStripe(
   ];
 }
 
+export async function splitCoreOxlintSelections(
+  shards: OxlintShard[],
+  {
+    platform = process.platform,
+    cwd = process.cwd(),
+    readDir = fs.readdirSync,
+    env = process.env,
+    deadline,
+    signal,
+  }: DirectoryOptions & PlatformOptions & { deadline?: number; signal?: AbortSignal } = {},
+) {
+  // Explicit root-file arguments can exceed Windows command-line limits.
+  // These measured selections are qualified only on Linux workers.
+  if (platform !== "linux") {
+    return shards;
+  }
+  const selections: OxlintShard[] = [];
+  for (const shard of shards) {
+    signal?.throwIfAborted();
+    const target = shard.args.length === 3 ? shard.args[2]! : "";
+    const parts = await splitCoreTargetSelection(target, { cwd, readDir }, env, deadline, signal);
+    signal?.throwIfAborted();
+    selections.push(
+      ...(parts.length === 1
+        ? [shard]
+        : parts.map((targets, index) => ({
+            name: `${shard.name}:part:${index + 1}`,
+            args: ["--tsconfig", CORE_TS_CONFIG, ...targets],
+            canonicalTargets: [target],
+          }))),
+    );
+  }
+  return selections;
+}
+
+async function splitCoreTargetSelection(
+  target: string,
+  options: DirectoryLookup,
+  env: NodeJS.ProcessEnv,
+  deadline?: number,
+  signal?: AbortSignal,
+) {
+  // These measured cuts bound checker/payload retention without changing type
+  // projects. Native discovery preserves gitignore before files become explicit.
+  if (
+    !["src/agents", "src/gateway", "ui"].includes(target) ||
+    readDirectoryEntries(options.readDir, path.join(options.cwd, target)).length === 0
+  ) {
+    return [[target]];
+  }
+  const discover = async (targets: string[]) => {
+    const remainingMs = deadline === undefined ? 30_000 : Math.ceil(deadline - performance.now());
+    if (remainingMs <= 0) {
+      throw new Error("core stripe deadline expired before file discovery");
+    }
+    const controller = new AbortController();
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let overflow = false;
+    try {
+      const status = await runManagedCommand({
+        bin: resolveRepoToolBinPath("oxlint"),
+        args: ["--debug", "files", ...targets],
+        cwd: options.cwd,
+        env,
+        stdio: ["ignore", "pipe", "inherit"],
+        requireProcessTreeExit: true,
+        timeoutMs: Math.min(30_000, remainingMs),
+        timeoutKillGraceMs: 0,
+        signalKillGraceMs: resolveShardKillGraceMs(env),
+        abortKillGraceMs: 0,
+        signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+        onReady(child) {
+          child.stdout!.on("data", (chunk: Buffer) => {
+            if (overflow) {
+              return;
+            }
+            bytes += chunk.length;
+            if (bytes > 4 * 1024 * 1024) {
+              overflow = true;
+              chunks.length = 0;
+              controller.abort();
+            } else {
+              chunks.push(chunk);
+            }
+          });
+        },
+      });
+      signal?.throwIfAborted();
+      if (status !== 0) {
+        throw new Error(`core file discovery failed (exit ${status})`);
+      }
+    } catch (error) {
+      // Report overflow only after joined cancellation; uncertain cleanup stays fatal.
+      if (overflow && isCommandCancellation(error)) {
+        throw new Error("core file discovery exceeded 4 MiB output", { cause: error });
+      }
+      throw error;
+    }
+    return Buffer.concat(chunks).toString("utf8").split(/\r?\n/u).filter(Boolean).toSorted();
+  };
+  const files = await discover([target]);
+  const selected = new Set(files);
+  const entries = (root: string) =>
+    readDirectoryEntries(options.readDir, path.join(options.cwd, root))
+      .filter((entry) => {
+        const candidate = root + "/" + entry.name;
+        return selected.has(candidate) || files.some((file) => file.startsWith(candidate + "/"));
+      })
+      .toSorted((left, right) => left.name.localeCompare(right.name));
+  let parts: string[][];
+  if (target === "ui") {
+    const root = entries("ui");
+    if (!root.some((entry) => entry.name === "src" && entry.isDirectory())) {
+      return [[target]];
+    }
+    const source = entries("ui/src");
+    if (!source.some((entry) => entry.name === "pages" && entry.isDirectory())) {
+      return [[target]];
+    }
+    parts = [
+      ["ui/src/pages"],
+      [
+        ...root.filter((entry) => entry.name !== "src").map((entry) => "ui/" + entry.name),
+        ...source.filter((entry) => entry.name !== "pages").map((entry) => "ui/src/" + entry.name),
+      ],
+    ];
+  } else {
+    const children = entries(target);
+    parts = [false, true].map((directory) =>
+      children
+        .filter((entry) => entry.isDirectory() === directory)
+        .map((entry) => target + "/" + entry.name),
+    );
+  }
+  // Retain directory traversal: enumerating every nested file can overflow
+  // the bounded-argument ownership token's per-environment-variable OS limit.
+  if (parts.some((part) => part.length === 0)) {
+    return [[target]];
+  }
+  const projected: string[] = [];
+  for (const part of parts) {
+    projected.push(...(await discover(part)));
+  }
+  projected.sort();
+  // Explicit paths are prefiltered before nested ignore negations can restore
+  // them. Keep native directory traversal unless the split preserves every file.
+  return projected.length === files.length &&
+    projected.every((file, index) => file === files[index])
+    ? parts
+    : [[target]];
+}
+
+function hasBoundedOxlintArgs(args: readonly string[]) {
+  // Fixes, suppression updates and warning budgets retain whole-command semantics.
+  return args.every((arg) => /^--(?:threads=[12]|format=(?:json|stylish))$/u.test(arg));
+}
+
 /** Select one deterministic, disjoint stripe of independently bounded extension Programs. */
 export function selectExtensionOxlintStripe(
   shards: OxlintShard[],
@@ -646,16 +832,26 @@ async function runShards({
   extraArgs,
   runner,
   evidenceId,
+  deadline,
+  stopOnFailure,
 }: ShardBatchOptions) {
   // Dependency-less worktrees establish their primary-checkout toolchain link
   // before this lazy import, avoiding a top-level package-resolution failure.
   const { default: pMap } = await import("p-map");
   let completed = 0;
+  let failed = false;
   const results = await pMap(
     entries,
     async (shard, index) => {
-      if (isParentTerminationRequested()) {
+      if (isParentTerminationRequested() || (stopOnFailure && failed)) {
         return undefined;
+      }
+      const remainingMs =
+        deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
+      if (remainingMs !== undefined && remainingMs <= 0) {
+        failed = true;
+        console.error("[oxlint] core stripe deadline expired; remaining shards were not started");
+        return 124;
       }
       // File projection must retain the measured parent Program's resource bounds.
       const targets = shard.canonicalTargets ?? shard.args.slice(2);
@@ -664,12 +860,14 @@ async function runShards({
           (targets.length === 1 ||
             targets.every((target) => !ISOLATED_CORE_TARGETS.has(target)))) ||
         (shard.name.startsWith("extensions:") && targets.length <= DEFAULT_EXTENSION_CHUNK_SIZE);
-      const boundedArgs =
-        boundedTargets &&
-        extraArgs.every((arg) => /^--(?:threads=[12]|format=(?:json|stylish))$/u.test(arg));
-      return await runShard({
+      const boundedArgs = boundedTargets && hasBoundedOxlintArgs(extraArgs);
+      const status = await runShard({
         env: {
           ...env,
+          // Physical parts share one command budget; another part cannot restart it.
+          ...(remainingMs === undefined
+            ? {}
+            : { OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: String(remainingMs) }),
           ...(evidenceId ? { OPENCLAW_CI_STATIC_EVIDENCE_ID: `${evidenceId}:${index}` } : {}),
           OPENCLAW_OXLINT_BATCH_CONCURRENCY: String(concurrency),
           OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: boundedArgs
@@ -684,8 +882,12 @@ async function runShards({
           completed++;
         },
       });
+      if (status !== 0) {
+        failed = true;
+      }
+      return status;
     },
-    { concurrency, stopOnError: false },
+    { concurrency, stopOnError: stopOnFailure },
   );
   return { statuses: results.filter((status) => status !== undefined), completed };
 }
