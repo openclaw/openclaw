@@ -385,3 +385,37 @@ export function deleteTranscriptEventsInTransaction(
   );
   return (result.numAffectedRows ?? 0n) > 0n;
 }
+
+export function pruneTranscriptReactionsInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  removedEventIds?: readonly string[],
+): void {
+  const db = getSessionKysely(database.db);
+  const query = db
+    .deleteFrom("session_reactions")
+    .where("session_key", "=", scope.sessionKey)
+    .where("session_id", "=", scope.sessionId)
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("transcript_event_identities")
+            .select("event_id")
+            .whereRef("session_id", "=", "session_reactions.session_id")
+            .whereRef("event_id", "=", "session_reactions.message_id"),
+        ),
+      ),
+    );
+  if (removedEventIds === undefined) {
+    executeSqliteQuerySync(database.db, query);
+    return;
+  }
+  // A suffix rewrite must not prune a retained, legacy unindexed prefix.
+  for (let start = 0; start < removedEventIds.length; start += 500) {
+    executeSqliteQuerySync(
+      database.db,
+      query.where("message_id", "in", removedEventIds.slice(start, start + 500)),
+    );
+  }
+}

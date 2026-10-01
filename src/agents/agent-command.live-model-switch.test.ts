@@ -44,6 +44,7 @@ import {
   withStoredAgentCommandRecoverySession,
 } from "./agent-command.restart-recovery.test-harness.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import { FailoverError } from "./failover/error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
@@ -390,11 +391,9 @@ vi.mock("../config/io.js", () => ({
   }),
 }));
 
-vi.mock("./agent-runtime-config.js", () => {
-  return {
-    resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-  };
-});
+vi.mock("./agent-runtime-config.js", () => ({
+  resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+}));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   const { rebasePluginMetadataSnapshotManifestRegistry } =
@@ -403,6 +402,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
     isPluginMetadataSnapshotCompatible: () => false,
     rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+      state.resolvePluginMetadataSnapshotMock(...args),
+    resolvePluginMetadataSnapshotAsync: async (...args: unknown[]) =>
       state.resolvePluginMetadataSnapshotMock(...args),
   };
 });
@@ -4219,6 +4220,51 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       model: "claude",
       reason: "format",
     });
+  });
+
+  it("does not carry an earlier provider error observation into a CLI startup failure", async () => {
+    const primaryFailure = new FailoverError("Primary provider failed", {
+      reason: "server_error",
+      provider: "anthropic",
+      model: "claude",
+    });
+    const startupFailure = new Error("CLI process failed before starting");
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await expect(runInitialFallbackAttempt(params)).rejects.toBe(primaryFailure);
+      return await runSubsequentFallbackAttempt(params, "claude-cli", "claude", "server_error");
+    });
+    state.runAgentAttemptMock
+      .mockImplementationOnce(
+        async (
+          params: Parameters<typeof import("./command/attempt-execution.js").runAgentAttempt>[0],
+        ) => {
+          await params.onAgentEvent({
+            stream: "lifecycle",
+            data: {
+              phase: "finishing",
+              error: primaryFailure.message,
+              errorObservation: {
+                provider: "anthropic",
+                model: "claude",
+                providerErrorType: "server_error",
+              },
+            },
+          });
+          throw primaryFailure;
+        },
+      )
+      .mockRejectedValueOnce(startupFailure);
+
+    await expect(runBasicAgentCommand()).rejects.toBe(startupFailure);
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+    const terminalErrors = agentLifecycleEvents().filter((event) => event.data?.phase === "error");
+    expect(terminalErrors).toHaveLength(1);
+    expect(terminalErrors[0]?.data).toMatchObject({
+      error: startupFailure.message,
+      executionSettled: true,
+    });
+    expect(terminalErrors[0]?.data).not.toHaveProperty("errorObservation");
   });
 
   it("emits a failure lifecycle after delivering a preserved exhausted result", async () => {

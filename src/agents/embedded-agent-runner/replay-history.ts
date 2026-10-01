@@ -99,14 +99,14 @@ type ProviderReplayHookParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  provider: string;
+  provider?: string;
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
   sessionId?: string;
 };
 
-function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
+function createProviderReplayPluginParams(params: ProviderReplayHookParams & { provider: string }) {
   const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -171,11 +171,10 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
   return touched ? out : messages;
 }
 
-function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
-  if (!message || message.role !== "user") {
-    return message;
-  }
-  const replayContent = (message as { content?: unknown }).content;
+function sanitizeUserReplayContent(
+  message: Extract<AgentMessage, { role: "user" }>,
+): AgentMessage | null {
+  const replayContent = message.content;
   if (typeof replayContent === "string") {
     return replayContent.trim() || hasPersistedMedia(message) ? message : null;
   }
@@ -233,19 +232,14 @@ function normalizeAssistantReplayBlockContent(
       continue;
     }
     const strippedText = stripInternalMetadataForDisplay(text);
-    if (strippedText === text) {
-      if (!isSilentReplyPayloadText(text.trim(), SILENT_REPLY_TOKEN)) {
-        sanitizedContent.push(block);
-      } else {
-        touched = true;
-        removedSilentText = true;
-      }
-      continue;
-    }
-    touched = true;
     const trimmed = strippedText.trim();
     const isSilentText =
       trimmed.length > 0 && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
+    if (strippedText === text && !isSilentText) {
+      sanitizedContent.push(block);
+      continue;
+    }
+    touched = true;
     if (trimmed && !isSilentText) {
       sanitizedContent.push({ ...record, text: strippedText });
     }
@@ -422,10 +416,6 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
 }
 
 function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {
-  if (messages.length === 0) {
-    return messages;
-  }
-
   let touched = false;
   const out = [...messages];
   for (let i = 0; i < out.length; i += 1) {
@@ -535,11 +525,8 @@ function appendModelSnapshot(sessionManager: SessionManager, data: ModelSnapshot
 }
 
 function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): boolean {
-  const normalize = (value?: string | null) => value ?? "";
-  return (
-    normalize(a.provider) === normalize(b.provider) &&
-    normalize(a.modelApi) === normalize(b.modelApi) &&
-    normalize(a.modelId) === normalize(b.modelId)
+  return (["provider", "modelApi", "modelId"] as const).every(
+    (field) => (a[field] ?? "") === (b[field] ?? ""),
   );
 }
 
@@ -555,22 +542,24 @@ function formatOpenAIResponsesReplayInvariantError(params: {
 }
 
 function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): AgentMessage[] {
-  const pending = new Map<string, { messageIndex: number }>();
+  const pending = new Map<string, number>();
+  const assertNoPendingCalls = () => {
+    const dangling = pending.entries().next().value;
+    if (dangling) {
+      throw formatOpenAIResponsesReplayInvariantError({
+        reason: "dangling_tool_call",
+        toolCallId: dangling[0],
+        messageIndex: dangling[1],
+      });
+    }
+  };
 
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
     const role = (message as { role?: unknown } | undefined)?.role;
 
-    if (pending.size > 0 && role !== "toolResult") {
-      const [toolCallId, meta] = pending.entries().next().value as [
-        string,
-        { messageIndex: number },
-      ];
-      throw formatOpenAIResponsesReplayInvariantError({
-        reason: "dangling_tool_call",
-        toolCallId,
-        messageIndex: meta.messageIndex,
-      });
+    if (role !== "toolResult") {
+      assertNoPendingCalls();
     }
 
     if (!message || typeof message !== "object") {
@@ -599,19 +588,11 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
     for (const toolCall of extractToolCallsFromAssistant(
       message as Extract<AgentMessage, { role: "assistant" }>,
     )) {
-      pending.set(toolCall.id, { messageIndex: i });
+      pending.set(toolCall.id, i);
     }
   }
 
-  if (pending.size > 0) {
-    const [toolCallId, meta] = pending.entries().next().value as [string, { messageIndex: number }];
-    throw formatOpenAIResponsesReplayInvariantError({
-      reason: "dangling_tool_call",
-      toolCallId,
-      messageIndex: meta.messageIndex,
-    });
-  }
-
+  assertNoPendingCalls();
   return messages;
 }
 
@@ -619,21 +600,16 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
  */
-export async function sanitizeSessionHistory(params: {
-  messages: AgentMessage[];
-  modelApi?: string | null;
-  modelId?: string;
-  provider?: string;
-  allowedToolNames?: Iterable<string>;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  model?: ProviderRuntimeModel;
-  sessionManager: SessionManager;
-  sessionId: string;
-  policy?: TranscriptPolicy;
-  preserveLatestAssistantThinking?: boolean;
-}): Promise<AgentMessage[]> {
+export async function sanitizeSessionHistory(
+  params: ProviderReplayHookParams & {
+    messages: AgentMessage[];
+    allowedToolNames?: Iterable<string>;
+    sessionManager: SessionManager;
+    sessionId: string;
+    policy?: TranscriptPolicy;
+    preserveLatestAssistantThinking?: boolean;
+  },
+): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy =
     params.policy ??
@@ -811,18 +787,12 @@ export async function sanitizeSessionHistory(params: {
  * Runs provider-owned replay validation before falling back to the remaining
  * generic validator pipeline.
  */
-export async function validateReplayTurns(params: {
-  messages: AgentMessage[];
-  modelApi?: string | null;
-  modelId?: string;
-  provider?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  model?: ProviderRuntimeModel;
-  sessionId?: string;
-  policy?: TranscriptPolicy;
-}): Promise<AgentMessage[]> {
+export async function validateReplayTurns(
+  params: ProviderReplayHookParams & {
+    messages: AgentMessage[];
+    policy?: TranscriptPolicy;
+  },
+): Promise<AgentMessage[]> {
   const policy =
     params.policy ??
     resolveTranscriptPolicy({

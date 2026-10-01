@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   readProviderJsonResponse,
   readProviderTextResponse,
@@ -77,8 +78,8 @@ const resolvedModelArtifacts = new Map<string, ModelArtifact>(); // Presets rema
 const presetState = {
   appliedRevisions: new Map<string, string>(),
   desiredRevisions: new Map<string, string>(),
-  transition: Promise.resolve(),
 };
+const runPresetTransition = createAsyncLock();
 const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000; // Allows five seconds beyond model shutdown.
 
 function parseHuggingFaceSource(source: string): {
@@ -323,12 +324,6 @@ async function writePreset(presetPath: string, contents: string): Promise<void> 
   } finally {
     await fsp.rm(temporary, { force: true });
   }
-}
-
-async function runPresetTransition(run: () => Promise<void>): Promise<void> {
-  const pending = presetState.transition.catch(() => undefined).then(run);
-  presetState.transition = pending;
-  await pending;
 }
 
 async function updatePreset(

@@ -134,6 +134,14 @@ export const HelloOkSchema = closedObject({
     recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
+    sessionCap: Type.Optional(
+      Type.Union([
+        Type.Literal("write"),
+        Type.Literal("suggest"),
+        Type.Literal("view"),
+        Type.Literal("none"),
+      ]),
+    ),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     deviceTokens: Type.Optional(
       Type.Array(

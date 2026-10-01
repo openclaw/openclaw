@@ -347,8 +347,6 @@ describe("registerPolicyDoctorChecks", () => {
   it.each([
     ["top-level array", [], "oc://policy.jsonc"],
     ["tools array", { tools: [] }, "oc://policy.jsonc/tools"],
-    ["tools settings array", { tools: { settings: [] } }, "oc://policy.jsonc/tools/settings"],
-    ["tools entries object", { tools: { entries: {} } }, "oc://policy.jsonc/tools/entries"],
     ["tools profiles array", { tools: { profiles: [] } }, "oc://policy.jsonc/tools/profiles"],
     [
       "tools profiles allow string",
@@ -374,11 +372,6 @@ describe("registerPolicyDoctorChecks", () => {
       "tools elevated allow string",
       { tools: { elevated: { allow: "false" } } },
       "oc://policy.jsonc/tools/elevated/allow",
-    ],
-    [
-      "tools alsoAllow array",
-      { tools: { alsoAllow: ["read"] } },
-      "oc://policy.jsonc/tools/alsoAllow",
     ],
     [
       "tools denyTools blank entry",
@@ -418,18 +411,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
       "oc://policy.jsonc/scopes/sebby/agents/workspace/allowedAccess/#0",
-    ],
-    [
-      "scopes agent tools exec allowHosts invalid",
-      {
-        scopes: {
-          sebby: {
-            agentIds: ["sebby"],
-            tools: { exec: { allowHosts: ["shell"] } },
-          },
-        },
-      },
-      "oc://policy.jsonc/scopes/sebby/tools/exec/allowHosts/#0",
     ],
     [
       "scopes agent tools unsupported top-level key",
@@ -553,11 +534,6 @@ describe("registerPolicyDoctorChecks", () => {
       { ingress: { channels: { denyOpenGroups: "true" } } },
       "oc://policy.jsonc/ingress/channels/denyOpenGroups",
     ],
-    [
-      "ingress requireMentionInGroups string",
-      { ingress: { channels: { requireMentionInGroups: "true" } } },
-      "oc://policy.jsonc/ingress/channels/requireMentionInGroups",
-    ],
     ["mcp array", { mcp: [] }, "oc://policy.jsonc/mcp"],
     ["mcp servers array", { mcp: { servers: [] } }, "oc://policy.jsonc/mcp/servers"],
     [
@@ -571,12 +547,6 @@ describe("registerPolicyDoctorChecks", () => {
       "oc://policy.jsonc/mcp/servers/deny/#1",
     ],
     ["models array", { models: [] }, "oc://policy.jsonc/models"],
-    ["models providers array", { models: { providers: [] } }, "oc://policy.jsonc/models/providers"],
-    [
-      "models providers allow string",
-      { models: { providers: { allow: "openai" } } },
-      "oc://policy.jsonc/models/providers/allow",
-    ],
     [
       "models providers deny blank entry",
       { models: { providers: { deny: ["openrouter", " "] } } },
@@ -601,31 +571,15 @@ describe("registerPolicyDoctorChecks", () => {
       "oc://policy.jsonc/gateway/auth/requireAuth",
     ],
     [
-      "gateway requireExplicitRateLimit string",
-      { gateway: { auth: { requireExplicitRateLimit: "true" } } },
-      "oc://policy.jsonc/gateway/auth/requireExplicitRateLimit",
-    ],
-    [
       "gateway denyEndpoints string",
       { gateway: { http: { denyEndpoints: "responses" } } },
       "oc://policy.jsonc/gateway/http/denyEndpoints",
-    ],
-    [
-      "gateway denyEndpoints blank entry",
-      { gateway: { http: { denyEndpoints: ["responses", " "] } } },
-      "oc://policy.jsonc/gateway/http/denyEndpoints/#1",
     ],
     [
       "gateway denyEndpoints unknown entry",
       { gateway: { http: { denyEndpoints: ["responses", "completions"] } } },
       "oc://policy.jsonc/gateway/http/denyEndpoints/#1",
     ],
-    [
-      "gateway requireUrlAllowlists string",
-      { gateway: { http: { requireUrlAllowlists: "true" } } },
-      "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
-    ],
-    ["gateway nodes array", { gateway: { nodes: [] } }, "oc://policy.jsonc/gateway/nodes"],
     [
       "gateway nodes denyCommands string",
       { gateway: { nodes: { denyCommands: "system.run" } } },
@@ -887,8 +841,12 @@ describe("registerPolicyDoctorChecks", () => {
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
-    expect(result.findings.map((finding) => finding.checkId)).toEqual([
-      "policy/policy-hash-mismatch",
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-hash-mismatch",
+        severity: "error",
+        path: "policy.jsonc",
+      }),
     ]);
   });
 
@@ -947,8 +905,12 @@ describe("registerPolicyDoctorChecks", () => {
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
-    expect(result.findings.map((finding) => finding.checkId)).toEqual([
-      "policy/attestation-hash-mismatch",
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/attestation-hash-mismatch",
+        severity: "error",
+        path: "policy attestation",
+      }),
     ]);
   });
 

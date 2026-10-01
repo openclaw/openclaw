@@ -129,7 +129,7 @@ export function registerClawsCli(program: Command) {
     .option("--plan-integrity <digest>", "Bind consent to an exact update plan")
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
-      const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");
+      const { runClawsUpdateCommand } = await import("./claws-update-cli.runtime.js");
       await runClawsUpdateCommand(target, opts);
     });
 

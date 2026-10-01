@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -244,7 +245,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
           if (!nativeDirectory?.removed || !nativeDirectory.recovering) {
             if (!cleanup) {
               try {
-                // Re-imported callers can hold another registry; this owner keeps its original readers.
+                // Re-imported callers share this reader fence with the retained native owner.
                 sealRetainedSnapshotTempDirectory(directory);
                 cleanup = pool.startCloseResources(directory);
               } catch (error) {
@@ -705,10 +706,11 @@ export function captureSqliteSnapshotStagingOwner() {
 }
 
 export async function allocateWorkerOwnedSqliteSnapshotDirectory(
-  root: string,
+  inputRoot: string,
   allowLegacyWorker: boolean,
   signal?: AbortSignal,
 ): Promise<SqliteSnapshotStagingDirectory> {
+  const root = path.resolve(inputRoot);
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
   const owner = captureSqliteSnapshotStagingOwner();
   const request = owner.start(

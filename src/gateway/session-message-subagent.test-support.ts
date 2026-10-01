@@ -57,7 +57,7 @@ export function registerRecoveredSubagentSessionEventTest({
         publication.onCommitted?.();
       },
       clearPendingLifecycleError: vi.fn(),
-      countPendingDescendantRuns: () => 0,
+      countPendingDescendantRuns: async () => 0,
       getLatestRunForChildSession: () => null,
       suppressAnnounceForSteerRestart: () => false,
       shouldEmitEndedHookForRun: () => false,

@@ -83,10 +83,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
 
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
-      () => this.uploadConfig,
-      (config, notify) => config.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.uploadConfig);
   }
   private readonly composer = createSessionRailComposer({
     submit: () => this.submit(),

@@ -91,7 +91,6 @@ type ReadCodexPluginInventoryParams = {
   configCwd?: string;
   metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
-  readPluginDetails?: boolean;
   suppressAppInventoryRefresh?: boolean;
 };
 
@@ -450,9 +449,6 @@ async function readPluginDetail(
   summary: v2.PluginSummary,
   diagnostics: CodexPluginInventoryDiagnostic[],
 ): Promise<v2.PluginDetail | undefined> {
-  if (params.readPluginDetails === false) {
-    return undefined;
-  }
   if (marketplace.remoteMarketplaceName && !summary.remotePluginId) {
     diagnostics.push({
       code: "plugin_detail_unavailable",
@@ -590,7 +586,12 @@ function findConfiguredMarketplacePlugin(
   plugin: Pick<ResolvedCodexPluginPolicy, "marketplaceName" | "pluginName">,
 ): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
   if (plugin.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) {
-    return findWorkspaceMarketplacePlugin(listed, plugin.pluginName);
+    // Workspace display names are not unique; use the exact configured catalog id.
+    const marketplace = listed.marketplaces.find(
+      (entry) => entry.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+    );
+    const summary = marketplace?.plugins.find((entry) => entry.id === plugin.pluginName);
+    return marketplace && summary ? { marketplace, summary } : undefined;
   }
   for (const marketplace of listed.marketplaces) {
     if (!marketplaceMatchesConfiguredName(marketplace, plugin.marketplaceName)) {
@@ -609,21 +610,8 @@ function marketplaceMatchesConfiguredName(
   configuredMarketplaceName: CodexPluginMarketplaceName,
 ): boolean {
   return isOpenAiCuratedMarketplaceName(configuredMarketplaceName)
-    ? isOpenAiCuratedMarketplace(marketplace)
+    ? isOpenAiCuratedMarketplaceName(marketplace.name)
     : marketplace.name === configuredMarketplaceName;
-}
-
-function findWorkspaceMarketplacePlugin(
-  listed: CodexPluginMarketplaceResponse,
-  pluginName: string,
-): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
-  // Workspace display names are not unique; the configured pluginName is the
-  // exact catalog id returned by plugin/list.
-  const marketplace = listed.marketplaces.find(
-    (entry) => entry.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-  );
-  const summary = marketplace?.plugins.find((plugin) => plugin.id === pluginName);
-  return marketplace && summary ? { marketplace, summary } : undefined;
 }
 
 function pluginNameFromPluginId(pluginId: string, marketplaceName: string): string | undefined {
@@ -647,11 +635,6 @@ export function marketplaceRef(
     ...(marketplace.path ? { path: marketplace.path } : {}),
     ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
   };
-}
-
-/** True for any supported OpenAI curated marketplace wire name, matching Codex's own curated predicate. */
-export function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
-  return isOpenAiCuratedMarketplaceName(marketplace.name);
 }
 
 export function isOpenAiCuratedMarketplaceName(marketplaceName: string): boolean {

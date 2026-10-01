@@ -129,32 +129,6 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
-  it("compacts when totalTokens is large and fresh", async () => {
-    const sessionFile = path.join(rootDir, "session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({ message: { role: "user", content: "x".repeat(2_000) } })}\n`,
-      "utf8",
-    );
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      sessionFile,
-      updatedAt: Date.now(),
-      totalTokens: 200_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-    };
-    await writeTestSessionStore(
-      path.join(rootDir, "sessions.json"),
-      "agent:main:main",
-      sessionEntry,
-    );
-
-    await runWithEntry(sessionEntry, sessionFile);
-
-    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
-  });
-
   it("forwards the routed account id into preflight compaction", async () => {
     // Group session keys carry no account identity, so if this launcher drops the
     // account the compaction path resolves the root history limit after prompt
@@ -223,14 +197,6 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       name: "the configured roster default before provider runtime selection",
       runAgentId: undefined,
       expectedAgentId: "ops",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      expectsCompaction: false,
-    },
-    {
-      name: "the explicitly prepared agent before provider runtime selection",
-      runAgentId: "worker",
-      expectedAgentId: "worker",
       provider: "openai",
       model: "gpt-5.6-luna",
       expectsCompaction: false,

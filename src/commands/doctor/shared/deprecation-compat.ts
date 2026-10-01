@@ -91,12 +91,12 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-08-16",
     source:
       "models.providers.* context defaults and agents.defaults/entries/list contextTokens caps",
-    migration: "src/config/legacy.context-budget.ts",
+    migration: "src/commands/doctor/shared/legacy-context-budget.ts",
     replacement:
       "models.providers.<provider>.models[].contextTokens active-input caps and per-model contextWindow metadata",
     docsPath: "/concepts/model-providers",
     tests: [
-      "src/config/legacy.context-budget.test.ts",
+      "src/commands/doctor/shared/legacy-context-budget.test.ts",
       "src/config/io.compat.test.ts",
       "src/commands/doctor-config-flow.test.ts",
     ],

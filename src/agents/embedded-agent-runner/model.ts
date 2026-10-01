@@ -202,42 +202,35 @@ export async function resolveModelAsync(
       }
       return staticCatalogModel;
     };
-    const explicitModel = resolveExplicitModelWithRegistry({
+    const registryParams = {
+      abortSignal: options?.abortSignal,
+      assertCurrent: options?.assertCurrent,
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
+      ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
       manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
+      authProfileId: options?.authProfileId,
+      authProfileMode: options?.authProfileMode,
+      preferredProfile: options?.preferredProfile,
       runtimeHooks,
+      getStaticCatalogModel: getManifestStaticCatalogModel,
+    };
+    const explicitModel = resolveExplicitModelWithRegistry({
+      ...registryParams,
       // Inline rows carry configured transport and headers; only their captured config can reuse them.
       preparedInlineProviderModels:
         cfg === preparedModelRuntime?.config
           ? preparedModelRuntime?.inlineProviderModels
           : undefined,
-      getStaticCatalogModel: getManifestStaticCatalogModel,
     });
     if (explicitModel && explicitModel.kind !== "resolved") {
       const suppressedRuntimeModel =
         explicitModel.kind === "suppressed"
-          ? await resolveRuntimePreferredSuppressedModel({
-              abortSignal: options?.abortSignal,
-              assertCurrent: options?.assertCurrent,
-              provider: normalizedRef.provider,
-              modelId: normalizedRef.model,
-              modelRegistry,
-              cfg,
-              agentDir: resolvedAgentDir,
-              ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
-              manifestAlias: normalizedRef.manifestAlias,
-              workspaceDir,
-              authProfileId: options?.authProfileId,
-              authProfileMode: options?.authProfileMode,
-              preferredProfile: options?.preferredProfile,
-              runtimeHooks,
-              getStaticCatalogModel: getManifestStaticCatalogModel,
-            })
+          ? await resolveRuntimePreferredSuppressedModel(registryParams)
           : undefined;
       options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
@@ -309,16 +302,7 @@ export async function resolveModelAsync(
       });
     };
     const resolveDynamicAttempt = async () => {
-      const authProfile = await resolveDynamicModelAuthProfile({
-        abortSignal: options?.abortSignal,
-        provider: normalizedRef.provider,
-        modelId: normalizedRef.model,
-        cfg,
-        agentDir: resolvedAgentDir,
-        authProfileId: options?.authProfileId,
-        authProfileMode: options?.authProfileMode,
-        preferredProfile: options?.preferredProfile,
-      });
+      const authProfile = await resolveDynamicModelAuthProfile(registryParams);
       options?.assertCurrent?.();
       const preparedDynamicModel = options?.deferProviderDynamicModelPreparation
         ? undefined
@@ -340,34 +324,14 @@ export async function resolveModelAsync(
           });
       options?.assertCurrent?.();
       return resolveModelWithPreparedRegistry({
-        abortSignal: options?.abortSignal,
-        assertCurrent: options?.assertCurrent,
-        provider: normalizedRef.provider,
-        modelId: normalizedRef.model,
-        modelRegistry,
-        cfg,
-        agentDir: resolvedAgentDir,
-        ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
-        manifestAlias: normalizedRef.manifestAlias,
-        workspaceDir,
-        authProfileId: options?.authProfileId,
-        authProfileMode: options?.authProfileMode,
-        preferredProfile: options?.preferredProfile,
-        runtimeHooks,
+        ...registryParams,
         preparedAuthProfile: authProfile,
         ...(preparedDynamicModel ? { preparedDynamicModel } : {}),
-        getStaticCatalogModel: getManifestStaticCatalogModel,
         ...(options?.allowBundledStaticCatalogFallback ? { skipConfiguredFallback: true } : {}),
       });
     };
-    const providerRuntimeMetadataShouldWin = shouldCompareProviderRuntimeResolvedModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      agentDir: resolvedAgentDir,
-      workspaceDir,
-      runtimeHooks,
-    });
+    const providerRuntimeMetadataShouldWin =
+      shouldCompareProviderRuntimeResolvedModel(registryParams);
     let model =
       explicitModel?.kind === "resolved" && !providerRuntimeMetadataShouldWin
         ? explicitModel.model

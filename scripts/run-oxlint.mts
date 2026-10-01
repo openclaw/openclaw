@@ -9,6 +9,7 @@ import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -659,7 +660,12 @@ export async function runOxlint(
     return { status: 0 };
   }
 
+  const root = process.cwd();
   const run = async (ownedDirectory?: string) => {
+    if (!focusedConfig) {
+      // Type-aware rules resolve Kysely schema projections, which are generated, not tracked.
+      await ensureKyselyTypes(root);
+    }
     if (needsArtifactPreparation) {
       // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
       await prepareExtensionPackageBoundaryArtifacts(localEnv);
@@ -673,7 +679,6 @@ export async function runOxlint(
   };
   // Skip-prepare callers still consume shared declarations. Hold one owner across
   // preparation and lint; source-only lint acquires it only for transient config.
-  const root = process.cwd();
   return !focusedConfig && shouldPrepareExtensionPackageBoundaryArtifacts(argv)
     ? await withDistArtifactOwnership(root, () => run(resolveDistArtifactLockPath(root)))
     : await run();

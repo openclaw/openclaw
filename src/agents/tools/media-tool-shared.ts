@@ -195,12 +195,8 @@ function resolveCapabilityModelCandidatesForTool(params: {
       !modelId ||
       providerDefaults.has(providerId) ||
       !isCapabilityProviderConfigured({
-        providers: params.providers,
+        ...params,
         provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
       })
     ) {
       continue;
@@ -250,27 +246,11 @@ export function resolveCapabilityModelConfigForTool(params: {
   }
   const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   return buildToolModelConfigFromCandidates({
+    ...params,
     explicit,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    candidates: resolveCapabilityModelCandidatesForTool({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-      providers,
-    }),
+    candidates: resolveCapabilityModelCandidatesForTool({ ...params, providers }),
     isProviderConfigured: (providerId) =>
-      isCapabilityProviderConfigured({
-        providers,
-        providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+      isCapabilityProviderConfigured({ ...params, providers, providerId }),
   });
 }
 
@@ -292,14 +272,7 @@ export function hasGenerationToolAvailability(params: {
   const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   if (providers) {
     return providers.some((provider) =>
-      isCapabilityProviderConfigured({
-        providers,
-        provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+      isCapabilityProviderConfigured({ ...params, providers, provider }),
     );
   }
   const snapshot =

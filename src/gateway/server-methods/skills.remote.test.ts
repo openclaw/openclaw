@@ -15,6 +15,7 @@ import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
 } from "../../skills/loading/workspace-skill-sources.js";
+import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -25,6 +26,9 @@ import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
+// skills.status opens real watchers; close them before their roots are removed so they
+// cannot outlive this file and re-arm timers on a later file's fake clock.
+afterEach(() => closeSkillsWatchers(true));
 
 it("reads remote skill status, cards and binary requirements through the workspace binding", async () => {
   const root = tempDirs.make("gateway-remote-skills-");

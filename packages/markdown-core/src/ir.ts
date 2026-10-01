@@ -863,31 +863,15 @@ function appendCell(state: RenderState, cell: MarkdownTableCell) {
   if (!cell.text) {
     return;
   }
-  const start = state.text.length;
-  appendHtmlTags(state, cell, start);
-  state.text += cell.text;
-  for (const span of cell.styles) {
-    state.styles.push({
-      start: start + span.start,
-      end: start + span.end,
-      style: span.style,
-    });
-  }
-  for (const link of cell.links) {
-    state.links.push(
-      copyMarkdownLinkSpan(link, {
-        start: start + link.start,
-        end: start + link.end,
-      }),
-    );
-  }
-  for (const annotation of cell.annotations ?? []) {
-    state.annotations.push({
-      ...annotation,
-      start: start + annotation.start,
-      end: start + annotation.end,
-    });
-  }
+  appendMarkdownIR(
+    state,
+    copyHtmlTags(cell, {
+      text: cell.text,
+      styles: cell.styles.map(({ start, end, style }) => ({ start, end, style })),
+      links: cell.links.map((link) => copyMarkdownLinkSpan(link)),
+      annotations: cell.annotations?.map((annotation) => ({ ...annotation })),
+    }),
+  );
 }
 
 function collectTableBlock(

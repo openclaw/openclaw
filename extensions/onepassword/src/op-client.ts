@@ -5,7 +5,7 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
-import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
 import { OnePasswordError } from "./errors.js";
 
@@ -42,12 +42,6 @@ type OpClientOptions = {
   home?: string;
   pathEnv?: string;
   warn?: (message: string) => void;
-};
-
-type OpField = {
-  id?: unknown;
-  label?: unknown;
-  value?: unknown;
 };
 
 async function defaultRunner(
@@ -134,13 +128,13 @@ function classifyOpError(error: unknown): OnePasswordError {
 }
 
 function parseField(stdout: string, requestedField: string, itemTitle: string): ResolvedSecret {
-  let field: OpField;
+  let field: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(stdout);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!isRecord(parsed)) {
       throw new Error("field response is not an object");
     }
-    field = parsed as OpField;
+    field = parsed;
   } catch (error) {
     throw new OnePasswordError("OP_ERROR", "1Password CLI returned invalid JSON", {
       cause: error,

@@ -115,7 +115,6 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
 }
 
-/** Build a card header from agent identity config. */
 function resolveCardHeader(
   agentId: string,
   identity: OutboundIdentity | undefined,
@@ -132,7 +131,6 @@ function resolveCardHeader(
   };
 }
 
-/** Build a card note footer from agent identity and model context. */
 function resolveCardNote(
   agentId: string,
   identity: OutboundIdentity | undefined,
@@ -222,7 +220,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       accountId,
       typing: {
         start: async () => {
-          // Check if typing indicator is enabled (default: true)
           if (!(account.config.typingIndicator ?? true)) {
             return;
           }
@@ -370,20 +367,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const buildCombinedStreamText = (thinking: string, answer: string): string => {
-    const parts: string[] = [];
-    if (thinking) {
-      parts.push(formatReasoningPrefix(thinking));
-    }
-    if (thinking && answer) {
-      parts.push("\n\n---\n\n");
-    }
-    if (answer) {
-      parts.push(answer);
-    }
-    if (statusLine) {
-      parts.push(parts.length > 0 ? `\n\n${statusLine}` : statusLine);
-    }
-    return parts.join("");
+    const content = [thinking ? formatReasoningPrefix(thinking) : "", answer]
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+    return [content, statusLine].filter(Boolean).join("\n\n");
   };
 
   const flushStreamingCardUpdate = (combined: string) => {

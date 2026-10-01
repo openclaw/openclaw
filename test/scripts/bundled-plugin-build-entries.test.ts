@@ -1,4 +1,5 @@
 // Bundled Plugin Build Entries tests cover bundled plugin build entries script behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +31,71 @@ function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
 }
 
 describe("bundled plugin build entries", () => {
+  it("preserves tracked entry names and ignores deleted or untracked plugin inputs", () => {
+    const cwd = tempDirs.make("openclaw-tracked-plugin-entries-");
+    const write = (name: string, contents = "export {};\n") => {
+      const target = path.join(cwd, name);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, contents);
+    };
+    write("package.json", JSON.stringify({ name: "openclaw", files: ["dist/**"] }));
+    const names = [
+      " leading-space.ts",
+      "café.ts",
+      "index.ts",
+      ...(process.platform === "win32" ? [] : ["line\nbreak.ts", "literal\\backslash.ts"]),
+    ];
+    write("extensions/demo/openclaw.plugin.json", JSON.stringify({ id: "demo" }));
+    write(
+      "extensions/demo/package.json",
+      JSON.stringify({ name: "@openclaw/demo", openclaw: { extensions: ["./index.ts"] } }),
+    );
+    for (const name of [...names, "deleted.ts", "probe.test.ts", "types.d.ts"]) {
+      write(`extensions/demo/${name}`);
+    }
+    write("extensions/demo/src/private.ts");
+    write("extensions/nested-only/src/private.ts");
+    write("extensions/gone/src/deleted.ts");
+    write(
+      "extensions/deleted-metadata/openclaw.plugin.json",
+      JSON.stringify({ id: "deleted-metadata" }),
+    );
+    write("extensions/deleted-metadata/index.ts");
+    execFileSync("git", ["init", "--quiet", cwd]);
+    execFileSync("git", ["-C", cwd, "add", "--", "extensions"]);
+    for (const name of [
+      "extensions/demo/deleted.ts",
+      "extensions/gone/src/deleted.ts",
+      "extensions/deleted-metadata/openclaw.plugin.json",
+    ]) {
+      fs.unlinkSync(path.join(cwd, name));
+    }
+    write("extensions/demo/untracked.ts");
+    write("extensions/untracked/openclaw.plugin.json", JSON.stringify({ id: "untracked" }));
+    write("extensions/untracked/index.ts");
+
+    const params = { cwd, env: { [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "nested-only" } };
+    const entries = collectSourceCheckoutPluginBuildEntries(params);
+    const expectedSources = [
+      "./index.ts",
+      ...names
+        .filter((name) => name !== "index.ts")
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((name) => `./${name}`),
+    ];
+    expect(entries.map(({ id }) => id)).toEqual(["demo"]);
+    expect(entries[0]?.sourceEntries).toEqual(expectedSources);
+    expect(Object.values(listBundledPluginBuildEntries(params))).toEqual(
+      expectedSources.map((name) => `extensions/demo/${name.slice(2)}`),
+    );
+    expect(() =>
+      collectSourceCheckoutPluginBuildEntries({
+        cwd,
+        env: { [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "gone" },
+      }),
+    ).toThrow("unknown plugin id(s): gone");
+  });
+
   it("selects typed barrels and manifest exports rather than every runtime sidecar", () => {
     const sources = [
       "./index.ts",

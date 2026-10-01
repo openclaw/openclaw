@@ -1,4 +1,3 @@
-/** Normalizes ACP runtime turn event/result streams into manager-facing outcomes. */
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -15,7 +14,6 @@ type AcpTurnEventGate = {
   pendingDelivery?: Promise<void>;
 };
 
-/** Summary of whether a turn stream emitted user-visible output or terminal events. */
 type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   terminalStatus?: "completed" | "cancelled";
@@ -134,7 +132,6 @@ export async function emitCancelledAcpTurn(
   return { sawOutput: false, terminalStatus: "cancelled" };
 }
 
-/** Consumes runtime turn APIs and emits normalized events while tracking output/terminal state. */
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;

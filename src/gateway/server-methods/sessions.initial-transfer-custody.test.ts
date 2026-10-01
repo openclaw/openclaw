@@ -205,7 +205,7 @@ it.each(["unchanged", "replaced", "empty"] as const)(
             expect(onYield).not.toHaveBeenCalled();
             expect(subagentRuns.get(runId)?.requesterTurnYielded).toBeUndefined();
           } else if (mode === "empty") {
-            expect(outcome).toMatchObject({ result: { details: { status: "error" } } });
+            expect(outcome).toMatchObject({ result: { details: { status: "nothing_pending" } } });
             expect(onYield).not.toHaveBeenCalled();
           } else {
             expect(outcome).toMatchObject({ result: { details: { status: "yielded" } } });

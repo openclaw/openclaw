@@ -459,10 +459,7 @@ function isNewerUsableOAuthCredential(
   if (!hasUsableOAuthCredential(existing)) {
     return true;
   }
-  return (
-    Number.isFinite(candidate.expires) &&
-    (!Number.isFinite(existing.expires) || candidate.expires > existing.expires)
-  );
+  return candidate.expires > existing.expires;
 }
 
 function findMainStoreOAuthReplacement(params: {

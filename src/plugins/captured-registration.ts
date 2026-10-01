@@ -1,4 +1,3 @@
-// Captures plugin registrations for controlled registry assembly.
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
@@ -101,6 +100,14 @@ export type CapturedPluginRegistration = {
 function captureInto<T>(entries: T[]): (entry: T) => void {
   return (entry) => {
     entries.push(entry);
+  };
+}
+
+function captureCapabilityInto<T extends { id: string }>(entries: T[]) {
+  return (entry: Parameters<typeof resolveCapabilityProviderRegistration<T>>[0]) => {
+    entries.push(
+      resolveCapabilityProviderRegistration(entry, resolvePluginCapabilityCatalogContext),
+    );
   };
 }
 
@@ -252,27 +259,11 @@ export function createCapturedPluginRegistration(params?: {
         registerCliBackend: captureInto(captured.cliBackends),
         registerTextTransforms: captureInto(captured.textTransforms),
         registerEmbeddingProvider: captureInto(captured.embeddingProviders),
-        registerSpeechProvider(entry) {
-          const provider = resolveCapabilityProviderRegistration(
-            entry,
-            resolvePluginCapabilityCatalogContext,
-          );
-          captured.speechProviders.push(provider);
-        },
-        registerRealtimeTranscriptionProvider(entry) {
-          const provider = resolveCapabilityProviderRegistration(
-            entry,
-            resolvePluginCapabilityCatalogContext,
-          );
-          captured.realtimeTranscriptionProviders.push(provider);
-        },
-        registerRealtimeVoiceProvider(entry) {
-          const provider = resolveCapabilityProviderRegistration(
-            entry,
-            resolvePluginCapabilityCatalogContext,
-          );
-          captured.realtimeVoiceProviders.push(provider);
-        },
+        registerSpeechProvider: captureCapabilityInto(captured.speechProviders),
+        registerRealtimeTranscriptionProvider: captureCapabilityInto(
+          captured.realtimeTranscriptionProviders,
+        ),
+        registerRealtimeVoiceProvider: captureCapabilityInto(captured.realtimeVoiceProviders),
         registerMediaUnderstandingProvider: captureInto(captured.mediaUnderstandingProviders),
         registerTranscriptSourceProvider: captureInto(captured.transcriptSourceProviders),
         registerImageGenerationProvider: captureInto(captured.imageGenerationProviders),

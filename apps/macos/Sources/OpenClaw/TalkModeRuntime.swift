@@ -1,4 +1,5 @@
 import AVFoundation
+import ConcurrencyExtras
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
@@ -31,19 +32,6 @@ actor TalkModeRuntime {
     static let systemTalkProvider = "system"
     static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
 
-    private final class RMSMeter: @unchecked Sendable {
-        private let lock = NSLock()
-        private var latestRMS: Double = 0
-
-        func set(_ rms: Double) {
-            self.lock.withLock { self.latestRMS = rms }
-        }
-
-        func get() -> Double {
-            self.lock.withLock { self.latestRMS }
-        }
-    }
-
     private var recognizerCache = SpeechRecognizerCache()
     private var audioEngine: AVAudioEngine?
     private var audioInputObserver: AudioInputDeviceObserver?
@@ -52,7 +40,7 @@ actor TalkModeRuntime {
     private var recognitionTask: SFSpeechRecognitionTask?
     var recognitionGeneration: Int = 0
     private var rmsTask: Task<Void, Never>?
-    private let rmsMeter = RMSMeter()
+    private let rmsMeter = LockIsolated<Double>(0)
 
     private var silenceTask: Task<Void, Never>?
     var phase: TalkModePhase = .idle
@@ -410,7 +398,7 @@ actor TalkModeRuntime {
         self.rmsTask = nil
     }
 
-    private func startRMSTicker(meter: RMSMeter) {
+    private func startRMSTicker(meter: LockIsolated<Double>) {
         self.rmsTask?.cancel()
         self.rmsTask = Task { [weak self, meter] in
             while let self {
@@ -418,7 +406,7 @@ actor TalkModeRuntime {
                 if Task.isCancelled {
                     return
                 }
-                await self.noteAudioLevel(rms: meter.get())
+                await self.noteAudioLevel(rms: meter.value)
             }
         }
     }
@@ -542,7 +530,8 @@ actor TalkModeRuntime {
                 format: format)
             { [weak request, meter] buffer, _ in
                 request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-                meter.set(TalkAudioLevel.rms(buffer: buffer))
+                let rms = TalkAudioLevel.rms(buffer: buffer)
+                meter.withValue { $0 = rms }
             }
             tapInstalled = true
             audioEngine.prepare()

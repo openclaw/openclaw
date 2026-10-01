@@ -393,19 +393,13 @@ function runGh(args: string[]): string {
 }
 
 function parsePaginatedJson(rawLocal: string): unknown[] {
-  const items: unknown[] = [];
-  for (const line of rawLocal.split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    const parsed = JSON.parse(line);
-    if (Array.isArray(parsed)) {
-      items.push(...parsed);
-    } else {
-      items.push(parsed);
-    }
-  }
-  return items;
+  return rawLocal
+    .split("\n")
+    .filter((line) => line.trim())
+    .flatMap((line): unknown[] => {
+      const parsed: unknown = JSON.parse(line);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    });
 }
 
 function normalizeMap(map: Record<string, string>): Record<string, string> {

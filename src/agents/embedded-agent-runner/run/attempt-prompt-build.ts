@@ -13,6 +13,7 @@ import {
 } from "../../../infra/heartbeat-summary.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
+import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
@@ -480,11 +481,9 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const contextFragments = promptSubmission.runtimeOnly
     ? [...eventFragments, ...runtimeFacts]
     : [...fragments, ...runtimeFacts];
-  const runtimeContextForHook =
-    contextFragments
-      .map((fragment) => fragment.text)
-      .filter(Boolean)
-      .join("\n\n") || undefined;
+  const runtimeContextForHook = joinPresentTextSegments(
+    contextFragments.map((fragment) => fragment.text),
+  );
   const runtimeContextMessageForCurrentTurn = buildRuntimeContextCustomMessage(
     runtimeContextForHook,
     contextFragments,

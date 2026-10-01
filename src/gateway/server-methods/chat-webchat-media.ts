@@ -1,5 +1,3 @@
-// Webchat media helpers translate reply payload media into assistant content
-// blocks that the control UI can render without unsafe file exposure.
 import path from "node:path";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
@@ -156,6 +154,10 @@ function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
   return "";
 }
 
+function mediaReplyText(hasAudio: boolean, hasImage: boolean): string {
+  return hasAudio && hasImage ? "Media reply" : hasAudio ? "Audio reply" : "Image reply";
+}
+
 export async function buildWebchatAssistantMessageFromReplyPayloads(
   payloads: ReplyPayload[],
   options?: WebchatAudioEmbeddingOptions,
@@ -169,8 +171,6 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   const payloadTexts: Array<string | undefined> = [];
   const seenAudio = new Set<string>();
   const seenImages = new Set<string>();
-  let hasAudio = false;
-  let hasImage = false;
 
   for (const [payloadIndex, payload] of payloads.entries()) {
     if (payload.isReasoning === true) {
@@ -193,7 +193,6 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       if (audio && !seenAudio.has(audio.path)) {
         seenAudio.add(audio.path);
         payloadMediaBlocks.push(audio.block);
-        hasAudio = true;
         payloadHasAudio = true;
         continue;
       }
@@ -203,7 +202,6 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       }
       seenImages.add(imageUrl);
       payloadMediaBlocks.push({ type: "input_image", image_url: imageUrl });
-      hasImage = true;
       payloadHasImage = true;
     }
     const needsSyntheticText =
@@ -212,11 +210,7 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       transcriptTextParts.length === 0;
     // Media-only replies need stable transcript text so later context is readable.
     const syntheticText = needsSyntheticText
-      ? payloadHasAudio && payloadHasImage
-        ? "Media reply"
-        : payloadHasAudio
-          ? "Audio reply"
-          : "Image reply"
+      ? mediaReplyText(payloadHasAudio, payloadHasImage)
       : undefined;
     const blockText = text ?? syntheticText;
     const fullText = replyDirectivePrefix + (blockText ?? "");
@@ -228,12 +222,12 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     content.push(...payloadMediaBlocks);
   }
 
-  if (!hasAudio && !hasImage) {
+  if (seenAudio.size === 0 && seenImages.size === 0) {
     return null;
   }
   const transcriptText =
     transcriptTextParts.join("\n\n").trim() ||
-    (hasAudio && hasImage ? "Media reply" : hasAudio ? "Audio reply" : "Image reply");
+    mediaReplyText(seenAudio.size > 0, seenImages.size > 0);
   if (transcriptTextParts.length === 0) {
     content.unshift({ type: "text", text: transcriptText });
   }

@@ -5,6 +5,7 @@ import {
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserAct,
@@ -121,15 +122,12 @@ function formatTabsToolResult(result: {
     payload: { running: result.running, tabs: formattedTabs },
     includeWarning: false,
   });
-  return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      running: result.running,
-      tabCount: formattedTabs.length,
-      tabs: formattedTabs,
-    },
-  };
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    running: result.running,
+    tabCount: formattedTabs.length,
+    tabs: formattedTabs,
+  });
 }
 
 /** Protect page-controlled model text while preserving the shipped structured result contract. */
@@ -144,10 +142,7 @@ export function formatBrowserExternalToolResult(params: {
   });
   // The Browser tool already marks the turn as network-tainted, and replay
   // strips details; changing this public structured payload breaks callers.
-  return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
-    details: params.payload,
-  };
+  return textResult(wrapped.wrappedText, params.payload);
 }
 
 function isChromeStaleTargetError(usesChromeMcp: boolean, err: unknown): boolean {
@@ -249,15 +244,12 @@ export async function executeConsoleAction(params: {
     payload: result,
     includeWarning: false,
   });
-  return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      targetId: readStringValue(result.targetId),
-      url: readStringValue(result.url),
-      messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-    },
-  };
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    targetId: readStringValue(result.targetId),
+    url: readStringValue(result.url),
+    messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+  });
 }
 
 /** Read browser debug logs, keeping counts aligned with the bounded payload. */
@@ -315,16 +307,13 @@ export async function executeTextAction(
       ? "Page text was truncated. Retry with a narrower selector."
       : undefined,
   });
-  return {
-    content: [{ type: "text", text: wrapped.text }],
-    details: {
-      ok: result.ok,
-      targetId: result.targetId,
-      url: result.url,
-      truncated: result.truncated || wrapped.truncated,
-      externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
-    },
-  };
+  return textResult(wrapped.text, {
+    ok: result.ok,
+    targetId: result.targetId,
+    url: result.url,
+    truncated: result.truncated || wrapped.truncated,
+    externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
+  });
 }
 
 /** Apply settings in order and pin later changes to the first resolved tab. */

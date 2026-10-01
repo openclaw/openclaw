@@ -312,7 +312,7 @@ struct TalkModeManagerTests {
         #expect(parsed.executionMode == .realtimeRelay)
         #expect(parsed.realtimeModelId == nil)
         #expect(manager._test_realtimeModelId() == nil)
-        #expect(manager._test_executionMode() == .realtimeRelay)
+        #expect(manager._test_runtimeRoute() == .realtimeRelay)
     }
 
     @Test func `preserves the released realtime model override`() {
@@ -457,7 +457,8 @@ struct TalkModeManagerTests {
     }
 
     @Test func `builds generic realtime fallback issue for display`() {
-        let issue = TalkRuntimeIssue.realtimeUnavailable(
+        let issue = TalkRuntimeIssue(
+            code: .realtimeUnavailable,
             message: "OpenAI API key rejected with 401",
             provider: "openai",
             model: "gpt-realtime-2",
@@ -815,7 +816,6 @@ struct TalkModeManagerTests {
             let routing = Self.resolve(parsed)
 
             #expect(routing.realtimeProvider == "google")
-            #expect(routing.executionMode == .realtimeRelay)
             #expect(routing.route == .realtimeRelay)
         }
     }

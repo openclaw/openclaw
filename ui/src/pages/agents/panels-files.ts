@@ -283,23 +283,20 @@ export function renderAgentFiles(params: {
                             ${agentFilePreview(
                               [params.agentId, activeEntry.name, hasContent],
                               () => {
-                                const previewHtml = activeEntry
-                                  ? toSanitizedMarkdownHtml(draft, {
-                                      codeBlockChrome: "none",
-                                      mode: "document",
-                                    })
-                                  : "";
+                                const previewHtml = toSanitizedMarkdownHtml(draft, {
+                                  codeBlockChrome: "none",
+                                  mode: "document",
+                                });
                                 const draftByteSize = formatBytes(
                                   new TextEncoder().encode(draft).length,
                                 );
                                 const draftWordCount = countWords(draft);
                                 const draftLineCount = countLines(draft);
-                                const activePathLabel = activeEntry
-                                  ? formatWorkspaceRelativePath(activeEntry.path, list?.workspace)
-                                  : "";
-                                const previewTitleId = activeEntry
-                                  ? `agent-file-preview-title-${toDomId(activeEntry.name)}`
-                                  : "";
+                                const activePathLabel = formatWorkspaceRelativePath(
+                                  activeEntry.path,
+                                  list?.workspace,
+                                );
+                                const previewTitleId = `agent-file-preview-title-${toDomId(activeEntry.name)}`;
                                 const previewStatusLabel = showMissing
                                   ? t("agents.files.willCreateOnSave")
                                   : isDirty || conflictName

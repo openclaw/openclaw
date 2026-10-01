@@ -35,11 +35,9 @@ function compareDefaultNodeOrder(
   b: NodeListNode,
   recencyField: "connectedAtMs" | "lastSeenAtMs",
 ): number {
-  const recencyOrder = compareNewestTimestamp(a[recencyField], b[recencyField]);
-  if (recencyOrder !== 0) {
-    return recencyOrder;
-  }
-  return a.nodeId.localeCompare(b.nodeId);
+  return (
+    compareNewestTimestamp(a[recencyField], b[recencyField]) || a.nodeId.localeCompare(b.nodeId)
+  );
 }
 
 /** Selects the implicit node target when a tool call omits an explicit node query. */

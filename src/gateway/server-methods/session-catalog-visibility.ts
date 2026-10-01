@@ -114,15 +114,18 @@ export function filterSessionCatalogHost(
   }
   return {
     ...host,
-    sessions: host.sessions.filter((session) => {
-      // No sessionKey means the provider cannot link this host-owned CLI row to an adopted
-      // OpenClaw session. Keep it private from non-admin callers on multi-identity Gateways.
-      return visibleCatalogSessionEntry({ ...params, session, visibility }) !== undefined;
-    }),
+    sessions: host.sessions.filter(
+      (session) => visibleCatalogSessionEntry({ ...params, session, visibility }) !== undefined,
+    ),
   };
 }
 
-export async function isSessionCatalogThreadVisible(params: {
+export type SessionCatalogThreadVisibility = {
+  visibility: SessionCatalogVisibility;
+  source?: { sessionKey: string; entry: SessionEntry };
+};
+
+export async function resolveSessionCatalogThreadVisibility(params: {
   access: "read" | "mutate";
   allowProcessHomeFallback: boolean;
   audience?: SessionCatalogProvider["audience"];
@@ -134,7 +137,7 @@ export async function isSessionCatalogThreadVisible(params: {
   listNodes: NonNullable<SessionCatalogListProviderParams["listNodes"]>;
   sourceHomeId?: string;
   threadId: string;
-}): Promise<boolean> {
+}): Promise<SessionCatalogThreadVisibility | null> {
   const projection = getSessionRowProjection(params.context);
   if (!projection) {
     throw new Error("Session projection is unavailable before Gateway startup completes");
@@ -145,13 +148,13 @@ export async function isSessionCatalogThreadVisible(params: {
   let config = params.context.getRuntimeConfig();
   let visibility = resolveSessionCatalogVisibility(params.client, config);
   if (visibility.kind === "unrestricted") {
-    return true;
+    return { visibility };
   }
   if (params.audience === "session-viewers" && params.access === "read") {
-    return isPublishedCatalogVisible(visibility);
+    return isPublishedCatalogVisible(visibility) ? { visibility } : null;
   }
   if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
-    return false;
+    return null;
   }
   const planningEntries = createSessionCatalogRequestEntrySnapshot({
     cfg: config,
@@ -172,7 +175,7 @@ export async function isSessionCatalogThreadVisible(params: {
     });
     const host = hosts.find((candidate) => candidate.hostId === params.hostId);
     if (!host) {
-      return false;
+      return null;
     }
     // Providers may populate planning entries before awaiting IO. Re-read privacy and caller
     // policy after enumeration, before granting read or mutation authority.
@@ -182,10 +185,10 @@ export async function isSessionCatalogThreadVisible(params: {
     config = params.context.getRuntimeConfig();
     visibility = resolveSessionCatalogVisibility(params.client, config);
     if (visibility.kind === "unrestricted") {
-      return true;
+      return { visibility };
     }
     if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
-      return false;
+      return null;
     }
     const requestEntries = createSessionCatalogRequestEntrySnapshot({
       cfg: config,
@@ -205,18 +208,18 @@ export async function isSessionCatalogThreadVisible(params: {
       // Gateway-hosted catalogs already live inside this Gateway's trust domain.
       // Method scopes and creation policy remain the read/mutation authority.
       if (params.audience === "gateway-operators") {
-        return true;
+        return { visibility };
       }
       if (visibility.kind === "restricted-unprofiled") {
-        return false;
+        return null;
       }
       const visibleEntry = visibleCatalogSessionEntry({
         session,
         requestEntries,
         visibility,
       });
-      if (!visibleEntry) {
-        return false;
+      if (!visibleEntry || !session.sessionKey) {
+        return null;
       }
       if (
         params.access === "read" ||
@@ -224,19 +227,19 @@ export async function isSessionCatalogThreadVisible(params: {
         visibility.others === "write" ||
         visibility.isCreator(visibleEntry.createdActor)
       ) {
-        return true;
+        return { visibility, source: { sessionKey: session.sessionKey, entry: visibleEntry } };
       }
       const target = session.sessionKey
         ? resolveSessionSharingTarget({ cfg: config, sessionKey: session.sessionKey })
         : null;
-      return (
-        target !== null &&
+      return target !== null &&
         resolveSessionSharingRole({ cfg: config, client: params.client, target }) === "member"
-      );
+        ? { visibility, source: { sessionKey: target.canonicalKey, entry: visibleEntry } }
+        : null;
     }
     const nextCursor = host.nextCursor;
     if (!nextCursor || seenCursors.has(nextCursor)) {
-      return false;
+      return null;
     }
     seenCursors.add(nextCursor);
     cursor = nextCursor;

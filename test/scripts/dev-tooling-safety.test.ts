@@ -1347,6 +1347,8 @@ describe("script-specific dev tooling hardening", () => {
       if (sendsHeaders) {
         response.writeHead(200, { "content-type": "application/json" });
         response.flushHeaders();
+        // Start an incomplete body so fetch exposes the streaming response before it stalls.
+        response.write('{"partial":');
       }
     });
     await new Promise<void>((resolve, reject) => {

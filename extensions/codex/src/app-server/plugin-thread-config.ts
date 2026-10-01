@@ -28,7 +28,7 @@ import {
   refreshCodexPluginAppInventory,
   resolveCodexPluginThreadAppCacheKey,
   resolveCodexExplicitAppEnablement,
-  resolveCodexPluginAppThreadAdmission,
+  isCodexPluginAppThreadAdmissible,
   shouldForceRefreshCodexNotReadyPluginApps,
   type CodexPluginThreadAppAdmissionConfig,
   type CodexPluginThreadAppAdmissionDiagnostic,
@@ -325,8 +325,9 @@ export async function buildCodexPluginThreadConfig(
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of inventory.appInventory?.state === "missing" ? [] : record.apps) {
-      const admission = resolveCodexPluginAppThreadAdmission(app, inventory);
-      const admissionConfig = admission === "blocked" ? undefined : await getAdmissionConfig();
+      const admissionConfig = isCodexPluginAppThreadAdmissible(app, inventory)
+        ? await getAdmissionConfig()
+        : undefined;
       if (
         !admissionConfig ||
         resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false

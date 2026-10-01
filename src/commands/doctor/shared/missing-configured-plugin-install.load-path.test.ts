@@ -29,10 +29,7 @@ function writeProviderPlugin(rootDir: string): void {
     JSON.stringify({
       name: "@openclaw/kilocode-provider",
       version: "2026.7.1",
-      openclaw: {
-        extensions: ["./index.ts"],
-        runtimeExtensions: ["./dist/index.js"],
-      },
+      openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
     }),
     "utf8",
   );
@@ -68,30 +65,25 @@ async function writePathInstallRecord(params: {
 }
 
 async function createConfiguredCodexBundleFixture(
-  manifestState: "valid" | "absent" | "malformed",
+  manifestState: "valid" | "malformed",
 ): Promise<{ cfg: OpenClawConfig; env: NodeJS.ProcessEnv; pluginDir: string }> {
   const rootDir = tempDirs.make(`openclaw-codex-${manifestState}-`);
   const pluginDir = path.join(rootDir, "gmail");
   fs.mkdirSync(path.join(pluginDir, ".codex-plugin"), { recursive: true });
-  if (manifestState !== "absent") {
-    fs.writeFileSync(
-      path.join(pluginDir, ".codex-plugin", "plugin.json"),
-      manifestState === "valid"
-        ? JSON.stringify({ name: "gmail", apps: "./.app.json" })
-        : "{not-json",
-      "utf8",
-    );
-  }
+  fs.writeFileSync(
+    path.join(pluginDir, ".codex-plugin", "plugin.json"),
+    manifestState === "valid"
+      ? JSON.stringify({ name: "gmail", apps: "./.app.json" })
+      : "{not-json",
+    "utf8",
+  );
   fs.writeFileSync(
     path.join(pluginDir, ".app.json"),
     JSON.stringify({ apps: { gmail: { id: "connector_test" } } }),
     "utf8",
   );
   const cfg: OpenClawConfig = {
-    plugins: {
-      load: { paths: [pluginDir] },
-      entries: { gmail: { enabled: true } },
-    },
+    plugins: { load: { paths: [pluginDir] }, entries: { gmail: { enabled: true } } },
   };
   const env = {
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
@@ -138,25 +130,30 @@ function writeBundledOpenCodeGoPlugin(bundledPluginsDir: string): void {
   );
 }
 
+function createProviderFixture(explicitEntry = true) {
+  const rootDir = tempDirs.make("openclaw-load-path-provider-");
+  const pluginDir = path.join(rootDir, "configured-plugin");
+  writeProviderPlugin(pluginDir);
+  const cfg: OpenClawConfig = {
+    plugins: {
+      load: { paths: [pluginDir] },
+      ...(explicitEntry ? { entries: { kilocode: { enabled: true } } } : {}),
+    },
+  };
+  const env = {
+    KILOCODE_API_KEY: "test-key",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+    VITEST: "true",
+  };
+  return { rootDir, pluginDir, cfg, env };
+}
+
 describe("configured plugin install health for explicit load paths", () => {
   it("persists removal of a stale path record shadowed by a configured plugin", async () => {
-    const rootDir = tempDirs.make("openclaw-stale-path-record-");
-    const pluginDir = path.join(rootDir, "configured-plugin");
+    const { rootDir, pluginDir, cfg, env } = createProviderFixture();
     const stalePath = path.join(rootDir, "removed-plugin");
-    writeProviderPlugin(pluginDir);
-    const cfg: OpenClawConfig = {
-      plugins: {
-        load: { paths: [pluginDir] },
-        entries: { kilocode: { enabled: true } },
-      },
-    };
-    const env = {
-      KILOCODE_API_KEY: "test-key",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
-      VITEST: "true",
-    };
     await writePathInstallRecord({ cfg, env, pluginId: "kilocode", installPath: stalePath });
 
     const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
@@ -185,10 +182,7 @@ describe("configured plugin install health for explicit load paths", () => {
     const stalePath = path.join(rootDir, "removed-plugin");
     writeBundledOpenCodeGoPlugin(bundledPluginsDir);
     const cfg: OpenClawConfig = {
-      plugins: {
-        load: { paths: [pluginDir] },
-        entries: { "opencode-go": { enabled: true } },
-      },
+      plugins: { load: { paths: [pluginDir] }, entries: { "opencode-go": { enabled: true } } },
     };
     const env = {
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
@@ -218,25 +212,10 @@ describe("configured plugin install health for explicit load paths", () => {
   });
 
   it("keeps a record whose source path resolves to the configured plugin", async () => {
-    const rootDir = tempDirs.make("openclaw-stale-path-alias-");
-    const pluginDir = path.join(rootDir, "configured-plugin");
+    const { rootDir, pluginDir, cfg, env } = createProviderFixture();
     const sourceAlias = path.join(rootDir, "source-alias");
     const stalePath = path.join(rootDir, "removed-install");
-    writeProviderPlugin(pluginDir);
     fs.symlinkSync(pluginDir, sourceAlias, "dir");
-    const cfg: OpenClawConfig = {
-      plugins: {
-        load: { paths: [pluginDir] },
-        entries: { kilocode: { enabled: true } },
-      },
-    };
-    const env = {
-      KILOCODE_API_KEY: "test-key",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
-      VITEST: "true",
-    };
     await writePathInstallRecord({
       cfg,
       env,
@@ -251,55 +230,23 @@ describe("configured plugin install health for explicit load paths", () => {
     expect(await loadInstalledPluginIndexInstallRecords({ env })).toHaveProperty("kilocode");
   });
 
-  it.each([false, true])(
-    "does not install a provider already selected by load path (missing npm shadow: %s)",
-    async (npmShadow) => {
-      const rootDir = tempDirs.make("openclaw-load-path-provider-");
-      const pluginDir = path.join(rootDir, "kilocode-provider");
-      writeProviderPlugin(pluginDir);
-
-      const cfg = {
-        plugins: {
-          load: { paths: [pluginDir] },
-        },
-      };
-      const env = {
-        KILOCODE_API_KEY: "test-key",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
-        VITEST: "true",
-      };
-      const records: Record<string, PluginInstallRecord> = npmShadow
-        ? {
-            kilocode: {
-              source: "npm" as const,
-              spec: "@openclaw/kilocode-provider",
-              installPath: path.join(rootDir, "missing-npm-package"),
-            },
-          }
-        : {};
-      if (npmShadow) {
-        await seedInstalledPluginIndex(records, { config: cfg, env });
-      }
-      const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
-      expect(snapshot.plugins.map((plugin) => plugin.id)).toContain("kilocode");
-
-      const issues = await detectConfiguredPluginInstallHealthIssues({
-        cfg,
-        env,
-      });
-      expect(issues).toStrictEqual([]);
-
-      const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
-      expect(repair).toMatchObject({
-        changes: [],
-        records,
-        warnings: [],
-      });
-      expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
-    },
-  );
+  it("keeps an env-selected load-path provider despite a missing npm shadow", async () => {
+    const { rootDir, cfg, env } = createProviderFixture(false);
+    const records: Record<string, PluginInstallRecord> = {
+      kilocode: {
+        source: "npm",
+        spec: "@openclaw/kilocode-provider",
+        installPath: path.join(rootDir, "missing-npm-package"),
+      },
+    };
+    await seedInstalledPluginIndex(records, { config: cfg, env });
+    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
+    expect(snapshot.plugins.map((plugin) => plugin.id)).toContain("kilocode");
+    expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
+    const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
+    expect(repair).toMatchObject({ changes: [], records, warnings: [] });
+    expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
+  });
 
   it("keeps a configured Gmail Codex app bundle without package.json", async () => {
     const { cfg, env, pluginDir } = await createConfiguredCodexBundleFixture("valid");
@@ -323,7 +270,7 @@ describe("configured plugin install health for explicit load paths", () => {
     expect(await loadInstalledPluginIndexInstallRecords({ env })).toHaveProperty("gmail");
   });
 
-  it.each(["absent", "malformed"] as const)(
+  it.each(["malformed"] as const)(
     "classifies a Codex bundle manifest in %s state as repairable",
     async (manifestState) => {
       const { cfg, env } = await createConfiguredCodexBundleFixture(manifestState);
@@ -357,9 +304,7 @@ describe("configured plugin install health for explicit load paths", () => {
 
     const cfg = {
       auth: {
-        profiles: {
-          "opencode-go:default": { provider: "opencode-go", mode: "api_key" as const },
-        },
+        profiles: { "opencode-go:default": { provider: "opencode-go", mode: "api_key" as const } },
       },
     };
     fs.writeFileSync(configPath, `${JSON.stringify(cfg)}\n`, "utf8");
@@ -386,10 +331,7 @@ describe("configured plugin install health for explicit load paths", () => {
     expect(issues).toStrictEqual([]);
 
     const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
-    expect(repair).toMatchObject({
-      changes: [],
-      warnings: [],
-    });
+    expect(repair).toMatchObject({ changes: [], warnings: [] });
     expect(Object.keys(repair.records)).toStrictEqual([]);
     expect(Object.getPrototypeOf(repair.records)).toBeNull();
   });

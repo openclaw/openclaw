@@ -4,9 +4,10 @@ extension OpenClawChatViewModel {
     func performSelectThinkingLevel(_ level: String) {
         let clearsOverride = level == Self.inheritedThinkingSelectionID
         let next = clearsOverride
-            ? (Self.normalizedThinkingLevel(self.resolvedThinkingLevelOptions(
-                for: self.currentSessionEntry(), modelChoice: self.selectedModelChoice(for: self.currentSessionEntry()))
-                .defaultLevel)
+            ? (Self.normalizedThinkingLevel(OpenClawChatThinkingProfile.resolve(
+                session: self.currentSessionEntry(),
+                defaults: self.sessionDefaults,
+                model: self.selectedModelChoice(for: self.currentSessionEntry()))?.defaultLevel)
                 ?? Self.normalizedThinkingLevel(self.thinkingLevel)
                 ?? "off")
             : (Self.normalizedThinkingLevel(level) ?? "off")
@@ -250,13 +251,15 @@ extension OpenClawChatViewModel {
             modelChoice = self.selectedModelChoice(for: session)
             target = currentModelPatchTarget()
         }
-        let resolved = self.resolvedThinkingLevelOptions(for: session, modelChoice: modelChoice)
+        let profile = OpenClawChatThinkingProfile.resolve(
+            session: session, defaults: self.sessionDefaults, model: modelChoice)
+        let options = profile?.levels ?? []
         if modelChoice?.reasoning == false ||
-            (!resolved.options.isEmpty && resolved.options.allSatisfy { $0.id == "off" })
+            (!options.isEmpty && options.allSatisfy { $0.id == "off" })
         {
             return "off"
         }
-        guard resolved.isGatewayMetadata else {
+        guard profile != nil else {
             return self.thinkingLevelWithoutGatewayMetadata(
                 storedLevel,
                 target: target,
@@ -264,23 +267,23 @@ extension OpenClawChatViewModel {
         }
         return Self.normalizedThinkingLevel(
             storedLevel,
-            options: resolved.options,
+            options: options,
             fallback: session?.thinkingLevel) ?? storedLevel
     }
 
     func syncThinkingLevelOptions() {
         let currentSession = currentSessionEntry()
         let modelChoice = self.selectedModelChoice(for: currentSession)
-        let resolved = self.resolvedThinkingLevelOptions(
-            for: currentSession, modelChoice: modelChoice)
-        let options = resolved.options
+        let profile = OpenClawChatThinkingProfile.resolve(
+            session: currentSession, defaults: self.sessionDefaults, model: modelChoice)
+        let options = profile?.levels ?? []
         showsThinkingPicker = options.contains { $0.id != "off" } && modelChoice?.reasoning != false
         let target = currentModelPatchTarget()
         let preferredLevel = self.prefersExplicitThinkingLevel
             ? self.preferredThinkingLevel
             : Self.normalizedThinkingLevel(currentSession?.thinkingLevel) ??
-            Self.normalizedThinkingLevel(resolved.defaultLevel) ?? self.preferredThinkingLevel
-        let preferred: String? = if resolved.isGatewayMetadata {
+            Self.normalizedThinkingLevel(profile?.defaultLevel) ?? self.preferredThinkingLevel
+        let preferred: String? = if profile != nil {
             Self.normalizedThinkingLevel(
                 preferredLevel,
                 options: options,
@@ -316,22 +319,6 @@ extension OpenClawChatViewModel {
             return "high"
         }
         return preferred
-    }
-
-    private struct ThinkingLevelOptionsResolution {
-        let options: [OpenClawChatThinkingLevelOption]
-        let isGatewayMetadata: Bool
-        var defaultLevel: String?
-    }
-
-    private func resolvedThinkingLevelOptions(
-        for currentSession: OpenClawChatSessionEntry?,
-        modelChoice: OpenClawChatModelChoice?) -> ThinkingLevelOptionsResolution
-    {
-        let profile = OpenClawChatThinkingProfile.resolve(
-            session: currentSession, defaults: self.sessionDefaults, model: modelChoice)
-        return ThinkingLevelOptionsResolution(
-            options: profile?.levels ?? [], isGatewayMetadata: profile != nil, defaultLevel: profile?.defaultLevel)
     }
 
     func selectedModelChoice(

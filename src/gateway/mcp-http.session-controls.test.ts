@@ -51,7 +51,7 @@ const targetId = "mcp-archive-target-id";
 // The dispatch cases are in-process boundary proof, not HTTP transport proof.
 // HTTP runs the same final-effect assertions through the real bearer-bound server.
 for (const transport of ["dispatch", "HTTP"] as const) {
-  it.each(["allowed", "unassigned", "reassigned", "profile-revoked", "replaced"] as const)(
+  it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "replaced"] as const)(
     `MCP ${transport} preserves archive final-effect authority: %s`,
     async (scenario) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -65,7 +65,11 @@ for (const transport of ["dispatch", "HTTP"] as const) {
         const profile = expectDefined(client.authenticatedUserProfile, "operator profile");
         for (const [sessionKey, sessionId, creator] of [
           [requesterKey, "mcp-archive-requester-id", profile.profileId],
-          [targetKey, targetId, "other-person"],
+          [
+            targetKey,
+            targetId,
+            scenario === "assigned-noncreator" ? "other-person" : profile.profileId,
+          ],
         ] as const) {
           await upsertSessionEntryCore(
             { agentId: "main", sessionKey },
@@ -77,15 +81,13 @@ for (const transport of ["dispatch", "HTTP"] as const) {
             },
           );
         }
-        if (scenario !== "unassigned") {
-          assignSessionOwner(
-            { agentId: "main", sessionKey: targetKey },
-            {
-              owner: { type: "human", id: profile.profileId },
-              assignedBy: { type: "human", id: profile.profileId },
-            },
-          );
-        }
+        assignSessionOwner(
+          { agentId: "main", sessionKey: targetKey },
+          {
+            owner: { type: "human", id: profile.profileId },
+            assignedBy: { type: "human", id: profile.profileId },
+          },
+        );
         const resources = new LegacyPluginSdkResourceHost();
         try {
           await resources.run(() =>
@@ -254,7 +256,7 @@ for (const transport of ["dispatch", "HTTP"] as const) {
                             atWriter.promise.then(() => true),
                             pending.then(() => false),
                           ]);
-                          expect(reachedWriter).toBe(scenario !== "unassigned");
+                          expect(reachedWriter).toBe(scenario !== "assigned-noncreator");
                           if (scenario === "reassigned") {
                             assignSessionOwner(
                               { agentId: "main", sessionKey: targetKey },
@@ -282,8 +284,10 @@ for (const transport of ["dispatch", "HTTP"] as const) {
                           }
                           releaseWriter.resolve();
                           const response = await pending;
+                          const archiveAllowed =
+                            scenario === "allowed" || scenario === "reassigned";
                           expect(response, JSON.stringify(response)).toMatchObject({
-                            result: { isError: scenario !== "allowed" },
+                            result: { isError: !archiveAllowed },
                           });
                           const entry = expectDefined(
                             loadSessionEntry({ agentId: "main", sessionKey: targetKey }),
@@ -292,7 +296,7 @@ for (const transport of ["dispatch", "HTTP"] as const) {
                           expect(entry.sessionId).toBe(
                             scenario === "replaced" ? "replacement-id" : targetId,
                           );
-                          if (scenario === "allowed") {
+                          if (archiveAllowed) {
                             expect(entry.archivedAt).toEqual(expect.any(Number));
                           } else {
                             expect(entry.archivedAt).toBeUndefined();

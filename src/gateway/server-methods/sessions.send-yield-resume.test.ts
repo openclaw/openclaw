@@ -22,7 +22,6 @@ import {
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { testing as registryTesting } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import * as requesterAuthority from "../../agents/subagents/requester-cron-authority.js";
 import * as requesterAttachment from "../../agents/subagents/requester-final-attachment.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
@@ -83,7 +82,7 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
       cleanupCompletedAt: expect.any(Number),
     });
   };
-  const expectSharedRequesterWake = (runIds: string[], batchRunIds: string[]) => {
+  const expectSharedRequesterCohort = (runIds: string[], batchRunIds: string[]) => {
     const wakes = runIds.map(
       (runId) => expectDefined(subagentRuns.get(runId), `wake owner ${runId}`).requesterSettleWake,
     );
@@ -94,18 +93,12 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
         rearmGeneration: 1,
       });
     }
-    const nextAttemptAt = wakes[0]?.nextAttemptAt;
-    expect(Number.isFinite(nextAttemptAt), "durable requester wake deadline").toBe(true);
-    expect(nextAttemptAt).toBeGreaterThan(Date.now());
-    expect(wakes.map((wake) => wake?.nextAttemptAt)).toEqual(runIds.map(() => nextAttemptAt));
-    return nextAttemptAt!;
+    return wakes;
   };
   const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
   context.resolveGatewayContext = () => context;
   const delivery = { dispatch: dispatchGatewayMethodInProcess };
-  const dispatchEntered = createDeferred();
   const dispatch = vi.spyOn(delivery, "dispatch").mockImplementation(async () => {
-    dispatchEntered.resolve();
     return {
       status: "ok",
       result: { payloads: [{ text: "Both results received; parent continues." }], meta: {} },
@@ -273,7 +266,13 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   };
   await complete(siblingRunId, siblingSessionKey, "Sibling result is ready.");
   expectCompletedRun(siblingRunId, "Sibling result is ready.");
-  expectSharedRequesterWake([previousRunId, siblingRunId], [previousRunId, siblingRunId]);
+  const pausedCohort = expectSharedRequesterCohort(
+    [previousRunId, siblingRunId],
+    [previousRunId, siblingRunId],
+  );
+  expect(pausedCohort.map((wake) => wake?.nextAttemptAt)).toEqual([undefined, undefined]);
+  expect(pausedCohort.map((wake) => wake?.status)).toEqual(["pending", "pending"]);
+  expect(pausedCohort[0]?.pauseNotice).toBeUndefined();
   expect(dispatch).not.toHaveBeenCalled();
 
   const followup = "Read the completed tool outputs and finish the existing task.";
@@ -320,17 +319,6 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
 
   await complete(nextRunId, childSessionKey, "Recovered child consumed its tool results.");
   expectCompletedRun(nextRunId, "Recovered child consumed its tool results.");
-  const nextAttemptAt = expectSharedRequesterWake(
-    [nextRunId, siblingRunId],
-    [nextRunId, siblingRunId],
-  );
-  expect(dispatch).not.toHaveBeenCalled();
-  const settleWakeWork = observeRootWork();
-  await vi.advanceTimersByTimeAsync(Math.max(0, nextAttemptAt - Date.now()) + 1);
-  await registryTesting.sweepOnceForTests();
-  await dispatchEntered.promise;
-  await settleWakeWork();
-  await fixture.settle();
   expect(dispatch).toHaveBeenCalledTimes(1);
   expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
     sessionKey: requesterSessionKey,

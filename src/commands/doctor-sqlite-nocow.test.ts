@@ -5,9 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wal-filesystem.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { inspectDoctorSqliteNoCow, repairDoctorSqliteNoCow } from "./doctor-sqlite-nocow.js";
 
-vi.mock("node:child_process", () => ({ spawnSync: vi.fn() }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: vi.fn(),
+}));
 vi.mock("../infra/sqlite-wal-filesystem.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-wal-filesystem.js")>()),
   isSqlitePathOnBtrfs: vi.fn(() => true),
@@ -210,6 +217,73 @@ async function repair(assertCurrent = () => {}) {
 }
 
 describe("Doctor btrfs NOCOW", () => {
+  it.skipIf(process.platform !== "linux")(
+    "rewrites shared and agent stores after the real Doctor maintenance scope drains",
+    async () => {
+      await withOpenClawTestState(
+        { scenario: "external-service", label: "doctor-nocow-owner" },
+        async () => {
+          const native =
+            await vi.importActual<typeof import("node:child_process")>("node:child_process");
+          const fakeTools = vi.mocked(spawnSync).getMockImplementation()!;
+          vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+            ["lsattr", "getfacl", "setfacl", "mv"].includes(command)
+              ? fakeTools(command, args, options)
+              : native.spawnSync(command, args, options),
+          );
+          const log = vi.fn();
+          const maintenance = await beginDoctorMaintenance({
+            options: { repair: true, nonInteractive: true, workspaceSuggestions: false },
+            root: null,
+            runtime: { log, error() {}, exit() {} },
+          });
+          try {
+            const paths = await maintenance!.run(async () => {
+              const state = openOpenClawStateDatabase();
+              const agent = openOpenClawAgentDatabase({ agentId: "main" });
+              for (const database of [state, agent]) {
+                database.db.exec(
+                  "CREATE TABLE nocow_payload(value TEXT); INSERT INTO nocow_payload VALUES ('preserved');",
+                );
+              }
+              return inspectDoctorSqliteNoCow([state.path, agent.path]).paths;
+            });
+            expect(paths).toHaveLength(2);
+            const originals = paths.map((pathname) => fs.statSync(pathname).ino);
+            await maintenance!.repairSqliteNoCow(paths);
+            expect(maintenance!.warnings).toEqual([]);
+            expect(exchanges).toBe(2);
+            for (const [index, pathname] of paths.entries()) {
+              expect(fs.statSync(pathname).ino).not.toBe(originals[index]);
+              const storeDir = path.dirname(pathname);
+              const parent = path.dirname(storeDir);
+              const retained = fs
+                .readdirSync(parent)
+                .find((name) => name.startsWith(`${path.basename(storeDir)}.nocow-backup-`))!;
+              expect(fs.statSync(path.join(parent, retained, path.basename(pathname))).ino).toBe(
+                originals[index],
+              );
+              const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+              try {
+                expect(db.prepare("SELECT value FROM nocow_payload").get()?.value).toBe(
+                  "preserved",
+                );
+                expect(db.prepare("PRAGMA quick_check").get()?.quick_check).toBe("ok");
+              } finally {
+                db.close();
+              }
+            }
+            expect(
+              log.mock.calls.filter(([line]) => line.startsWith("Rewrote SQLite")),
+            ).toHaveLength(2);
+          } finally {
+            await maintenance?.release();
+          }
+        },
+      );
+    },
+  );
+
   it("reports existing CoW stores, skips other filesystems and explains missing tooling", () => {
     fs.writeFileSync(sqlitePath, "fixture");
     expect(inspectDoctorSqliteNoCow([sqlitePath]).paths).toEqual([sqlitePath]);
@@ -345,8 +419,27 @@ describe("Doctor btrfs NOCOW", () => {
     "corrupt",
     "exchange-failed",
     "changed-source",
+    "new-wal",
+    "changed-wal",
   ] as const)("leaves the previous store intact on %s refusal", async (failure) => {
     seedDatabase();
+    if (failure === "new-wal") {
+      const db = openNodeSqliteDatabase(sqlitePath);
+      db.prepare("SELECT value FROM payload").get();
+      db.close();
+      expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(false);
+    }
+    if (failure === "new-wal" || failure === "changed-wal") {
+      const tool = vi.mocked(spawnSync).getMockImplementation()!;
+      let inspections = 0;
+      vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+        const result = tool(command, args, options);
+        if (command === "fuser" && ++inspections === 2) {
+          fs.appendFileSync(`${sqlitePath}-wal`, "unexpected writer");
+        }
+        return result;
+      });
+    }
     const original = fs.statSync(sqlitePath);
     if (failure === "space") {
       vi.mocked(fs.statfsSync).mockReturnValue({
@@ -384,7 +477,7 @@ describe("Doctor btrfs NOCOW", () => {
         fs.readdirSync(root).filter((name) => name.startsWith("state.nocow-snapshots-")),
       ).toEqual([]);
     }
-    if (failure === "changed-source") {
+    if (failure === "changed-source" || failure === "new-wal" || failure === "changed-wal") {
       expect(notes.join(",")).toContain("source store changed");
     }
   });

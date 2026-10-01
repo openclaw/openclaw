@@ -24,9 +24,7 @@ export type WindowsProcessArgsResult =
   | { ok: true; args: string[] | null }
   | { ok: false; permanent: boolean };
 
-// ---------------------------------------------------------------------------
 // Windows listening-PID discovery (PowerShell → netstat fallback)
-// ---------------------------------------------------------------------------
 
 function readListeningPidsViaPowerShell(port: number, timeoutMs: number): number[] | null {
   const ps = spawnSync(
@@ -120,9 +118,7 @@ export function readWindowsPortUsageSync(port: number, timeoutMs: number): PortU
   return /^\d+$/.test(count) ? (Number(count) === 0 ? "free" : "busy") : "unknown";
 }
 
-// ---------------------------------------------------------------------------
 // Windows process identity reading (PowerShell → WMIC fallback)
-// ---------------------------------------------------------------------------
 
 function extractWindowsCommandLine(raw: Buffer | string): string | null {
   const lines = normalizeStringEntries(decodeWindowsProcessOutput(raw).split(/\r?\n/));

@@ -5,6 +5,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as configIo from "../config/io.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
@@ -122,9 +123,17 @@ describe("update-cli", () => {
           [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(unrelatedGatewayFixturePid),
         },
       );
-      vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
-        process.env.OPENCLAW_PROFILE === "work" ? managedSnapshot : baseSnapshot,
-      );
+      const snapshotForEnv = (env: NodeJS.ProcessEnv = process.env) =>
+        env.OPENCLAW_PROFILE === "work" ? managedSnapshot : baseSnapshot;
+      vi.mocked(readConfigFileSnapshot).mockImplementation(async () => snapshotForEnv());
+      const createConfigIO = configIo.createConfigIO;
+      vi.spyOn(configIo, "createConfigIO").mockImplementation((options) => ({
+        ...createConfigIO(options),
+        readConfigFileSnapshotForWrite: async () => ({
+          snapshot: snapshotForEnv(options?.env),
+          writeOptions: {},
+        }),
+      }));
       loadInstalledPluginIndexInstallRecords.mockImplementation(async (options = {}) =>
         options.env?.OPENCLAW_PROFILE === "work" ? managedRecords : {},
       );

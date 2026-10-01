@@ -34,7 +34,9 @@ import type {
 
 export function resolveCronCreatorAuthorityCapture(
   callerScope: CronCallerScope | undefined,
-): (() => CronRuntimeAuthority | undefined) | undefined {
+):
+  | { captureRuntimeAuthority: () => CronRuntimeAuthority | undefined; assertCurrent: () => void }
+  | undefined {
   const grant = callerScope?.cronCreatorAuthorityGrant;
   if (!grant) {
     return undefined;
@@ -48,7 +50,16 @@ export function resolveCronCreatorAuthorityCapture(
   if (callerScope.toolsAllowProvenance?.source !== "final-executable-surface") {
     throw new TypeError("cron creator authority grant is missing tool-surface provenance");
   }
-  return () => consumeCronCreatorAuthorityGrant(grant);
+  let consumed: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
+  return {
+    captureRuntimeAuthority() {
+      consumed = consumeCronCreatorAuthorityGrant(grant);
+      return consumed.authority;
+    },
+    assertCurrent() {
+      consumed?.assertCurrent();
+    },
+  };
 }
 
 export function resolveCronMutationCommitGuard(
@@ -87,6 +98,7 @@ export function resolveCronMutationCommitGuard(
   ) {
     return undefined;
   }
+  let consumedRequester: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
   return bindGatewayDeviceRevocation(() => {
     callerAuthority?.sessionMutationCommitGuard?.();
     if (callerAuthority?.hasCurrentClientAuthority?.() === false) {
@@ -117,7 +129,11 @@ export function resolveCronMutationCommitGuard(
       }
     }
     if (requesterGrant) {
-      consumeCronCreatorAuthorityGrant(requesterGrant);
+      if (consumedRequester) {
+        consumedRequester.assertCurrent();
+      } else {
+        consumedRequester = consumeCronCreatorAuthorityGrant(requesterGrant);
+      }
     }
   }, callerAuthority?.hasCurrentClientAuthority);
 }

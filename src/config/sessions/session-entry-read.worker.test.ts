@@ -22,7 +22,6 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { readSessionBackingFacts } from "./session-backing-facts.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import {
@@ -254,8 +253,8 @@ it("reads row metadata, board presence, and cold summary position from one snaps
   });
 });
 
-it.each(["worker", "synchronous", "row-facts"] as const)(
-  "refuses unavailable backing metadata in the %s reader instead of reporting missing sessions",
+it.each(["worker", "row-facts"] as const)(
+  "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
   async (reader) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
@@ -268,15 +267,13 @@ it.each(["worker", "synchronous", "row-facts"] as const)(
               env,
               sessionKeys,
             }).rows
-          : reader === "worker"
-            ? readExactSessionEntriesWithLifecycle({
-                kind: "session-exact-entries",
-                database: { agentId: "main", path: storePath },
-                env,
-                sessionKeys,
-                projection: "backing",
-              }).entries
-            : readSessionBackingFacts({ storePath, sessionKeys, env });
+          : readExactSessionEntriesWithLifecycle({
+              kind: "session-exact-entries",
+              database: { agentId: "main", path: storePath },
+              env,
+              sessionKeys,
+              projection: "list",
+            }).entries;
       expect(read()).toEqual([]);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       fs.writeFileSync(storePath, "");
@@ -368,17 +365,15 @@ it("preserves listing validation of dirty siblings in selected worker reads", as
     for (const key of [sessionKey, sibling]) {
       writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
     }
-    const read = (projection: "list" | "backing") =>
+    const read = () =>
       readSessionEntriesFromStoreInWorker({
         agentId: "main",
         storePath: database.path,
         env,
         sessionKeys: [sessionKey],
-        projection,
+        projection: "list",
       });
-    for (const projection of ["list", "backing"] as const) {
-      expect((await read(projection)).entries).toHaveLength(1);
-    }
+    expect((await read()).entries).toHaveLength(1);
     database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
       JSON.stringify({
         sessionId: sibling,
@@ -392,9 +387,7 @@ it("preserves listing validation of dirty siblings in selected worker reads", as
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sibling);
-    for (const projection of ["list", "backing"] as const) {
-      await expect(read(projection)).rejects.toThrow("non-canonical persisted row");
-    }
+    await expect(read()).rejects.toThrow("non-canonical persisted row");
   });
 });
 

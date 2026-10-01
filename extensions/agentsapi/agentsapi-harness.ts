@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
+import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
 import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
@@ -29,6 +29,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   let closing = false;
   const runningSessions = new Map<string, number>();
   const isolatedRuns = new Map<AbortController, Promise<unknown>>();
+  const promptHistories: AgentsApiPromptHistories = new WeakMap();
   let bindings: ReturnType<typeof createAgentsApiBindings> | undefined;
   const getBindings = () => (bindings ??= createAgentsApiBindings(runtime));
   const assertCurrent = () => {
@@ -138,6 +139,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               },
               target,
               () => runtime.config.current().plugins?.entries?.agentsapi?.config,
+              promptHistories,
             );
           },
         );

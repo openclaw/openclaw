@@ -1,6 +1,5 @@
 import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  applyAuthProfileConfig,
   buildApiKeyCredential,
   type ProviderAuthResult,
   type SecretInput,
@@ -76,11 +75,6 @@ export type FoundrySelection = {
   api: FoundryProviderApi;
 };
 
-export type CachedTokenEntry = {
-  token: string;
-  expiresAt: number;
-};
-
 export type FoundryProviderApi =
   | typeof DEFAULT_API
   | typeof DEFAULT_GPT5_API
@@ -124,9 +118,6 @@ type FoundryModelCompat = {
 
 type FoundryConfigShape = {
   auth?: AuthConfig;
-  models?: {
-    providers?: Record<string, ModelProviderConfig>;
-  };
 };
 
 function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
@@ -651,24 +642,6 @@ export function buildFoundryAuthResult(params: {
     ...(!imageDeployment ? { defaultModel: modelRef } : {}),
     notes: params.notes,
   };
-}
-
-export function applyFoundryProfileBinding(config: FoundryConfigShape, profileId: string): void {
-  const next = applyAuthProfileConfig(config, {
-    profileId,
-    provider: PROVIDER_ID,
-    mode: "api_key",
-  });
-  config.auth = next.auth;
-}
-
-export function applyFoundryProviderConfig(
-  config: FoundryConfigShape,
-  providerConfig: ModelProviderConfig,
-): void {
-  config.models ??= {};
-  config.models.providers ??= {};
-  config.models.providers[PROVIDER_ID] = providerConfig;
 }
 
 export function resolveFoundryTargetProfileId(config: FoundryConfigShape): string | undefined {

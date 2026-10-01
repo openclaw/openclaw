@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
+import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -14,13 +14,9 @@ describe("qa suite concurrency", () => {
     try {
       expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(10);
       expect(normalizeQaSuiteConcurrency(undefined, 80)).toBe(64);
-      expect(
-        normalizeQaSuiteConcurrency(
-          undefined,
-          80,
-          defaultQaSuiteConcurrencyForTransport("qa-channel"),
-        ),
-      ).toBe(4);
+      expect(normalizeQaSuiteConcurrency(undefined, 80, QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY)).toBe(
+        4,
+      );
       expect(normalizeQaSuiteConcurrency(2.8, 10)).toBe(2);
       expect(normalizeQaSuiteConcurrency(20, 3)).toBe(3);
       expect(normalizeQaSuiteConcurrency(0, 3)).toBe(1);

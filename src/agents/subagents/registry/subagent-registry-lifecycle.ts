@@ -26,6 +26,7 @@ import {
   resumeAncestorCleanup,
   startSubagentAnnounceCleanupFlow,
 } from "./subagent-registry-lifecycle-announce-cleanup.js";
+import { completeCleanupBookkeeping } from "./subagent-registry-lifecycle-bookkeeping.js";
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import type {
   CleanupBookkeepingParams,
@@ -37,7 +38,6 @@ import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-de
 import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-give-up.js";
 import {
   cancelRequesterSettleWake,
-  completeCleanupBookkeeping,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
@@ -220,7 +220,11 @@ export class SubagentLifecycleController {
     entry.cleanupHandled === true && this.isCleanupGenerationCurrent(runId, entry, generation);
   isEndedHookOwnerCurrent = (runId: string, entry: SubagentRunRecord): boolean => {
     const current = this.options.runs.get(runId);
-    return (current === undefined || current === entry) && !this.newerGenerationOwnsSession(entry);
+    return (
+      (current === undefined || current === entry) &&
+      entry.pauseReason !== "sessions_yield" &&
+      !this.newerGenerationOwnsSession(entry)
+    );
   };
 
   bumpTerminalGeneration(entry: SubagentRunRecord): number {
@@ -293,7 +297,7 @@ export class SubagentLifecycleController {
   };
 
   completeCleanupBookkeeping = (params: CleanupBookkeepingParams) => {
-    completeCleanupBookkeeping(this, params);
+    return completeCleanupBookkeeping(this, params);
   };
 
   resumeAncestorCleanup = (settledEntry: SubagentRunRecord): void =>

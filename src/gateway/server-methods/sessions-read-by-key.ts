@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -92,10 +93,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const limit =
-      typeof p.limit === "number" && Number.isFinite(p.limit)
-        ? Math.max(1, Math.floor(p.limit))
-        : 200;
+    const limit = resolveIntegerOption(p.limit, 200, { min: 1 });
 
     const projection = getSessionRowProjection(context);
     if (!projection) {

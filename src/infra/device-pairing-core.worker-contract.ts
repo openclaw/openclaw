@@ -10,21 +10,7 @@ import type {
   RevokeDeviceTokenResult,
   RotateDeviceTokenResult,
 } from "./device-pairing-core.types.js";
-import type {
-  DeviceAuthToken,
-  DevicePairingPendingRequest,
-  DevicePairingPendingRecord,
-  PairedDevice,
-} from "./device-pairing.types.js";
-
-export type DevicePairingCoreAdmissionFacts =
-  | {
-      kind: "pairing-approval";
-      pending: DevicePairingPendingRecord;
-      existing: PairedDevice | undefined;
-    }
-  | { kind: "pairing-prune"; deviceIds: readonly string[] }
-  | { kind: "pairing-token-issuance" };
+import type { DeviceAuthToken, DevicePairingPendingRequest } from "./device-pairing.types.js";
 
 export type DevicePairingCoreWorkerOperations = {
   "devicePairing.request": {

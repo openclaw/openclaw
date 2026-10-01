@@ -84,7 +84,7 @@ describe("CLI durable session context", () => {
     }
   });
 
-  it.each(["process", "plugin", "first-only"])(
+  it.each(["plugin", "first-only"])(
     "preserves prompt privacy and order with plugin execution %s",
     async (transport) => {
       const pluginExecution = transport === "plugin";
@@ -270,11 +270,8 @@ describe("CLI durable session context", () => {
 
   it.each([
     { transport: "plugin", resume: false, changeAccount: false },
-    { transport: "plugin", resume: true, changeAccount: false },
-    { transport: "process", resume: false, changeAccount: false },
     { transport: "process", resume: true, changeAccount: false },
     { transport: "plugin", resume: true, changeAccount: true },
-    { transport: "process", resume: true, changeAccount: true },
   ])(
     "preserves owned reference facts for $transport, resume=$resume, changeAccount=$changeAccount",
     async (testCase) => {

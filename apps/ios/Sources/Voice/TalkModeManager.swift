@@ -275,7 +275,6 @@ final class TalkModeManager: NSObject {
     private var voiceOverrideActive = false
     private var modelOverrideActive = false
     private var defaultOutputFormat: String?
-    private var executionMode: TalkModeExecutionMode = .native
     private var runtimeRoute: TalkModeRuntimeRoute = .localElevenLabs
     private var realtimeProvider: String?
     private var realtimeModelId: String?
@@ -706,7 +705,7 @@ final class TalkModeManager: NSObject {
         let bypassRealtime = self.bypassRealtimeOnNextStart
         self.bypassRealtimeOnNextStart = false
         if self.runtimeRoute.usesRealtime, !bypassRealtime {
-            let realtimeStart = self.executionMode == .realtimeRelay
+            let realtimeStart = self.runtimeRoute == .realtimeRelay
                 ? await self.startRealtimeRelayIfAvailable(attemptID: attemptID)
                 : await self.startRealtimeIfAvailable(attemptID: attemptID)
             switch realtimeStart {
@@ -2607,7 +2606,7 @@ final class TalkModeManager: NSObject {
               self.realtimeRelaySession == nil,
               !self.isEnabled
         else { return }
-        guard self.runtimeRoute.usesRealtime, self.executionMode != .realtimeRelay else { return }
+        guard self.runtimeRoute == .realtimeWebRTC else { return }
         guard self.gatewayTalkPermissionState == .ready else { return }
         guard self.consumePrefetchedRealtimeSession(peekOnly: true) == nil else { return }
         guard self.realtimePrefetchTask == nil else { return }
@@ -3370,20 +3369,18 @@ final class TalkModeManager: NSObject {
     }
 
     private func shouldInterrupt(with transcript: String) -> Bool {
-        guard self.shouldAllowSpeechInterruptForCurrentRoute() else { return false }
+        let route = AVAudioSession.sharedInstance().currentRoute
+        // Built-in outputs can feed TTS back into recognition and falsely interrupt it.
+        guard !route.outputs.contains(where: { $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver })
+        else {
+            return false
+        }
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
         if let spoken = lastSpokenText?.lowercased(), spoken.contains(trimmed.lowercased()) {
             return false
         }
         return true
-    }
-
-    private func shouldAllowSpeechInterruptForCurrentRoute() -> Bool {
-        let route = AVAudioSession.sharedInstance().currentRoute
-        // Built-in speaker/receiver often feeds TTS back into STT, causing false interrupts.
-        // Allow barge-in for isolated outputs (headphones/Bluetooth/USB/CarPlay/AirPlay).
-        return !route.outputs.contains { $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver }
     }
 
     private var isSpeechOutputActive: Bool {
@@ -3394,14 +3391,10 @@ final class TalkModeManager: NSObject {
     }
 
     private func applyDirective(_ directive: TalkDirective?) {
-        let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let usesGatewayVoiceIds = self.runtimeRoute.usesGatewayTalkSpeak
         let resolvedVoice = usesGatewayVoiceIds
-            ? requestedVoice
-            : TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
-        if !usesGatewayVoiceIds, requestedVoice?.isEmpty == false, resolvedVoice == nil {
-            self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
-        }
+            ? directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            : self.resolveElevenLabsVoiceAlias(directive?.voiceId)
         guard directive?.once != true else { return }
         if let voice = resolvedVoice {
             self.currentVoiceId = voice
@@ -3539,7 +3532,9 @@ final class TalkModeManager: NSObject {
 
     private func startIncrementalPrefetch(segment: String, context: IncrementalSpeechContext) {
         guard context.canUseElevenLabs, let apiKey = context.apiKey, let voiceId = context.voiceId else { return }
-        let prefetchOutputFormat = self.resolveIncrementalPrefetchOutputFormat(context: context)
+        let prefetchOutputFormat = TalkTTSValidation.pcmSampleRate(from: context.outputFormat) == nil
+            ? context.outputFormat
+            : ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
         let request = ElevenLabsTTSRequest(
             text: segment,
             directive: context.directive,
@@ -3617,13 +3612,6 @@ final class TalkModeManager: NSObject {
         let prefetched = IncrementalPrefetchedAudio(chunks: chunks, outputFormat: completed.outputFormat)
         self.incrementalSpeechPrefetch = nil
         return prefetched
-    }
-
-    private func resolveIncrementalPrefetchOutputFormat(context: IncrementalSpeechContext) -> String? {
-        if TalkTTSValidation.pcmSampleRate(from: context.outputFormat) != nil {
-            return ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
-        }
-        return context.outputFormat
     }
 
     private func finishIncrementalSpeech() async {
@@ -3745,15 +3733,13 @@ final class TalkModeManager: NSObject {
         } else {
             nil
         }
-        let canUseElevenLabs = (voiceId?.isEmpty == false) && (apiKey?.isEmpty == false)
         return IncrementalSpeechContext(
             apiKey: apiKey,
             voiceId: voiceId,
             modelId: modelId,
             outputFormat: outputFormat,
             language: self.incrementalSpeechLanguages.provider,
-            directive: directive,
-            canUseElevenLabs: canUseElevenLabs)
+            directive: directive)
     }
 
     /// Returns `mp3_44100_128` when the API has already rejected PCM, otherwise `pcm_44100`.
@@ -3899,7 +3885,10 @@ private struct IncrementalSpeechBuffer {
     }
 
     private mutating func stripDirectiveIfReady(from text: String) -> String? {
-        guard !self.directiveParsed else { return text }
+        guard !self.directiveParsed else {
+            // Each update carries the full reply, including any leading directive.
+            return self.directive == nil ? text : TalkDirectiveParser.parse(text).stripped
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if trimmed.hasPrefix("{") {
@@ -4000,7 +3989,7 @@ private struct IncrementalSpeechBuffer {
 }
 
 extension TalkModeManager {
-    func resolveVoiceId(
+    private func resolveVoiceId(
         preferred: String?,
         apiKey: String,
         shouldApply: @MainActor @Sendable () -> Bool = { true }) async -> String?
@@ -4204,11 +4193,12 @@ extension TalkModeManager {
     }
 
     private func realtimeIssue(message: String, phase: String) -> TalkRuntimeIssue {
-        TalkRuntimeIssue.realtimeUnavailable(
+        TalkRuntimeIssue(
+            code: .realtimeUnavailable,
             message: message,
             provider: self.realtimeProvider,
             model: self.realtimeModelId,
-            transport: self.executionMode == .realtimeRelay ? "gateway-relay" : "webrtc",
+            transport: self.runtimeRoute == .realtimeRelay ? "gateway-relay" : "webrtc",
             phase: phase)
     }
 
@@ -4228,7 +4218,7 @@ extension TalkModeManager {
                from: gatewayError,
                fallbackProvider: realtimeProvider,
                fallbackModel: realtimeModelId,
-               fallbackTransport: executionMode == .realtimeRelay ? "gateway-relay" : "webrtc",
+               fallbackTransport: runtimeRoute == .realtimeRelay ? "gateway-relay" : "webrtc",
                fallbackPhase: phase)
         {
             return issue
@@ -4249,7 +4239,8 @@ extension TalkModeManager {
         let model = rawIssue["model"]?.stringValue ?? fallbackModel
         let transport = rawIssue["transport"]?.stringValue ?? fallbackTransport
         let phase = rawIssue["phase"]?.stringValue ?? fallbackPhase
-        return TalkRuntimeIssue.realtimeUnavailable(
+        return TalkRuntimeIssue(
+            code: .realtimeUnavailable,
             message: message,
             provider: provider,
             model: model,
@@ -4354,7 +4345,6 @@ extension TalkModeManager {
             parsed: parsed,
             defaultProvider: Self.defaultTalkProvider)
         let realtimeVoiceId = parsed.snapshot.realtime.voice
-        self.executionMode = routing.executionMode
         self.runtimeRoute = routing.route
         self.realtimeProvider = routing.realtimeProvider
         self.realtimeModelId = routing.realtimeModelId
@@ -4428,7 +4418,7 @@ extension TalkModeManager {
         realtimeVoiceId: String?)
     {
         let usesRealtimeConfig = routing.route.usesRealtime
-        let usesRealtimeRelay = routing.executionMode == .realtimeRelay
+        let usesRealtimeRelay = routing.route == .realtimeRelay
         self.gatewayTalkDefaultVoiceId = usesRealtimeConfig ? realtimeVoiceId : self.defaultVoiceId
         self.gatewayTalkDefaultModelId = usesRealtimeConfig ? routing.realtimeModelId : nativeModelId
         let providerLabel = Self.displayName(forProvider: routing.activeProvider)
@@ -4495,7 +4485,6 @@ extension TalkModeManager {
     }
 
     private func applyTalkConfigLoadFailureFallback() {
-        self.executionMode = .native
         self.runtimeRoute = .localElevenLabs
         self.realtimeProvider = nil
         self.realtimeModelId = nil
@@ -5038,10 +5027,6 @@ extension TalkModeManager {
         }
     }
 
-    func _test_executionMode() -> TalkModeExecutionMode {
-        self.executionMode
-    }
-
     func _test_realtimeProvider() -> String? {
         self.realtimeProvider
     }
@@ -5129,10 +5114,6 @@ extension TalkModeManager {
         self.pendingRealtimeIssue != nil
     }
 
-    func _test_incrementalReset() {
-        self.incrementalSpeechBuffer = IncrementalSpeechBuffer()
-    }
-
     func _test_incrementalIngest(_ text: String, isFinal: Bool) -> [String] {
         self.incrementalSpeechBuffer.ingest(text: text, isFinal: isFinal)
     }
@@ -5150,7 +5131,9 @@ private struct IncrementalSpeechContext: Equatable {
     let outputFormat: String?
     var language: String?
     let directive: TalkDirective?
-    let canUseElevenLabs: Bool
+    var canUseElevenLabs: Bool {
+        self.voiceId?.isEmpty == false && self.apiKey?.isEmpty == false
+    }
 }
 
 private struct IncrementalSpeechPrefetchState {

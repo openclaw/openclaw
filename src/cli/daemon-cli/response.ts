@@ -1,4 +1,3 @@
-import { Writable } from "node:stream";
 import { currentGatewayServiceRebindReceipt } from "../../daemon/service-rebind.js";
 import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -9,6 +8,7 @@ import {
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createNullWriter } from "../../shared/null-writer.js";
 
 type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
@@ -121,14 +121,6 @@ export function emitDaemonScheduledRestart(params: {
     warnings: params.warnings.length ? params.warnings : undefined,
   });
   return true;
-}
-
-export function createNullWriter(): Writable {
-  return new Writable({
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
-  });
 }
 
 export function createDaemonActionContext(params: {

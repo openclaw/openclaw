@@ -2,21 +2,33 @@ import "./doctor-health.test-support.js";
 import { execFile, fork, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import * as configFlow from "../commands/doctor-config-flow.js";
 import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
+import { inspectUpdateRecoveryBackups } from "../infra/update-recovery-backup-status.js";
+import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
+import { readUpdateRunDriver } from "../infra/update-run-driver.js";
+import { createUpdateRun, listUpdateRuns } from "../infra/update-run-ledger.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import * as databasePreflight from "../state/openclaw-database-preflight.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
@@ -40,6 +52,194 @@ beforeEach(() => {
   vi.mocked(execFile).mockReset();
   mocks.packageRoot.mockReturnValue(undefined);
   mocks.runContributions.mockReset();
+});
+
+afterEach(() => {
+  resetAutoMigrateLegacyStateDirForTest();
+});
+
+function readCapturedConfig(directory: string, sourcePath: string) {
+  const manifestPath = path.join(directory, "manifest.json");
+  const manifestBytes = fs.readFileSync(manifestPath);
+  const manifest = parseUpdateRecoveryBackupManifest(manifestBytes.toString("utf8"));
+  const entry = manifest.entries.find((item) => item.sourcePath === sourcePath);
+  if (entry?.kind !== "file") {
+    throw new Error(`Original configuration was not captured: ${sourcePath}`);
+  }
+  const payloadPath = path.join(directory, entry.archivePath);
+  return {
+    manifest,
+    manifestPath,
+    manifestBytes,
+    payloadPath,
+    bytes: fs.readFileSync(payloadPath),
+  };
+}
+
+it("preserves original config bytes before Doctor relocates and repairs legacy state", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const legacyRoot = path.join(state.home, ".clawdbot");
+    const legacyConfig = path.join(legacyRoot, "openclaw.json");
+    const original = Buffer.from("// original operator formatting\n{ gateway: { port: 19101 } }\n");
+    fs.writeFileSync(state.configPath, original);
+    fs.renameSync(state.stateDir, legacyRoot);
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
+    mocks.packageRoot.mockReturnValue(process.cwd());
+    mocks.config.mockReturnValue({});
+    mocks.runContributions.mockResolvedValue(undefined);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    let captured: ReturnType<typeof readCapturedConfig> | undefined;
+    const loadConfig = configFlow.loadAndMaybeMigrateDoctorConfig;
+    const repair = vi
+      .spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig")
+      .mockImplementation(async (params) => {
+        const scope = getOpenClawDatabaseMaintenanceScope();
+        if (!scope) {
+          throw new Error("Doctor config repair lost its maintenance scope");
+        }
+        expect(scope.ownsSchemaMaintenance).toBe(true);
+        scope.assertOwnerCurrent();
+        expect(fs.lstatSync(legacyRoot).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(legacyRoot)).toBe(state.stateDir);
+        expect(resolveStateDir(process.env)).toBe(state.stateDir);
+        const store = resolveUpdateCaptureRoot(legacyRoot);
+        expect(fs.existsSync(store), runtime.log.mock.calls.flat().join("\n")).toBe(true);
+        const captures = fs.readdirSync(store).filter((name) => name.startsWith("doctor-"));
+        expect(captures, runtime.log.mock.calls.flat().join("\n")).toHaveLength(1);
+        expect(
+          fs.existsSync(path.join(store, captures[0]!, "manifest.json")),
+          runtime.log.mock.calls.flat().join("\n"),
+        ).toBe(true);
+        captured = readCapturedConfig(path.join(store, captures[0]!), legacyConfig);
+        expect(captured.bytes).toEqual(original);
+        expect(captured.manifest.stateDir).toBe(legacyRoot);
+        const result = await loadConfig(params);
+        fs.writeFileSync(state.configPath, '{ "gateway": { "port": 19102 } }\n');
+        return { ...result, path: state.configPath };
+      });
+    try {
+      expect(resolveStateDir(process.env)).toBe(legacyRoot);
+      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      expect(repair).toHaveBeenCalledOnce();
+      expect(fs.realpathSync(legacyRoot)).toBe(state.stateDir);
+      expect(fs.readFileSync(state.configPath, "utf8")).toContain("19102");
+      if (!captured) {
+        throw new Error("Doctor did not reach the config repair boundary");
+      }
+      expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
+      expect(fs.readFileSync(captured.payloadPath)).toEqual(original);
+      expect(await inspectUpdateRecoveryBackups({ installRoot: process.cwd() })).toEqual([
+        expect.objectContaining({
+          ref: expect.objectContaining({ manifestPath: captured.manifestPath }),
+          runId: captured.manifest.runId,
+          captureStatus: "pending",
+          status: "manual",
+          terminalOutcome: undefined,
+        }),
+      ]);
+      expect(listUpdateRuns()).toEqual([]);
+    } finally {
+      repair.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+it("reuses the same original capture across Doctor continuations without recapturing current config", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const original = '{ "gateway": { "port": 19111 } }\n';
+    fs.writeFileSync(state.configPath, original);
+    const driver = readUpdateRunDriver();
+    if (!driver) {
+      throw new Error("The fixture requires its actual process identity");
+    }
+    const run = createUpdateRun({ trigger: "cli", origin: { driver } }, { env: state.env });
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
+    try {
+      const installRoot = state.path("installation");
+      fs.mkdirSync(installRoot);
+      mocks.packageRoot.mockReturnValue(installRoot);
+      mocks.config.mockReturnValue({});
+      mocks.runContributions.mockResolvedValue(undefined);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      await withUpdateCommandExecutor(run.runId, async (executor) => {
+        const fence = await executor.enter(installRoot);
+        const maintenance = await beginDoctorMaintenance({
+          options: { repair: true, nonInteractive: true },
+          root: null,
+          runtime,
+          assertCurrent: fence.assertCurrent,
+        });
+        if (!maintenance) {
+          throw new Error("The fixture requires actual maintenance custody");
+        }
+        let baseline: Awaited<ReturnType<typeof captureUpdateRecoveryBaseline>>;
+        try {
+          baseline = await maintenance.run(() => {
+            const scope = getOpenClawDatabaseMaintenanceScope();
+            if (!scope) {
+              throw new Error("Original update capture lost its maintenance scope");
+            }
+            return captureUpdateRecoveryBaseline({
+              runId: run.runId,
+              installRoot,
+              env: process.env,
+              drivers: [driver],
+              signal: maintenance.signal,
+              assertCurrent: () => {
+                fence.assertCurrent();
+                scope.assertOwnerCurrent();
+              },
+            });
+          });
+        } finally {
+          await maintenance.release();
+        }
+        const captured = readCapturedConfig(baseline.ref.directory, state.configPath);
+        expect(captured.bytes.toString("utf8")).toBe(original);
+        const store = resolveUpdateCaptureRoot(state.stateDir);
+        const originalEntries = fs.readdirSync(store).toSorted();
+        for (const [port, inheritedRunId] of [
+          [19112, undefined],
+          [19113, run.runId],
+        ] as const) {
+          vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunId);
+          const current = `{ "gateway": { "port": ${port} } }\n`;
+          fs.writeFileSync(state.configPath, current);
+          await runDoctorHealthFlow(
+            runtime,
+            { repair: true, nonInteractive: true },
+            {
+              inputHash: hashConfigRaw(current),
+              assertCurrent: fence.assertCurrent,
+              originalRecoveryCapture: { runId: run.runId, installRoot, ref: baseline.ref },
+            },
+          );
+          expect(fs.readFileSync(state.configPath, "utf8")).toBe(current);
+          expect(fs.readdirSync(store).toSorted()).toEqual(originalEntries);
+          expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
+          expect(fs.readFileSync(captured.payloadPath, "utf8")).toBe(original);
+        }
+        expect(mocks.runContributions).toHaveBeenCalledTimes(2);
+        expect(
+          runtime.log.mock.calls.filter(
+            ([message]) =>
+              message === `Original update capture retained at ${baseline.ref.manifestPath}.`,
+          ),
+          runtime.log.mock.calls.flat().join("\n"),
+        ).toHaveLength(2);
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 it("shares one fleet preflight with Doctor admission and its health contribution", async () => {

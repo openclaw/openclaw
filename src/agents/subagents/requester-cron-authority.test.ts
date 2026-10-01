@@ -1,6 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -29,11 +30,13 @@ import {
   settleRequesterTurnAfterSessionSpawns,
 } from "./registry/subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./registry/subagent-registry-requester-yield.test-support.js";
+import { consumeSubagentPauseNotice } from "./registry/subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   consumeRequesterCronAuthorityAdmission,
   replaceRequesterCronAuthorityEntry,
   revokeRequesterCronAuthority,
+  revokeRequesterCronAuthorityBatch,
   withRequesterCronAuthority,
 } from "./requester-cron-authority.js";
 
@@ -224,6 +227,93 @@ function consume(batch: SubagentRunRecord[], runId = "continuation") {
 }
 
 describe("requester cron authority lifetime", () => {
+  it.each(["completion", "scope ended", "reset"] as const)(
+    "retains the full cohort's authority across a scoped child pause until %s",
+    async (outcome) => {
+      const operator = createAdmittedRunOperatorAuthority({
+        profileId: "pause-requester",
+        scopes: ["operator.read"],
+        assertCurrent: () => {},
+      });
+      const batch = createBatch("pause-owner", 2);
+      await inAdminRun(
+        "pause-owner",
+        async () => expect(await mark(batch)).toBe(2),
+        undefined,
+        undefined,
+        undefined,
+        operator,
+      );
+      expect(await settle(batch)).toBe(true);
+      const paused = batch[0]!;
+      paused.pauseReason = "sessions_yield";
+      paused.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
+      let pauseAdmission: ReturnType<typeof consume>;
+      await dispatch(
+        [paused],
+        async () => {
+          expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBe(operator);
+          pauseAdmission = consume([paused], "pause-turn");
+          expect(pauseAdmission?.managementEntitlement.source).toBe("control-ui-admin");
+          expect(pauseAdmission?.isCurrent()).toBe(true);
+          const scope = createCronCreatorAuthorityCapability(
+            "pause-turn",
+            { kind: "unknown" },
+            pauseAdmission!.managementEntitlement,
+            pauseAdmission!.isCurrent,
+          )!;
+          pauseAdmission!.bindRunScope(scope);
+          await runWithCronCreatorAuthorityCapability(scope, async () => {
+            expect(pauseAdmission!.isCurrent()).toBe(true);
+            if (outcome === "reset") {
+              fixture.session.lifecycleRevision = "replacement";
+            } else if (outcome === "completion") {
+              expect(consumeSubagentPauseNotice(paused)).toBe(true);
+              revokeRequesterCronAuthorityBatch([paused], 1);
+            }
+            expect(pauseAdmission!.isCurrent()).toBe(outcome !== "reset");
+          });
+        },
+        "pause-turn",
+      );
+      expect(pauseAdmission!.isCurrent()).toBe(false);
+      if (outcome === "reset") {
+        const work = vi.fn(async () => {});
+        await expect(dispatch(batch, work)).rejects.toThrow("no longer current");
+        expect(work).not.toHaveBeenCalled();
+        return;
+      }
+      if (outcome === "scope ended") {
+        expect(consumeSubagentPauseNotice(paused)).toBe(true);
+        revokeRequesterCronAuthorityBatch([paused], 1);
+      }
+
+      const continued = structuredClone(paused);
+      continued.runId = "continued-child";
+      continued.taskRunId = paused.runId;
+      continued.pauseReason = undefined;
+      const nextBatch = [continued, batch[1]!];
+      const batchRunIds = nextBatch.map((entry) => entry.runId).toSorted();
+      for (const entry of nextBatch) {
+        entry.requesterSettleWake!.batchRunIds = batchRunIds;
+      }
+      runs.delete(paused.runId);
+      runs.set(continued.runId, continued);
+      replaceRequesterCronAuthorityEntry({ previous: paused, next: continued, preserve: true });
+      await dispatch(nextBatch, async () => {
+        expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBe(operator);
+        const completionAdmission = consume(nextBatch)!;
+        expect(completionAdmission.managementEntitlement.source).toBe("control-ui-admin");
+        expect(completionAdmission.isCurrent()).toBe(true);
+        for (const entry of nextBatch) {
+          entry.requesterSettleWake = undefined;
+        }
+        revokeRequesterCronAuthorityBatch(nextBatch, 1);
+        expect(completionAdmission.isCurrent()).toBe(false);
+      });
+    },
+  );
+
   it.each([
     "complete",
     "source revoked",

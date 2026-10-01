@@ -1,4 +1,3 @@
-// Policy doctor checks and findings for gateway exposure policy.
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence, PolicyGatewayExposureEvidence } from "../../policy-state-types.js";
@@ -102,11 +101,7 @@ function gatewayHttpEndpointFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const denied = new Set(
-    readStringList(policy, ["gateway", "http", "denyEndpoints"]).map((endpoint) =>
-      endpoint.toLowerCase(),
-    ),
-  );
+  const denied = new Set(readStringList(policy, ["gateway", "http", "denyEndpoints"]));
   if (denied.size === 0) {
     return [];
   }

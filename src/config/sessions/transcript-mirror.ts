@@ -1,18 +1,13 @@
 // Transcript mirroring turns outbound text/media notifications into compact transcript text.
 import path from "node:path";
 
-// Media transcript mirrors use stable filenames instead of raw URLs with tokens/query strings.
-function stripQuery(value: string): string {
-  const noHash = value.split("#")[0] ?? value;
-  return noHash.split("?")[0] ?? noHash;
-}
-
 function extractFileNameFromMediaUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
-  const cleaned = stripQuery(trimmed);
+  // Media transcript mirrors use stable filenames instead of raw URLs with tokens/query strings.
+  const cleaned = trimmed.split(/[?#]/u, 1)[0] ?? trimmed;
   try {
     const parsed = new URL(cleaned);
     // Data URLs carry inline bytes, not a filename suitable for transcript text.
@@ -50,5 +45,5 @@ export function resolveMirroredTranscriptText(params: {
     return trimmedText ? `${trimmedText}\n${mediaText}` : mediaText;
   }
 
-  return trimmedText ? trimmedText : null;
+  return trimmedText || null;
 }

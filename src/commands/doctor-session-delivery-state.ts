@@ -36,7 +36,6 @@ export function repairCanonicalSessionDeliveryStates(params: {
   });
 }
 
-/** Removes runtime-only skill catalogs from previously persisted session rows. */
 export function repairCanonicalSessionResolvedSkills(params: {
   apply: boolean;
   cfg: OpenClawConfig;

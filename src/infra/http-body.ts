@@ -96,15 +96,7 @@ export type ReadRequestBodyOptions = {
   destroyOnLimit?: boolean;
 };
 
-type RequestBodyLimitValues = {
-  maxBytes: number;
-  timeoutMs: number;
-};
-
-function resolveRequestBodyLimitValues(options: {
-  maxBytes: number;
-  timeoutMs?: number;
-}): RequestBodyLimitValues {
+function resolveRequestBodyLimitValues(options: { maxBytes: number; timeoutMs?: number }) {
   const maxBytes = Number.isFinite(options.maxBytes)
     ? Math.max(1, Math.floor(options.maxBytes))
     : 1;

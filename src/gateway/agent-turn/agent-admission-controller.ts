@@ -84,33 +84,23 @@ export function createAgentAdmissionController(params: {
       return undefined;
     }
     if (params.dedupeLifecycle.isReserved()) {
-      if (!latest) {
-        if (commitOutcome) {
-          postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
-          setAbortedAgentDedupeEntries({
-            dedupe: params.context.dedupe,
-            keys: params.dedupeLifecycle.ownedReservationKeys(),
-            agentId: admissionAgentId(),
-            sessionKey: resolvedSessionKey,
-            runId: params.runId,
-            stopReason: "timeout",
-          });
+      let expiresAtMs: unknown;
+      if (latest) {
+        if (!latest.ok || !isAcceptedAgentDedupePayload(latest.payload)) {
+          if (commitOutcome) {
+            postAdmissionAbort = latest;
+          }
+          return undefined;
         }
-        return undefined;
-      }
-      if (!latest.ok || !isAcceptedAgentDedupePayload(latest.payload)) {
-        if (commitOutcome) {
-          postAdmissionAbort = latest;
+        if (!params.dedupeLifecycle.ownsReservation()) {
+          if (commitOutcome) {
+            postAdmissionSuperseded = true;
+          }
+          return undefined;
         }
-        return undefined;
+        expiresAtMs = latest.payload.expiresAtMs;
       }
-      if (!params.dedupeLifecycle.ownsReservation()) {
-        if (commitOutcome) {
-          postAdmissionSuperseded = true;
-        }
-        return undefined;
-      }
-      if (!isFutureDateTimestampMs(latest.payload.expiresAtMs, { nowMs: Date.now() })) {
+      if (!latest || !isFutureDateTimestampMs(expiresAtMs, { nowMs: Date.now() })) {
         if (commitOutcome) {
           postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
           setAbortedAgentDedupeEntries({

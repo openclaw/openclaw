@@ -72,6 +72,7 @@ import {
   prepareGatewaySessionAccessAuthority,
   type GatewaySessionAccessAuthority,
 } from "./session-access-authority.js";
+import { sessionLog } from "./session-log.js";
 import { sessionMutationTargetFields } from "./session-method-policy.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
@@ -87,6 +88,10 @@ import {
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
 import { resolveRuntimeSessionParticipantRequest } from "./session-tool-participant.js";
+import {
+  startSlowRequestDiagnostics,
+  type SessionSubscribePhase,
+} from "./slow-request-diagnostics.js";
 import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
@@ -144,6 +149,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   expectedProfileBinding?: ExpectedProfileBinding;
   hasCurrentClientAuthority?: () => boolean;
   assertInvocationCurrent?: () => void;
+  markSessionSubscribePhase?: (phase: SessionSubscribePhase) => void;
 }): Promise<{
   error: ErrorShape | null;
   sessionScope?: SessionOperatorScope;
@@ -151,8 +157,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   sessionAccessAuthority?: GatewaySessionAccessAuthority;
 }> {
   if (params.context.ensureSessionRowProjection) {
+    params.markSessionSubscribePhase?.("projectionReadiness");
     await params.context.ensureSessionRowProjection();
   }
+  params.markSessionSubscribePhase?.("accessFacts");
   const authorizeMethod = () =>
     withPluginRuntimeRegistryScope(
       // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
@@ -242,16 +250,36 @@ export async function authorizeGatewayRequestPreDispatch(params: {
             sessionRowRead,
             sessionScope: scopeAuthorization.sessionScope,
           });
-    const preparedSessionMutation = projection
-      ? await projection.withPreparedExactRows(
-          (cfg) =>
-            resolveDirectSessionTargets(params.method, params.requestParams).flatMap((target) => {
-              const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
-              return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
-            }),
-          authorizeSession,
-        )
-      : withCanonicalSessionValidationDeferral(() => authorizeSession());
+    const subscriptionAccessOnly =
+      params.method === "sessions.messages.subscribe" &&
+      resolveDirectIncognitoTargets(params.method, params.requestParams).length === 0;
+    if (projection && subscriptionAccessOnly) {
+      // Observers need committed sharing facts, not display rows held by an active turn's
+      // worker refresh. Incognito reads keep their transient exact-row preparation.
+      params.markSessionSubscribePhase?.("accessFacts");
+      while (projection.needsMembershipPreparation()) {
+        await projection.prepareMembership();
+      }
+    }
+    params.markSessionSubscribePhase?.(
+      subscriptionAccessOnly ? "accessFacts" : "projectionReadiness",
+    );
+    const preparedSessionMutation =
+      projection && !subscriptionAccessOnly
+        ? await projection.withPreparedExactRows(
+            (cfg) =>
+              resolveDirectSessionTargets(params.method, params.requestParams).flatMap((target) => {
+                const agent = resolveRequestedSessionAgentId(
+                  cfg,
+                  target.sessionKey,
+                  target.agentId,
+                );
+                return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
+              }),
+            authorizeSession,
+          )
+        : withCanonicalSessionValidationDeferral(() => authorizeSession());
+    params.markSessionSubscribePhase?.("accessFacts");
     if (preparedSessionMutation.kind === "pending") {
       const { certifySessionCanonicalValidationPending } =
         await import("../config/sessions/session-canonical-validation-readiness.js");
@@ -498,6 +526,15 @@ export async function handleGatewayRequest(
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
   const { req, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } = opts;
+  using subscribeDiagnostics =
+    req.method === "sessions.messages.subscribe"
+      ? startSlowRequestDiagnostics<SessionSubscribePhase>(
+          sessionLog,
+          "slow session messages subscribe",
+          req.method,
+          "setup",
+        )
+      : undefined;
   const runtimeParticipant = resolveRuntimeSessionParticipantRequest(opts);
   if (runtimeParticipant === null) {
     return;
@@ -552,6 +589,7 @@ export async function handleGatewayRequest(
       methodRegistry,
       expectedProfileBinding: profileBinding,
       hasCurrentClientAuthority,
+      markSessionSubscribePhase: subscribeDiagnostics?.mark,
       assertInvocationCurrent: () => {
         runtimeParticipant?.assertCurrent();
         profileBinding?.assertCurrent();
@@ -615,6 +653,7 @@ export async function handleGatewayRequest(
         }
       : respondAuthorized;
     const invokeHandler = async () => {
+      subscribeDiagnostics?.mark("handlerPreparation");
       const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
       // Lazy preparation may yield across a hot config change. Keep the router fence
       // unless the canonical owner reconciles accepted input before new admission.
@@ -637,6 +676,7 @@ export async function handleGatewayRequest(
           ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
           sessionMutationCommitGuard,
           sessionMutationAuthorization,
+          markSessionSubscribePhase: subscribeDiagnostics?.mark,
           ...(authorization.sessionAccessAuthority
             ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
             : {}),

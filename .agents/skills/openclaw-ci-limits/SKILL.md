@@ -270,7 +270,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   API and job deadlines remain unchanged.
   The aggregate preserves failure-triggered PR cancellation through the
   `pr-fail-fast` cause outputs; superseded runs without a failure cause still
-  skip the aggregate. PR Node matrices use native fail-fast. The same-repository
+  skip the aggregate. Canonical PR Node matrices disable native fail-fast on
+  every attempt; reruns complete every leg so inherited main failures leave the
+  remaining admin-landing proof intact. Native fail-fast applies only to PRs in
+  other workflow repositories. Historical runs retain their tested policy. The same-repository
   PR first-attempt monitor alone has `actions: write` and adds one 4-class registration per
   eligible PR, or uses hosted Ubuntu under the outage override. Main/manual
   matrices remain complete. The monitor starts after preflight, observes failures
@@ -305,6 +308,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   class-vCPU-minutes (1.17% of that broad run). Include that allowance with
   Node packing costs until native proof measures the new duration. No jobs,
   registrations, permissions, compiler checks, or hosted eligibility are added.
+  The package-boundary row has a 30-minute whole-job budget: three hosted
+  four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
+  SDK preparation and 126 compiles before final validation/canary/cleanup.
+  One completed both compile and canary but still exceeded the job deadline.
+  Other additional-check groups retain 20 minutes; compiler concurrency,
+  complete inventory, receipt guards, canary, and routing remain unchanged.
 - Current fast plugin/channel contract families each share one checkout/setup.
   Their two weighted process envelopes run sequentially with unchanged include
   lists and package commands; channel invocations retain four project slots and
@@ -505,11 +514,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   at least eight actual CPUs and 28 GiB memory, with the existing two-worker
   fallback elsewhere. Keep its worker-specific timing identity and require
   three original-shard replays plus sampled memory evidence when changing it.
-  The measured Gateway server-isolated/database-worker family uses at most eight
-  workers only in a serial, non-frozen self-hosted job with at least eight actual
-  CPUs and 28 GiB memory. Its 20.70 GiB observed aggregate RSS leaves the existing
-  25% reserve at that floor. Preserve its two-worker fallback, other groups' pins,
-  hosted planning, complete inventory, and old timing generations until refit.
+  The Gateway server-isolated/database-worker family keeps two workers, including
+  roomy serial self-hosted jobs, to leave cold-startup headroom within its existing
+  test deadlines. Preserve host admission and fallback rules, other groups' pins,
+  hosted planning, complete inventory, cleanup, and old timing generations until
+  refit. The historical eight-worker qualification does not establish headroom
+  for the current fixture cohort.
   The primary GitHub profile remains serial at 210s. Failed-job-only hybrid
   retries retain the original wider matrix on hosted Ubuntu, clamp to one child,
   and keep two workers per child; they can exceed the eight-minute normal-run
@@ -556,7 +566,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
-  backend/event/contributor routing and two/one-worker project limits. Every fresh
+  backend/event routing and two/one-worker project limits. Every fresh
   plan for a target with the named-project contract uses twelve Control UI shards
   plus one browser-extension row, across backend profiles, attempts and frozen
   targets. Historical targets without that contract retain four total rows on
@@ -618,9 +628,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.
-- `OPENCLAW_CI_RUNNER_BACKEND=github` routes every configurable `ci.yml` job
-  to its existing GitHub-hosted fallback label. Unset or `blacksmith` preserves
-  the normal Blacksmith-first route.
+- Where repository variables are available, `OPENCLAW_CI_RUNNER_BACKEND=github`
+  routes configurable `ci.yml` jobs to their existing GitHub-hosted fallback
+  labels. Unset or `blacksmith` preserves the normal Blacksmith-first route.
+  Fork first attempts cannot honor an unavailable override; they use Blacksmith
+  Node runners and hosted check stripes. Fork retries use hosted runners.
 - Vitest transform and Node compile caches are restore-only in CI and use
   immutable Actions caches; the main-push/daily/dispatch warmer is their sole
   writer. Build, QA and test orchestration consume its shared Node compile seed.
@@ -638,13 +650,14 @@ already started.
 gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
 ```
 
-In degraded mode, `ci.yml` uses the same hosted labels and non-Blacksmith paths
-as manual dispatches and fork pull requests. Blacksmith-only Docker and sticky
-steps stay off, dependency setup uses the ordinary Actions pnpm-store cache,
-and Android's large build uses separate low-memory Gradle processes. Standard
-4-core hosted runners make builds and test lanes slower. Blacksmith runner
-registration is no longer part of the budget, while GitHub-hosted concurrency
-limits apply.
+Where the override is available, degraded `ci.yml` jobs use the same hosted
+labels and non-Blacksmith paths as manual dispatches and fork retries.
+Blacksmith-only Docker and sticky steps stay off, dependency setup uses the
+ordinary Actions pnpm-store cache, and Android's large build uses separate
+low-memory Gradle processes. Standard 4-core hosted runners make builds and
+test lanes slower. Those jobs consume GitHub-hosted concurrency instead of
+Blacksmith registrations. Fork first attempts with unavailable repository
+variables still use Blacksmith and must remain in the registration budget.
 
 Flip back after the outage by deleting the variable:
 

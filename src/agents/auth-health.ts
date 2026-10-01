@@ -108,13 +108,11 @@ function resolveOAuthStatus(
   if (expiryState === "invalid_expires" || expiryState === "missing") {
     return { status: "missing" };
   }
-  if (expiryState === "expired") {
-    return { status: "expired", expiresAt: normalizedExpiresAt, remainingMs };
-  }
-  if (expiryState === "expiring") {
-    return { status: "expiring", expiresAt: normalizedExpiresAt, remainingMs };
-  }
-  return { status: "ok", expiresAt: normalizedExpiresAt, remainingMs };
+  return {
+    status: expiryState === "valid" ? "ok" : expiryState,
+    expiresAt: normalizedExpiresAt,
+    remainingMs,
+  };
 }
 
 function buildProfileHealth(params: {

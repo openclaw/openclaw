@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import {
-  UPDATE_RUN_DRIVER_LIMIT,
-  UPDATE_RUN_PHASES,
-} from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { UPDATE_RUN_DRIVER_LIMIT } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -13,6 +10,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
+import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
   inspectUpdateRepairDriverAdmission,
   isStaleIdentitylessUpdateRun,
@@ -26,6 +24,7 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
+import type { UpdateRunPatch as RunPatch } from "./update-run-mutation.types.js";
 import {
   decodeRun,
   hasStoredUpdateRecovery,
@@ -43,6 +42,8 @@ import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { readRecoveries } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
+  applyUpdateRunPhase,
+  applyUpdateRunStep,
   mutateRun,
   mutateRunInTransaction,
   persistRun,
@@ -68,10 +69,6 @@ export {
 export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
-type RunPatch = Partial<
-  Pick<UpdateRunRecord, "origin" | "target" | "before" | "after" | "trigger">
->;
-
 export function createUpdateRun(
   input: RunPatch & {
     runId?: string;
@@ -291,49 +288,7 @@ export function recordUpdateRunPhase(
 ): UpdateRunRecord {
   return mutateRun(
     runId,
-    (record) => {
-      if (record.status !== "running") {
-        return;
-      }
-      if (patch.origin) {
-        record.origin = { ...record.origin, ...patch.origin };
-      }
-      if (patch.target) {
-        record.target = { ...record.target, ...patch.target };
-      }
-      if (patch.before) {
-        record.before = { ...record.before, ...patch.before };
-      }
-      if (patch.after) {
-        record.after = { ...record.after, ...patch.after };
-      }
-      if (patch.trigger) {
-        record.trigger = patch.trigger;
-      }
-      const repairsVerification = phase === "repairing" && record.phase === "verifying";
-      const advances = UPDATE_RUN_PHASES.indexOf(phase) > UPDATE_RUN_PHASES.indexOf(record.phase);
-      // Post-activation repair may only return to verification; stale staging
-      // writers must not reopen activation while the live candidate is repaired.
-      const resumesVerification =
-        record.phase === "repairing" && record.steps.some((step) => step.step === "verifying");
-      if (
-        phase !== "finished" &&
-        (repairsVerification || (advances && (!resumesVerification || phase === "verifying")))
-      ) {
-        const now = Date.now();
-        upsertStep(record, { step: record.phase, status: "completed", endedAtMs: now });
-        record.phase = phase;
-        upsertStep(record, {
-          step: phase,
-          status: "in_progress",
-          startedAtMs: now,
-          endedAtMs: undefined,
-        });
-      }
-      if (patch.step) {
-        upsertStep(record, patch.step);
-      }
-    },
+    (record) => applyUpdateRunPhase(record, phase, patch),
     options,
     captureBefore,
   );
@@ -344,18 +299,7 @@ export function recordUpdateRunStep(
   { reason, ...step }: UpdateRunStep & { reason?: string },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
-  return mutateRun(
-    runId,
-    (record) => {
-      if (record.status === "running") {
-        upsertStep(record, step);
-        if (reason !== undefined) {
-          record.reason = reason;
-        }
-      }
-    },
-    options,
-  );
+  return mutateRun(runId, (record) => applyUpdateRunStep(record, { ...step, reason }), options);
 }
 
 export function recordUpdateRunRepairContinuation(
@@ -507,13 +451,10 @@ export function finishInterruptedUpdateBeforeActivation(
     throw new Error("Update interruption requires its live pre-activation transaction");
   }
   const recoveryTable = "config_machine_state";
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${recoveryTable} (`);
-  const marker = ") STRICT;";
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
-  if (start < 0 || end < 0) {
-    throw new Error("Interrupted update schema is unavailable.");
-  }
-  const recoverySchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
+  const recoverySchema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, recoveryTable, {
+    endMarker: ") STRICT;",
+    errorMessage: "Interrupted update schema is unavailable.",
+  });
   assertCurrent();
   runExistingOpenClawStateWriteTransaction(
     ({ db, path: pathname }) => {

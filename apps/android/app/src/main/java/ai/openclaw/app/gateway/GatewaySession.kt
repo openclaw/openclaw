@@ -1,5 +1,7 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.node.asStringOrNull
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -2713,16 +2715,7 @@ private fun formatGatewayAuthorityHost(host: String): String {
   return if (normalizedHost.contains(":")) "[$normalizedHost]" else normalizedHost
 }
 
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
 private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
-
-private fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? =
   when (this) {

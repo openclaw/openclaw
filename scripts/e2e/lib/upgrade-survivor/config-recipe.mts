@@ -10,6 +10,7 @@ import {
   parsePinnedReleaseVersion,
   parseReleaseVersion,
 } from "../../../lib/release-version.mjs";
+import { usesStructuredToolSearchAtBaseline } from "../../../lib/upgrade-survivor-policy.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -272,6 +273,12 @@ export function resolveUpgradeSurvivorConfigSteps(
 }
 
 function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null): ConfigStep {
+  if (step.id === "tools-tool-search" && usesStructuredToolSearchAtBaseline(baselineVersion)) {
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify({ mode: "tools" }), ...step.argv.slice(4)],
+    };
+  }
   if (step.id === "agents") {
     const agentsJson = step.argv[3];
     if (agentsJson === undefined) {

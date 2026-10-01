@@ -133,23 +133,21 @@ describe("sessionsCommand ACP model display", () => {
     }
   });
 
-  it.each([ACP_SESSION_KEY, "agent:copilot:acp:binding:discord:default:feedface"])(
-    "reports native ACP metadata for %s",
-    async (sessionKey) => {
-      writeSession("copilot", sessionKey);
-      await writeAcpRuntimeMeta("copilot", sessionKey);
+  it("reports native ACP metadata for binding sessions", async () => {
+    const sessionKey = "agent:copilot:acp:binding:discord:default:feedface";
+    writeSession("copilot", sessionKey);
+    await writeAcpRuntimeMeta("copilot", sessionKey);
 
-      expect(await readSessions()).toMatchObject([
-        {
-          key: sessionKey,
-          model: "copilot-acp",
-          modelProvider: "acpx",
-          acpRuntime: true,
-          agentRuntime: { id: "copilot", source: "session-key" },
-        },
-      ]);
-    },
-  );
+    expect(await readSessions()).toMatchObject([
+      {
+        key: sessionKey,
+        model: "copilot-acp",
+        modelProvider: "acpx",
+        acpRuntime: true,
+        agentRuntime: { id: "copilot", source: "session-key" },
+      },
+    ]);
+  });
 
   it("keeps the configured model for ACP-shaped bridge sessions without runtime metadata", async () => {
     const sessionKey = "agent:copilot:acp:bridge-session-1";

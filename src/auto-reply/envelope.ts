@@ -1,4 +1,3 @@
-/** Formats inbound message envelopes with sender, timing, and channel metadata for agent prompts. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -104,10 +103,7 @@ export function formatAgentEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (ts === undefined) {
-    return undefined;
-  }
-  if (options?.includeTimestamp === false) {
+  if (ts === undefined || options?.includeTimestamp === false) {
     return undefined;
   }
   const date = ts instanceof Date ? ts : new Date(ts);
@@ -144,11 +140,8 @@ export function formatAgentEnvelopeTimestamp(
 function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
   const label = sanitizeEnvelopeHeaderPart(from || "");
   const idMarkerIndex = label.search(/\s+id:/i);
-  if (idMarkerIndex > 0) {
-    const displayLabel = label.slice(0, idMarkerIndex).trim();
-    return displayLabel.includes(":") ? "(sender)" : displayLabel;
-  }
-  return label.includes(":") ? "(sender)" : label;
+  const displayLabel = idMarkerIndex > 0 ? label.slice(0, idMarkerIndex).trim() : label;
+  return displayLabel.includes(":") ? "(sender)" : displayLabel;
 }
 
 /** Formats the generic bracketed envelope prepended to agent-visible messages. */
@@ -176,13 +169,11 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   } else if (elapsed) {
     parts.push(`+${elapsed}`);
   }
-  const host = normalizeOptionalString(params.host);
-  if (host) {
-    parts.push(sanitizeEnvelopeHeaderPart(host));
-  }
-  const ip = normalizeOptionalString(params.ip);
-  if (ip) {
-    parts.push(sanitizeEnvelopeHeaderPart(ip));
+  for (const value of [params.host, params.ip]) {
+    const normalized = normalizeOptionalString(value);
+    if (normalized) {
+      parts.push(sanitizeEnvelopeHeaderPart(normalized));
+    }
   }
   const ts = formatAgentEnvelopeTimestamp(params.timestamp, params.envelope);
   if (ts) {

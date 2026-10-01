@@ -237,7 +237,6 @@ describe("private worker launch wire", () => {
 
   it.each([
     { timeoutMs: 30_000, expected: { code: "runner-offline" } },
-    { timeoutMs: 5_000, expected: { message: "node worker launch timed out" } },
     { timeoutMs: 10_000, expected: { message: "node worker launch timed out" } },
   ])(
     "rejects clock expiry during discovery before dispatch with a $timeoutMs ms launch budget",
@@ -290,6 +289,31 @@ describe("private worker launch wire", () => {
       }
     },
   );
+
+  it("rejects event and invoke delivery after a real socket leaves OPEN", async () => {
+    const received = once(client, "message");
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "open" })).toBe(true);
+    await received;
+    const sent = vi.spyOn(socket, "send");
+    try {
+      socket.close(1000, "runtime proof");
+      expect(socket.readyState).toBe(WebSocket.CLOSING);
+      expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "closing" })).toBe(false);
+      expect(nodeRegistry.sendEventRaw(nodeId, "runtime.raw", null)).toBe(false);
+      const onDispatchReady = vi.fn();
+      await expect(
+        nodeRegistry.invoke({ nodeId, command: "runtime.proof", timeoutMs: 0, onDispatchReady }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+      });
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      expect(sent).not.toHaveBeenCalled();
+    } finally {
+      sent.mockRestore();
+    }
+  });
 });
 
 it("revokes native workspace dispatch when the same connection withdraws ownership support", async () => {

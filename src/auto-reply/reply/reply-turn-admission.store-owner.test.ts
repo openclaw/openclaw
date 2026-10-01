@@ -357,7 +357,7 @@ it.each(
       }
       const replacement = await admitOwner(storePath, "unrelated-replacement");
       expect(replacement.sessionId).toBe("unrelated-replacement");
-      expect(replacement.hasOwnedSessionId(sessionId)).toBe(false);
+      expect(replacement.captureOwnedSessionIds().has(sessionId)).toBe(false);
       if (replacementBarrier) {
         replacement.completeWithAfterClearBarrier(replacementDelivery.promise);
       } else {
@@ -466,7 +466,7 @@ it("keeps rekeyed source lineage separate from the adopted target", async () => 
   });
   expect(adopted.status).toBe("owned");
   owner.updateSessionId(targetId);
-  expect(owner.hasOwnedSessionId(targetId)).toBe(true);
+  expect(owner.captureOwnedSessionIds().has(targetId)).toBe(true);
   const waited = vi.spyOn(registry, "waitForReplyRunSuccessorAdmission");
   const controller = new AbortController();
   const pending = [sessionId, targetId].map(async (expectedSessionId) => {

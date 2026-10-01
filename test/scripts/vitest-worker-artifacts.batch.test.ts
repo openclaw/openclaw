@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 import { isProcessAlive } from "../helpers/process-wait.js";
+import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 import {
   createControlledWorkerCompiler,
@@ -79,6 +80,8 @@ const infraConfig = "test/vitest/vitest.infra.config.ts";
 const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts";
 const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
+const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
+const agentsCoreConfig = agentVitestProjectOwners.core.config;
 
 it.for([
   { name: "worker", args: [coreWorker], prepare: true },
@@ -100,6 +103,50 @@ it.for([
     prepare: false,
   },
   { name: "empty channels", config: channelsConfig, args: [], include: [], prepare: false },
+  ...[agentVitestProjectOwners.core, agentVitestProjectOwners.all].map((owner) => ({
+    name: `code-mode ${owner.name}`,
+    config: owner.config,
+    args: [codeModeWorker],
+    prepare: true,
+  })),
+  {
+    name: "code-mode full agentic config",
+    config: "test/vitest/vitest.full-agentic.config.ts",
+    args: [codeModeWorker],
+    prepare: true,
+  },
+  {
+    name: "code-mode excluded from its scoped project",
+    config: agentsCoreConfig,
+    args: [codeModeWorker, "--exclude", path.basename(codeModeWorker)],
+    prepare: false,
+  },
+  {
+    name: "code-mode include",
+    config: agentsCoreConfig,
+    args: [],
+    include: [codeModeWorker],
+    prepare: true,
+  },
+  {
+    name: "code-mode omitted by include",
+    config: agentsCoreConfig,
+    args: [codeModeWorker],
+    include: ["src/agents/code-mode.test.ts"],
+    prepare: false,
+  },
+  {
+    name: "code-mode non-owning config",
+    config: infraConfig,
+    args: [codeModeWorker],
+    prepare: false,
+  },
+  {
+    name: "code-mode selection leaves unrelated agents lazy",
+    config: agentsCoreConfig,
+    args: ["src/agents/code-mode-runtime.test.ts"],
+    prepare: false,
+  },
 ])(
   "selects eager worker preparation for $name",
   async ({ config = infraConfig, args, include, prepare }) => {
@@ -115,6 +162,7 @@ it.runIf(process.platform !== "win32").for(
       ? ["ready", "excluded"]
       : [
           "ready",
+          "code-mode",
           "failure",
           "cancel",
           "excluded",
@@ -133,8 +181,16 @@ it.runIf(process.platform !== "win32").for(
   "$route runner owns pre-spawn worker preparation through $mode",
   ({ route, mode }, { workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
-      const selectedFile = route.startsWith("contracts-") ? packageContract : coreWorker;
-      const selectedConfig = route.startsWith("contracts-") ? contractsConfig : infraConfig;
+      const selectedFile = route.startsWith("contracts-")
+        ? packageContract
+        : mode === "code-mode"
+          ? codeModeWorker
+          : coreWorker;
+      const selectedConfig = route.startsWith("contracts-")
+        ? contractsConfig
+        : mode === "code-mode"
+          ? agentsCoreConfig
+          : infraConfig;
       const { node } = workerArtifacts.createFixtureCommands();
       const directory = workerArtifacts.fixtureDirectory();
       const compiled = path.join(directory, "compiled.jsonl");
@@ -250,7 +306,11 @@ syncFixtureBuiltinExports();
       expect(result.code, result.stdout + result.stderr).toBe(
         mode === "cancel" ? 143 : mode === "failure" ? 1 : 0,
       );
-      const ready = mode === "ready" || mode === "include-worker" || mode === "channels";
+      const ready =
+        mode === "ready" ||
+        mode === "include-worker" ||
+        mode === "channels" ||
+        mode === "code-mode";
       const prepared = ready || mode === "failure" || mode === "cancel";
       expect(fs.existsSync(compilerReceipt)).toBe(prepared);
       if (mode === "failure" || mode === "cancel") {

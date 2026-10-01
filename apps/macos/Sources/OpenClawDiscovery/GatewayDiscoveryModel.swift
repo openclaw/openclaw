@@ -176,16 +176,8 @@ public final class GatewayDiscoveryModel {
 
     private var wideAreaFallbackGateways: [DiscoveredGateway] {
         guard let fallback = self.wideAreaFallback else { return [] }
-        return self.mapWideAreaBeacons(fallback.beacons, domain: fallback.domain)
-    }
-
-    private var tailscaleServeFallbackGateways: [DiscoveredGateway] {
-        self.mapTailscaleServeBeacons(self.tailscaleServeFallbackBeacons)
-    }
-
-    private func mapWideAreaBeacons(_ beacons: [WideAreaGatewayBeacon], domain: String) -> [DiscoveredGateway] {
-        beacons.map { beacon in
-            let stableID = "wide-area|\(domain)|\(beacon.instanceName)"
+        return fallback.beacons.map { beacon in
+            let stableID = "wide-area|\(fallback.domain)|\(beacon.instanceName)"
             let isLocal = Self.isLocalGateway(
                 lanHost: beacon.lanHost,
                 tailnetDns: beacon.tailnetDns,
@@ -209,10 +201,8 @@ public final class GatewayDiscoveryModel {
         }
     }
 
-    private func mapTailscaleServeBeacons(
-        _ beacons: [TailscaleServeGatewayBeacon]) -> [DiscoveredGateway]
-    {
-        beacons.map { beacon in
+    private var tailscaleServeFallbackGateways: [DiscoveredGateway] {
+        self.tailscaleServeFallbackBeacons.map { beacon in
             let stableID = "tailscale-serve|\(beacon.tailnetDns.lowercased())"
             let isLocal = Self.isLocalGateway(
                 lanHost: nil,
@@ -506,18 +496,14 @@ public final class GatewayDiscoveryModel {
             type: type,
             domain: domain,
             logger: self.logger)
-        { [weak self] result in
+        { [weak self] resolved in
             Task { @MainActor in
                 guard let self, self.generation == generation else { return }
                 self.pendingServiceResolvers[stableID] = nil
-                switch result {
-                case let .success(resolved):
-                    self.resolvedServiceByID[stableID] = resolved
-                    self.updateGatewaysForAllDomains()
-                    self.recomputeGateways()
-                case .failure:
-                    break
-                }
+                guard let resolved else { return }
+                self.resolvedServiceByID[stableID] = resolved
+                self.updateGatewaysForAllDomains()
+                self.recomputeGateways()
             }
         }
 
@@ -650,7 +636,7 @@ struct ResolvedGatewayService: Equatable {
 
 final class GatewayServiceResolver: NSObject, NetServiceDelegate {
     private let service: NetService
-    private let completion: (Result<ResolvedGatewayService, Error>) -> Void
+    private let completion: (ResolvedGatewayService?) -> Void
     private let logger: Logger
     private var didFinish = false
 
@@ -659,7 +645,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
         type: String,
         domain: String,
         logger: Logger,
-        completion: @escaping (Result<ResolvedGatewayService, Error>) -> Void)
+        completion: @escaping (ResolvedGatewayService?) -> Void)
     {
         self.service = NetService(domain: domain, type: type, name: name)
         self.completion = completion
@@ -673,7 +659,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
     }
 
     func cancel() {
-        self.finish(result: .failure(GatewayServiceResolverError.cancelled))
+        self.finish(result: nil)
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
@@ -686,14 +672,14 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
                 "discovery: resolved TXT for \(sender.name, privacy: .public): \(payload, privacy: .public)")
         }
         let resolved = ResolvedGatewayService(txt: txt, host: host, port: port)
-        self.finish(result: .success(resolved))
+        self.finish(result: resolved)
     }
 
-    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-        self.finish(result: .failure(GatewayServiceResolverError.resolveFailed(errorDict)))
+    func netService(_: NetService, didNotResolve _: [String: NSNumber]) {
+        self.finish(result: nil)
     }
 
-    private func finish(result: Result<ResolvedGatewayService, Error>) {
+    private func finish(result: ResolvedGatewayService?) {
         guard !self.didFinish else { return }
         self.didFinish = true
         self.service.stop()
@@ -711,9 +697,4 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
     }
-}
-
-enum GatewayServiceResolverError: Error {
-    case cancelled
-    case resolveFailed([String: NSNumber])
 }

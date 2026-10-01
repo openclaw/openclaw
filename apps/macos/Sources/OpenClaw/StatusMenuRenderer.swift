@@ -497,7 +497,7 @@ final class StatusMenuRenderer: NSObject {
 
         switch id {
         case "config": DebugActions.openConfigFolder()
-        case "health": Task { await DebugActions.runHealthCheckNow() }
+        case "health": Task { await HealthStore.shared.refresh(onDemand: true) }
         case "heartbeat": Task { _ = await DebugActions.sendTestHeartbeat() }
         case "pairing":
             #if DEBUG
@@ -543,7 +543,7 @@ final class StatusMenuRenderer: NSObject {
         guard !self.testNotificationPending else { return }
         self.testNotificationPending = true
         sender.isEnabled = false
-        let outcome = await DebugActions.sendTestNotification()
+        let outcome = await TestNotificationAction.send()
         self.testNotificationPending = false
         sender.isEnabled = true
 

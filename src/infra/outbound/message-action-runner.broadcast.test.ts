@@ -782,7 +782,10 @@ describe("broadcast send outcomes through native actions", () => {
           idempotencyKey: "broadcast-root",
         },
         messageActionAuthorization: {
-          scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} },
+          scheduled: {
+            policy: { version: 1, mode: "trusted" },
+            assertCurrent: () => {},
+          },
         },
       });
     await send();

@@ -12,8 +12,7 @@ import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission
 import { finalizeCronRuntimeRows, type CronFinalizationReceipt } from "./run-finalization.js";
 import { recordQuietCronEvaluation } from "./run-history.js";
 import { resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
-import { publishCronRuntimeRows } from "./runtime-publication.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState, publishCronRuntimeRows } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";

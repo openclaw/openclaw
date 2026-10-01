@@ -542,10 +542,6 @@ function toSession(
   };
 }
 
-function threadFromRead(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) && isRecord(value.thread) ? value.thread : undefined;
-}
-
 function isLoadedThreadReadMiss(error: unknown): boolean {
   const message = coerceErrorMessage(error);
   return message.includes("thread not found") || message.includes("thread not loaded");
@@ -557,29 +553,23 @@ async function readThread(params: {
   threadId: string;
   includeTurns: boolean;
 }): Promise<Record<string, unknown>> {
-  try {
+  const read = async (includeTurns: boolean, errorOptions?: ErrorOptions) => {
     const response = await params.request(params.endpoint, "thread/read", {
       threadId: params.threadId,
-      includeTurns: params.includeTurns,
+      includeTurns,
     });
-    const thread = threadFromRead(response);
-    if (!thread) {
-      throw new Error("Codex thread/read returned an invalid response");
+    if (!isRecord(response) || !isRecord(response.thread)) {
+      throw new Error("Codex thread/read returned an invalid response", errorOptions);
     }
-    return thread;
+    return response.thread;
+  };
+  try {
+    return await read(params.includeTurns);
   } catch (error) {
     if (!params.includeTurns || !String(error).includes("not materialized yet")) {
       throw error;
     }
-    const response = await params.request(params.endpoint, "thread/read", {
-      threadId: params.threadId,
-      includeTurns: false,
-    });
-    const thread = threadFromRead(response);
-    if (!thread) {
-      throw new Error("Codex thread/read returned an invalid response", { cause: error });
-    }
-    return thread;
+    return await read(false, { cause: error });
   }
 }
 

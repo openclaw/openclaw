@@ -2,7 +2,8 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
+import type { WebSocket } from "ws";
 import type { CallManager } from "../manager.js";
 import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import type { CallRecord, HangupCallInput } from "../types.js";
@@ -20,7 +21,7 @@ export const createRealtimeConfig = () => ({
   instructions: "Be helpful.",
 });
 
-export const noOpStreamDisconnectLifecycle: StreamDisconnectLifecycle = {
+const noOpStreamDisconnectLifecycle: StreamDisconnectLifecycle = {
   connect: () => {},
   disconnect: () => {},
   retire: () => {},
@@ -45,16 +46,18 @@ export function createBridge(
 
 export function makeRealtimeProvider(
   createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
+  overrides: Partial<RealtimeVoiceProviderPlugin> = {},
 ): RealtimeVoiceProviderPlugin {
   return {
     id: "openai",
     label: "OpenAI",
     isConfigured: () => true,
     createBridge: createBridgeForCall,
+    ...overrides,
   };
 }
 
-export function makeCallRegistrationResolver(
+function makeCallRegistrationResolver(
   provider: RealtimeVoiceProviderPlugin,
 ): ResolveRealtimeCallRegistration {
   return (call) => ({
@@ -137,5 +140,15 @@ export async function connectCarrierStream(handler: RealtimeCallHandler) {
       handler.handleWebSocketUpgrade(request, socket, head);
     },
   });
-  return { server, ws: await connectWs(server.url) };
+  const ws = await connectWs(server.url);
+  onTestFinished(async () => {
+    ws.terminate();
+    await handler.close();
+    await server.close();
+  });
+  return { server, ws };
+}
+
+export function sendCarrierStart(ws: WebSocket, streamSid: string, callSid: string | undefined) {
+  ws.send(JSON.stringify({ event: "start", start: { streamSid, callSid } }));
 }

@@ -63,7 +63,7 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
 ];
 const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
-export const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 2 * 60_000;
+const FULL_RELEASE_GITHUB_POLL_INTERVAL_MS = 2 * 60_000;
 const FULL_RELEASE_PROGRESS_INTERVAL_MS = 15 * 60_000;
 const FULL_RELEASE_RUN_DISCOVERY_DELAYS_MS = [30_000, 60_000, 120_000];
 // A run can wait in the runner queue before its first job uploads the witness.

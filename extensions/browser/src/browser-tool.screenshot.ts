@@ -2,6 +2,7 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserScreenshotAction,
@@ -154,22 +155,19 @@ export async function executeScreenshotAction({
         },
       );
       const text = `[analyzed by ${analyzedBy}]\n${wrappedDescription}\n${shareHint}`;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          ...result,
-          // Do NOT include details.media here — the vision path returns
-          // a text description as the deliverable output. Exposing the raw
-          // screenshot as media would cause channel delivery to auto-send
-          // potentially sensitive page content. The text block carries the
-          // staged outbound-copy path for an explicit outbound-delivery send.
-          vision: {
-            provider: described.provider,
-            model: described.model,
-            decision: described.decision,
-          },
+      return textResult(text, {
+        ...result,
+        // Do NOT include details.media here — the vision path returns
+        // a text description as the deliverable output. Exposing the raw
+        // screenshot as media would cause channel delivery to auto-send
+        // potentially sensitive page content. The text block carries the
+        // staged outbound-copy path for an explicit outbound-delivery send.
+        vision: {
+          provider: described.provider,
+          model: described.model,
+          decision: described.decision,
         },
-      };
+      });
     }
   } catch (err) {
     // Fall back to returning the raw image block so the agent loop can

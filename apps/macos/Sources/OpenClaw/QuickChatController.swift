@@ -669,7 +669,7 @@ final class QuickChatController: NSObject {
 
     private var canShowRecentSessions: Bool {
         self.isVisible &&
-            self.model.canSelectRecentSession &&
+            self.model.canCaptureWindow &&
             self.windowPicker?.isInteractionActive != true &&
             !self.isMenuActive
     }
@@ -735,11 +735,7 @@ final class QuickChatController: NSObject {
         // Competing interaction: a recents menu must not pop over the picker overlays.
         self.invalidateRecentsFetch()
         Task {
-            if area {
-                await windowPicker.beginArea()
-            } else {
-                await windowPicker.beginWindow()
-            }
+            await windowPicker.begin(mode: area ? .area : .window)
         }
     }
 

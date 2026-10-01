@@ -404,6 +404,13 @@ openclaw plugins enable <id>
 
 Updates from the fixed release onward inspect these plugins normally.
 
+The 2026.9.5 updater can also report `Cannot use 'import.meta' outside a module`
+for ESM plugins, including bundles using `import.meta.dir`. Use the same temporary
+disable/update/enable sequence: a new candidate cannot replace the parser already
+running in the installed updater. Version 2026.9.6 admits retained `import.meta`
+syntax. Current snapshot inventory also records unparseable entries as named
+plugin warnings instead of aborting the snapshot.
+
 ### Large model-catalog temporary directories
 
 Older releases can retain several complete plugin copies inside

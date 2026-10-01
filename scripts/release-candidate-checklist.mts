@@ -50,7 +50,10 @@ import {
   validateReleasePreflightTagIdentity,
 } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPreflightDistTag } from "./openclaw-npm-extended-stable-release.mjs";
-import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
+import {
+  PluginSdkApiAcknowledgementError,
+  validatePluginSdkApiReleaseEvidence,
+} from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
 import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
@@ -177,7 +180,7 @@ Options:
                                       8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
   --skip-dispatch                    Require Full Release Validation run; separate npm run only for historical recovery.
-  --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
+  --skip-local-generated-check        Do not run local generated release baseline checks.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
   --skip-parallels                   Force-skip candidate Parallels smoke; stable/full run by default.
   --parallels-registry-package-artifact <dir>
@@ -776,6 +779,14 @@ function runFromTrustedTooling(
       );
     }
   } finally {
+    // Remove the installed graph before Git walks the checkout to remove it.
+    try {
+      rmSync(tempRoot, { force: true, recursive: true });
+    } catch (error) {
+      console.warn(
+        `could not remove temporary trusted tooling files at ${tempRoot}: ${String(error)}`,
+      );
+    }
     if (worktreeAdded) {
       const cleanup = spawnSync("git", ["worktree", "remove", "--force", toolingRoot], {
         cwd: targetRoot,
@@ -788,7 +799,6 @@ function runFromTrustedTooling(
         );
       }
     }
-    rmSync(tempRoot, { force: true, recursive: true });
   }
 }
 
@@ -2128,9 +2138,13 @@ async function main() {
         ),
       )
     : "";
-  const localGeneratedCheck = runLocalGeneratedCheckIfNeeded(options);
-
-  if (!options.fullReleaseRunId && !options.skipDispatch) {
+  // A new dispatch is gated by the local check; consuming existing evidence
+  // defers it until the SDK acknowledgement has been checked.
+  const dispatchesValidation = !options.fullReleaseRunId && !options.skipDispatch;
+  let localGeneratedCheck = dispatchesValidation
+    ? runLocalGeneratedCheckIfNeeded(options)
+    : undefined;
+  if (dispatchesValidation) {
     const workflowFile = "full-release-validation.yml";
     const targetContextRef = releaseBranchForTag(options.tag);
     const trustedWorkflowFields = fullReleaseTrustedWorkflowFields({
@@ -2225,15 +2239,6 @@ async function main() {
   if (fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha) {
     throw new Error(`run SHA mismatch: tag=${targetSha} full=${fullRun.headSha}`);
   }
-  // Only exact historical producers retain local, non-authoritative planning.
-  // B recovery consumes its original hosted observations without another sweep.
-  const publicationAdmission = fullValidationEvidence.publicationAdmission;
-  const pluginNpmPlan = publicationAdmission
-    ? publicationAdmission.observations.plans.npm
-    : await collectPluginPlanWithRetry("scripts/plugin-npm-release-plan.ts", options);
-  const pluginClawHubPlan = publicationAdmission
-    ? publicationAdmission.observations.plans.clawhub
-    : await collectPluginPlanWithRetry("scripts/plugin-clawhub-release-plan.ts", options);
   if (npmUsesFullRun) {
     rmSync(npmDir, { recursive: true, force: true });
   }
@@ -2309,13 +2314,47 @@ async function main() {
     targetSha,
     npmDistTag: options.npmDistTag,
   });
-  const pluginSdkApiValidation = validatePluginSdkApiReleaseEvidence({
-    acknowledgement: options.pluginSdkApiAcknowledgement,
-    evidence: npmManifest.pluginSdkApi,
-    expectedHeadSha: targetSha,
-    expectedWorkflowSha: npmRun.headSha,
-    npmDistTag: options.npmDistTag,
-  });
+  let pluginSdkApiValidation;
+  try {
+    pluginSdkApiValidation = validatePluginSdkApiReleaseEvidence({
+      acknowledgement: options.pluginSdkApiAcknowledgement,
+      evidence: npmManifest.pluginSdkApi,
+      expectedHeadSha: targetSha,
+      expectedWorkflowSha: npmRun.headSha,
+      npmDistTag: options.npmDistTag,
+    });
+  } catch (error) {
+    if (error instanceof PluginSdkApiAcknowledgementError) {
+      const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
+      const end = argv.indexOf("--");
+      const flag = "--plugin-sdk-api-acknowledgement";
+      let replaced = false;
+      for (let index = 0; index < (end === -1 ? argv.length : end); index++) {
+        if (argv[index] === flag) {
+          argv[++index] = error.digest;
+          replaced = true;
+        }
+      }
+      if (!replaced) {
+        argv.unshift(flag, error.digest);
+      }
+      throw new Error(
+        `${error.message}\nReview the Plugin SDK API diff before rerunning.\n${["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" ")}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  localGeneratedCheck ??= runLocalGeneratedCheckIfNeeded(options);
+  // Only exact historical producers retain local, non-authoritative planning.
+  // B recovery consumes its original hosted observations without another sweep.
+  const publicationAdmission = fullValidationEvidence.publicationAdmission;
+  const pluginNpmPlan = publicationAdmission
+    ? publicationAdmission.observations.plans.npm
+    : await collectPluginPlanWithRetry("scripts/plugin-npm-release-plan.ts", options);
+  const pluginClawHubPlan = publicationAdmission
+    ? publicationAdmission.observations.plans.clawhub
+    : await collectPluginPlanWithRetry("scripts/plugin-clawhub-release-plan.ts", options);
   validateFullManifest(fullManifest, {
     targetSha,
     releaseProfile: options.releaseProfile,

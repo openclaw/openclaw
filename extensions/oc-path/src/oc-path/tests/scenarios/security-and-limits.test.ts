@@ -1,16 +1,10 @@
 // OC Path tests cover security and limits plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  OcPathError,
-  findOcPaths,
-  formatOcPath,
-  parseOcPath,
-  resolveOcPath,
-  setOcPath,
-} from "../../index.js";
+import { findOcPaths } from "../../find.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseJsonl } from "../../jsonl/parse.js";
-import { MAX_TRAVERSAL_DEPTH } from "../../oc-path.js";
+import { MAX_TRAVERSAL_DEPTH, OcPathError, formatOcPath, parseOcPath } from "../../oc-path.js";
+import { resolveOcPath, setOcPath } from "../../universal.js";
 
 const PATH_LENGTH_LIMIT = 4096;
 

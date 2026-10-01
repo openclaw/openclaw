@@ -486,6 +486,7 @@ export async function runGitCandidatePreflight(params: {
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
+  retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -669,7 +670,10 @@ export async function runGitCandidatePreflight(params: {
     throw error;
   } finally {
     if (!cleanupUncertain) {
-      await cleanupGitPreflight(params, worktreeDir, preflightRoot);
+      const cleanup = () => cleanupGitPreflight(params, worktreeDir, preflightRoot);
+      if (tested?.status !== "ok" || !params.retainCleanup?.(cleanup)) {
+        await cleanup();
+      }
     }
   }
   if (tested?.status !== "ok") {

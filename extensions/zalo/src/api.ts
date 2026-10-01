@@ -131,9 +131,6 @@ function resolveZaloApiUrl(apiUrl?: string): string {
   return parsed.href.replace(/\/+$/u, "");
 }
 
-/**
- * Call the Zalo Bot API
- */
 export async function callZaloApi<T = unknown>(
   method: string,
   token: string,
@@ -183,9 +180,6 @@ export async function callZaloApi<T = unknown>(
   }
 }
 
-/**
- * Validate bot token and get bot info
- */
 export async function getMe(
   token: string,
   timeoutMs?: number,
@@ -194,9 +188,6 @@ export async function getMe(
   return callZaloApi<ZaloBotInfo>("getMe", token, undefined, { timeoutMs, fetch: fetcher });
 }
 
-/**
- * Send a text message
- */
 export async function sendMessage(
   token: string,
   params: ZaloSendMessageParams,
@@ -209,9 +200,6 @@ export async function sendMessage(
   });
 }
 
-/**
- * Send a photo message
- */
 export async function sendPhoto(
   token: string,
   params: ZaloSendPhotoParams,
@@ -268,7 +256,6 @@ export async function sendChatAction(
 }
 
 /**
- * Get updates using long polling (dev/testing only)
  * Note: Zalo returns a single update per call, not an array like Telegram
  */
 export async function getUpdates(
@@ -282,9 +269,6 @@ export async function getUpdates(
   return callZaloApi<ZaloUpdate>("getUpdates", token, body, { timeoutMs, fetch: fetcher });
 }
 
-/**
- * Set webhook URL for receiving updates
- */
 export async function setWebhook(
   token: string,
   params: ZaloSetWebhookParams,
@@ -293,9 +277,6 @@ export async function setWebhook(
   return callZaloApi<ZaloWebhookInfo>("setWebhook", token, params, { fetch: fetcher });
 }
 
-/**
- * Delete webhook configuration
- */
 export async function deleteWebhook(
   token: string,
   fetcher?: ZaloFetch,
@@ -307,9 +288,6 @@ export async function deleteWebhook(
   });
 }
 
-/**
- * Get current webhook info
- */
 export async function getWebhookInfo(
   token: string,
   fetcher?: ZaloFetch,

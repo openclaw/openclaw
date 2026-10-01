@@ -60,6 +60,7 @@ import { renderContinueInTerminalDialog } from "./components/continue-in-termina
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import {
   ensureSidebarConversation,
+  isSidebarSlotVisible,
   promoteSidebarPanel,
   setSidebarDock,
   setSidebarExpanded,
@@ -315,7 +316,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
     const desktopPanelAvailable =
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
-    const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
     const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
     const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
@@ -345,50 +345,35 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           </button>
         </openclaw-tooltip>`
       : nothing;
-    const sessionRailMode = this.selectedSessionRailMode(this.state?.sessionKey ?? "");
+    const sessionRailVisible =
+      this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "companion");
     const toggleSessionRail = () => this.requestSessionRail("toggle");
-    const panelMenuActions: HeaderMenuQuickAction[] = [];
-    if (sessionWorkspace.onToggleTerminal) {
-      panelMenuActions.push({
-        id: "terminal",
-        label: t("terminal.toggle"),
-        icon: icons.terminal,
-        onActivate: sessionWorkspace.onToggleTerminal,
-      });
-    }
-    if (sessionWorkspace.onToggleBrowser) {
-      panelMenuActions.push({
-        id: "browser",
-        label: t("browser.toggle"),
-        icon: icons.globe,
-        onActivate: sessionWorkspace.onToggleBrowser,
-      });
-    }
-    if (desktopPanelAvailable && sessionWorkspace.onToggleDesktop) {
-      panelMenuActions.push({
-        id: "desktop",
-        label: t("desktop.toggle"),
-        icon: icons.monitor,
-        onActivate: openDesktopPanel,
-      });
-    }
-    if (discussion) {
-      panelMenuActions.push({
-        id: "discussion",
-        label: discussion.label,
-        icon: icons.messageSquare,
-        active: discussion.active,
-        onActivate: discussion.onToggle,
-      });
-    }
-    if (sessionWorkspace.onOpenDiff) {
-      panelMenuActions.push({
-        id: "changes",
-        label: t("chat.sessionDiff.show"),
-        icon: icons.diff,
-        onActivate: sessionWorkspace.onOpenDiff,
-      });
-    }
+    const panelMenuActions: HeaderMenuQuickAction[] = (
+      [
+        ["terminal", t("terminal.toggle"), icons.terminal, sessionWorkspace.onToggleTerminal],
+        ["browser", t("browser.toggle"), icons.globe, sessionWorkspace.onToggleBrowser],
+        [
+          "desktop",
+          t("desktop.toggle"),
+          icons.monitor,
+          desktopPanelAvailable ? sessionWorkspace.onToggleDesktop : undefined,
+        ],
+        ["discussion", discussion?.label ?? "", icons.messageSquare, discussion?.onToggle],
+        ["changes", t("chat.sessionDiff.show"), icons.diff, sessionWorkspace.onOpenDiff],
+      ] as const
+    ).flatMap(([id, label, icon, onActivate]) =>
+      onActivate
+        ? [
+            {
+              id,
+              label,
+              icon,
+              onActivate,
+              ...(id === "discussion" ? { active: discussion?.active } : {}),
+            },
+          ]
+        : [],
+    );
     panelMenuActions.push({
       id: "session-files",
       label: t(
@@ -403,9 +388,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     });
     panelMenuActions.push({
       id: "session-companion",
-      label: t(sessionRailMode === "expanded" ? "chat.rail.collapse" : "chat.rail.show"),
+      label: t(sessionRailVisible ? "chat.rail.collapse" : "chat.rail.show"),
       icon: icons.spark,
-      active: sessionRailMode === "expanded",
+      active: sessionRailVisible,
       onActivate: toggleSessionRail,
     });
     const layoutMenuActions: HeaderMenuQuickAction[] = [];
@@ -421,21 +406,18 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         onActivate: this.onOpenSplitView,
       });
     }
-    if (!this.narrow && this.onSplitDown) {
-      layoutMenuActions.push({
-        id: "split-down",
-        label: t("chat.splitView.splitDown"),
-        icon: icons.panelBottomOpen,
-        onActivate: () => this.onSplitDown?.(this.paneId),
-      });
-    }
-    if (!this.narrow && this.onSplitRight) {
-      layoutMenuActions.push({
-        id: "split-right",
-        label: t("chat.splitView.splitRight"),
-        icon: icons.panelRightOpen,
-        onActivate: () => this.onSplitRight?.(this.paneId),
-      });
+    for (const [id, label, icon, callback] of [
+      ["split-down", "chat.splitView.splitDown", icons.panelBottomOpen, "onSplitDown"],
+      ["split-right", "chat.splitView.splitRight", icons.panelRightOpen, "onSplitRight"],
+    ] as const) {
+      if (!this.narrow && this[callback]) {
+        layoutMenuActions.push({
+          id,
+          label: t(label),
+          icon,
+          onActivate: () => this[callback]?.(this.paneId),
+        });
+      }
     }
     const placement = resolveChatPanePlacement({
       gatewaySnapshot: this.context.gateway.snapshot,
@@ -585,7 +567,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
-              .boardWidgetMenu=${this.fullscreenBoardWidgetMenu(currentLayout)}
+              .boardWidgetMenu=${this.pageBoardWidgetMenu(currentLayout)}
               .sharing=${sharing}
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}

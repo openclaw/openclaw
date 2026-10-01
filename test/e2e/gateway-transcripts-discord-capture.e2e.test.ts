@@ -435,8 +435,8 @@ describe("Gateway admitted Discord transcript capture", () => {
         await import("../../src/config/sessions/store-writer-state.test-support.js");
       const { closeOpenClawStateDatabaseByPathAsync } =
         await import("../../src/state/openclaw-state-db-cache.js");
-      const { activeSessions, resolveSourceProvider } =
-        await import("../../src/transcripts/capture.js");
+      const { activeSessions } = await import("../../src/transcripts/capture-startup.js");
+      const { resolveSourceProvider } = await import("../../src/transcripts/capture.js");
       const { createTranscriptsAutoStartService } =
         await import("../../src/transcripts/auto-start.js");
       const { readConfiguredTranscriptStarts } =

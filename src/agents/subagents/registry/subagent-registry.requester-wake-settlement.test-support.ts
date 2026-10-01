@@ -2,6 +2,8 @@ import { expect, it, vi } from "vitest";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
@@ -199,7 +201,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
       },
     ]);
     expect(batch.requesterSettleWake).toBeUndefined();
-    expect(registry.countActiveDescendantRuns(requesterSessionKey)).toBe(1);
-    expect(registry.countActiveDescendantRuns(requesterSessionKey, "main")).toBe(0);
+    expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey)).toBe(1);
+    expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey, "main")).toBe(0);
   });
 }

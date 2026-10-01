@@ -35,6 +35,8 @@ export type AgentWorkspaceContext = {
   instructionSnapshot: ReturnType<typeof buildAgentWorkspaceInstructionSnapshot>;
   personaFiles: EmbeddedContextFile[];
   personaInstructions?: string;
+  /** Safe for carriers inherited by delegated agents; excludes selected personal profiles. */
+  sharedPersonaInstructions?: string;
   promptContextFiles: EmbeddedContextFile[];
   memoryReferenceFiles: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles: BootstrapFile[];
@@ -138,6 +140,9 @@ export async function prepareAgentWorkspaceContext(
     instructionSnapshot,
     personaFiles,
     personaInstructions: renderPersonaInstructions(personaFiles),
+    sharedPersonaInstructions: renderPersonaInstructions(
+      personaFiles.filter((file) => file.personalUser !== true),
+    ),
     promptContextFiles,
     memoryReferenceFiles,
     memoryToolRoutedBootstrapFiles,

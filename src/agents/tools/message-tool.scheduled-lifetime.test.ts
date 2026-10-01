@@ -16,7 +16,7 @@ import {
   noteActiveCronJobMessageActionAuthorityMutation,
   requestActiveCronJobCancellation,
 } from "../../cron/active-jobs.js";
-import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
+import { prepareCronRunAdmission } from "../../cron/run-admission.js";
 import { registerActiveCronTaskRun } from "../../cron/service/active-run-cancellation.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
@@ -97,7 +97,7 @@ it.each([
       activeJobMarker: marker,
     });
     let pending: ReturnType<ReturnType<typeof createMessageTool>["execute"]> | undefined;
-    let admission: ReturnType<typeof prepareCronPromptRunAdmission> | undefined;
+    let admission: ReturnType<typeof prepareCronRunAdmission> | undefined;
     let gatewayDispatch: ReturnType<typeof vi.fn<GatewayRequestHandler>> | undefined;
     try {
       const config: OpenClawConfig = {
@@ -303,7 +303,8 @@ it.each([
         } as GatewayRequestContext;
       }
       const prepareAdmission = () =>
-        prepareCronPromptRunAdmission({
+        prepareCronRunAdmission({
+          deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
           cfg: config,
           agentId: "main",
           runId,

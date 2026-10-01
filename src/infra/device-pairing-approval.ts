@@ -1,5 +1,6 @@
 // Pairing approval keeps host policy live until the worker commits its authoritative rows.
 import type { DeviceBootstrapProfile } from "../shared/device-bootstrap-profile.js";
+import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import type {
   ApproveDevicePairingResult,
   DeviceBootstrapApprovalOptions,
@@ -8,7 +9,6 @@ import type {
 } from "./device-pairing-core.types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { resolvePairingRequestExpiry } from "./device-pairing-state.kernel.js";
-import type { DevicePairingAdmissionFacts } from "./device-pairing-worker-contract.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,

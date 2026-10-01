@@ -14,6 +14,7 @@ import {
   markSubagentRunTerminated,
   registerSubagentRun,
 } from "../agents/subagents/registry/subagent-registry.js";
+import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -65,6 +66,8 @@ beforeAll(async () => {
   }
 });
 afterAll(async () => {
+  // Stop registry timers before the Gateway releases their database lifecycle.
+  resetSubagentRegistryForTests({ persist: false });
   await server.close();
 });
 

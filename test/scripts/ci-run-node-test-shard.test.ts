@@ -613,6 +613,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         nativeCompilerTest,
         compilerGraphTest,
         mixedCompilerTest,
+        "src/auto-reply/reply/get-reply.imports.test.ts",
       ];
       const bunFiles = [bunTarget, missingDockerTest];
       const includePatterns = [...bunFiles, ...nodeFiles];

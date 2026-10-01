@@ -183,7 +183,7 @@ it.each(["query failed", "native reader close failed"])(
   },
 );
 
-it.each(["cleanup-fact", "bun"] as const)(
+it.each(["cleanup-fact", "conservative", "capable"] as const)(
   "settles successful reads with retirement only for native cleanup (%s)",
   async (reason) => {
     const { options } = source();
@@ -194,13 +194,11 @@ it.each(["cleanup-fact", "bun"] as const)(
       stopping.resolve();
       return stopped.promise;
     });
-    if (reason === "bun") {
-      // Policy-only control: the task and its native retirement are both mocked.
-      vi.stubGlobal("process", {
-        ...process,
-        versions: { ...process.versions, bun: "1.4.2" },
-      });
-    }
+    mock.capabilities.mockReturnValue({
+      explicitSqliteCloseReleasesNativeResources: reason !== "conservative",
+      decided: true,
+      reason: "test policy",
+    });
     try {
       const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
       let settled = false;
@@ -236,9 +234,6 @@ it.each(["cleanup-fact", "bun"] as const)(
       expect(task.close).toHaveBeenCalledOnce();
     } finally {
       stopped.resolve();
-      if (reason === "bun") {
-        vi.unstubAllGlobals();
-      }
     }
   },
 );
@@ -363,6 +358,7 @@ it("closes only the operation matching a state path while its sibling finishes n
 });
 
 it.each([
+  "githubPublication.sharedObservation",
   "fleet.get",
   "userProfiles.reconcile",
   "onboardingRecommendations.read",
@@ -378,30 +374,64 @@ it.each([
     const { options } = source();
     const selector = "租户🦞".repeat(512);
     const command =
-      type === "updateRuns.get"
-        ? { type, runId: selector }
-        : type === "fleet.get"
-          ? { type, tenantId: selector }
-          : type === "userProfiles.reconcile"
-            ? { type, profileId: selector }
-            : type === "onboardingRecommendations.read"
-              ? { type, configKey: selector }
-              : type === "pluginBlob.lookup"
-                ? { type, input: { pluginId: selector, namespace: selector, key: selector } }
-                : type === "pluginBlob.entries"
-                  ? { type, input: { pluginId: selector, namespace: selector } }
-                  : type === "workspace.snapshot"
-                    ? { type, workspaceDir: selector }
-                    : type === "sandboxRegistry.get"
-                      ? { type, containerName: selector }
-                      : { type, backendId: selector, scopeKey: selector };
+      type === "githubPublication.sharedObservation"
+        ? {
+            type,
+            input: {
+              kind: "repository" as const,
+              session: {
+                agentId: selector,
+                sessionKey: selector,
+                sessionId: selector,
+                lifecycleRevision: selector,
+              },
+              selector: { requestId: selector },
+              entry: {
+                repositoryWorkspaceId: selector,
+                lifecycleRevision: selector,
+                worktree: { id: selector, branch: selector, repoRoot: selector },
+              },
+            },
+          }
+        : type === "updateRuns.get"
+          ? { type, runId: selector }
+          : type === "fleet.get"
+            ? { type, tenantId: selector }
+            : type === "userProfiles.reconcile"
+              ? { type, profileId: selector }
+              : type === "onboardingRecommendations.read"
+                ? { type, configKey: selector }
+                : type === "pluginBlob.lookup"
+                  ? { type, input: { pluginId: selector, namespace: selector, key: selector } }
+                  : type === "pluginBlob.entries"
+                    ? { type, input: { pluginId: selector, namespace: selector } }
+                    : type === "workspace.snapshot"
+                      ? { type, workspaceDir: selector }
+                      : type === "sandboxRegistry.get"
+                        ? { type, containerName: selector }
+                        : { type, backendId: selector, scopeKey: selector };
     const expected = structuredClone(command);
     const dispatch = createDeferredCore();
     const task = queueTask(dispatch.promise);
     const result = executeExistingOpenClawStateRead(options, command);
     const submitted = await task.submitted;
     const originalRoot = options.env.OPENCLAW_STATE_DIR;
-    if (command.type === "updateRuns.get") {
+    if (command.type === "githubPublication.sharedObservation") {
+      Object.assign(command.input.session, {
+        agentId: "changed",
+        sessionKey: "changed",
+        sessionId: "changed",
+        lifecycleRevision: "changed",
+      });
+      command.input.selector.requestId = "changed";
+      command.input.entry.repositoryWorkspaceId = "changed";
+      command.input.entry.lifecycleRevision = "changed";
+      Object.assign(command.input.entry.worktree, {
+        id: "changed",
+        branch: "changed",
+        repoRoot: "changed",
+      });
+    } else if (command.type === "updateRuns.get") {
       command.runId = "different run after admission";
     } else if (command.type === "fleet.get") {
       command.tenantId = "different tenant after admission";
@@ -425,40 +455,44 @@ it.each([
     }
     options.env.OPENCLAW_STATE_DIR = path.join(originalRoot, "different");
     const returned: OpenClawStateReadReply =
-      type === "updateRuns.get"
-        ? { ok: true, type, sourceAdmitted: true, run: undefined }
-        : type === "fleet.get"
-          ? { ok: true, type, sourceAdmitted: true, cell: undefined }
-          : type === "userProfiles.reconcile"
-            ? { ok: true, type, sourceAdmitted: true, profile: undefined, emailBindings: [] }
-            : type === "onboardingRecommendations.read"
-              ? { ok: true, type, sourceAdmitted: true, record: null }
-              : type === "pluginBlob.lookup"
-                ? { ok: true, type, sourceAdmitted: true, value: undefined }
-                : type === "pluginBlob.entries"
-                  ? { ok: true, type, sourceAdmitted: true, value: [] }
-                  : type === "sandboxRegistry.get"
-                    ? { ok: true, type, sourceAdmitted: true, entry: null }
-                    : type === "sandboxRegistry.runtimeIds"
-                      ? { ok: true, type, sourceAdmitted: true, runtimeIds: [] }
-                      : {
-                          ok: true,
-                          type,
-                          sourceAdmitted: true,
-                          snapshot: {
-                            identity: createWorkspaceStateIdentity(selector),
-                            setup: { version: 1 },
-                            setupExists: false,
-                          },
-                        };
+      type === "githubPublication.sharedObservation"
+        ? { ok: true, type, sourceAdmitted: true, row: undefined }
+        : type === "updateRuns.get"
+          ? { ok: true, type, sourceAdmitted: true, run: undefined }
+          : type === "fleet.get"
+            ? { ok: true, type, sourceAdmitted: true, cell: undefined }
+            : type === "userProfiles.reconcile"
+              ? { ok: true, type, sourceAdmitted: true, profile: undefined, emailBindings: [] }
+              : type === "onboardingRecommendations.read"
+                ? { ok: true, type, sourceAdmitted: true, record: null }
+                : type === "pluginBlob.lookup"
+                  ? { ok: true, type, sourceAdmitted: true, value: undefined }
+                  : type === "pluginBlob.entries"
+                    ? { ok: true, type, sourceAdmitted: true, value: [] }
+                    : type === "sandboxRegistry.get"
+                      ? { ok: true, type, sourceAdmitted: true, entry: null }
+                      : type === "sandboxRegistry.runtimeIds"
+                        ? { ok: true, type, sourceAdmitted: true, runtimeIds: [] }
+                        : {
+                            ok: true,
+                            type,
+                            sourceAdmitted: true,
+                            snapshot: {
+                              identity: createWorkspaceStateIdentity(selector),
+                              setup: { version: 1 },
+                              setupExists: false,
+                            },
+                          };
     try {
       expect(Number.isSafeInteger(submitted.inputBytes)).toBe(true);
       const selectorCount =
-        type === "pluginBlob.lookup"
-          ? 3
-          : type === "pluginBlob.entries" || type === "sandboxRegistry.runtimeIds"
-            ? 2
-            : 1;
+        type === "githubPublication.sharedObservation"
+          ? 10
+          : type === "pluginBlob.lookup"
+            ? 3
+            : type === "pluginBlob.entries" || type === "sandboxRegistry.runtimeIds"
+              ? 2
+              : 1;
       expect(submitted.inputBytes).toBeGreaterThanOrEqual(
         Buffer.byteLength(selector) * selectorCount,
       );

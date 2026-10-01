@@ -121,13 +121,13 @@ export function createCodexInferenceModelBinding(params: {
     ) {
       throw new CodexInferenceAuthorizationError("owner");
     }
-    if (path === "/responses" && metadata.requestKind === "prewarm" && body.generate === false) {
-      return { assertCurrent: assertClient, release: () => {} };
-    }
     const memory =
       metadata.threadSource === "memory_consolidation" &&
       (metadata.requestKind === "memory" || metadata.subagent === "memory_consolidation");
-    if (memory && params.memoryConfigured() && path === "/responses") {
+    if (
+      (path === "/responses" && metadata.requestKind === "prewarm" && body.generate === false) ||
+      (memory && params.memoryConfigured() && path === "/responses")
+    ) {
       return { assertCurrent: assertClient, release: () => {} };
     }
     const parentExecution = reviewer || classifier || metadata.subagent === "review";
@@ -173,6 +173,11 @@ export function createCodexInferenceModelBinding(params: {
     };
     let model: ReturnType<NonNullable<NonNullable<typeof captured.source>["bindModelExecution"]>>;
     let releaseAbort = () => {};
+    const release = () => {
+      releaseAbort();
+      model?.release();
+      captured.release();
+    };
     try {
       captured.assertCurrent();
       signal.throwIfAborted();
@@ -203,11 +208,10 @@ export function createCodexInferenceModelBinding(params: {
         if (!model) {
           throw new CodexInferenceAuthorizationError("owner");
         }
-        const revoke = cancelNativeTurn;
-        model?.signal.addEventListener("abort", revoke, { once: true });
-        releaseAbort = () => model?.signal.removeEventListener("abort", revoke);
-        if (model?.signal.aborted) {
-          revoke();
+        model.signal.addEventListener("abort", cancelNativeTurn, { once: true });
+        releaseAbort = () => model?.signal.removeEventListener("abort", cancelNativeTurn);
+        if (model.signal.aborted) {
+          cancelNativeTurn();
         }
       }
       if (!parentExecution) {
@@ -228,16 +232,10 @@ export function createCodexInferenceModelBinding(params: {
       return {
         assertCurrent: assertExecution,
         signal: model?.signal ?? captured.source?.signal,
-        release: () => {
-          releaseAbort();
-          model?.release();
-          captured.release();
-        },
+        release,
       };
     } catch (error) {
-      releaseAbort();
-      model?.release();
-      captured.release();
+      release();
       return refuseOwner(error, signal);
     }
   };

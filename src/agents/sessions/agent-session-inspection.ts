@@ -10,13 +10,7 @@ import type { ContextUsage } from "./extensions/index.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
 
 export abstract class AgentSessionInspection extends AgentSessionModels {
-  // =========================================================================
-  // Session Management
-  // =========================================================================
-
-  /**
-   * Set a display name for the current session.
-   */
+  /** Set the current session's display name. */
   setSessionName(name: string): void {
     this.sessionManager.appendSessionInfo(name);
     this.emit({ type: "session_info_changed", name: this.sessionManager.getSessionName() });
@@ -52,7 +46,6 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
     let estimateFromContent = false;
 
     if (compactionIndex >= 0) {
-      // Check if there's a valid assistant usage after the compaction boundary
       let hasPostCompactionUsage = false;
       for (let index = branchEntries.length - 1; index > compactionIndex; index -= 1) {
         // SAFETY: The reverse index stays within the canonical branch entries.
@@ -95,10 +88,6 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
       percent,
     };
   }
-
-  // =========================================================================
-  // Utilities
-  // =========================================================================
 
   /**
    * Get text content of last assistant message.

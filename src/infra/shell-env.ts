@@ -1,4 +1,3 @@
-// Loads shell-derived environment variables for provider and command runtimes.
 import {
   type ExecFileSyncOptionsWithBufferEncoding,
   execFileSync,

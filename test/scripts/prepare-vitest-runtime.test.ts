@@ -33,7 +33,9 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "dist", "entry.js"), "original\n");
-  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
+  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockImplementation(
+    async (bindingEnv, options) => (options?.includeInvoking ? [{ env: bindingEnv }] : []),
+  );
   vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
     installed: false,
     loadState: { status: "not-loaded" },

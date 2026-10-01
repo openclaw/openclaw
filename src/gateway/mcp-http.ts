@@ -273,6 +273,7 @@ async function startMcpLoopbackServer(
           () =>
             toolCache.resolve({
               context: requestContext,
+              admittedRunContext: boundClientGrant?.admittedRunContext,
               sessionControlAuthority: readAdmittedRunOperatorAuthority(
                 boundClientGrant?.admittedRunContext,
               ),

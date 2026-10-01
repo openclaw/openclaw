@@ -6,7 +6,7 @@
  * Grammar opinions (indented `##`, empty `## `, ordered lists, nested
  * sub-bullets) live in lint rules, not the parser.
  *
- * Byte-fidelity: `emitMd(parse(raw)) === raw`.
+ * Byte-fidelity: `parseMd(raw).ast.raw === raw`.
  *
  * @module @openclaw/oc-path/parse
  */

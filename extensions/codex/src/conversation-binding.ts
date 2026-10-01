@@ -5,7 +5,7 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
-  isCodexAppServerUnsafeSubscriptionError,
+  CodexAppServerUnsafeSubscriptionError,
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./app-server/attempt-client-cleanup.js";
@@ -528,7 +528,10 @@ export async function runBoundTurnWithMissingThreadRecovery(
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
-  if (isCodexAppServerOverloadError(error) || isCodexAppServerUnsafeSubscriptionError(error)) {
+  if (
+    isCodexAppServerOverloadError(error) ||
+    error instanceof CodexAppServerUnsafeSubscriptionError
+  ) {
     return false;
   }
   const message = formatErrorMessage(error);

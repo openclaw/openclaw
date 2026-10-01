@@ -127,7 +127,6 @@ const exactCommandMarker = (commandText: string): string =>
 const callGatewayToolMock = vi.hoisted(() => vi.fn());
 const listNodesMock = vi.hoisted(() => vi.fn());
 const parsePreparedSystemRunPayloadMock = vi.hoisted(() => vi.fn());
-const commandRequiresSecurityAuditSuppressionApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const evaluateShellAllowlistMock = vi.hoisted(() =>
   vi.fn((_raw?: ShellAllowlistMockParams): MockAllowlistResult => ({
     allowlistMatches: [],
@@ -344,8 +343,6 @@ vi.mock("../infra/exec-approvals.js", () => ({
   countObsoleteGeneratedExecApprovals: vi.fn(() => 0),
   evaluateShellAllowlist: evaluateShellAllowlistMock,
   evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
-  commandRequiresSecurityAuditSuppressionApproval:
-    commandRequiresSecurityAuditSuppressionApprovalMock,
   hasDurableExecApproval: hasDurableExecApprovalMock,
   hasNodeCommandAllowAlwaysMarker: hasNodeCommandAllowAlwaysMarkerMock,
   requiresExecApproval: requiresExecApprovalMock,
@@ -758,8 +755,6 @@ describe("executeNodeHostCommand", () => {
       execPolicy: { security: "full", ask: "off" },
     });
 
-    commandRequiresSecurityAuditSuppressionApprovalMock.mockReset();
-    commandRequiresSecurityAuditSuppressionApprovalMock.mockReturnValue(false);
     evaluateShellAllowlistMock.mockReset();
     evaluateShellAllowlistMock.mockReturnValue(
       analysis([segment(["/usr/local/bin/bun", "./script.ts"])]),
@@ -2026,53 +2021,6 @@ describe("executeNodeHostCommand", () => {
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
   });
 
-  it("does not treat read-only suppression inspections as wrapper writes", async () => {
-    const wrapperPlan = nodePlan(
-      ["/bin/sh", "-lc", "openclaw config get security.audit.suppressions"],
-      `/bin/sh -lc "openclaw config get security.audit.suppressions"`,
-      "openclaw config get security.audit.suppressions",
-    );
-    parsePreparedSystemRunPayloadMock.mockReturnValue({
-      plan: wrapperPlan,
-      execPolicy: { security: "full", ask: "off" },
-    });
-    evaluateShellAllowlistMock.mockImplementation((params?: { command?: string }) => {
-      const command = params?.command ?? "";
-      return analysis(
-        [
-          command.startsWith("/bin/sh")
-            ? segment(
-                ["/bin/sh", "-lc", "openclaw config get security.audit.suppressions"],
-                `/bin/sh -lc "openclaw config get security.audit.suppressions"`,
-              )
-            : segment(
-                ["openclaw", "config", "get", "security.audit.suppressions"],
-                "openclaw config get security.audit.suppressions",
-              ),
-        ],
-        { allowlistSatisfied: true },
-      );
-    });
-    commandRequiresSecurityAuditSuppressionApprovalMock.mockImplementation(
-      (params?: { command?: string }) => params?.command?.startsWith("/bin/sh") === true,
-    );
-    requiresExecApprovalMock.mockReturnValue(false);
-    resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("allowlist", "on-miss"));
-
-    const result = await executeNodeHostCommand(
-      createNodeHostRequest({
-        command: "openclaw config get security.audit.suppressions",
-        security: "allowlist",
-        ask: "on-miss",
-        autoReview: true,
-      }),
-    );
-
-    expect(result.details?.status).toBe("completed");
-    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expectSystemRunInvoke({ invokeDeadlineMs: 35_000, invokeWaitMs: 40_000, runTimeoutMs: 30_000 });
-  });
-
   it.each([
     {
       name: "ask always",
@@ -2163,31 +2111,6 @@ describe("executeNodeHostCommand", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     expectNoSystemRun();
-  });
-
-  it("keeps security audit suppression edits off the auto-review path", async () => {
-    const autoReviewer = allowReviewer();
-    const warnings: string[] = [];
-    commandRequiresSecurityAuditSuppressionApprovalMock.mockReturnValue(true);
-    resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("allowlist", "on-miss"));
-
-    const result = await executeNodeHostCommand(
-      createNodeHostRequest({
-        command: "openclaw config set security.audit.suppressions '[]'",
-        security: "allowlist",
-        ask: "on-miss",
-        autoReview: true,
-        autoReviewer,
-        warnings,
-      }),
-    );
-
-    expect(result.details?.status).toBe("completed");
-    expect(autoReviewer).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
-    expect(warnings).toContain(
-      "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
-    );
   });
 
   it("requests detached human approval when node runtime policy requires ask always", async () => {

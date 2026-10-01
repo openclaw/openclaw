@@ -119,7 +119,7 @@ function matchesSubagentCacheAdmission(
   }
 }
 
-export function applySubagentRunChanges<T extends SubagentRunReadRecord>(
+function applySubagentRunChanges<T extends SubagentRunReadRecord>(
   runs: Map<string, T>,
   changes: Map<string, SubagentRunChange<T>> | undefined,
 ): Map<string, T> {
@@ -133,7 +133,7 @@ export function applySubagentRunChanges<T extends SubagentRunReadRecord>(
   return runs;
 }
 
-export function retainUnpublishedSubagentChanges<T>(
+function retainUnpublishedSubagentChanges<T>(
   changes: Map<string, SubagentRunChange<T>> | undefined,
 ) {
   for (const [runId, change] of changes ?? []) {

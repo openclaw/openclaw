@@ -1,4 +1,3 @@
-// Access group helpers resolve plugin allowlists that reference named config groups.
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   ACCESS_GROUP_ALLOW_FROM_PREFIX,
@@ -60,17 +59,6 @@ export type ResolvedAccessGroupAllowFromState = {
   hasMatch: boolean;
 };
 
-/** Resolve the concrete sender allowlist entries for static message-sender groups. */
-function resolveMessageSenderGroupEntries(params: {
-  group: AccessGroupConfig;
-  channel: ChannelId;
-}): string[] {
-  if (params.group.type !== "message.senders") {
-    return [];
-  }
-  return [...(params.group.members["*"] ?? []), ...(params.group.members[params.channel] ?? [])];
-}
-
 /** Resolves `accessGroup:<name>` allowlist entries without changing the original allowlist. */
 export async function resolveAccessGroupAllowFromState(params: {
   /** Configured access groups keyed by name. */
@@ -88,12 +76,10 @@ export async function resolveAccessGroupAllowFromState(params: {
   /** Optional resolver for non-static or integration-backed group types. */
   resolveMembership?: AccessGroupMembershipLookup;
 }): Promise<ResolvedAccessGroupAllowFromState> {
-  const names = Array.from(
-    new Set(
-      (params.allowFrom ?? [])
-        .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
-        .filter((entry): entry is string => entry != null),
-    ),
+  const names = uniqueStrings(
+    (params.allowFrom ?? [])
+      .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
+      .filter((entry): entry is string => entry != null),
   );
   const state: ResolvedAccessGroupAllowFromState = {
     referenced: names,
@@ -113,10 +99,10 @@ export async function resolveAccessGroupAllowFromState(params: {
       continue;
     }
 
-    const senderEntries = resolveMessageSenderGroupEntries({
-      group,
-      channel: params.channel,
-    });
+    const senderEntries =
+      group.type === "message.senders"
+        ? [...(group.members["*"] ?? []), ...(group.members[params.channel] ?? [])]
+        : [];
     if (
       senderEntries.length > 0 &&
       params.isSenderAllowed?.(params.senderId, senderEntries) === true

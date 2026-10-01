@@ -22,6 +22,7 @@ import {
   markRequesterSettleWakePending,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import { consumeSubagentPauseNotice } from "../registry/subagent-registry-run-pause.js";
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
@@ -287,7 +288,8 @@ function readRequesterBatch(
     }
     // Outcome settlement owns the whole frozen wave; quiet wake decisions may select
     // current members without settling the remaining siblings' delivery outcomes.
-    for (const id of params.kind === "requesterBatch"
+    for (const id of params.kind === "requesterBatch" &&
+    !(subagent.pauseReason === "sessions_yield" && subagent.requesterSettleWake.pauseNotice)
       ? (subagent.requesterSettleWake?.batchRunIds ?? [])
       : []) {
       if (!ids.has(id) && !checkedOmittedIds.has(id)) {
@@ -319,6 +321,16 @@ function settleRequesterBatch(
   const now = params.now;
   const mutations = readRequesterBatch(database, params).map(
     ({ expected, subagent }): CompletionMutation => {
+      if (consumeSubagentPauseNotice(subagent)) {
+        // A notice is one paused member's input, not settlement of its frozen cohort.
+        if (
+          params.outcome.storeReplaced ||
+          params.outcome.disposition === "intentional_non_delivery"
+        ) {
+          subagent.requesterSettleWake = undefined;
+        }
+        return { subagent };
+      }
       const changedOwner = () =>
         new Error("subagent completion owner changed before settlement: " + expected.runId);
       // An exact requester receipt can arrive after expiry transferred this result to its wake.
@@ -476,6 +488,13 @@ function mutateRequesterWake(
   const mutations = readRequesterBatch(database, params).map(({ subagent }): CompletionMutation => {
     if (params.operation.kind === "complete") {
       return { subagent, retire: completeRequesterSettleWakeState(subagent) };
+    }
+    if (
+      subagent.pauseReason === "sessions_yield" &&
+      Boolean(subagent.requesterSettleWake?.pauseNotice) !==
+        Boolean(params.operation.state.pauseNotice)
+    ) {
+      throw new Error("Requester pause notice changed before transition");
     }
     transitionRequesterSettleWakeState(subagent, params.operation.state);
     return { subagent };

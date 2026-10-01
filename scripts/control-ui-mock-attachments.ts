@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { deflateRawSync } from "node:zlib";
+import { crc32, deflateRawSync } from "node:zlib";
 import type { Plugin } from "vite";
 import { createPlaybackMediaFixture } from "../test/fixtures/media-playback.js";
 
@@ -17,17 +17,6 @@ type FixtureAsset = {
 
 function textAsset(body: string, contentType: string): FixtureAsset {
   return { body: Buffer.from(body, "utf8"), contentType };
-}
-
-function crc32(body: Buffer): number {
-  let value = 0xffffffff;
-  for (const byte of body) {
-    value ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      value = (value >>> 1) ^ (0xedb88320 & -(value & 1));
-    }
-  }
-  return (value ^ 0xffffffff) >>> 0;
 }
 
 function zipAsset(entries: Record<string, string>, contentType: string): FixtureAsset {

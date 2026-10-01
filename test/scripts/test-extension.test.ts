@@ -62,7 +62,10 @@ import { providerExtensionTestRoots } from "../vitest/vitest.extension-provider-
 import { qaExtensionTestRoots } from "../vitest/vitest.extension-qa-paths.mjs";
 import { zaloExtensionTestRoots } from "../vitest/vitest.extension-zalo-paths.mjs";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
-import { isSharedVitestExcludedPath } from "../vitest/vitest.pattern-file.ts";
+import {
+  isSharedVitestExcludedPath,
+  matchesVitestCliSelection,
+} from "../vitest/vitest.pattern-file.ts";
 
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
@@ -689,7 +692,7 @@ describe("scripts/test-extension.mts", () => {
       env: {
         OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
       },
-      targets: ["two"],
+      targets: ["two/"],
     });
     const cachePaths = runGroup.mock.calls.map(([params]) =>
       params.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/"),
@@ -1009,6 +1012,53 @@ await new Promise(()=>{});export default {};`,
     },
   );
 
+  it.each([
+    { ids: ["policy"], args: [], selected: ["extensions/policy/src/example.test.ts"] },
+    {
+      ids: ["policy", "file-transfer"],
+      args: [],
+      selected: [
+        "extensions/policy/src/example.test.ts",
+        "extensions/file-transfer/src/shared/policy.test.ts",
+      ],
+    },
+    {
+      ids: ["policy"],
+      args: ["--watch"],
+      selected: ["extensions/policy/src/example.test.ts"],
+    },
+  ])("confines extension roots $ids with $args", async ({ ids, args, selected }) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    await expect(
+      runExtensionBatchPlan(resolveExtensionBatchPlan({ extensionIds: ids }), {
+        env: {},
+        runGroup,
+        vitestArgs: args,
+      }),
+    ).resolves.toBe(0);
+
+    expect(runGroup).toHaveBeenCalledOnce();
+    const invocation = requireFirstMockArg<RunGroupParams>(runGroup);
+    const candidates = [
+      "extensions/policy/src/example.test.ts",
+      "extensions/file-transfer/src/shared/policy.test.ts",
+      "extensions/other/src/policy/example.test.ts",
+      "extensions/policy-extra/src/example.test.ts",
+      "extensions/policy/src/example.test.tsx",
+    ];
+    expect(
+      candidates.filter((file) =>
+        matchesVitestCliSelection(
+          file,
+          ["extensions/**/*.test.ts"],
+          ["run", "--config", invocation.config, ...invocation.args, ...invocation.targets],
+          "extensions",
+          invocation.env ?? {},
+        ),
+      ),
+    ).toEqual(selected);
+  });
+
   it("expands extension batch roots before applying exact Vitest excludes", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
     await runExtensionBatchPlan(
@@ -1222,7 +1272,7 @@ await new Promise(()=>{});export default {};`,
       expect(result).toBe(0);
       expect(runGroup).toHaveBeenCalledOnce();
       const invocation = requireFirstMockArg<RunGroupParams>(runGroup);
-      expect(invocation.targets).toEqual(["matrix"]);
+      expect(invocation.targets).toEqual(["matrix/"]);
       expect(invocation.config).toBe("test/vitest/vitest.database-worker-watch.config.ts");
       expect(invocation.homeMode).toBe("live-aware");
       expect(invocation.env?.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER).toBe(

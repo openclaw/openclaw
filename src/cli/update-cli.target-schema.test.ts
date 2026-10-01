@@ -4,8 +4,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveConfigPath } from "../config/paths.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
-import * as versionManagerPath from "../shared/version-manager-path.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
@@ -52,6 +53,7 @@ import {
   updateCommand,
   updateGitCheckout,
   clearRestartSentinelIfRevision,
+  closeOpenClawStateDatabaseAsync,
   doctorCommand,
   mockGitUpdateAfterMutation,
   readRestartSentinel,
@@ -59,6 +61,7 @@ import {
   runDaemonInstall,
   expectGitMetadataPreview,
 } from "./update-cli-modules.test-support.js";
+import { UpdatePreMutationError } from "./update-cli/shared.js";
 import {
   packageTargetStatus,
   writeOpenClawPackageFixture,
@@ -370,8 +373,48 @@ describe("update-cli", () => {
     }
   });
 
+  it("preserves original state when target metadata resolution is interrupted before admission", async () => {
+    await useFileBackedConfig();
+    const root = await mockPackageInstallAtCaseDir("openclaw-early-metadata");
+    await closeOpenClawStateDatabaseAsync();
+    const originalPaths = [
+      resolveConfigPath(),
+      resolveOpenClawStateSqlitePath(),
+      path.join(root, "package.json"),
+    ];
+    const originals = await Promise.all(originalPaths.map((file) => fs.readFile(file)));
+    const requested = createDeferred();
+    const release = createDeferred();
+    const interruption = new Error("interrupted target metadata request");
+    vi.mocked(resolveNpmChannelTag).mockImplementation(async () => {
+      requested.resolve();
+      await release.promise;
+      throw interruption;
+    });
+    const update = updateCommand({ yes: true, restart: false }).catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        requested.promise,
+        update.then(() => {
+          throw new Error("Update ended before metadata resolution");
+        }),
+      ]);
+      expect(listUpdateRuns({ limit: 1 })).toEqual([]);
+      release.resolve();
+      expect(await update).toBe(interruption);
+      expect(listUpdateRuns({ limit: 1 })).toEqual([]);
+      await closeOpenClawStateDatabaseAsync();
+      expect(await Promise.all(originalPaths.map((file) => fs.readFile(file)))).toEqual(originals);
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expectNoSideEffects(serviceStop, replaceConfigFile, cleanupStaleManagedServiceUpdateHandoffs);
+    } finally {
+      release.resolve();
+      await update;
+    }
+  });
+
   it.each(["SIGINT", "SIGTERM"] as const)(
-    "settles a fresh update interrupted during target metadata admission (%s)",
+    "settles an admitted update interrupted during plugin preflight (%s)",
     async (signal) => {
       await useFileBackedConfig();
       const root = await mockPackageInstallAtCaseDir("openclaw-early-signal");
@@ -390,17 +433,17 @@ describe("update-cli", () => {
       const pending = new Promise<void>((resolve) => {
         release = resolve;
       });
-      vi.mocked(resolveNpmChannelTag).mockImplementation(async () => {
+      pluginAvailabilityPreflight.mockImplementation(async () => {
         entered();
         await pending;
-        throw new Error("interrupted target metadata request");
+        throw new Error("interrupted plugin preflight");
       });
       const update = updateCommand({ yes: true, restart: false }).catch((error: unknown) => error);
       try {
         await Promise.race([
           requested,
           update.then(() => {
-            throw new Error("Update ended before metadata admission");
+            throw new Error("Update ended before plugin preflight");
           }),
         ]);
         const before = listUpdateRuns({ limit: 1 })[0]!;
@@ -412,7 +455,8 @@ describe("update-cli", () => {
         for (const listener of listeners) {
           listener();
         }
-        // Inspect while metadata remains blocked: ordinary unwind cannot settle this row.
+        await exitCalled.promise;
+        // Inspect while preflight remains blocked: ordinary unwind cannot settle this row.
         expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
           runId: before.runId,
           status: "failed",
@@ -420,7 +464,6 @@ describe("update-cli", () => {
           reason: "interrupted",
           finishedAtMs: expect.any(Number),
         });
-        await exitCalled.promise;
         expect(processExitSpy).toHaveBeenCalledWith(signal === "SIGINT" ? 130 : 143);
         expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
         expect(packageInstallCommandCall()).toBeUndefined();
@@ -435,8 +478,8 @@ describe("update-cli", () => {
   it.each([true, false])(
     "uses inspected package runtime requirements when a later lookup disagrees (compatible=%s)",
     async (compatible) => {
-      // This case specifies system-runtime guidance, independent of the host Node manager.
-      vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
+      // This case specifies a non-container system runtime, independent of the test host.
+      runtimeRecovery.mockNonContainerSystemRuntime();
       const root = await mockPackageInstallAtCaseDir("openclaw-runtime-target");
       const inspectedEngine = compatible ? ">=22.19.0" : ">=999.0.0";
       vi.mocked(fetchNpmPackageTargetStatus)
@@ -515,15 +558,22 @@ describe("update-cli", () => {
     mockPackageInstallStatus(createCaseDir("openclaw-unknown-owner"));
     const refusal =
       "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.";
-    resolveGlobalManager.mockRejectedValueOnce(new Error(refusal));
+    resolveGlobalManager.mockRejectedValueOnce(
+      new UpdatePreMutationError("unmanaged-package-install", refusal),
+    );
 
-    await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
+    await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(0));
     expect([getLogOutput(), getErrorOutput()].join("\n")).toContain(
       refusal.split(", then retry.")[0],
     );
 
     expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+      status: "skipped",
+      phase: "finished",
+      reason: "unmanaged-package-install",
+    });
   });
 
   it("reports indeterminate package databases during dry-run", async () => {

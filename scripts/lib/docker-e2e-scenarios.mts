@@ -86,7 +86,8 @@ const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((vers
       // Run 36506342273 (hosted 4-vCPU): projected 2125s x ~1.5 => 3200s inner;
       // add 300s for host-side fixtures, package preparation, and cleanup.
       timeoutMs: 3500 * 1000,
-      weight: 1,
+      // Limit npm/disk contention to two hops at npm limit 5; a weight-3 survivor can overlap one.
+      weight: 2,
     },
   ),
 );

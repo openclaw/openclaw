@@ -268,10 +268,6 @@ function renderMessage(m: QaBusMessage): string {
     </div>`;
 }
 
-function recentInspectorMessages(state: UiState, limit = 18) {
-  return (state.snapshot?.messages ?? []).slice(-limit).toReversed();
-}
-
 function renderInspectorLiveMessage(message: QaBusMessage): string {
   const avatar = messageAvatar(message);
   const conversationLabel = message.conversation.title || message.conversation.id;
@@ -295,7 +291,7 @@ function renderInspectorLiveMessage(message: QaBusMessage): string {
 }
 
 function renderInspectorLiveTranscript(state: UiState): string {
-  const messages = recentInspectorMessages(state);
+  const messages = (state.snapshot?.messages ?? []).slice(-18).toReversed();
   const isLive = state.bootstrap?.runner.status === "running";
 
   return `
@@ -318,8 +314,6 @@ function renderInspectorLiveTranscript(state: UiState): string {
       </div>
     </aside>`;
 }
-
-/* ===== Render: Results tab ===== */
 
 export function renderResultsView(state: UiState): string {
   const scenarios = state.bootstrap?.scenarios ?? [];
@@ -433,8 +427,6 @@ function renderInspector(state: UiState, scenario: SeedScenario): string {
       ${renderInspectorLiveTranscript(state)}
     </div>`;
 }
-
-/* ===== Render: Report tab ===== */
 
 export function renderReportView(state: UiState): string {
   return `

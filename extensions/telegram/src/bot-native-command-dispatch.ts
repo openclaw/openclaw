@@ -6,10 +6,10 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
+import { resolveTelegramDmAllow } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
+import { resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramResolvedGroupConfig } from "./bot-handlers.types.js";
 import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
@@ -303,14 +303,11 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+  const { effectiveAllow: dmAllow } = await resolveTelegramDmAllow({
     cfg,
     allowFrom: groupAllowOverride ?? params.allowFrom,
     accountId,
     senderId,
-  });
-  const dmAllow = normalizeDmAllowFromWithStore({
-    allowFrom: expandedDmAllowFrom,
     storeAllowFrom: isGroup ? [] : storeAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });

@@ -28,6 +28,7 @@ import { readQaJsonResponse } from "./ignored-response-body.js";
 import { buildQaConversationTarget, parseQaTarget } from "./qa-bus-protocol.js";
 import {
   createQaTransportStateMethods,
+  sendQaTransportNativeCommand,
   type QaTransportAdapter,
   type QaTransportGatewayConfig,
   type QaTransportOutboundEvent,
@@ -396,14 +397,7 @@ function createQaCrablineTransport(params: {
     hooks.prepareFlow = async (input) => (await prepareEnvironment()).prepareFlow(input);
   }
   if (params.selection.channel === "telegram") {
-    hooks.sendNativeCommand = async (input) => {
-      const { command, ...message } = input;
-      await stateMethods.sendInbound({
-        ...message,
-        text: `/${command}`,
-        nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
-      });
-    };
+    hooks.sendNativeCommand = (input) => sendQaTransportNativeCommand(stateMethods, input);
     hooks.waitForOutboundSequence = async (input) =>
       await waitForQaTransportOutboundSequence({
         accountId: adapter.accountId,

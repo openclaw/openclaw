@@ -65,6 +65,7 @@ import {
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
+import { textResult } from "./tool-results.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
@@ -247,35 +248,25 @@ function resolveImageModelConfigForTool(params: {
     cfg: params.cfg,
     provider: primary.provider,
   });
-  const primaryCandidates = (() => {
-    if (providerVisionFromConfig) {
-      if (primary.provider === "openai") {
-        return [
-          resolveImplicitOpenAiImageCandidate(
-            providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1),
-          ),
-        ];
-      }
-      return [providerVisionFromConfig];
-    }
-    const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      providerId: primary.provider,
-      capability: "image",
-      includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
-    });
-    if (providerDefault) {
-      if (primary.provider === "openai") {
-        return [resolveImplicitOpenAiImageCandidate(providerDefault)];
-      }
-      return [`${primary.provider}/${providerDefault}`];
-    }
-    if (isMinimaxVlmProvider(primary.provider)) {
-      return [`${primary.provider}/MiniMax-VL-01`];
-    }
-    return [];
-  })();
+  const primaryModelId = providerVisionFromConfig
+    ? providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1)
+    : imageToolProviderDeps.resolveDefaultMediaModel({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        providerId: primary.provider,
+        capability: "image",
+        includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
+      });
+  const primaryCandidates =
+    providerVisionFromConfig || primaryModelId
+      ? [
+          primary.provider === "openai"
+            ? resolveImplicitOpenAiImageCandidate(primaryModelId ?? "")
+            : (providerVisionFromConfig ?? `${primary.provider}/${primaryModelId}`),
+        ]
+      : isMinimaxVlmProvider(primary.provider)
+        ? [`${primary.provider}/MiniMax-VL-01`]
+        : [];
 
   const rawAutoCandidates = imageToolProviderDeps
     .resolveAutoMediaKeyProviders({
@@ -455,15 +446,10 @@ export function createImageTool(options?: {
 
         const maxImages = readPositiveIntegerParam(record, "maxImages") ?? DEFAULT_MAX_IMAGES;
         if (pathInputs.length > maxImages) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Too many images: ${pathInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
-              },
-            ],
-            details: { error: "too_many_images", count: pathInputs.length, max: maxImages },
-          };
+          return textResult(
+            `Too many images: ${pathInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
+            { error: "too_many_images", count: pathInputs.length, max: maxImages },
+          );
         }
 
         const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
@@ -543,18 +529,13 @@ export function createImageTool(options?: {
           const refInfo = classifyMediaReferenceSource(normalizedRef);
           const { isDataUrl, isHttpUrl } = refInfo;
           if (refInfo.hasUnsupportedScheme) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Unsupported image reference: ${pathRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
-                },
-              ],
-              details: {
+            return textResult(
+              `Unsupported image reference: ${pathRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+              {
                 error: "unsupported_image_reference",
                 path: pathRawInput,
               },
-            };
+            );
           }
 
           if (sandboxConfig && isHttpUrl) {

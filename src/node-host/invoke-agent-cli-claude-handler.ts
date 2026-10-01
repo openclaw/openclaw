@@ -136,6 +136,7 @@ export async function handleClaudeCliNodeInvoke(params: {
   };
   let runResult: RunResult | undefined;
   await (params.runtime.handleSystemRun ?? handleSystemRunInvoke)({
+    ...params.deps,
     client: params.client,
     // The command-specific validator is the execution boundary. Approval sees
     // every caller-supplied executable argument. The node adds its own prompt,
@@ -153,10 +154,6 @@ export async function handleClaudeCliNodeInvoke(params: {
     skillBins: params.skillBins,
     execHostEnforced: false,
     execHostFallbackAllowed: true,
-    resolveExecSecurity: params.deps.resolveExecSecurity,
-    resolveExecAsk: params.deps.resolveExecAsk,
-    isCmdExeInvocation: params.deps.isCmdExeInvocation,
-    sanitizeEnv: params.deps.sanitizeEnv,
     runCommand: async (approvalArgv, cwd, env, timeoutMs, _signal, assertCurrent) => {
       const childEnv = { ...env };
       for (const key of request.clearEnv ?? []) {
@@ -187,26 +184,21 @@ export async function handleClaudeCliNodeInvoke(params: {
       }
       return runResult;
     },
-    runViaMacAppExecHost: params.deps.runViaMacAppExecHost,
     // Agent runs already report through the agent-run stream. Suppress the
     // system.run lifecycle side-channel, whose Gateway provenance is scoped
     // exclusively to system.run invokes.
     sendNodeEvent: async () => {},
-    buildExecEventPayload: params.deps.buildExecEventPayload,
     sendInvokeResult: async (result) => {
       if (
         !result.ok &&
         !request.approvalDecision &&
         result.error?.message?.includes("approval required")
       ) {
-        await params.response.send({
-          ok: true,
-          payloadJSON: JSON.stringify({
-            approvalRequired: true,
-            systemRunPlan: approvalPlan,
-            security: execPolicy.security,
-            ask: execPolicy.ask,
-          }),
+        await params.response.json({
+          approvalRequired: true,
+          systemRunPlan: approvalPlan,
+          security: execPolicy.security,
+          ask: execPolicy.ask,
         });
         return;
       }
@@ -222,10 +214,7 @@ export async function handleClaudeCliNodeInvoke(params: {
           ? { timeoutKind: runResult.noOutputTimedOut ? ("idle" as const) : ("hard" as const) }
           : {}),
       };
-      await params.response.send({
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await params.response.json(payload);
     },
     sendExecFinishedEvent: async () => {},
     preferMacAppExecHost: false,

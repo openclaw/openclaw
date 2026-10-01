@@ -27,10 +27,11 @@ const { createSession } = vi.hoisted(() => ({
 vi.mock("./agentsapi-session.js", () => ({ createAgentsApiSession: createSession }));
 vi.mock("./agentsapi-prompt.js", () => ({
   buildAgentsApiInstructions: async () => "Fixture instructions",
-  buildAgentsApiTurnContext: () => "",
+  buildAgentsApiTurnInput: (_params: unknown, _tools: unknown, prompt: string) => prompt,
 }));
 vi.mock("./agentsapi-files.js", () => ({
   prepareInputs: async () => ({ files: [], mappingText: "" }),
+  prepareSelfHostedInputs: async () => ({ files: [], mappingText: "" }),
   uploadInputs: async () => {},
   collectOutputs: async () => [],
 }));

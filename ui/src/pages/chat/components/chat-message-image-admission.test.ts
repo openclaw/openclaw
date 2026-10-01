@@ -137,6 +137,40 @@ it.each(["assistant", "managed", "omitted"] as const)(
   },
 );
 
+it("loads an artifact thumbnail for the tile and distinct full bytes for the lightbox", async () => {
+  const artifactId = `artifact_transcript_image_${crypto.randomUUID()}`;
+  const thumbnail = new Blob(["thumbnail"], { type: "image/png" });
+  const full = new Blob(["original"], { type: "image/jpeg" });
+  const resolveArtifactDownload = vi
+    .fn()
+    .mockResolvedValueOnce({ url: "/thumbnail", blob: thumbnail })
+    .mockResolvedValueOnce({ url: "/original", blob: full });
+  const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+  draw([{ artifactId }], { sessionKey: "main", resolveArtifactDownload, onOpenImage });
+  intersections[0]!();
+  await vi.advanceTimersByTimeAsync(0);
+  const preview = container.querySelector("img")?.getAttribute("src");
+  expect(preview).toBeTruthy();
+  expect(resolveArtifactDownload).toHaveBeenCalledExactlyOnceWith(
+    { sessionKey: "main", artifactId, variant: "thumbnail" },
+    expect.any(AbortSignal),
+  );
+
+  container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  const opened = onOpenImage.mock.calls[0]![0];
+  expect(opened.src).toBe(preview);
+  const original = await opened.loadFullResolution!();
+  expect(original?.src).toBeTruthy();
+  expect(original?.src).not.toBe(preview);
+  expect(resolveArtifactDownload).toHaveBeenLastCalledWith(
+    { sessionKey: "main", artifactId, variant: "full" },
+    expect.any(AbortSignal),
+  );
+  expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+  original?.release?.();
+  opened.release?.();
+});
+
 it.each(["assistant", "managed"] as const)(
   "remounts a loaded %s image immediately without repeating viewport admission",
   async (kind) => {

@@ -34,14 +34,7 @@ import {
 } from "./discord-live.evidence.js";
 import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
 
-export type DiscordQaRuntimeEnv = {
-  guildId: string;
-  channelId: string;
-  driverBotToken: string;
-  sutBotToken: string;
-  sutApplicationId: string;
-  voiceChannelId?: string;
-};
+export type DiscordQaRuntimeEnv = z.infer<typeof discordQaCredentialPayloadSchema>;
 
 export type DiscordQaScenarioRun =
   | {
@@ -490,14 +483,6 @@ export async function getCurrentDiscordUser(token: string) {
   return await requestDiscord<DiscordUser>("/users/@me", token);
 }
 
-async function listGuildChannels(params: { token: string; guildId: string }) {
-  return await requestDiscord<DiscordChannel[]>(`/guilds/${params.guildId}/channels`, params.token);
-}
-
-async function getDiscordChannel(params: { token: string; channelId: string }) {
-  return await requestDiscord<DiscordChannel>(`/channels/${params.channelId}`, params.token);
-}
-
 function isDiscordVoiceChannel(channel: DiscordChannel) {
   return channel.type === 2 || channel.type === 13;
 }
@@ -508,10 +493,10 @@ export async function resolveDiscordQaVoiceChannel(params: {
   voiceChannelId?: string;
 }) {
   if (params.voiceChannelId) {
-    const channel = await getDiscordChannel({
-      token: params.token,
-      channelId: params.voiceChannelId,
-    });
+    const channel = await requestDiscord<DiscordChannel>(
+      `/channels/${params.voiceChannelId}`,
+      params.token,
+    );
     if (!isDiscordVoiceChannel(channel)) {
       throw new Error(`Discord voiceChannelId ${params.voiceChannelId} is not a voice channel.`);
     }
@@ -523,7 +508,10 @@ export async function resolveDiscordQaVoiceChannel(params: {
     return channel;
   }
 
-  const channels = await listGuildChannels({ token: params.token, guildId: params.guildId });
+  const channels = await requestDiscord<DiscordChannel[]>(
+    `/guilds/${params.guildId}/channels`,
+    params.token,
+  );
   const voiceChannels = channels
     .filter(isDiscordVoiceChannel)
     .toSorted(
@@ -671,46 +659,6 @@ async function listChannelMessagesAfter(params: {
   );
 }
 
-async function createThreadFromMessage(params: {
-  token: string;
-  channelId: string;
-  messageId: string;
-  name: string;
-}) {
-  return await requestDiscord<DiscordThread>(
-    `/channels/${params.channelId}/messages/${params.messageId}/threads`,
-    params.token,
-    {
-      body: {
-        name: params.name,
-        auto_archive_duration: 60,
-      },
-    },
-  );
-}
-
-async function archiveDiscordThread(params: { token: string; threadId: string }) {
-  await requestDiscord<DiscordThread>(`/channels/${params.threadId}`, params.token, {
-    body: {
-      archived: true,
-    },
-    method: "PATCH",
-  });
-}
-
-async function joinDiscordThread(params: { token: string; threadId: string }) {
-  await requestDiscord<void>(`/channels/${params.threadId}/thread-members/@me`, params.token, {
-    method: "PUT",
-  });
-}
-
-async function listThreadMessages(params: { token: string; threadId: string }) {
-  return await requestDiscord<DiscordMessage[]>(
-    `/channels/${params.threadId}/messages?limit=50`,
-    params.token,
-  );
-}
-
 export function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string) {
   if (!triggerTimestamp || !replyTimestamp) {
     return undefined;
@@ -729,12 +677,7 @@ export async function writeDiscordStatusReactionEvidence(params: {
 }) {
   const htmlPath = path.join(params.outputDir, `${params.timeline.scenarioId}-timeline.html`);
   const screenshotPath = path.join(params.outputDir, `${params.timeline.scenarioId}-timeline.png`);
-  const html = renderDiscordStatusReactionHtml({
-    expectedSequence: params.timeline.expectedSequence,
-    scenarioTitle: params.timeline.scenarioTitle,
-    seenSequence: params.timeline.seenSequence,
-    snapshots: params.timeline.snapshots,
-  });
+  const html = renderDiscordStatusReactionHtml(params.timeline);
   await fs.writeFile(htmlPath, html, { encoding: "utf8", mode: 0o600 });
   const screenshot = await writeHtmlScreenshot({ htmlPath, screenshotPath });
   return { htmlPath, ...screenshot };
@@ -781,14 +724,7 @@ async function writeDiscordThreadReplyAttachmentEvidence(params: {
     params.outputDir,
     `${params.evidence.scenarioId}-attachment.png`,
   );
-  const html = renderDiscordThreadReplyAttachmentHtml({
-    attachmentFilenames: params.evidence.attachmentFilenames,
-    expectedAttachmentFilename: params.evidence.expectedAttachmentFilename,
-    messageContent: params.evidence.messageContent,
-    scenarioTitle: params.evidence.scenarioTitle,
-    status: params.evidence.status,
-    threadName: params.evidence.threadName,
-  });
+  const html = renderDiscordThreadReplyAttachmentHtml(params.evidence);
   await fs.writeFile(htmlPath, html, { encoding: "utf8", mode: 0o600 });
   if (uiPath) {
     await fs.writeFile(
@@ -833,11 +769,7 @@ export async function observeStatusReactionTimeline(params: {
   let seenSequence: string[] = [];
   while (Date.now() - startedAtMs < params.timeoutMs) {
     const observedAt = new Date();
-    const message = await getChannelMessage({
-      token: params.token,
-      channelId: params.channelId,
-      messageId: params.messageId,
-    });
+    const message = await getChannelMessage(params);
     snapshots.push(
       normalizeDiscordReactionSnapshot({
         message,
@@ -859,13 +791,6 @@ export async function observeStatusReactionTimeline(params: {
     snapshots,
     triggerMessageId: params.messageId,
   } satisfies DiscordStatusReactionTimeline;
-}
-
-async function listApplicationCommands(params: { token: string; applicationId: string }) {
-  return await requestDiscord<DiscordApplicationCommand[]>(
-    `/applications/${params.applicationId}/commands`,
-    params.token,
-  );
 }
 
 function compareDiscordSnowflakes(a: string, b: string) {
@@ -931,10 +856,10 @@ async function pollThreadReplyMessage(params: {
 }) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
-    const messages = await listThreadMessages({
-      token: params.token,
-      threadId: params.threadId,
-    });
+    const messages = await requestDiscord<DiscordMessage[]>(
+      `/channels/${params.threadId}/messages?limit=50`,
+      params.token,
+    );
     const match = messages.find(
       (message) =>
         message.author?.id === params.sutBotId &&
@@ -966,12 +891,11 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     params.runtimeEnv.channelId,
     params.scenarioRun.input,
   );
-  const thread = await createThreadFromMessage({
-    token: params.runtimeEnv.driverBotToken,
-    channelId: params.runtimeEnv.channelId,
-    messageId: parent.id,
-    name: threadName,
-  });
+  const thread = await requestDiscord<DiscordThread>(
+    `/channels/${params.runtimeEnv.channelId}/messages/${parent.id}/threads`,
+    params.runtimeEnv.driverBotToken,
+    { body: { name: threadName, auto_archive_duration: 60 } },
+  );
   const attachmentPath = path.join(params.outputDir, params.scenarioRun.expectedAttachmentFilename);
   await fs.writeFile(
     attachmentPath,
@@ -987,10 +911,11 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
   );
 
   try {
-    await joinDiscordThread({
-      token: params.runtimeEnv.sutBotToken,
-      threadId: thread.id,
-    });
+    await requestDiscord<void>(
+      `/channels/${thread.id}/thread-members/@me`,
+      params.runtimeEnv.sutBotToken,
+      { method: "PUT" },
+    );
     await withRegisteredDiscordQaApiBase(params.runtimeEnv.sutBotToken, async () => {
       await handleDiscordMessageAction({
         action: "thread-reply",
@@ -1068,10 +993,11 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     };
   } finally {
     if (!keepThread) {
-      await archiveDiscordThread({
-        token: params.runtimeEnv.driverBotToken,
-        threadId: thread.id,
-      }).catch(() => {});
+      await requestDiscord<DiscordThread>(
+        `/channels/${thread.id}`,
+        params.runtimeEnv.driverBotToken,
+        { body: { archived: true }, method: "PATCH" },
+      ).catch(() => {});
     }
   }
 }
@@ -1120,10 +1046,10 @@ export async function assertDiscordApplicationCommandsRegistered(params: {
   const startedAt = Date.now();
   let lastNames: string[] = [];
   while (Date.now() - startedAt < params.timeoutMs) {
-    const commands = await listApplicationCommands({
-      token: params.token,
-      applicationId: params.applicationId,
-    });
+    const commands = await requestDiscord<DiscordApplicationCommand[]>(
+      `/applications/${params.applicationId}/commands`,
+      params.token,
+    );
     lastNames = commands
       .map((command) => command.name ?? "")
       .filter(Boolean)

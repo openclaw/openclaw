@@ -26,12 +26,6 @@ import { findPersistedAuthProfileCredential } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
-function throwAuthProfileUpdateError(): never {
-  throw new Error(
-    "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-  );
-}
-
 function restoresFencedOAuthRefreshGeneration(params: {
   profileId: string;
   existing: AuthProfileCredential | undefined;
@@ -436,6 +430,8 @@ export async function upsertAuthProfileWithLockOrThrow(
 ): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);
   if (!updated) {
-    throwAuthProfileUpdateError();
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
   }
 }

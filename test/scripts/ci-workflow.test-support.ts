@@ -48,8 +48,6 @@ export function evaluateWorkflowExpression(
     actor?: string;
     githubEvent?: Record<string, unknown>;
     maintainerCommands?: string;
-    // Runner routing keys off contributor trust, so pull-request cases default
-    // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
     authorAssociation?: string;
     cancelled?: boolean;
     dispatchId?: string;
@@ -289,6 +287,10 @@ export function runWorkflowShellScript(
               : (nodeOptions ?? "");
           return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
         },
+      )
+      .replace(
+        'node "${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs',
+        `${quoteShell(testNodeExecPath)} "\${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs`,
       )
       .replaceAll(
         "manifest_node_args+=(--import tsx)",

@@ -28,7 +28,6 @@ const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
   path.join("src", "config-schema.cts"),
   path.join("src", "config-schema.cjs"),
 ] as const;
-const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api"] as const;
 
 type ChannelConfigSurface = {
   schema: JsonSchemaObject;
@@ -87,15 +86,6 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
   return Object.values(imported).find(isBuiltChannelConfigSchema) ?? null;
 }
 
-function getModuleLoader(modulePath: string) {
-  return getCachedPluginModuleLoader({
-    modulePath,
-    importerUrl: import.meta.url,
-    preferBuiltDist: true,
-    loaderFilename: import.meta.url,
-  });
-}
-
 function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
   for (const relativePath of SOURCE_CONFIG_SCHEMA_CANDIDATES) {
     const candidate = path.join(pluginDir, relativePath);
@@ -103,12 +93,10 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
       return candidate;
     }
   }
-  for (const basename of PUBLIC_CONFIG_SURFACE_BASENAMES) {
-    for (const extension of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-      const candidate = path.join(pluginDir, `${basename}${extension}`);
-      if (pluginCacheExistsSync(candidate)) {
-        return candidate;
-      }
+  for (const extension of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+    const candidate = path.join(pluginDir, `channel-config-api${extension}`);
+    if (pluginCacheExistsSync(candidate)) {
+      return candidate;
     }
   }
   return undefined;
@@ -116,7 +104,13 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
 
 function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
   try {
-    const imported = getModuleLoader(modulePath)(modulePath) as Record<string, unknown>;
+    const load = getCachedPluginModuleLoader({
+      modulePath,
+      importerUrl: import.meta.url,
+      preferBuiltDist: true,
+      loaderFilename: import.meta.url,
+    });
+    const imported = load(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;

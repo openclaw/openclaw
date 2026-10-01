@@ -26,7 +26,7 @@ export type NativeSubagentMonitorRuntime = {
 
 export type NativeSubagentMonitorClient = Pick<
   CodexAppServerClient,
-  "request" | "addNotificationHandler" | "addCloseHandler" | "getTransportPid"
+  "request" | "addNotificationHandler" | "addCloseHandler"
 >;
 
 export type NativeModelSource = NonNullable<

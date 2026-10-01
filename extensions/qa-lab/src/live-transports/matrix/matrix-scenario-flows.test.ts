@@ -75,31 +75,6 @@ describe("Matrix QA Lab scenario flows", () => {
     );
   });
 
-  it("expands every Matrix module call through the shared flow host", () => {
-    const bindings = new Set<string>();
-    expect(scenarios).toHaveLength(84);
-    for (const scenario of scenarios) {
-      expect(scenario.execution.kind, scenario.id).toBe("flow");
-      if (scenario.execution.kind !== "flow") {
-        continue;
-      }
-      const { importAction, callAction } = readModuleBinding(scenario);
-      bindings.add(`${importAction.value.expr}:${callAction.call}`);
-      if (scenario.id !== "matrix-allowlist-hot-reload") {
-        expect(scenario.objective, scenario.id).toBe(scenario.title);
-        expect(scenario.successCriteria, scenario.id).toEqual([
-          `${scenario.title} completes successfully.`,
-        ]);
-      }
-      expect(scenario.execution.channel, scenario.id).toBe("matrix");
-      expect(scenario.execution.retryCount, scenario.id).toBe(0);
-      expect(scenario.execution.flow?.steps.at(-1)?.detailsExpr, scenario.id).toBe(
-        "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
-      );
-    }
-    expect(bindings.size).toBe(84);
-  });
-
   it("prepares the shared canary only for canary-dependent scenarios", () => {
     const canaryScenarioIds = new Set([
       "matrix-reaction-not-a-reply",

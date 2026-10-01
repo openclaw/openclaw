@@ -54,7 +54,6 @@ export const DEFAULT_AGENT_TURN_PAYLOAD: CronJob["payload"] = {
   kind: "agentTurn",
   message: DEFAULT_MESSAGE,
 };
-export const GMAIL_MODEL = "openrouter/meta-llama/llama-3.3-70b:free";
 
 type RunCronTurnOptions = {
   cfgOverrides?: Parameters<typeof makeCfg>[2];
@@ -89,6 +88,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
 
   const jobPayload = options.jobPayload ?? DEFAULT_AGENT_TURN_PAYLOAD;
   const res = await runCronIsolatedAgentTurn({
+    deliveryAttemptFence: null,
     cfg: makeCfg(home, storePath, options.cfgOverrides),
     deps,
     job: {

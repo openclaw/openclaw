@@ -9,10 +9,7 @@ import {
   ChatHistoryParamsSchema,
   ChatPendingInputsPageSchema,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import {
-  applySessionStoreProjection,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
@@ -46,25 +43,17 @@ function useLoggingConfig(name: string, logging: Record<string, unknown>): void 
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 }
 
-async function writeSessionStore(
+function writeSessionStore(
   name: string,
   entries: Record<string, { sessionId: string; updatedAt: number; archivedAt?: number }>,
-): Promise<string> {
+): string {
   if (!tempDir) {
     throw new Error("tempDir not initialized");
   }
   const storePath = path.join(tempDir, name);
-  await applySessionStoreProjection({
-    storePath,
-    skipMaintenance: true,
-    update: (store) => {
-      for (const sessionKey of Object.keys(store)) {
-        delete store[sessionKey];
-      }
-      Object.assign(store, entries);
-      return { persist: true, result: undefined };
-    },
-  });
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    replaceSessionEntrySync({ storePath, sessionKey }, entry);
+  }
   return storePath;
 }
 
@@ -608,7 +597,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:subagent:parent";
     const targetSessionKey = "agent:main:subagent:old-child";
     const expectedSessionId = "old-child-session";
-    const storePath = await writeSessionStore("old-child.json", {
+    const storePath = writeSessionStore("old-child.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     const requests: CallGatewayRequest[] = [];
@@ -662,7 +651,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:subagent:parent";
     const targetSessionKey = "agent:main:subagent:old-child-race";
     const expectedSessionId = "old-child-session";
-    const storePath = await writeSessionStore("old-child-race.json", {
+    const storePath = writeSessionStore("old-child-race.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     const requests: CallGatewayRequest[] = [];
@@ -705,7 +694,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "main-session-incarnation";
-    const storePath = await writeSessionStore("scoped-grant.json", {
+    const storePath = writeSessionStore("scoped-grant.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     const requests: CallGatewayRequest[] = [];
@@ -751,7 +740,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-race";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "old-incarnation";
-    const storePath = await writeSessionStore("scoped-grant-race.json", {
+    const storePath = writeSessionStore("scoped-grant-race.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     let grantChecks = 0;
@@ -805,7 +794,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-archive-race";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "main-incarnation";
-    const storePath = await writeSessionStore("scoped-grant-archive-race.json", {
+    const storePath = writeSessionStore("scoped-grant-archive-race.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     let grantChecks = 0;

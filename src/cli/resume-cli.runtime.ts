@@ -1,4 +1,3 @@
-// Resolves recent Gateway sessions and attaches the existing TUI to the selected key.
 import { cancel } from "@clack/prompts";
 import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import { SessionsResolveResultSchema } from "../../packages/gateway-protocol/src/schema/sessions-resolve.js";

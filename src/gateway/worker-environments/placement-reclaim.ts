@@ -180,7 +180,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               });
             };
             const finishReclaim = async (): Promise<WorkerReclaimPlacement> => {
-              const pending = journal.load();
+              const pending = await journal.load();
               if (pending) {
                 reauthorize?.();
                 if (workspace.kind !== "local") {
@@ -194,7 +194,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                   assertCurrent: recovery.assertCurrent,
                 });
                 reauthorize?.();
-                journal.abort();
+                await journal.abort();
               }
               recovery.assertCurrent();
               const tunnel = await environments.startTunnel({
@@ -238,12 +238,13 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                           ref: reclaimResultRef,
                           record: (ref) => {
                             assertCurrent();
-                            placements.recordStagedWorkspaceResult(
+                            return placements.recordStagedWorkspaceResult(
                               reclaimClaim,
                               ref,
                               workspace.kind === "repository"
                                 ? workspace.repository.workspaceId
                                 : undefined,
+                              assertCurrent,
                             );
                           },
                         },

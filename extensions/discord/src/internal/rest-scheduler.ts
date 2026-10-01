@@ -560,7 +560,7 @@ export class RestScheduler<TData> {
         schedule.push(lane);
       }
     }
-    return schedule.length > 0 ? schedule : [...requestPriorities];
+    return schedule;
   }
 
   private getOldestQueuedAge(lane: RequestPriority): number {

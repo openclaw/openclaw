@@ -245,6 +245,7 @@ export async function sendDiscordComponentMessage(
         mediaAccess: opts.mediaAccess,
         reply: opts.reply,
         silent: opts.silent,
+        allowedMentions: opts.allowedMentions,
         textLimit: opts.textLimit,
         maxLinesPerMessage: opts.maxLinesPerMessage,
         tableMode: opts.tableMode,

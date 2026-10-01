@@ -9,9 +9,7 @@ import kotlinx.serialization.json.Json
 /** Decoded talk.speak audio bytes plus provider metadata needed for Android playback. */
 internal data class TalkSpeakAudio(
   val bytes: ByteArray,
-  val provider: String,
   val outputFormat: String?,
-  val voiceCompatible: Boolean?,
   val mimeType: String?,
   val fileExtension: String?,
 )
@@ -88,9 +86,7 @@ internal class TalkSpeakClient(
     return TalkSpeakResult.Success(
       TalkSpeakAudio(
         bytes = bytes,
-        provider = payload.provider,
         outputFormat = payload.outputFormat,
-        voiceCompatible = payload.voiceCompatible,
         mimeType = payload.mimeType,
         fileExtension = payload.fileExtension,
       ),

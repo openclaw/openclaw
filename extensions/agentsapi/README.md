@@ -1,8 +1,16 @@
 # Agents API harness
 
-The `agentsapi` harness uses API-key authentication and defaults to an OpenAI-hosted
-Linux environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
-`agentRuntime.id`. See the [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
+The `agentsapi` harness runs commands and file operations in an OpenAI-hosted Linux
+VM by default, while OpenClaw handles channel messaging and configured Gateway
+tools. It uses OpenAI API-key authentication.
+
+Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
+Enable the `agentsapi` plugin and select it for the model through
+`agents.defaults.models["openai/<model>"].agentRuntime.id: "agentsapi"`.
+Replace `<model>` with a model available to your Agents API project. Enabling the
+plugin alone does not select the runtime. Provider-scoped and per-agent model
+overrides are covered in the
+[harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
@@ -158,9 +166,19 @@ for the executor to connect. Configure the controller to connect promptly;
 the API's longer connection window does not extend this deadline. Session
 connection events remain visible while it connects.
 Hosted environments support input
-attachments and output file transfers. Self-hosted environments do not support
-file transfers. Gateway function availability follows the configured OpenClaw
-tool policy. Native Agents API apps and connectors are not configured by this
+attachments and output file transfers. Self-hosted input attachments use the
+registered workspace provider's existing staging service. It prepares admitted
+originals on the executor workspace and returns execution-only paths without
+changing their Gateway media references or transcript provenance. Admission
+requires a completed preparation result for every attachment; one unavailable
+file stops the request with an error. The harness does not infer availability
+from a path in the prompt. Repeated preparation reuses the same owned staging
+files. A self-hosted deployment without this provider must configure it or use
+an OpenAI-hosted environment for attachments. This does not add native image
+input or automatic self-hosted output transfer. See the
+[official files guide](https://developers.openai.com/api/docs/guides/agents-api/environments/files).
+Gateway function availability follows the configured OpenClaw tool policy.
+Native Agents API apps and connectors are not configured by this
 plugin, and the Gateway image-generation tool is not exposed.
 
 For self-hosted sessions, `hostExecutorSkillDirectories` lists absolute paths on

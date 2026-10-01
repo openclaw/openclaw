@@ -16,7 +16,6 @@ import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
-import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -91,7 +90,7 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
   return !env.VITEST && env.NODE_ENV !== "test";
 }
 
-function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
+function hasGatewayStartHooks(pluginRegistry: PluginRegistry): boolean {
   return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
 }
 
@@ -134,7 +133,7 @@ export async function startGatewaySidecars(params: {
   cfg: OpenClawConfig;
   getModelRuntimeConfig?: () => OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+  pluginRegistry: PluginRegistry;
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
@@ -623,10 +622,7 @@ export async function startGatewayPostAttachRuntime(
     updateCanary?: boolean;
     cfgAtStart: OpenClawConfig;
     getConfig: () => OpenClawConfig;
-    bindHost: string;
-    bindHosts: string[];
     port: number;
-    tlsEnabled: boolean;
     log: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -643,7 +639,7 @@ export async function startGatewayPostAttachRuntime(
     pluginManifestRecords: readonly PluginManifestRecord[];
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-    pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+    pluginRegistry: PluginRegistry;
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
@@ -728,6 +724,8 @@ export async function startGatewayPostAttachRuntime(
       return;
     }
     params.onStartupPluginsLoading?.();
+    // Capture retirement before starting work that can finish after shutdown begins.
+    const { disposePluginRegistryInstances } = await import("../plugins/runtime.js");
     const loaded = await measureStartup(params.startupTrace, "plugins.runtime-post-bind", () =>
       params.loadStartupPlugins!(),
     );
@@ -736,7 +734,6 @@ export async function startGatewayPostAttachRuntime(
       const current = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
       if (loaded.pluginRegistry !== current) {
         loaded.retireGatewayRuntimeBindings?.();
-        const { disposePluginRegistryInstances } = await import("../plugins/runtime.js");
         await disposePluginRegistryInstances(loaded.pluginRegistry, current);
       }
       pluginRegistry = current;
@@ -805,10 +802,6 @@ export async function startGatewayPostAttachRuntime(
             ? params.pluginManifestRecords
             : (params.getCurrentPluginMetadataSnapshot?.()?.plugins ?? []),
           ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
-          bindHost: params.bindHost,
-          bindHosts: params.bindHosts,
-          port: params.port,
-          tlsEnabled: params.tlsEnabled,
           loadedPluginIds: startupPluginRegistry.plugins
             .filter((plugin) => plugin.status === "loaded")
             .map((plugin) => plugin.id),

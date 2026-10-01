@@ -80,6 +80,7 @@ describe("controlUi.sessionPreview", () => {
                 sessionKeys: [],
               }),
               (selection) => selection.runIds,
+              { sessionKeys: [run.childSessionKey], descendants: true },
             );
             void recovering.catch(() => {});
             await recoveryStarted.promise;

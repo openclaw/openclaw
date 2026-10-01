@@ -2,6 +2,10 @@ import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js
 import { html, nothing, svg } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import type {
+  WorkerMachineOption,
+  WorkerOperatingSystem,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import { deviceIcons } from "../../components/icons-devices.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
@@ -24,9 +28,8 @@ import {
   defaultCloudOs,
   type DraftCloudProfile,
   type DraftEnvironment,
-  type DraftMachineOption,
-  type DraftOperatingSystem,
 } from "./discovery.ts";
+import { renderPickerLabel } from "./picker-label.ts";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 
 registerNewSessionSetupEnglish();
@@ -41,9 +44,9 @@ type WhereChipState = Readonly<{
   label: string;
   devices: readonly DevicePlacementOption[];
   cloudProfiles: readonly DraftCloudProfile[];
-  cloudMachines: readonly DraftMachineOption[];
+  cloudMachines: readonly WorkerMachineOption[];
   selectedMachineId: string;
-  operatingSystems: readonly DraftOperatingSystem[];
+  operatingSystems: readonly WorkerOperatingSystem[];
   selectedOsId: string;
   autoDeviceDisabledReason?: string;
 }>;
@@ -137,6 +140,31 @@ function renderEnvironmentSkeletons(section: "devices" | "cloud") {
   >
     <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true"></span>
     <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true"></span>
+  </div>`;
+}
+
+function renderEnvironmentHeading(
+  label: string,
+  action: "connect-machine" | "manage-cloud-workers",
+  disabled: boolean,
+  onAction: (() => void) | undefined,
+) {
+  return html`<div class="new-session-page__environment-heading new-session-page__devices-heading">
+    <span>${label}</span>
+    ${
+      onAction
+        ? html`<button
+            type="button"
+            class="new-session-page__connect-device"
+            data-action=${action}
+            aria-label=${t(action === "connect-machine" ? "newSession.connectMachine" : "newSession.manageCloudWorkers")}
+            ?disabled=${disabled}
+            @click=${onAction}
+          >
+            ${connectDeviceIcon}
+          </button>`
+        : nothing
+    }
   </div>`;
 }
 
@@ -294,23 +322,7 @@ export function renderWhereChip(params: {
         ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
-        <span class="new-session-page__target-icon" aria-hidden="true">${icon}</span>
-        <span class="new-session-page__trigger-label">${label}</span>
-        ${
-          configurationSummary
-            ? html`<span class="new-session-page__trigger-summary">${configurationSummary}</span>`
-            : nothing
-        }
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-          aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-          aria-hidden="true"
-          >${icons.chevronsUpDown}</span
-        >
+        ${renderPickerLabel(icon, label, configurationSummary)}
       </button>
     </span>
     <wa-popover
@@ -362,25 +374,12 @@ export function renderWhereChip(params: {
           <div ${ref(bindScrollFade)} class="new-session-page__environment-list">
             ${
               showLocal || devices.length || showAuto
-                ? html`<div
-                    class="new-session-page__environment-heading new-session-page__devices-heading"
-                  >
-                    <span>${t("newSession.yourDevices")}</span>
-                    ${
-                      params.isAdmin
-                        ? html`<button
-                            type="button"
-                            class="new-session-page__connect-device"
-                            data-action="connect-machine"
-                            aria-label=${t("newSession.connectMachine")}
-                            ?disabled=${busy}
-                            @click=${params.onConnectMachine}
-                          >
-                            ${connectDeviceIcon}
-                          </button>`
-                        : nothing
-                    }
-                  </div>`
+                ? renderEnvironmentHeading(
+                    t("newSession.yourDevices"),
+                    "connect-machine",
+                    busy,
+                    params.isAdmin ? params.onConnectMachine : undefined,
+                  )
                 : nothing
             }
             ${
@@ -470,25 +469,12 @@ export function renderWhereChip(params: {
             ${showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : nothing}
             ${
               cloudProfiles.length || showMissingCloud || showCloudSkeletons
-                ? html`<div
-                    class="new-session-page__environment-heading new-session-page__devices-heading"
-                  >
-                    <span>${t("newSession.cloud")}</span>
-                    ${
-                      params.isAdmin && !showCloudSkeletons
-                        ? html`<button
-                            type="button"
-                            class="new-session-page__connect-device"
-                            data-action="manage-cloud-workers"
-                            aria-label=${t("newSession.manageCloudWorkers")}
-                            ?disabled=${busy}
-                            @click=${params.onManageCloudWorkers}
-                          >
-                            ${connectDeviceIcon}
-                          </button>`
-                        : nothing
-                    }
-                  </div>`
+                ? renderEnvironmentHeading(
+                    t("newSession.cloud"),
+                    "manage-cloud-workers",
+                    busy,
+                    params.isAdmin && !showCloudSkeletons ? params.onManageCloudWorkers : undefined,
+                  )
                 : nothing
             }
             ${renderCloudProfileMenuItems({

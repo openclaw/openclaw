@@ -180,7 +180,6 @@ export {
   OPTIONAL_EXEC_APPROVAL_DECISIONS,
 } from "./exec-approvals-policy.js";
 export {
-  commandRequiresSecurityAuditSuppressionApproval,
   isExecApprovalDecisionAllowed,
   maxAsk,
   minSecurity,

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
-import type { SessionTreeEntry } from "../types.js";
+import {
+  InvalidSummaryOutputError,
+  SummaryOutputBudgetError,
+  type SessionTreeEntry,
+} from "../types.js";
 import {
   calculateContextTokens,
   compact,
@@ -787,6 +791,7 @@ describe("generateSummary thinking options", () => {
     if (result.ok) {
       throw new Error("expected empty compaction output to fail");
     }
+    expect(result.error).toBeInstanceOf(InvalidSummaryOutputError);
     expect(result.error).toMatchObject({
       name: "CompactionError",
       code: "summarization_failed",
@@ -825,6 +830,7 @@ describe("generateSummary thinking options", () => {
     );
 
     expect(streamFn).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ error: expect.any(SummaryOutputBudgetError) });
     expect(result).toMatchObject({
       ok: false,
       error: {

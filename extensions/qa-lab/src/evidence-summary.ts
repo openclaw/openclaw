@@ -288,32 +288,42 @@ function resultForEvidence(
   };
 }
 
-function buildQaEvidenceSummary(params: {
-  entries: QaEvidenceSummaryV2Entry[];
+type QaEvidenceSummaryInput<Entry extends QaEvidenceSummaryEntry> = {
+  entries: Entry[];
   evidenceMode?: QaScorecardEvidenceMode;
   generatedAt: string;
   profile?: QaEvidenceProfile;
   profilePlan?: QaProfileEvidencePlan;
   scorecard?: QaEvidenceScorecardJson;
-}): QaEvidenceSummaryV2Json {
-  const profileOptions = readQaScorecardProfileOptions(params.profile);
-  const evidenceMode = params.evidenceMode ?? profileOptions.evidenceMode;
-  const entries =
-    evidenceMode === "slim"
-      ? params.entries.map((entry) => {
-          const { execution: _execution, ...withoutExecution } = entry;
-          return withoutExecution;
-        })
-      : params.entries;
-  return qaEvidenceSummarySchema.parse({
+};
+
+function buildQaEvidenceSummaryFields(params: QaEvidenceSummaryInput<QaEvidenceSummaryEntry>) {
+  const evidenceMode =
+    params.evidenceMode ?? readQaScorecardProfileOptions(params.profile).evidenceMode;
+  return {
     kind: QA_EVIDENCE_SUMMARY_KIND,
-    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
     evidenceMode,
-    entries,
+    entries:
+      evidenceMode === "slim"
+        ? params.entries.map(({ execution: _execution, ...entry }) => entry)
+        : params.entries,
     profile: params.profile,
     profilePlan: params.profilePlan,
     scorecard: params.scorecard,
+  };
+}
+
+function buildQaEvidenceSummary(
+  params: QaEvidenceSummaryInput<QaEvidenceSummaryV2Entry>,
+): QaEvidenceSummaryV2Json {
+  const profileOptions = readQaScorecardProfileOptions(params.profile);
+  return qaEvidenceSummarySchema.parse({
+    ...buildQaEvidenceSummaryFields({
+      ...params,
+      evidenceMode: params.evidenceMode ?? profileOptions.evidenceMode,
+    }),
+    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   });
 }
 
@@ -321,31 +331,27 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
   return qaVersionedEvidenceSummarySchema.parse(summary);
 }
 
+export function collectQaEvidenceArtifacts(summary: QaEvidenceSummaryJson) {
+  return [
+    ...summary.entries.flatMap((entry) => entry.execution?.artifacts ?? []),
+    ...(summary.schemaVersion === 3
+      ? summary.occurrences.flatMap((occurrence) =>
+          occurrence.receipts.map((receipt) => receipt.artifact),
+        )
+      : []),
+  ];
+}
+
 /** Only the invocation owner can supply bindings; this constructor invents none. */
-export function buildQaOccurrenceEvidenceSummary(params: {
-  entries: QaEvidenceSummaryV3Entry[];
-  occurrences: QaEvidenceOccurrence[];
-  evidenceMode?: QaScorecardEvidenceMode;
-  generatedAt: string;
-  profile?: QaEvidenceProfile;
-  profilePlan?: QaProfileEvidencePlan;
-  scorecard?: QaEvidenceScorecardJson;
-}): QaEvidenceSummaryV3Json {
-  const evidenceMode =
-    params.evidenceMode ?? readQaScorecardProfileOptions(params.profile).evidenceMode;
+export function buildQaOccurrenceEvidenceSummary(
+  params: QaEvidenceSummaryInput<QaEvidenceSummaryV3Entry> & {
+    occurrences: QaEvidenceOccurrence[];
+  },
+): QaEvidenceSummaryV3Json {
   return qaEvidenceSummaryV3Schema.parse({
-    kind: QA_EVIDENCE_SUMMARY_KIND,
+    ...buildQaEvidenceSummaryFields(params),
     schemaVersion: 3,
-    generatedAt: params.generatedAt,
-    evidenceMode,
-    entries:
-      evidenceMode === "slim"
-        ? params.entries.map(({ execution: _execution, ...entry }) => entry)
-        : params.entries,
     occurrences: params.occurrences,
-    profile: params.profile,
-    profilePlan: params.profilePlan,
-    scorecard: params.scorecard,
   });
 }
 
@@ -453,25 +459,15 @@ export function attachQaEvidenceScorecard(params: {
   profilePlan: QaProfileEvidencePlan;
   scorecard: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
-  if (params.summary.schemaVersion === 3) {
+  const { summary, evidenceMode, ...scorecard } = params;
+  if (summary.schemaVersion === 3) {
     return buildQaOccurrenceEvidenceSummary({
-      entries: params.summary.entries,
-      occurrences: params.summary.occurrences,
-      evidenceMode: params.evidenceMode ?? params.summary.evidenceMode,
-      generatedAt: params.summary.generatedAt,
-      profile: params.profile,
-      profilePlan: params.profilePlan,
-      scorecard: params.scorecard,
+      ...summary,
+      ...scorecard,
+      evidenceMode: evidenceMode ?? summary.evidenceMode,
     });
   }
-  return buildQaEvidenceSummary({
-    entries: params.summary.entries,
-    evidenceMode: params.evidenceMode,
-    generatedAt: params.summary.generatedAt,
-    profile: params.profile,
-    profilePlan: params.profilePlan,
-    scorecard: params.scorecard,
-  });
+  return buildQaEvidenceSummary({ ...summary, ...scorecard, evidenceMode });
 }
 
 export function buildQaSuiteEvidenceSummary(

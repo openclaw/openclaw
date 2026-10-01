@@ -19,7 +19,6 @@ import type {
   ParentOwner,
   ParentState,
 } from "./native-subagent-monitor-types.js";
-import { isJsonObject } from "./protocol.js";
 
 /** Equality joins input to one live source; it never grants another source's models. */
 export function assertNativeModelInputCompatible(sender: ParentOwner, receiver: ParentOwner): void {
@@ -318,10 +317,9 @@ export async function prepareNativeModelToolInput(
       throw new Error("Codex native input receiver cannot retain this sender's admitted source");
     }
     if (!dependencies.knownChildren.has(thread.id) && !dependencies.parents.has(thread.id)) {
-      const metadata = isJsonObject(thread) ? thread : undefined;
       dependencies.registerChildThread(state, thread.id, {
-        nativeParentThreadId: readThreadParentThreadId(metadata),
-        agentPath: readString(readThreadSpawnSource(metadata), "agent_path"),
+        nativeParentThreadId,
+        agentPath: readString(readThreadSpawnSource(thread), "agent_path"),
       });
     }
     const currentState =

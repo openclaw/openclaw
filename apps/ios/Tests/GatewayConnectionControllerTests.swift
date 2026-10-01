@@ -433,6 +433,7 @@ private func waitUntil(
             OpenClawGatewayClientCapability.agentKind,
             OpenClawGatewayClientCapability.inlineWidgets,
             OpenClawGatewayClientCapability.modelSelectionPolicy,
+            OpenClawGatewayClientCapability.ultrafast,
         ])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))

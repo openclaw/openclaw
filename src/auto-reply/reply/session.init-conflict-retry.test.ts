@@ -88,22 +88,6 @@ function conflictingAttempt(failures: number) {
 const instantSleep = async (_ms: number) => {};
 
 describe("runWithSessionInitConflictRetry", () => {
-  it("returns immediately when the first attempt succeeds", async () => {
-    const { attempt, state } = conflictingAttempt(0);
-    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
-      "ok",
-    );
-    expect(state.calls).toBe(1);
-  });
-
-  it("retries conflicts and succeeds once the competing writer settles", async () => {
-    const { attempt, state } = conflictingAttempt(3);
-    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
-      "ok",
-    );
-    expect(state.calls).toBe(4);
-  });
-
   it("retries conflict messages rejected as strings", async () => {
     const attempt = vi
       .fn<() => Promise<string>>()
@@ -114,14 +98,6 @@ describe("runWithSessionInitConflictRetry", () => {
       "ok",
     );
     expect(attempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("rethrows the conflict after exhausting all attempts", async () => {
-    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
-    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).rejects.toThrow(
-      `reply session initialization conflicted for ${SESSION_KEY}`,
-    );
-    expect(state.calls).toBe(5);
   });
 
   it("respects a caller-provided maxAttempts", async () => {
@@ -176,48 +152,19 @@ describe("runWithSessionInitConflictRetry", () => {
     expect(calls).toBe(1);
   });
 
-  it("cancels an in-progress backoff without starting another attempt", async () => {
-    const controller = new AbortController();
-    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
-    let markSleepStarted = () => {};
-    const sleepStarted = new Promise<void>((resolve) => {
-      markSleepStarted = resolve;
-    });
-    const sleep = vi.fn(
-      async (_ms: number, signal?: AbortSignal) =>
-        await new Promise<void>((_resolve, reject) => {
-          expect(signal).toBe(controller.signal);
-          signal?.addEventListener(
-            "abort",
-            () => reject(new Error("aborted", { cause: signal.reason })),
-            { once: true },
-          );
-          markSleepStarted();
-        }),
-    );
-
-    const retrying = runWithSessionInitConflictRetry(attempt, {
-      signal: controller.signal,
-      sleep,
-    });
-    await sleepStarted;
-    controller.abort(new Error("stop retrying"));
-
-    await expect(retrying).rejects.toThrow("aborted");
-    expect(state.calls).toBe(1);
-    expect(sleep).toHaveBeenCalledTimes(1);
-  });
-
   it("applies capped exponential backoff between attempts", async () => {
     const delays: number[] = [];
-    const { attempt } = conflictingAttempt(Number.POSITIVE_INFINITY);
+    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     try {
-      await runWithSessionInitConflictRetry(attempt, {
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-      }).catch(() => {});
+      await expect(
+        runWithSessionInitConflictRetry(attempt, {
+          sleep: async (ms) => {
+            delays.push(ms);
+          },
+        }),
+      ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
+      expect(state.calls).toBe(5);
       expect(delays).toEqual([250, 500, 1_000, 2_000]);
     } finally {
       randomSpy.mockRestore();

@@ -56,31 +56,24 @@ export function normalizeStrictOpenAIJsonSchema(
   modelCompat?: ToolSchemaCompatInput | null,
 ): unknown {
   const schemaInput = schema ?? {};
-  if (!schemaInput || typeof schemaInput !== "object") {
-    return normalizeStrictOpenAIJsonSchemaRecursive(
-      normalizeToolParameterSchema(schemaInput, {
-        modelCompat: resolveToolSchemaModelCompat(modelCompat),
-      }),
-      0,
-    );
+  const cacheable = typeof schemaInput === "object";
+  const cacheKey = cacheable ? resolveStrictOpenAISchemaCacheKey(modelCompat) : "";
+  if (cacheable) {
+    const cached = strictOpenAISchemaCache.get(schemaInput, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
   }
-  const cacheKey = resolveStrictOpenAISchemaCacheKey(modelCompat);
-  const cached = strictOpenAISchemaCache.get(schemaInput, cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  return strictOpenAISchemaCache.remember(
-    schemaInput,
-    cacheKey,
-    // Cache by input object and compatibility key so repeated inventory generation preserves object
-    // identity without mixing schemas normalized for different provider limitations.
-    normalizeStrictOpenAIJsonSchemaRecursive(
-      normalizeToolParameterSchema(schemaInput, {
-        modelCompat: resolveToolSchemaModelCompat(modelCompat),
-      }),
-      0,
-    ),
+  const normalized = normalizeStrictOpenAIJsonSchemaRecursive(
+    normalizeToolParameterSchema(schemaInput, {
+      modelCompat: resolveToolSchemaModelCompat(modelCompat),
+    }),
+    0,
   );
+  // Preserve object identity per input and compatibility key.
+  return cacheable
+    ? strictOpenAISchemaCache.remember(schemaInput, cacheKey, normalized)
+    : normalized;
 }
 
 function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {

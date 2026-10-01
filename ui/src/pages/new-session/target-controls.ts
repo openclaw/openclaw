@@ -120,7 +120,6 @@ export function renderNewSessionPlaceControls({
   const checkoutState = resolveCheckoutChip({
     destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
     worktree: place.worktree,
-    worktreeAvailable: place.worktreeAvailable(),
     worktreeName: place.worktreeName,
     headBranch: branches?.headBranch,
     baseRef: place.baseRef,
@@ -252,7 +251,7 @@ export function renderNewSessionPlaceControls({
           onClose: () => browser.close(),
         })
   }${
-    checkoutState && !place.freshWorkspace && !(nativeTerminal && place.terminalOnNode)
+    place.checkoutVisible && !(nativeTerminal && place.terminalOnNode)
       ? renderCheckoutChip({
           idPrefix,
           state: checkoutState,

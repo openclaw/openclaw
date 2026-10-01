@@ -1,5 +1,7 @@
 // Status overview row tests cover status-all overview values, update metadata, and display rows.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import * as memoryStatus from "../memory-host-sdk/status.js";
 import { VERSION } from "../version.js";
 import {
   buildStatusAllOverviewRows,
@@ -9,6 +11,22 @@ import {
   baseStatusOverviewSurface,
   createStatusCommandOverviewRowsParams,
 } from "./status.test-support.ts";
+
+beforeEach(() => {
+  vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
+  vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
+  vi.spyOn(theme, "muted").mockImplementation((value) => `muted(${String(value)})`);
+  vi.spyOn(memoryStatus, "resolveMemoryVectorState").mockReturnValue({
+    state: "ready",
+    tone: "ok",
+  });
+  vi.spyOn(memoryStatus, "resolveMemoryFtsState").mockReturnValue({ state: "ready", tone: "warn" });
+  vi.spyOn(memoryStatus, "resolveMemoryCacheSummary").mockReturnValue({
+    text: "cache warm",
+    tone: "muted",
+  });
+});
+afterEach(() => vi.restoreAllMocks());
 
 function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string) {
   return rows.find((row) => row.Item === item)?.Value;

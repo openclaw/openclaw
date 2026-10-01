@@ -1,8 +1,3 @@
-/**
- * Sandbox defaults and state paths.
- *
- * Centralizes image names, container prefixes, workspace paths, browser ports, and registry locations.
- */
 import path from "node:path";
 import { CHANNEL_IDS } from "../../channels/ids.js";
 import { STATE_DIR } from "../../config/paths.js";

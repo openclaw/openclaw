@@ -74,6 +74,8 @@ export type SessionListOptions = {
   involvingMe?: boolean;
   offset?: number;
   limit?: number;
+  /** Physical read size for a managed window that needs every page enriched. */
+  pageSize?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
@@ -207,6 +209,10 @@ export type SessionCapability = {
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
+  /** Broad observer outage, independent of query and operation errors; changes notify subscribers. */
+  readonly eventSubscriptionError: string | null;
+  /** Advances for every publication, including pending facts outside state. */
+  readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
   readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
@@ -216,7 +222,7 @@ export type SessionCapability = {
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
   isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
-  /** Shares exact descriptor reads until the session changes; refresh supersedes earlier reads. */
+  /** Shares descriptor reads, including agent-implied scopes, until the session changes; refresh supersedes earlier reads. */
   describe: (
     params: SessionsDescribeParams,
     options?: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient },

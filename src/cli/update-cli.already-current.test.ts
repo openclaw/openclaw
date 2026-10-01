@@ -514,19 +514,35 @@ describe("update-cli", () => {
         membership,
       );
 
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await updateCommand({
-          admission: "auto",
-          channel: "beta",
-          yes: true,
-          restart: true,
-          json: true,
-        });
-      });
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_DEBUG_PROXY_ENABLED: membership === "outside" ? "yes" : "0",
+          OPENCLAW_DEBUG_PROXY_URL: undefined,
+          OPENCLAW_DEBUG_PROXY_REQUIRE: undefined,
+        },
+        async () => {
+          await updateCommand({
+            admission: "auto",
+            channel: "beta",
+            yes: true,
+            restart: true,
+            json: true,
+          });
+        },
+      );
 
       expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
       expect(doctorCommandCall()).toBeUndefined();
+      const captureNotices = vi
+        .mocked(defaultRuntime.error)
+        .mock.calls.filter(
+          ([message]) =>
+            message ===
+            "Warning: Debug HTTP capture is disabled in this updater process. Doctor may enable capture in its own process after schema readiness is confirmed.",
+        );
+      expect(captureNotices).toHaveLength(membership === "outside" ? 1 : 0);
       if (membership === "unknown") {
         expectNoSideEffects(replaceConfigFile, updateNpmInstalledPlugins);
         expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
@@ -625,11 +641,21 @@ describe("update-cli", () => {
       error: "HTTP 404",
     });
 
-    await updateCommand({ tag: "next" });
+    await expect(updateCommand({ tag: "next" })).rejects.toEqual(new ExitError(1));
 
-    expect(getErrorOutput()).toContain("Downgrade confirmation required.");
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(getLogOutput()).toContain("OpenClaw update skipped: downgrade-confirmation-required.");
+    expect(getLogOutput()).toContain(
+      "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+    );
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expectNoSideEffects(
+      serviceStop,
+      serviceStart,
+      serviceRestart,
+      runDaemonRestart,
+      replaceConfigFile,
+    );
   });
 
   registerUpdatePreflightTests({

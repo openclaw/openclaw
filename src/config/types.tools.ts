@@ -1,4 +1,3 @@
-// Defines tool availability and allowlist configuration types.
 import type { z } from "zod";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig } from "./types.base.js";

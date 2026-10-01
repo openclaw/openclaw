@@ -1,4 +1,3 @@
-// Voice model catalog helpers shared by TTS and realtime voice plugins.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {

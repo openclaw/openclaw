@@ -1,4 +1,3 @@
-// Shared cron CLI formatting, parsing, delivery preview, and warning helpers.
 import {
   MAX_DATE_TIMESTAMP_MS,
   parseStrictNonNegativeInteger,
@@ -204,18 +203,15 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
   }
   const obj = value as Record<string, unknown>;
 
-  // Single job object (has 'state' and 'enabled')
   if ("state" in obj && "enabled" in obj) {
     return { ...obj, status: computeStatus(obj) };
   }
 
-  // List response (has 'jobs' array)
   if ("jobs" in obj && Array.isArray(obj.jobs)) {
-    const enrichedJobs = (obj.jobs as CronJob[]).map((job) => {
-      const status = computeStatus(job);
-      return Object.assign({}, job, { status });
-    });
-    return { ...obj, jobs: enrichedJobs };
+    return {
+      ...obj,
+      jobs: obj.jobs.map((job: CronJob) => Object.assign({}, job, { status: computeStatus(job) })),
+    };
   }
 
   return value;
@@ -433,10 +429,7 @@ export function parseCronStringList(input: unknown): string[] | undefined {
     : typeof input === "string"
       ? input
       : "";
-  return raw
-    .split(/[,\s]+/u)
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  return raw.split(/[,\s]+/u).filter(Boolean);
 }
 
 const INVALID_CRON_TIMEZONE_MESSAGE =
@@ -450,13 +443,7 @@ export function parseCronTimezoneOption(value: unknown): string | undefined {
   return timezone;
 }
 
-/**
- * Parse a one-shot `--at` value into an ISO string (UTC).
- *
- * When `tz` is provided and the input is an offset-less datetime
- * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
- * that IANA timezone instead of UTC.
- */
+// Offset-less datetimes use the supplied IANA timezone instead of UTC.
 export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
@@ -521,9 +508,7 @@ const formatCell = (value: unknown, width: number) => {
   const truncated =
     visibleWidth(text) <= width
       ? text
-      : width <= TRUNCATED_SUFFIX.length
-        ? truncateToVisibleWidth(text, width)
-        : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
+      : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
   const remaining = width - visibleWidth(truncated);
   return remaining > 0 ? `${truncated}${" ".repeat(remaining)}` : truncated;
 };

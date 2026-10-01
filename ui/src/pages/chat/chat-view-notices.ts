@@ -24,15 +24,11 @@ export type ChatPlacementStartupNoticeProps = {
   onRetrySessionPlacementStartup?: () => void;
 };
 
-type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
+type ChatViewNoticesProps = {
   diskSpace?: SessionPlacementDiskSpace;
   workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
   error?: string | null;
-  focusMode?: boolean;
   onDismissError?: () => void;
-  onDismissWorkspaceConflict?: () => void;
-  onToggleFocusMode?: () => void;
-  workspaceConflict?: WorkspaceResultConflict | null;
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
@@ -180,22 +176,6 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
       ${renderDiskSpaceNotice(props.diskSpace)}
       ${renderWorkerRuntimeInstallNotice(props.workerRuntimeInstall)}
       ${props.error ? renderErrorNotice(props.error, dismiss) : nothing}
-      ${
-        props.focusMode && props.onToggleFocusMode
-          ? html`
-              <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
-                <button
-                  class="chat-focus-exit"
-                  type="button"
-                  @click=${props.onToggleFocusMode}
-                  aria-label=${t("chat.actions.exitFocusMode")}
-                >
-                  ${icons.x}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing
-      }
     </div>
   `;
 }

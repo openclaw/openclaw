@@ -1,4 +1,3 @@
-// Formats ACP diagnostics and runtime error details for command replies.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

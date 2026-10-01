@@ -1,8 +1,3 @@
-/**
- * Publishes ClickClack's native ephemeral agent.progress signal for one
- * OpenClaw turn. ClickClack renders this as its compact "Agent is
- * responding" status and the detailed progress lines above the composer.
- */
 import {
   buildChannelProgressDraftLine,
   isCompleteAgentPreamble,
@@ -38,18 +33,9 @@ function progressText(payload: ClickClackItemEventPayload): string {
     return payload.title;
   }
   const line = buildChannelProgressDraftLine({
+    ...payload,
     event: "item",
-    itemId: payload.itemId,
-    toolCallId: payload.toolCallId,
     itemKind: payload.kind,
-    title: payload.title,
-    name: payload.name,
-    phase: payload.phase,
-    status: payload.status,
-    summary: payload.summary,
-    progressText: payload.progressText,
-    meta: payload.meta,
-    commandBearing: payload.commandBearing,
   })?.text?.trim();
   if (line) {
     return line;
@@ -88,14 +74,11 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
     const phase = payload.phase?.trim().toLowerCase();
     const existingAnonymous =
       phase === "start" ? undefined : anonymousLines.toReversed().find((line) => line.active);
-    const line =
-      existingAnonymous ??
-      (() => {
-        const created = { id: `item:${kind}:${++anonymousSequence}`, active: true };
-        anonymousLines.push(created);
-        anonymousLinesByKind.set(kind, anonymousLines);
-        return created;
-      })();
+    const line = existingAnonymous ?? { id: `item:${kind}:${++anonymousSequence}`, active: true };
+    if (!existingAnonymous) {
+      anonymousLines.push(line);
+      anonymousLinesByKind.set(kind, anonymousLines);
+    }
     if (isFinal(payload)) {
       line.active = false;
     }

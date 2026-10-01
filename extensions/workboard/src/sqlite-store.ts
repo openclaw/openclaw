@@ -10,6 +10,7 @@ import type {
   PersistedWorkboardBoard,
   WorkboardCardStore,
   WorkboardKeyedStore,
+  WorkboardSessionsBoardStore,
   WorkboardSubscriptionStore,
   WorkboardWriteAuthority,
 } from "./persistence-types.js";
@@ -23,6 +24,7 @@ import { resolveWorkboardSqlitePath } from "./sqlite-store-paths.js";
 type WorkboardSqliteStores = {
   cards: WorkboardCardStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
+  sessionsBoard: WorkboardSessionsBoardStore;
   subscriptions: WorkboardSubscriptionStore;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
   ready: Promise<number>;
@@ -219,6 +221,18 @@ export function createWorkboardSqliteStores(options: {
         execute("boards.delete", { connection, args }, true),
       ),
       entries: bindOperation((connection, args) => execute("boards.entries", { connection, args })),
+    },
+    sessionsBoard: {
+      get: bindOperation((connection, args) => execute("sessionsBoard.get", { connection, args })),
+      update: bindOperation((connection, args) =>
+        execute("sessionsBoard.update", { connection, args }, true),
+      ),
+      listPlacements: bindOperation((connection, args) =>
+        execute("sessionsBoard.listPlacements", { connection, args }),
+      ),
+      writePlacements: bindOperation((connection, args) =>
+        execute("sessionsBoard.writePlacements", { connection, args }, true),
+      ),
     },
     subscriptions: {
       register: bindOperation((connection, args) =>

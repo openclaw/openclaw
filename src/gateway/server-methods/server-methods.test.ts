@@ -2493,7 +2493,7 @@ describe("gateway healthHandlers.status scope handling", () => {
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
-  let restoreContextEngineRegistryState: () => void;
+  let restoreContextEngineRegistryState: () => Promise<void>;
   const contextEngineTestOwner = "plugin:health-test";
   const healthyChildRuntime = { execPath: "/test/node", available: true };
   let restoreChildRuntime: () => void;
@@ -2593,20 +2593,20 @@ describe("gateway healthHandlers.health cache freshness", () => {
     ({ healthHandlers } = await import("./health.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const runtimeSpy = vi
       .spyOn(childRuntime, "readChildRuntimeViability")
       .mockReturnValue(healthyChildRuntime);
     restoreChildRuntime = () => runtimeSpy.mockRestore();
     restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
-    registerLegacyContextEngine();
-    resetContextEngineRuntimeQuarantineForTests();
+    await registerLegacyContextEngine();
+    await resetContextEngineRuntimeQuarantineForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     restoreChildRuntime();
     vi.useRealTimers();
-    restoreContextEngineRegistryState();
+    await restoreContextEngineRegistryState();
   });
 
   it("rate-limits request-driven refreshes for fresh cached health", async () => {
@@ -2794,7 +2794,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
   it("merges live context-engine quarantine state into cached health responses", async () => {
     const engineId = `health-context-engine-${Date.now()}`;
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => ({
         info: { id: "lcm", name: "Lossless Claw Memory" },

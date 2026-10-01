@@ -26,6 +26,20 @@ const inventoryCheck =
 const wrapperFailure = (output: string) =>
   `${output}\nCheck the inventory first: ${inventoryCheck}`;
 
+it("keeps packaged scripts closed over runtime imports", () => {
+  const files: string[] = JSON.parse(readFileSync("package.json", "utf8")).files;
+  const scripts = files.filter(
+    (file) => file.startsWith("scripts/") && !/\.d\.[cm]?ts$/.test(file),
+  );
+  const closure = collectRuntimeImportClosure(process.cwd(), scripts, {
+    includeDynamicImports: true,
+  });
+  expect(
+    closure.filter((file) => !files.includes(file)),
+    "Package lifecycle scripts must ship their guarded imports and transitive dependencies.",
+  ).toEqual([]);
+});
+
 it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const components = readFileSync(wrapperInventory, "utf8").trim().split("\n");
   const stale = components.filter((file) => !existsSync(file)).toSorted();

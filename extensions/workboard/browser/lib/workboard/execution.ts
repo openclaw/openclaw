@@ -17,7 +17,6 @@ import type {
   WorkboardExecution,
   WorkboardExecutionEngine,
   WorkboardExecutionMode,
-  WorkboardExecutionStatus,
   WorkboardUiState,
 } from "./types.ts";
 
@@ -66,13 +65,10 @@ function isScheduledForLater(card: WorkboardCard, now = Date.now()): boolean {
   return card.status === "scheduled";
 }
 
-function buildWorkboardExecution(params: {
+function buildManualWorkboardExecution(params: {
   card: WorkboardCard;
   engine: WorkboardExecutionEngine;
-  mode: WorkboardExecutionMode;
   sessionKey?: string | null;
-  runId?: string;
-  status: WorkboardExecutionStatus;
 }): WorkboardExecution {
   const now = Date.now();
   const model = engineModel(params.engine);
@@ -80,13 +76,12 @@ function buildWorkboardExecution(params: {
     id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
     kind: "agent-session",
     engine: params.engine,
-    mode: params.mode,
-    status: params.status,
+    mode: "manual",
+    status: "idle",
     startedAt: now,
     updatedAt: now,
     ...(model ? { model } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.runId ? { runId: params.runId } : {}),
   };
 }
 
@@ -186,12 +181,10 @@ export async function startWorkboardCard(params: {
         runId: null,
         ...(engine
           ? {
-              execution: buildWorkboardExecution({
+              execution: buildManualWorkboardExecution({
                 card: params.card,
                 engine,
-                mode,
                 sessionKey,
-                status: "idle",
               }),
             }
           : { execution: null }),
@@ -245,7 +238,7 @@ export async function stopWorkboardCard(params: {
       : false;
     assertCurrent();
     if (!sessionAborted) {
-      if (linkedSessionKey && !session) {
+      if (!session) {
         throw new Error(
           "Refresh this card's session details before stopping it, or use Edit to choose its session.",
         );

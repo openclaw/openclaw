@@ -285,7 +285,7 @@ describe("refreshSlashCommands", () => {
       commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
     };
     beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata);
-    applyRemoteSlashCommandsResult({ client, agentId: "main", result: metadata });
+    applyRemoteSlashCommandsResult(metadata);
 
     invalidateChatMetadataStore(client);
     await refreshSlashCommands({ client, agentId: "main" });

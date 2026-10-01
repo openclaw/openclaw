@@ -26,6 +26,8 @@ import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronJob } from "../types.js";
+import * as runReceipts from "./run-receipts.js";
+import * as serviceStore from "./store.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-shared-runtime-" });
 const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
@@ -306,25 +308,32 @@ describe("scheduler-disabled shared-store mutations", () => {
       ),
     );
     const resumeUpdates = createDeferred();
+    const prepareOwner = runReceipts.prepareCronRunReceiptOwnerMutation;
+    // Hold the edit before receipt observation, without installing a job-snapshot precondition.
+    const admission = vi
+      .spyOn(runReceipts, "prepareCronRunReceiptOwnerMutation")
+      .mockImplementation(async (params) => {
+        const testCase = cases.find(({ job }) => job.id === params.previousJob.id)!;
+        expect(params.previousJob.state.runningAtMs).toBeUndefined();
+        testCase.entered.resolve();
+        await resumeUpdates.promise;
+        const prepared = prepareOwner(params);
+        if (!prepared) {
+          throw new Error("Expected the owner-changing edit to observe its receipt.");
+        }
+        return prepared;
+      });
     const updates = Promise.allSettled(
-      cases.map(({ cron, job, operation, entered }) =>
-        cron.updateWithPrecondition(
-          job.id,
-          {
-            agentId: "beta",
-            state: {
-              ...(operation === "ordinary edit"
-                ? {}
-                : { runningAtMs: startedAtMs + (operation === "same timestamp" ? 0 : 1) }),
-              triggerState: { owner: "saved edit" },
-            },
+      cases.map(({ cron, job, operation }) =>
+        cron.update(job.id, {
+          agentId: "beta",
+          state: {
+            ...(operation === "ordinary edit"
+              ? {}
+              : { runningAtMs: startedAtMs + (operation === "same timestamp" ? 0 : 1) }),
+            triggerState: { owner: "saved edit" },
           },
-          async (snapshot) => {
-            expect(snapshot.state.runningAtMs).toBeUndefined();
-            entered.resolve();
-            await resumeUpdates.promise;
-          },
-        ),
+        }),
       ),
     );
     const database = openOpenClawStateDatabase().db;
@@ -351,7 +360,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       }
       const failedJob = cases.find(({ operation }) => operation === "failed replacement")!.job;
       database.exec(`
-        CREATE TEMP TRIGGER reject_shared_marker_update
+        CREATE TRIGGER reject_shared_marker_update
         BEFORE UPDATE ON cron_jobs
         WHEN NEW.job_id = '${failedJob.id}'
         BEGIN
@@ -360,6 +369,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       `);
       resumeUpdates.resolve();
       const results = await updates;
+      admission.mockRestore();
       for (const [index, { operation, storePath }] of cases.entries()) {
         const result = results[index]!;
         const receipt = admitted[index]!;
@@ -397,6 +407,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       database.exec("DROP TRIGGER IF EXISTS reject_shared_marker_update");
       resumeUpdates.resolve();
       await updates;
+      admission.mockRestore();
       for (const { cron } of cases) {
         cron.stop();
       }
@@ -461,18 +472,27 @@ describe("scheduler-disabled shared-store mutations", () => {
 
       // A child owns execution so the passive editor can hold its store lock
       // while both runs advance. Identical clocks cannot identify the new edit.
-      const acknowledged = await editor.updateWithPrecondition(
-        job.id,
-        { schedule: { kind: "every", everyMs: 120_000, anchorMs: nowMs } },
-        async (snapshot) => {
+      const persist = serviceStore.persistCronJobMutation;
+      const admission = vi
+        .spyOn(serviceStore, "persistCronJobMutation")
+        .mockImplementationOnce(async (params) => {
+          const snapshot = params.previous.jobs.find(({ id }) => id === job.id)!;
           expect(snapshot.schedule).toEqual(before.schedule);
           expect(snapshot.state.runningAtMs).toBe(firstReceipt.startedAtMs);
           expect(snapshot.state.runningScheduleChangeId).toBe(before.state.runningScheduleChangeId);
           child.send("advance");
           await closed;
           assertCompleted();
-        },
-      );
+          return persist(params);
+        });
+      let acknowledged: CronJob;
+      try {
+        acknowledged = await editor.update(job.id, {
+          schedule: { kind: "every", everyMs: 120_000, anchorMs: nowMs },
+        });
+      } finally {
+        admission.mockRestore();
+      }
       expect(acknowledged.state.nextRunAtMs).toBe(nowMs + 120_000);
       const after = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
       const secondReceipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });

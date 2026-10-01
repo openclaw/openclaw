@@ -49,8 +49,6 @@ func (tr *behaviorFixtureTranslator) TranslateRaw(_ context.Context, text, _, _ 
 	return tr.run("raw", text), nil
 }
 
-func (tr *behaviorFixtureTranslator) Close() {}
-
 func (tr *behaviorFixtureTranslator) run(method, text string) string {
 	tr.t.Helper()
 	for _, rule := range tr.rules {

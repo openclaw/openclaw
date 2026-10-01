@@ -90,7 +90,7 @@ extension ChatTranscriptRow {
                 }
             }
             guard let first = work.first else { return turn }
-            let boundaryTimestamp = turn.first?.startsTurn == true ? turn.first?.workTimestamp : nil
+            let boundaryTimestamp = turn.first?.startsTurn == true ? turn.first?.timestamp : nil
             let began = boundaryTimestamp ?? first.timestamp
             let finished = (work.compactMap(\.timestamp) + [terminal.timestamp].compactMap(\.self)).max()
             let duration = began.flatMap { start in
@@ -137,15 +137,6 @@ extension ChatTranscriptRow {
         return nil
     }
 
-    private var workTimestamp: Double? {
-        switch self {
-        case let .message(message): message.timestamp
-        case let .systemNotice(notice): notice.timestamp
-        case let .historyDivider(divider): divider.timestamp
-        case .completedWork: nil
-        }
-    }
-
     private var isWorkOutput: Bool {
         guard let message = self.workMessage else { return false }
         return !message.isForwardedTurnBoundary &&
@@ -161,8 +152,7 @@ extension OpenClawChatMessage {
     var workRunID: String? {
         if let transcriptRunID, !transcriptRunID.isEmpty { return transcriptRunID }
         if let key = self.idempotencyKey, key.hasSuffix(":user") { return String(key.dropLast(5)) }
-        let fallbackRunID = self.streamFallback?.runId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return fallbackRunID?.isEmpty == false ? fallbackRunID : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(self.streamFallback?.runId)
     }
 
     private var hasWorkMedia: Bool {

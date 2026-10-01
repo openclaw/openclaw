@@ -4,8 +4,8 @@ import {
   runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -34,7 +34,6 @@ import { createNativeSubagentAssignmentStore } from "./native-subagent-assignmen
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
-import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
@@ -57,12 +56,12 @@ import {
   isSameCodexAppServerThreadOwner,
   retainCodexAppServerBindingSubscription,
 } from "./thread-ownership.js";
-import { CODEX_DELEGATION_DISABLED_THREAD_CONFIG } from "./thread-requests.js";
+import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
-  const { context, turnState, buildRenderedCodexDeveloperInstructions } = prompt;
+  const { context } = prompt;
   const { runtime, attemptTools } = context;
   const { connection, hookChannelId } = runtime;
   const {
@@ -76,7 +75,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     options,
     nativeHookRelayEvents,
   } = connection;
-  const { toolBridge } = attemptTools;
   const modelAdmissionSource = runtime.nativeToolSurfaceEnabled
     ? params.hostCapabilities.retainSourceAuthority?.()
     : undefined;
@@ -99,14 +97,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeProcessAuthority?.release();
     }
   };
-  const trajectoryRecorder = createCodexTrajectoryRecorder({
-    attempt: params,
-    cwd: effectiveCwd,
-    developerInstructions: buildRenderedCodexDeveloperInstructions(),
-    prompt: turnState.codexTurnPromptText,
-    trajectory: params.hostCapabilities.trajectory,
-    tools: toolBridge.availableSpecs,
-  });
+  const trajectoryRecorder = createCodexTrajectoryRecorder(params.hostCapabilities.trajectory);
   const initialResourceState: {
     sandboxExecEnvironment: CodexSandboxExecEnvironment | undefined;
     executionDisconnectError: Error | undefined;
@@ -126,6 +117,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     detachRouteAbort: (() => undefined) as () => void,
     trajectoryEndRecorded: false,
     nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
+    nativeSpawnAdmissionInstalled: false,
     nativeSubagentMonitor: undefined as
       | Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>
       | undefined,
@@ -519,6 +511,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const buildNativeHookRelayFinalConfigPatch = async (
     decision: CodexThreadFinalConfigPatchDecision,
   ) => {
+    state.nativeSpawnAdmissionInstalled = false;
     const previousRelay = state.nativeHookRelay;
     previousRelay?.unregister();
     await previousRelay?.drain();
@@ -597,21 +590,40 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     });
     await state.nativeHookRelay?.prepareInvocation();
     connection.assertCurrent();
+    state.nativeSpawnAdmissionInstalled = Boolean(
+      state.nativeHookRelay &&
+      requiresModelAdmission &&
+      decision.nativeModelInputTools?.includes("spawn_agent") &&
+      params.hostCapabilities.assertNativeSubagentSpawnAllowed,
+    );
+    if (!state.nativeSpawnAdmissionInstalled && !isCodexNativeDelegationDisabledForRun(params)) {
+      // A prior backend attempt may already have accepted another participant.
+      try {
+        params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
+      } catch (cause) {
+        // Revocation and ended-turn failures retain their own recovery guidance.
+        if (
+          !(cause instanceof Error) ||
+          !cause.message.startsWith("Several people have steered this turn:")
+        ) {
+          throw cause;
+        }
+        throw new Error(
+          "Several people have steered this turn, and this Codex setup cannot run native sub-agents safely for more than one person without native hook admission. Send the request again as a new message so it runs as its own turn.",
+          { cause },
+        );
+      }
+    }
     return {
-      configPatch: mergeCodexThreadConfigs(
-        state.nativeHookRelay
-          ? buildCodexNativeHookRelayConfig({
-              relay: state.nativeHookRelay,
-              events: relayEvents,
-              hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-            })
-          : options.nativeHookRelay?.enabled === false
-            ? buildCodexNativeHookRelayDisabledConfig()
-            : undefined,
-        params.hostCapabilities.assertNativeSubagentSpawnAllowed && !requiresModelAdmission
-          ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
+      configPatch: state.nativeHookRelay
+        ? buildCodexNativeHookRelayConfig({
+            relay: state.nativeHookRelay,
+            events: relayEvents,
+            hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+          })
+        : options.nativeHookRelay?.enabled === false
+          ? buildCodexNativeHookRelayDisabledConfig()
           : undefined,
-      ),
       nativeHookRelayGeneration: state.nativeHookRelay?.generation,
     };
   };

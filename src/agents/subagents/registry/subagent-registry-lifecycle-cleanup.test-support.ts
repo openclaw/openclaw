@@ -132,6 +132,7 @@ export function registerDirectSessionCleanupAuthorityTests({
   createRunEntry,
   createLifecycleController,
   completeRun,
+  completeAndJoinCleanup,
   gatewayMocks,
   helperMocks,
   sessionEntryReadMocks,
@@ -142,6 +143,11 @@ export function registerDirectSessionCleanupAuthorityTests({
     options: { entry: SubagentRunRecord } & Partial<SubagentLifecycleOptions>,
   ) => SubagentLifecycleController;
   completeRun: (
+    controller: SubagentLifecycleController,
+    entry: SubagentRunRecord,
+    options: Pick<SubagentCompletionRequest, "triggerCleanup" | "sessionEffects">,
+  ) => Promise<void>;
+  completeAndJoinCleanup: (
     controller: SubagentLifecycleController,
     entry: SubagentRunRecord,
     options: Pick<SubagentCompletionRequest, "triggerCleanup" | "sessionEffects">,
@@ -261,7 +267,6 @@ export function registerDirectSessionCleanupAuthorityTests({
       suppressCompletionDelivery: true,
     });
     const runs = new Map([[entry.runId, entry]]);
-    const retired = createDeferredCore();
     let current = true;
     sessionEntryReadMocks.loadSessionEntryByKey.mockImplementationOnce(async () => {
       current = false;
@@ -275,14 +280,9 @@ export function registerDirectSessionCleanupAuthorityTests({
     const controller = createLifecycleController({
       entry,
       runs,
-      persistOrThrow: () => {
-        if (!runs.has(entry.runId)) {
-          retired.resolve();
-        }
-      },
     });
 
-    await completeRun(controller, entry, {
+    await completeAndJoinCleanup(controller, entry, {
       triggerCleanup: true,
       sessionEffects: {
         isCurrent: async () => current,
@@ -290,7 +290,6 @@ export function registerDirectSessionCleanupAuthorityTests({
         assertCurrentEntry: assertCurrent,
       },
     });
-    await retired.promise;
 
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
     expect(entry.execution.status).toBe("terminal");

@@ -91,7 +91,7 @@ describe("update-cli", () => {
     async (outcome) => {
       const valid = outcome !== "invalid";
       const legacyConfigChange = outcome === "legacy-config-change";
-      const succeeds = valid && outcome !== "live-config-change";
+      const succeeds = valid;
       const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
         path.join(tempDirs.make("openclaw-update-candidate-order-"), "lib", "node_modules"),
         "1.0.0",
@@ -247,7 +247,11 @@ describe("update-cli", () => {
         await updateCommand({ yes: true, json: true }).catch((cause: unknown) => {
           throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, { cause });
         });
-        expect(events).toEqual(["validate", "stop", "plugins"]);
+        expect(events).toEqual(
+          outcome === "live-config-change"
+            ? ["validate", "validate", "stop", "plugins"]
+            : ["validate", "stop", "plugins"],
+        );
         expect(spawn).toHaveBeenCalledOnce();
         expect(runExec).toHaveBeenCalledWith(
           expect.any(String),
@@ -274,8 +278,7 @@ describe("update-cli", () => {
         });
         expect(lastWriteJsonCall()).toMatchObject({
           status: "error",
-          reason:
-            outcome === "live-config-change" ? "invalid-config" : "runtime-verification-failed",
+          reason: "runtime-verification-failed",
         });
         await expect(
           fs.access(requireValue(candidateRoot, "candidate root")),
@@ -293,8 +296,13 @@ describe("update-cli", () => {
         ).toEqual(doctorChanges);
       }
       if (outcome === "live-config-change") {
-        expect(record?.reason).toBe("invalid-config");
-        expect(spawn).not.toHaveBeenCalled();
+        expect(record?.reason).toBeNull();
+        expect(
+          candidateValidation.mock.calls.map(([options]) => options.config.logging?.level),
+        ).toEqual([undefined, "debug"]);
+        expect(getErrorOutput()).toContain(
+          "Configuration changed during update checks; validating the current configuration before activation.",
+        );
         expect(
           JSON.parse(await fs.readFile(requireValue(liveConfigPath, "live config path"), "utf8")),
         ).toEqual({ logging: { level: "debug" } });

@@ -2,6 +2,7 @@ import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";
 import {
   createQaTransportStateMethods,
+  sendQaTransportNativeCommand,
   waitForQaTransportAccountReady,
   waitForQaTransportCondition,
   waitForQaTransportOutboundSequence,
@@ -9,7 +10,6 @@ import {
 import type {
   QaTransportAdapter,
   QaTransportGatewayConfig,
-  QaTransportNativeCommandInput,
   QaTransportOutboundSequenceMatch,
   QaTransportPolicy,
   QaTransportReportParams,
@@ -127,14 +127,7 @@ export function createQaChannelTransport(state: QaBusState, transportPolicy?: Qa
       replyTo: target,
       ...(threadId ? { threadId } : {}),
     }),
-    async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
-      const { command, ...message } = input;
-      await methods.sendInbound({
-        ...message,
-        text: `/${command}`,
-        nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
-      });
-    },
+    sendNativeCommand: (input) => sendQaTransportNativeCommand(methods, input),
     async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
       return await waitForQaTransportOutboundSequence({
         accountId: QA_CHANNEL_ACCOUNT_ID,

@@ -536,7 +536,7 @@ export async function deliverSlackSlashReplies(params: {
       ...(message.blocks ? { blocks: message.blocks } : {}),
       ...(message.mrkdwn === false ? { mrkdwn: false as const } : {}),
     });
-  const emitDeliveryFailure = (delivery: SlashReplyDelivery, error: unknown) => {
+  const emitDelivery = (delivery: SlashReplyDelivery, success: boolean, error?: unknown) => {
     if (!params.messageSentHookTarget) {
       return;
     }
@@ -545,8 +545,8 @@ export async function deliverSlackSlashReplies(params: {
       to: params.messageSentHookTarget,
       accountId: params.accountId,
       content: delivery.hookContent,
-      success: false,
-      error: formatErrorMessage(error),
+      success,
+      ...(success ? {} : { error: formatErrorMessage(error) }),
       isGroup: params.isGroup,
       groupId: params.groupId,
     });
@@ -574,7 +574,7 @@ export async function deliverSlackSlashReplies(params: {
       }
     }
     for (const delivery of deliveries) {
-      emitDeliveryFailure(delivery, failure);
+      emitDelivery(delivery, false, failure);
       params.onReplySettled?.({
         replyIndex: delivery.replyIndex,
         visibleReplySent: false,
@@ -650,7 +650,7 @@ export async function deliverSlackSlashReplies(params: {
             visibleReplySent: true,
           })
         : error;
-      emitDeliveryFailure(delivery, deliveryError);
+      emitDelivery(delivery, false, deliveryError);
       params.onReplySettled?.({
         replyIndex: delivery.replyIndex,
         visibleReplySent,
@@ -658,17 +658,7 @@ export async function deliverSlackSlashReplies(params: {
       });
       throw deliveryError;
     }
-    if (params.messageSentHookTarget) {
-      emitSlackMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        to: params.messageSentHookTarget,
-        accountId: params.accountId,
-        content: delivery.hookContent,
-        success: true,
-        isGroup: params.isGroup,
-        groupId: params.groupId,
-      });
-    }
+    emitDelivery(delivery, true);
     params.onReplySettled?.({ replyIndex: delivery.replyIndex, visibleReplySent: true });
   }
 }

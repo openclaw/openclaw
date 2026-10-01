@@ -114,6 +114,12 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function assertConfigReloadWriteSnapshot(snapshot: ConfigFileSnapshot): void {
+  if (!snapshot.exists || !snapshot.valid) {
+    throw new Error("Config write snapshot is missing or invalid; runtime application refused.");
+  }
+}
+
 export function createReloadCancellationError(superseded: boolean) {
   return superseded
     ? new GatewayConfigReloadSupersededError()

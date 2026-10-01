@@ -8,7 +8,7 @@ export type SkillWorkshopAccess = {
   canReject: boolean;
 };
 
-type SkillWorkshopAdminMethod =
+export type SkillWorkshopAdminMethod =
   | "config.patch"
   | "skills.proposals.apply"
   | "skills.proposals.evaluate"

@@ -703,12 +703,7 @@ async function resolveMarketplaceRef(params: {
     !params.config.marketplaceSource &&
     !params.config.marketplacePath &&
     !params.config.marketplaceName;
-  if (
-    candidates.length === 0 &&
-    bundledMarketplacePath &&
-    discoverDefaultMarketplace &&
-    resolveBundledComputerUseMarketplacePath(params)
-  ) {
+  if (candidates.length === 0 && bundledMarketplacePath && discoverDefaultMarketplace) {
     if (params.managedCodexHome) {
       await migrateLegacyBundledMarketplaceSource({
         request: params.request,

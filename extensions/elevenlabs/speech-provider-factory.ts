@@ -439,7 +439,7 @@ export function buildElevenLabsSpeechProvider({
         ...(normalize == null
           ? {}
           : { applyTextNormalization: normalizeApplyTextNormalization(normalize) }),
-        ...(language == null ? {} : { languageCode: normalizeLanguageCode(language) }),
+        languageCode: normalizeLanguageCode(language),
         ...(latencyTier == null ? {} : { latencyTier }),
         ...(Object.keys(voiceSettings).length === 0 ? {} : { voiceSettings }),
       };

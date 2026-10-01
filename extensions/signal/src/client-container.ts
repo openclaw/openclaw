@@ -748,7 +748,6 @@ export async function containerRpcRequest<T = unknown>(
         timeoutMs: opts.timeoutMs,
         maxResponseBytes: opts.maxResponseBytes,
       });
-      // Convert to native format: { data: base64String }
       if (!buffer) {
         return { data: undefined } as T;
       }

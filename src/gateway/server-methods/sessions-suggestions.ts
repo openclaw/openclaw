@@ -166,9 +166,7 @@ async function dispatchSuggestion(params: {
     agentId: params.target.agentId,
     sessionId: params.target.entry.sessionId,
     message: params.suggestion.text,
-    ...(params.resolution === "queue"
-      ? { queueMode: "followup" as const }
-      : { queueMode: "steer" as const }),
+    queueMode: params.resolution === "queue" ? ("followup" as const) : ("steer" as const),
     idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   await handleChatSend({
@@ -326,7 +324,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       if (role === null) {
         return;
       }
-      if (role !== "owner" && role !== "admin") {
+      if (!canManageSessionSharing(role)) {
         respond(
           false,
           undefined,

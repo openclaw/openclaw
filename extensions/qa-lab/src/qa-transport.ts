@@ -249,6 +249,18 @@ export type QaTransportAdapter = Omit<
   ) => Promise<T>;
 };
 
+export async function sendQaTransportNativeCommand(
+  transport: Pick<QaTransportAdapter, "sendInbound">,
+  input: QaTransportNativeCommandInput,
+): Promise<void> {
+  const { command, ...message } = input;
+  await transport.sendInbound({
+    ...message,
+    text: `/${command}`,
+    nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
+  });
+}
+
 export function createQaTransportStateMethods(params: {
   accountId: string;
   state: QaTransportState;

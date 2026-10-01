@@ -24,6 +24,8 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
+  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+  await initializeSqliteRuntimeCapabilities();
   const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
   const ownedLock = opts.gatewayStateOwner
     ? null
