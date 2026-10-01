@@ -172,20 +172,10 @@ function startFixtureRegistry(
   preload?: string,
   options: { packageName?: string; version?: string; cwd?: string } = {},
 ) {
-  const readinessPreload = `import net from "node:net";
-const listen = net.Server.prototype.listen;
-net.Server.prototype.listen = function (...args) {
-  const result = listen.apply(this, args);
-  // The registry's listening callback publishes the port before this observer runs.
-  this.once("listening", () => process.send({ port: this.address().port }));
-  return result;
-};`;
   const child = spawn(
     process.execPath,
     [
       ...(preload ? ["--import", pathToFileURL(preload).href] : []),
-      "--import",
-      `data:text/javascript,${encodeURIComponent(readinessPreload)}`,
       path.resolve("scripts/e2e/lib/plugins/npm-registry-server.mjs"),
       portFile,
       options.packageName ?? "@openclaw/demo-plugin-npm",
@@ -204,15 +194,8 @@ net.Server.prototype.listen = function (...args) {
   });
   const listening = new Promise<number>((resolve, reject) => {
     child.once("message", (message: unknown) => {
-      if (
-        typeof message === "object" &&
-        message !== null &&
-        "port" in message &&
-        typeof message.port === "number" &&
-        Number.isInteger(message.port) &&
-        message.port > 0
-      ) {
-        resolve(message.port);
+      if (typeof message === "number" && Number.isInteger(message) && message > 0) {
+        resolve(message);
       } else {
         reject(new Error(`invalid fixture registry readiness: ${JSON.stringify(message)}`));
       }
