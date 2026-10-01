@@ -18,6 +18,7 @@ import { msTeamsChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+const MSTeamsThreadSessionPolicySchema = z.enum(["thread", "channel"]);
 
 const MSTeamsChannelSchema = z
   .object({
@@ -26,6 +27,7 @@ const MSTeamsChannelSchema = z
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     replyStyle: MSTeamsReplyStyleSchema.optional(),
+    threadSessionPolicy: MSTeamsThreadSessionPolicySchema.optional(),
   })
   .strict();
 
@@ -90,6 +92,7 @@ export const MSTeamsConfigSchema = z
     requireMention: z.boolean().optional(),
     requireMentionInBotThreads: z.boolean().optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
+    threadSessionPolicy: MSTeamsThreadSessionPolicySchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
     /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
     sharePointSiteId: z.string().optional(),

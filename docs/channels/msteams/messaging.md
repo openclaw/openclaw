@@ -14,9 +14,49 @@ How replies are routed and threaded, and how attachments and files move in and o
 
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
   - Direct messages share the main session (`agent:<agentId>:main`) by default.
-  - Channel/group messages use conversation id:
-    - `agent:<agentId>:msteams:channel:<conversationId>`
-    - `agent:<agentId>:msteams:group:<conversationId>`
+  - Group chats use `agent:<agentId>:msteams:group:<conversationId>`.
+  - Channel messages use a separate session per thread by default:
+    `agent:<agentId>:msteams:channel:<conversationId>:thread:<threadId>`.
+
+Set `threadSessionPolicy: "channel"` to share conversation context across threads
+in a channel. For example, a follow-up in a new post can use context from an
+earlier post that the bot handled in the same channel. The shared session uses
+`agent:<agentId>:msteams:channel:<conversationId>`. Enable this only for channels
+where sharing context between threads and their participants is intended.
+
+```json5
+{
+  channels: {
+    msteams: {
+      teams: {
+        "team-id": {
+          channels: {
+            "19:channel-id@thread.tacv2": {
+              threadSessionPolicy: "channel",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The policy resolves from the channel override, then the team override, then
+`channels.msteams.threadSessionPolicy`, then the default `"thread"`. Direct
+messages and group chats keep their existing session behavior. `replyStyle`
+independently controls where replies appear; shared context can still use
+threaded replies.
+
+Use team and channel IDs for scoped policies. Outbound routing uses the team ID
+saved when the bot receives channel activity; it does not guess team ownership
+from other teams' channel entries. Before that reference is available, only
+global and wildcard-team settings can be resolved.
+
+Changing the policy selects a different session; it does not merge or delete
+existing transcripts. Switching back to `"thread"` resumes the existing thread
+sessions. Context accumulated in the shared channel session is not copied into
+those thread sessions.
 
 ## Channel metadata
 

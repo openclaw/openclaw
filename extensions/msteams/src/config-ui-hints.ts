@@ -34,6 +34,18 @@ export const msTeamsChannelConfigUiHints = {
     label: "Channel Bot Thread Mentions",
     help: "Override mention requirements for this bot's threads in this channel. Unset inherits the team or global value.",
   },
+  threadSessionPolicy: {
+    label: "MS Teams Thread Session Policy",
+    help: 'Channel conversation context: "thread" isolates each thread (default); "channel" shares context across threads in the same channel. Does not change reply placement or DM/group-chat sessions.',
+  },
+  "teams.*.threadSessionPolicy": {
+    label: "MS Teams Team Thread Session Policy",
+    help: "Default session context for channels in this team. Overrides the global threadSessionPolicy; individual channels can override it.",
+  },
+  "teams.*.channels.*.threadSessionPolicy": {
+    label: "MS Teams Channel Thread Session Policy",
+    help: 'Session context for this channel: "thread" isolates each thread; "channel" shares context across threads. Overrides team and global threadSessionPolicy.',
+  },
   ...createChannelConfigUiHints({
     channelLabel: "MS Teams",
     streaming: {

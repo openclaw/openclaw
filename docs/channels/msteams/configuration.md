@@ -55,12 +55,15 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.requireMention`: require @mention in channels/groups (default `true`).
 - `channels.msteams.requireMentionInBotThreads`: override mention gating in channel threads rooted at this bot's tracked messages. Omitted preserves current behavior; see [Bot-created threads](/channels/msteams/access-control#mentions-in-bot-created-threads).
 - `channels.msteams.replyStyle`: `thread | top-level` (see [Reply style](/channels/msteams/messaging#reply-style-threads-vs-posts)).
+- `channels.msteams.threadSessionPolicy`: `thread | channel` (default `thread`). Opt into shared context across channel threads with `channel`; does not affect reply placement, DMs, or group chats (see [Routing and sessions](/channels/msteams/messaging#routing-and-sessions)).
 - `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
+- `channels.msteams.teams.<teamId>.threadSessionPolicy`: per-team session policy override.
 - `channels.msteams.teams.<teamId>.requireMention`: per-team override.
 - `channels.msteams.teams.<teamId>.requireMentionInBotThreads`: per-team bot-thread override.
 - `channels.msteams.teams.<teamId>.tools`: default per-team tool policy overrides (`allow`/`deny`/`alsoAllow`) used when a channel override is missing.
 - `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides (`"*"` wildcard supported).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override.
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.threadSessionPolicy`: per-channel session policy override; takes precedence over team and global values.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMentionInBotThreads`: per-channel bot-thread override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
