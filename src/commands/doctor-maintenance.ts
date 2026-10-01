@@ -611,7 +611,7 @@ export async function beginDoctorMaintenance(
       if (this !== maintenance || custody !== "held") {
         throw new Error("Updater runtime cleanup requires its original live maintenance owner.");
       }
-      await settle(() => state.cleanupRetainedRuntimes());
+      await settle(() => state.cleanupRetainedRuntimes(serviceUpdateVerdict !== undefined));
     },
     async release() {
       if (this !== maintenance) {

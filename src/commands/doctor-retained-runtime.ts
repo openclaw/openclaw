@@ -4,9 +4,12 @@ import { maintainRetainedUpdateRuntimes } from "../infra/temp-artifact-cleanup.j
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { inspectDoctorTemporaryDirectories } from "./doctor/shared/temporary-directories.js";
 
-export async function prepareRetainedUpdateRuntimeCleanup(env: NodeJS.ProcessEnv) {
+export async function prepareRetainedUpdateRuntimeCleanup(
+  env: NodeJS.ProcessEnv,
+  options?: { inspectService?: boolean },
+) {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
-  const { directories, warnings } = await inspectDoctorTemporaryDirectories(env);
+  const { directories, warnings } = await inspectDoctorTemporaryDirectories(env, options);
   const packageRoots = resolveOpenClawPackageRootsSync({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
