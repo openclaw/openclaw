@@ -277,6 +277,9 @@ vi.mock("./legacy-inherited-auth-dir.js", async (importOriginal) => ({
 }));
 
 vi.mock("./auth-profiles/runtime-materializations.js", async (importOriginal) => ({
+  clearAllRuntimeAuthMaterializations: (
+    await importOriginal<typeof import("./auth-profiles/runtime-materializations.js")>()
+  ).clearAllRuntimeAuthMaterializations,
   clearRuntimeAuthMaterializationsAtDatabasePath: (
     await importOriginal<typeof import("./auth-profiles/runtime-materializations.js")>()
   ).clearRuntimeAuthMaterializationsAtDatabasePath,

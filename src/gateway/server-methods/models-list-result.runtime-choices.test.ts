@@ -1,9 +1,11 @@
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { ModelChoiceSchema } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "../../agents/harness/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import * as modelProviderConfig from "../../config/model-provider-config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -25,7 +27,6 @@ describe("models.list configured runtime choices", () => {
           const provider = "projection-fixture";
           const authFailure = new Error("Configured auth read rejected");
           let rejectAuthReads = false;
-          const configuredRowVisits = new Map<ModelDefinitionConfig, number>();
           const models = Array.from({ length: 17 }, (_, index): ModelDefinitionConfig => ({
             id: `model-${index}`,
             name: `Configured ${index}`,
@@ -36,19 +37,6 @@ describe("models.list configured runtime choices", () => {
             contextTokens: 16_000 + index,
             maxTokens: 4096,
           }));
-          const configuredModels = new Proxy(models, {
-            get(target, key, receiver) {
-              if (key === Symbol.iterator) {
-                return function* () {
-                  for (const model of target) {
-                    configuredRowVisits.set(model, (configuredRowVisits.get(model) ?? 0) + 1);
-                    yield model;
-                  }
-                };
-              }
-              return Reflect.get(target, key, receiver);
-            },
-          });
           const selectedIndexes = [0, 4, 8, 12, 16];
           const entries: ModelCatalogEntry[] = selectedIndexes.map((index) => ({
             provider,
@@ -63,16 +51,13 @@ describe("models.list configured runtime choices", () => {
               providers: {
                 [provider]: {
                   baseUrl: "https://models.example.test/v1",
-                  models: configuredModels,
-                  get apiKey() {
-                    if (rejectAuthReads) {
-                      throw authFailure;
-                    }
-                    return undefined;
-                  },
+                  models,
                 },
               },
             },
+          };
+          const profiles: AuthProfileStore["profiles"] = {
+            "projection-fixture:test": { type: "api_key", provider, key: "synthetic-test-key" },
           };
           const projector = createGatewayAgentModelCatalogProjector({
             cfg,
@@ -81,44 +66,46 @@ describe("models.list configured runtime choices", () => {
             metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
             preparedAuthStore: {
               version: 1,
-              profiles: {
-                "projection-fixture:test": { type: "api_key", provider, key: "synthetic-test-key" },
+              get profiles() {
+                if (rejectAuthReads) {
+                  throw authFailure;
+                }
+                return profiles;
               },
             },
           });
-          // Auth scope preparation visits configured models before projection begins.
-          const visitsAfterConstruction = new Map(configuredRowVisits);
-          rejectAuthReads = rejectAuth;
-          if (rejectAuth) {
-            await expect(projector.projectCatalog()).rejects.toBe(authFailure);
-            expect(configuredRowVisits).toEqual(visitsAfterConstruction);
-            return;
-          }
-          const projected = await projector.projectCatalog();
-          expect(
-            projected.map(({ name, contextWindow, contextTokens }) => ({
-              name,
-              contextWindow,
-              contextTokens,
-            })),
-          ).toEqual(
-            selectedIndexes.map((index) => ({
-              name: `Configured ${index}`,
-              contextWindow: 32_000,
-              contextTokens: 16_000 + index,
-            })),
+          const configuredIndexes = vi.spyOn(
+            modelProviderConfig,
+            "createConfiguredProviderModelResolver",
           );
-          expect(
-            Math.max(
-              ...Array.from(
-                configuredRowVisits,
-                ([model, visits]) => visits - (visitsAfterConstruction.get(model) ?? 0),
-              ),
-            ),
-          ).toBeLessThanOrEqual(1);
-          const visitsAfterProjection = new Map(configuredRowVisits);
-          expect(await projector.projectCatalog()).toBe(projected);
-          expect(configuredRowVisits).toEqual(visitsAfterProjection);
+          try {
+            rejectAuthReads = rejectAuth;
+            if (rejectAuth) {
+              await expect(projector.projectCatalog()).rejects.toBe(authFailure);
+              expect(configuredIndexes).not.toHaveBeenCalled();
+              return;
+            }
+            const projected = await projector.projectCatalog();
+            expect(
+              projected.map(({ name, contextWindow, contextTokens }) => ({
+                name,
+                contextWindow,
+                contextTokens,
+              })),
+            ).toEqual(
+              selectedIndexes.map((index) => ({
+                name: `Configured ${index}`,
+                contextWindow: 32_000,
+                contextTokens: 16_000 + index,
+              })),
+            );
+            expect(configuredIndexes.mock.calls.length).toBeLessThanOrEqual(1);
+            configuredIndexes.mockClear();
+            expect(await projector.projectCatalog()).toBe(projected);
+            expect(configuredIndexes).not.toHaveBeenCalled();
+          } finally {
+            configuredIndexes.mockRestore();
+          }
         },
       );
     },
