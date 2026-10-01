@@ -94,7 +94,10 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
   getDisplaySubagentRun(childSessionKey: string): T | null;
   latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   countActiveDescendantRuns(rootSessionKey: string): number;
-  countPendingDescendantRuns(rootSessionKey: string): number;
+  countPendingDescendantRuns(
+    rootSessionKey: string,
+    options?: { excludeSuspendedDelivery?: boolean },
+  ): number;
   hasDescendantRunAwaitingSettle(rootSessionKey: string, excludeRunId?: string): boolean;
   listDescendantRunsForRequester(rootSessionKey: string): T[];
   runsByControllerSessionKey: ReadonlyMap<string, readonly T[]>;
@@ -149,6 +152,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
   const latestRunByRequesterAndChildSessionKey = new Map<string, Map<string, T>>();
   const activeDescendantCountBySessionKey = new Map<string, number>();
   const pendingDescendantCountBySessionKey = new Map<string, number>();
+  const admissionPendingDescendantCountBySessionKey = new Map<string, number>();
 
   for (const entry of params.inMemoryRuns ?? []) {
     const childSessionKey = entry.childSessionKey.trim();
@@ -255,6 +259,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     rootSessionKey: string,
     options?: {
       excludeRunId?: string;
+      excludeSuspendedDelivery?: boolean;
       treatSuspendedDeliveryAsSettled?: boolean;
       stopAtFirst?: boolean;
     },
@@ -267,6 +272,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       }
       const runPending = hasSubagentRunEnded(entry)
         ? typeof entry.cleanupCompletedAt !== "number" &&
+          !(options?.excludeSuspendedDelivery === true && isDeliverySuspended(entry)) &&
           !(
             options?.treatSuspendedDeliveryAsSettled === true &&
             isDeliveryTerminalForRequesterSettle(entry)
@@ -283,16 +289,22 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     return count;
   };
 
-  const countPendingDescendantRuns = (rootSessionKey: string): number => {
+  const countPendingDescendantRuns = (
+    rootSessionKey: string,
+    options?: { excludeSuspendedDelivery?: boolean },
+  ): number => {
     const root = rootSessionKey.trim();
     if (!root) {
       return 0;
     }
-    if (pendingDescendantCountBySessionKey.has(root)) {
-      return pendingDescendantCountBySessionKey.get(root) ?? 0;
+    const counts = options?.excludeSuspendedDelivery
+      ? admissionPendingDescendantCountBySessionKey
+      : pendingDescendantCountBySessionKey;
+    if (counts.has(root)) {
+      return counts.get(root) ?? 0;
     }
-    const count = countPendingDescendantRunsInternal(root);
-    pendingDescendantCountBySessionKey.set(root, count);
+    const count = countPendingDescendantRunsInternal(root, options);
+    counts.set(root, count);
     return count;
   };
 
@@ -463,7 +475,11 @@ export function countActiveRunsForSessionFromRuns(
       count += 1;
       continue;
     }
-    if (readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0) {
+    if (
+      readIndex.countPendingDescendantRuns(entry.childSessionKey, {
+        excludeSuspendedDelivery: true,
+      }) > 0
+    ) {
       count += 1;
     }
   }

@@ -186,7 +186,7 @@ export function buildSubagentList(params: {
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
   const { childSessionsByController, readIndex } = buildLatestSubagentRunIndex(snapshot);
   const pendingDescendantCount = (sessionKey: string) =>
-    readIndex.countPendingDescendantRuns(sessionKey);
+    readIndex.countPendingDescendantRuns(sessionKey, { excludeSuspendedDelivery: true });
   const runView = buildSubagentRunView({
     runs: params.runs,
     recentMinutes: params.recentMinutes,
