@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   acquireSessionMcpRuntime: mocks.acquireSessionMcpRuntime,
+}));
+vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   releaseSessionMcpRuntime: async (lease: { releaseLease: () => void }) => lease.releaseLease(),
 }));
 vi.mock("../agents/agent-scope.js", () => ({

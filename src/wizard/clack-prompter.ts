@@ -124,7 +124,6 @@ async function runPromptWithNavigation<T>(
         }
       });
     };
-    const onStdinEnd = () => queueCancellation();
     const onKeypress = (input: string | undefined, key: KeypressInfo | undefined) => {
       if (input === "\x04" || (key?.ctrl === true && key.name === "d")) {
         queueCancellation();
@@ -139,7 +138,7 @@ async function runPromptWithNavigation<T>(
     };
 
     try {
-      process.stdin.once("end", onStdinEnd);
+      process.stdin.once("end", queueCancellation);
       if (process.stdin.readableEnded) {
         queueCancellation();
       }
@@ -156,36 +155,26 @@ async function runPromptWithNavigation<T>(
         clearImmediate(cancellationImmediate);
         cancellationImmediate = undefined;
       }
-      process.stdin.off("end", onStdinEnd);
+      process.stdin.off("end", queueCancellation);
       process.stdin.off("keypress", onKeypress);
     }
   });
 }
 
-function normalizeSearchTokens(search: string): string[] {
-  return normalizeLowercaseStringOrEmpty(search)
+export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
+  const tokens = normalizeLowercaseStringOrEmpty(search)
     .split(/\s+/)
     .filter((token) => token.length > 0);
-}
-
-function buildOptionSearchText<T>(option: Option<T>): string {
-  const label = stripAnsi(option.label ?? "");
-  const hint = stripAnsi(option.hint ?? "");
-  const value = String(option.value ?? "");
-  return normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
-}
-
-export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
-  const tokens = normalizeSearchTokens(search);
   if (tokens.length === 0) {
     return true;
   }
-  const haystack = buildOptionSearchText(option);
+  const label = stripAnsi(option.label ?? "");
+  const hint = stripAnsi(option.hint ?? "");
+  const value = String(option.value ?? "");
+  const haystack = normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
   return tokens.every((token) => haystack.includes(token));
 }
 
-// Public factory used by setup/onboard commands. Keep side effects inside method
-// calls so tests can import the module without starting prompts.
 export function createClackPrompter(
   output: NodeJS.WriteStream = process.stdout,
   signal?: AbortSignal,

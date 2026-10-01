@@ -127,6 +127,7 @@ private struct ChatSidebarRow: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: 5) {
+                ChatSidebarSessionViewers(sessionKey: self.node.session.key)
                 if self.facts.unreadDescendants { self.unreadDot }
                 if self.facts.failedDescendants {
                     Image(systemName: "exclamationmark.triangle.fill")

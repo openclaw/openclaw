@@ -270,7 +270,7 @@ describe("cron service store seam coverage", () => {
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(
       expectedActiveJobIds,
     );
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         sourceIndex: 0,
         reason: "invalid-schedule",
@@ -311,7 +311,7 @@ describe("cron service store seam coverage", () => {
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         sourceIndex: 0,
         reason: "invalid-payload",
@@ -385,7 +385,7 @@ describe("cron service store seam coverage", () => {
       repairableState.id,
       surviving.id,
     ]);
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         sourceIndex: 0,
         reason: "invalid-schedule",
@@ -433,7 +433,7 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state);
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         reason: "invalid-state",
         job: expect.objectContaining({ id: invalidState.id }),
@@ -743,7 +743,7 @@ describe("cron service store seam coverage", () => {
     );
     expect(state.pendingQuarantineConfigJobs).toEqual([]);
     expect(notify).toHaveBeenCalledOnce();
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({ reason: "invalid-schedule" }),
     ]);
     expect(onEvent).toHaveBeenCalledTimes(1);

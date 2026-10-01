@@ -296,6 +296,19 @@ describe("embedded run session prompt state", () => {
     });
   });
 
+  it.each([{ modelRun: true }, { promptMode: "none" as const }])(
+    "keeps the original prompt for a raw model run retry (%o)",
+    async (rawRun) => {
+      await using state = await createState(rawRun);
+
+      state.continueFromCurrentTranscript();
+
+      // Raw runs load no transcript history, so a continuation prompt would drop the task.
+      expect(state.activePrompt.override).toBeUndefined();
+      expect(state.activePrompt.internal).toBe(false);
+    },
+  );
+
   it("continues from the transcript after compaction when the runtime persisted the user turn", async () => {
     const runtimeMessage = makeUserMessage();
     const persistApproved = vi.fn(async () => undefined);

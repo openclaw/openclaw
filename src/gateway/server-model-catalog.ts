@@ -50,17 +50,6 @@ type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
   refreshAuth?: boolean;
 };
 
-async function resolveLoader(
-  params?: LoadGatewayModelCatalogParams,
-): Promise<LoadPublishedPreparedModelCatalogOwnerSnapshot> {
-  if (params?.loadPublishedPreparedModelCatalogOwnerSnapshot) {
-    return params.loadPublishedPreparedModelCatalogOwnerSnapshot;
-  }
-  const { loadPublishedPreparedModelCatalogOwnerSnapshot } =
-    await import("../agents/prepared-model-catalog.js");
-  return loadPublishedPreparedModelCatalogOwnerSnapshot;
-}
-
 async function loadGatewayModelCatalogOwnerSnapshot(
   params?: LoadPreparedGatewayModelCatalogParams,
 ): Promise<{
@@ -69,7 +58,10 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     authMaterializations: PreparedGatewayModelCatalogSnapshot["authMaterializations"];
   };
 }> {
-  const loadOwner = await resolveLoader(params);
+  const loadOwner = await (params?.loadPublishedPreparedModelCatalogOwnerSnapshot ??
+    import("../agents/prepared-model-catalog.js").then(
+      (module) => module.loadPublishedPreparedModelCatalogOwnerSnapshot,
+    ));
   const candidate = await loadOwner({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),

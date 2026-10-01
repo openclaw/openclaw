@@ -179,6 +179,9 @@ vi.mock("../infra/update-managed-service-handoff.js", async (importOriginal) => 
   startManagedServiceUpdateHandoff: managedUpdateHandoff.start,
   transferManagedServiceUpdateHandoff: managedUpdateHandoff.transfer,
   cancelManagedServiceUpdateHandoff: managedUpdateHandoff.cancel,
+}));
+vi.mock("../infra/update-managed-service-handoff-current.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-current.js")>()),
   isCurrentManagedServiceUpdateHandoffProcess: async () => false,
 }));
 vi.mock("../infra/update-repair-agent.js", () => ({
@@ -369,6 +372,9 @@ vi.mock("node:child_process", async () => {
   const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
   const { resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js");
   const { resolveRuntimeWorkerArgv } = await import("../infra/runtime-worker-url.js");
+  const hostExecPath = process.execPath;
+  const brokerUrl = resolveRuntimeProcessEntrypointUrl("spawnBroker");
+  const hostBrokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
   return {
     ...actual,
     // SQLite snapshots and their native broker need real IPC; updater/service children stay simulated.
@@ -379,17 +385,21 @@ vi.mock("node:child_process", async () => {
         ? actual.execFile(...args)
         : execFile(...args),
     spawn: (...args: Parameters<typeof actual.spawn>) => {
-      const brokerArgv = resolveRuntimeWorkerArgv(
-        resolveRuntimeProcessEntrypointUrl("spawnBroker"),
-      );
+      const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
       const childArgs = args[1];
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(childArgs) &&
+        childArgs.length === brokerArgv.length &&
+        childArgs.every((arg, index) => arg === brokerArgv[index])
+      ) {
+        // Simulated Node selection must not mix runtimes on the real broker's advanced IPC.
+        return actual.spawn(hostExecPath, hostBrokerArgv, args[2]);
+      }
       return Array.isArray(childArgs) &&
         (isMacosAclInspection(args[0], childArgs) ||
           isPlistStdinConversion(args[0], childArgs) ||
-          (args[0] === process.execPath &&
-            (childArgs.includes(SQLITE_READONLY_CHILD_ARG) ||
-              (childArgs.length === brokerArgv.length &&
-                childArgs.every((arg, index) => arg === brokerArgv[index])))))
+          (args[0] === process.execPath && childArgs.includes(SQLITE_READONLY_CHILD_ARG)))
         ? actual.spawn(...args)
         : spawn(...args);
     },

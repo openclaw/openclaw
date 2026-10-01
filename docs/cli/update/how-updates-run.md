@@ -507,6 +507,12 @@ repair applies when the updated driver runs the next upgrade; it cannot change
 an already-running 2026.9.5 updater. If that older driver stops with recovery
 pending, use the installed version's `openclaw update repair`.
 
+If you interrupt while Windows task autostart is initially being suspended, the
+updater restores its prior autostart setting before exiting. Restoration still
+requires the original live update owner and task identity. This interruption
+handling belongs to the updater already running; an in-progress older updater
+keeps its existing behavior.
+
 When Doctor cannot acquire maintenance before repair writes begin, finalization
 restores any service it stopped and exits successfully with a recorded warning.
 This includes lock contention from unknown or non-serving processes. Doctor and
@@ -539,6 +545,12 @@ largest family and 64 MiB for restoration while migrated originals remain.
 Hard-linked database or journal files refuse before migration because restoring
 one pathname cannot safely restore every alias.
 
+Backup metadata reuses the snapshot publisher's verified SHA-256 and byte count,
+avoiding another full database read. Recovery still verifies the stored bytes
+against that receipt before replacing any live database, so later snapshot changes
+are rejected. This saving requires the installed updater to contain the fix;
+older updaters retain their original backup path.
+
 Settled, verified successful activation removes the current update's database
 snapshots, together with the old package backup. Rollback, failed or unverified
 completion, and restore refusal keep them. Cleanup failures produce a maintenance warning with
@@ -552,9 +564,19 @@ If the Gateway was confirmed stopped during capture and the update fails before
 the candidate is allowed to start, restoration also requires matching database
 write evidence. Doctor checks the captured file generations before migrations
 and records their final generations before releasing maintenance ownership.
+Any fingerprint change during maintenance, including a newly created database,
+refuses automatic restoration. Gateway maintenance ownership does not exclude
+independent SQLite writers, and these observations cannot distinguish Doctor's
+own writes from foreign commits. Changed databases require manual recovery.
 Rollback checks those facts again while holding database file exclusions. The
-fingerprints cover database, WAL, and rollback-journal identity, timestamps,
-sizes, and content digests; they reuse the snapshot inventory.
+fingerprints cover database identity, committed page content, and the retained
+WAL transaction counter and commit checksum; they reuse the snapshot inventory.
+Checkpointing already-captured WAL pages into the same database does not
+invalidate rollback while that write evidence remains available. New commits,
+replacement of a database, or loss of the captured WAL write evidence still
+refuse restoration.
+An exact write reversal that leaves both committed bytes and retained write
+evidence unchanged is admitted: it leaves no later data for rollback to discard.
 
 When that evidence matches, the updater restores the databases before restoring
 the package. It holds the
@@ -998,6 +1020,11 @@ the core updater. This includes official plugins with a default/latest catalog
 target and managed `@beta` selectors. OpenClaw installs the exact inspected
 version while keeping the selected tag or restored catalog default for future updates.
 
+Npm plugin updates reuse the registry metadata already selected for the same
+installation attempt, avoiding a second lookup before download. Compatibility,
+integrity, install-policy, and capability-consent checks still apply to the
+selected package. A fallback to another target resolves that target separately.
+
 ClawHub plugins on the beta channel try their own `@beta` tag. If that release
 is unavailable, OpenClaw falls back to the default/latest spec and reports a
 warning naming the requested and used targets.
@@ -1056,11 +1083,12 @@ and active slots. A plugin can remain unavailable until repaired.
 After installing the core and before restarting the managed Gateway,
 `openclaw update` runs mandatory **post-core convergence**: it repairs missing
 configured plugin payloads, validates each _active_ tracked install record on disk,
-and statically verifies its `package.json` is parseable and its declared
+and statically verifies its `package.json` contains a JSON object and its declared
 `openclaw.extensions` entries are loadable. When a package does not declare
 OpenClaw extensions, the check instead verifies any explicitly declared npm
-`main`. Missing or unloadable plugin payloads add warnings while the core update
-continues. An invalid config snapshot still returns
+`main`. Invalid package manifests and missing or unloadable plugin payloads add
+per-plugin warnings while validation of the remaining plugins and the core update
+continue. An invalid config snapshot still returns
 `postUpdate.plugins.status: "error"`, makes the top-level update `status`
 `"error"`, and exits nonzero. Invalid state, ownership errors, failed required
 Doctor or readiness checks also remain errors. Disabled plugins are skipped unless their records are trusted official

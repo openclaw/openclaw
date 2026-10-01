@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -20,6 +21,7 @@ import {
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
@@ -30,6 +32,7 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+import type { AgentCommandOpts } from "./types.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
 
@@ -267,9 +270,7 @@ export function resolveFallbackRetryPrompt(params: {
 const CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET = 8_000;
 const CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS = 64;
 
-type FallbackTurnLikeMessage = Record<string, unknown>;
-
-function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
+function extractFallbackTurnText(message: ClaudeCliFallbackSeed["recentTurns"][number]): string {
   const content = message.content;
   if (typeof content === "string") {
     return content;
@@ -311,7 +312,7 @@ function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
 }
 
 function formatFallbackTurns(
-  turns: ReadonlyArray<FallbackTurnLikeMessage>,
+  turns: Readonly<ClaudeCliFallbackSeed["recentTurns"]>,
   remainingBudget: number,
 ): string {
   if (turns.length === 0 || remainingBudget <= 0) {
@@ -372,10 +373,7 @@ function formatClaudeCliFallbackPrelude(
     }
   }
   if (remaining > CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS && seed.recentTurns.length > 0) {
-    const text = formatFallbackTurns(
-      seed.recentTurns as ReadonlyArray<FallbackTurnLikeMessage>,
-      remaining - 32,
-    );
+    const text = formatFallbackTurns(seed.recentTurns, remaining - 32);
     if (text) {
       sections.push(`\nRecent turns:\n${text}`);
     }
@@ -410,8 +408,6 @@ export function createAcpVisibleTextAccumulator() {
   let pendingSilentPrefix = "";
   let visibleText = "";
   let rawVisibleText = "";
-  const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
-
   const resolveNextCandidate = (base: string, chunk: string): string => {
     if (!base) {
       return chunk;
@@ -419,7 +415,7 @@ export function createAcpVisibleTextAccumulator() {
     if (
       isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
       !chunk.startsWith(base) &&
-      startsWithWordChar(chunk)
+      /^[\p{L}\p{N}]/u.test(chunk)
     ) {
       return chunk;
     }
@@ -506,4 +502,45 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
+}
+
+export function isClaudeCliProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "claude-cli";
+}
+
+/** Restores completion tools only on runtimes that enforce the captured requester cap. */
+export function resolveCompletionToolPolicy(params: {
+  run: { sessionEntry: SessionEntry | undefined; opts: AgentCommandOpts };
+  trustedSubagentAnnounceHandoff: boolean;
+  isSubagentAnnounceHandoff: boolean;
+  isRawModelRun: boolean;
+  isCliExecutionProvider: boolean;
+  cliExecutionProvider: string;
+  completionNeedsMessageDelivery: boolean;
+}) {
+  const { run, completionNeedsMessageDelivery, isSubagentAnnounceHandoff } = params;
+  const completionRetainsRequesterTools =
+    params.trustedSubagentAnnounceHandoff &&
+    !params.isRawModelRun &&
+    (!params.isCliExecutionProvider ||
+      (isClaudeCliProvider(params.cliExecutionProvider) &&
+        run.sessionEntry?.execHost !== "node" &&
+        !run.opts.trustedInternalHandoff?.settleBatch &&
+        !messageToolOwnsVisibleReply(run.opts))) &&
+    (!messageToolOwnsVisibleReply(run.opts) || completionNeedsMessageDelivery);
+  // CLI message-only delivery keeps its existing narrow grant. A denied completion
+  // must clear an explicit cap so its owner can relay frozen text tool-free.
+  const runtimeToolsAllow = isSubagentAnnounceHandoff
+    ? completionRetainsRequesterTools
+      ? run.opts.toolsAllow
+      : completionNeedsMessageDelivery
+        ? ["message"]
+        : undefined
+    : run.opts.toolsAllow;
+  const disableTools =
+    run.opts.modelRun === true ||
+    (isSubagentAnnounceHandoff &&
+      !completionRetainsRequesterTools &&
+      !completionNeedsMessageDelivery);
+  return { completionRetainsRequesterTools, runtimeToolsAllow, disableTools };
 }

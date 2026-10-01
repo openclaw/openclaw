@@ -868,22 +868,16 @@ internal class MicCaptureManager(
       else -> nativeText("Listening")
     }
 
-  private fun pcm16ToPcmu(pcm16: ByteArray): ByteArray {
-    val output = ByteArray(pcm16.size / 2)
-    var inputIndex = 0
-    var outputIndex = 0
-    while (inputIndex + 1 < pcm16.size) {
+  private fun pcm16ToPcmu(pcm16: ByteArray): ByteArray =
+    ByteArray(pcm16.size / 2) { index ->
+      val inputIndex = index * 2
       val sample =
         (
           (pcm16[inputIndex].toInt() and 0xff) or
             (pcm16[inputIndex + 1].toInt() shl 8)
         ).toShort().toInt()
-      output[outputIndex] = linear16ToPcmu(sample)
-      inputIndex += 2
-      outputIndex += 1
+      linear16ToPcmu(sample)
     }
-    return output
-  }
 
   private fun linear16ToPcmu(sample: Int): Byte {
     var sign = 0

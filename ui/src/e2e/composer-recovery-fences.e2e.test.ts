@@ -159,12 +159,13 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 700 } },
       async ({ page }) => {
         await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate(() => {
+        // The shell opens the Control UI database at startup.
+        await page.addInitScript(() => {
           IDBFactory.prototype.open = () => {
             throw new DOMException("Storage unavailable", "UnknownError");
           };
         });
+        await page.goto(`${suite.server.baseUrl}settings`);
         await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
         await page.evaluate(() => {
           const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {

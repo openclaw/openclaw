@@ -284,7 +284,11 @@ type HeredocMarker = {
   operatorIndex: number;
 };
 
-function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
+export function parseHeredocMarker(
+  command: string,
+  operatorIndex: number,
+  whitespace = /[ \t]/u,
+): HeredocMarker | undefined {
   if (
     command[operatorIndex] !== "<" ||
     command[operatorIndex - 1] === "<" ||
@@ -296,7 +300,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
 
   const stripLeadingTabs = command[operatorIndex + 2] === "-";
   let index = operatorIndex + (stripLeadingTabs ? 3 : 2);
-  while (/[ \t]/u.test(command[index] ?? "")) {
+  while (whitespace.test(command[index] ?? "")) {
     index += 1;
   }
 
@@ -318,7 +322,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
       continue;
     }
 
-    if (/[\r\n;&|<>]/u.test(char) || /[ \t]/u.test(char)) {
+    if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
       break;
     }
     if (char === "'" || char === '"') {

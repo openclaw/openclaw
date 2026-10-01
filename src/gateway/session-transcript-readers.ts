@@ -4,6 +4,11 @@ import {
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import {
+  prepareSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
@@ -147,22 +152,29 @@ export async function readSessionMessageByIdAsync(
   });
 }
 
-/** Keep exact membership and its full-history validation in the admitted history worker. */
-export async function readSessionMessagesMatchingIdAsync(
-  scope: SessionTranscriptReadScope,
-  messageId: string,
-): Promise<unknown[]> {
-  const target = captureHistoryReadScope(scope);
+export async function readSessionTranscriptWatermarkAsync(
+  scope: SessionTranscriptReadScope & { agentId: string; storePath: string },
+) {
+  const target = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
   if (usesProcessHeldTranscript(target)) {
-    return sessionTranscriptReader.readSessionMessagesMatchingIdAsync(target, messageId);
+    return readSessionTranscriptWatermark(target);
   }
-  const { readSessionHistoryPageInWorker } =
-    await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({
-    kind: "message-lookup",
-    params: { target, messageId },
-  });
+  const { withSessionHistoryWorkerDatabase } =
+    await import("../config/sessions/session-transcript-worker-runtime.js");
+  return withSessionHistoryWorkerDatabase(
+    toDatabaseOptions(await prepareSqliteTranscriptReadScope(target)),
+    (owner) => owner.readWatermark({ scope: target }),
+  );
 }
+
+/** Keep exact membership and its full-history validation in the admitted history worker. */
+export const readSessionMessagesMatchingIdAsync = createHistoryPageReader(
+  sessionTranscriptReader.readSessionMessagesMatchingIdAsync,
+  (read, target, messageId) => read({ kind: "message-lookup", params: { target, messageId } }),
+);
 
 /** Counts display messages asynchronously through the reader seam. */
 export async function readSessionMessageCountAsync(

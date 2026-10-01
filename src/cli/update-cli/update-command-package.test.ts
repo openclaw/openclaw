@@ -258,7 +258,12 @@ it.each(["guidance", "staging"])(
   },
 );
 
-it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned/candidate"])(
+it.each([
+  "1.0.0",
+  "https://example.invalid/candidate.tgz",
+  "openclaw@file:/owned/candidate",
+  "openclaw@file:../candidate",
+])(
   "honors the explicit package artifact without changing registry no-op semantics: %s",
   async (tag) => {
     // Swap bounds tests own deadline progression; artifact selection keeps real filesystem work.
@@ -280,6 +285,7 @@ it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned
         ...params,
         tag: tag.startsWith("openclaw@") ? "latest" : tag,
         installEnv: tag.startsWith("openclaw@") ? { OPENCLAW_UPDATE_PACKAGE_SPEC: tag } : {},
+        invocationCwd: base,
         validateCandidate,
         beforeActivate,
         onTransaction,
@@ -292,6 +298,12 @@ it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned
         await expect(update).rejects.toBe(stopped);
         expect(validateCandidate).toHaveBeenCalledOnce();
         expect(beforeActivate).toHaveBeenCalledOnce();
+      }
+      if (tag === "openclaw@file:../candidate") {
+        const install = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.includes(tag));
+        expect(install?.[1]).toMatchObject({ cwd: base });
       }
       expect(onTransaction).not.toHaveBeenCalled();
       await expectOriginalInstallation();

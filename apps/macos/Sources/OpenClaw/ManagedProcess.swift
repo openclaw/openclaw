@@ -109,6 +109,7 @@ final class ManagedProcess: @unchecked Sendable {
         error: some ErrorOutputProtocol,
         closeAfterSpawn childHandles: [FileHandle] = [],
         closeStdinForGracefulShutdown stdinHandle: FileHandle? = nil,
+        terminateWhenClosingStdin: Bool = false,
         gracefulShutdownTimeout: Duration = .zero) -> ManagedProcess
     {
         var configuration = configuration
@@ -165,6 +166,9 @@ final class ManagedProcess: @unchecked Sendable {
                     }
                     if graceful, let stdinHandle {
                         try? stdinHandle.close()
+                        if terminateWhenClosingStdin {
+                            try? execution.send(signal: .terminate, toProcessGroup: true)
+                        }
                         if await self.waitForExit(
                             pid,
                             timeout: gracefulShutdownTimeout,
@@ -199,6 +203,7 @@ final class ManagedProcess: @unchecked Sendable {
         stdout: FileHandle,
         stderr: FileHandle,
         closeStdinForGracefulShutdown stdinWriter: FileHandle? = nil,
+        terminateWhenClosingStdin: Bool = false,
         gracefulShutdownTimeout: Duration = .zero) -> ManagedProcess
     {
         self.launch(
@@ -208,6 +213,7 @@ final class ManagedProcess: @unchecked Sendable {
             error: .fileDescriptor(.init(rawValue: stderr.fileDescriptor), closeAfterSpawningProcess: false),
             closeAfterSpawn: [stdin, stdout, stderr],
             closeStdinForGracefulShutdown: stdinWriter,
+            terminateWhenClosingStdin: terminateWhenClosingStdin,
             gracefulShutdownTimeout: gracefulShutdownTimeout)
     }
 

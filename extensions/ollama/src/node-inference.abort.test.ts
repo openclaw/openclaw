@@ -80,12 +80,12 @@ async function withAbortTestServer(
   );
 }
 
-function requireNodeChatCommand(baseUrl: string) {
+function requireNodeCommand(baseUrl: string, commandName = "ollama.chat") {
   const command = createOllamaNodeHostCommands({ baseUrl }).find(
-    (candidate) => candidate.command === "ollama.chat",
+    (candidate) => candidate.command === commandName,
   );
   if (!command) {
-    throw new Error("Ollama node chat command was not registered");
+    throw new Error(`Ollama node command ${commandName} was not registered`);
   }
   return command;
 }
@@ -129,7 +129,7 @@ describe("node-local Ollama inference cancellation", () => {
   ])("closes the node-local request when $phase is canceled", async ({ path }) => {
     await withAbortTestServer(path, async ({ baseUrl, requests, canceled }) => {
       const controller = new AbortController();
-      const inference = requireNodeChatCommand(baseUrl).handle(
+      const inference = requireNodeCommand(baseUrl).handle(
         JSON.stringify({ model: "node-local:small", prompt: "answer locally" }),
         undefined,
         { sendNodeEvent: async () => undefined, signal: controller.signal },
@@ -148,7 +148,7 @@ describe("node-local Ollama inference cancellation", () => {
       const controller = new AbortController();
       const invoke = vi.fn(
         async (params: { command: string; params?: unknown; signal?: AbortSignal }) => ({
-          payloadJSON: await requireNodeChatCommand(baseUrl).handle(
+          payloadJSON: await requireNodeCommand(baseUrl).handle(
             JSON.stringify(params.params),
             undefined,
             { sendNodeEvent: async () => undefined, signal: params.signal },
@@ -219,19 +219,30 @@ describe("node-local Ollama inference cancellation", () => {
       "/api/show",
       async ({ baseUrl, requests, canceled }) => {
         const controller = new AbortController();
-        const command = requireNodeChatCommand(baseUrl);
-        const params = JSON.stringify({ model: "node-local:small", prompt: "answer locally" });
-        const canceledInference = command.handle(params, undefined, {
+        const command = requireNodeCommand(baseUrl, "ollama.models");
+        const canceledDiscovery = command.handle(undefined, undefined, {
           sendNodeEvent: async () => undefined,
           signal: controller.signal,
         });
         await vi.waitFor(() => expect(requests).toContain("/api/show"));
 
-        controller.abort(new Error("first inference canceled"));
-        await expect(canceledInference).rejects.toThrow("first inference canceled");
+        controller.abort(new Error("first discovery canceled"));
+        await expect(canceledDiscovery).rejects.toThrow("first discovery canceled");
         await vi.waitFor(() => expect(canceled).toContain("/api/show"));
 
-        await expect(command.handle(params)).resolves.toContain("node-only inference");
+        const discovered: unknown = JSON.parse(await command.handle());
+        expect(discovered).toMatchObject({
+          provider: "ollama",
+          models: [
+            {
+              name: "node-local:small",
+              contextWindow: 8192,
+              capabilities: ["completion", "tools"],
+            },
+          ],
+        });
+        expect(requests.filter((request) => request === "/api/show")).toHaveLength(2);
+        expect(JSON.parse(await command.handle())).toEqual(discovered);
         expect(requests.filter((request) => request === "/api/show")).toHaveLength(2);
       },
       { stallCount: 1 },

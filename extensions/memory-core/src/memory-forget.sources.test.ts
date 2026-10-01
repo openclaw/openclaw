@@ -8,6 +8,7 @@ import {
   openNodeSqliteDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -19,12 +20,15 @@ import {
   pruneMemoryEntryOrigins,
   recordMemoryEntryOrigins,
 } from "./memory-entry-origins.js";
+import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
+import { planMemoryIndex } from "./memory-forget-index-sources.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   createMemoryForgetFixture,
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 
 describe("memory forget source removal", () => {
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
@@ -35,6 +39,65 @@ describe("memory forget source removal", () => {
 
   afterEach(async () => {
     await fixture.cleanup();
+  });
+
+  function indexSelection() {
+    return {
+      agentId: "main",
+      changedPaths: new Set<string>(),
+      removedPaths: new Set<string>(),
+      sessionIds: new Set(["target"]),
+      excludedSessionIds: new Set<string>(),
+      entryKeys: new Set<string>(),
+      corpusSnippets: new Set<string>(),
+    };
+  }
+
+  it("retains planning input and placement across dispatch without creating missing stores", async () => {
+    const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: fixture.stateDir } };
+    const db = openOpenClawAgentDatabase(options).db;
+    db.prepare(`INSERT INTO memory_index_chunks
+      (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+      VALUES ('selected', 'memory/selected.md', 'memory', 1, 1, 'hash', 'test', ?, x'', 1)`).run(
+      "A retained indexed amber detail.",
+    );
+    const selection = indexSelection();
+    selection.corpusSnippets.add("indexed amber detail");
+    const run = cpuRuntime.runMemoryForgetIndexPlan;
+    const release = createDeferred<void>();
+    const transport = vi
+      .spyOn(cpuRuntime, "runMemoryForgetIndexPlan")
+      .mockImplementationOnce(async (request) => {
+        await release.promise;
+        return run(request);
+      });
+    const reading = planMemoryIndex(selection, options);
+    const alternate = path.join(fixture.stateDir, "uncreated-alternate");
+    try {
+      selection.corpusSnippets.clear();
+      options.env.OPENCLAW_STATE_DIR = alternate;
+      vi.stubEnv("OPENCLAW_STATE_DIR", alternate);
+      release.resolve();
+      const plan = await reading;
+      expect(plan.chunks).toEqual([
+        { id: "selected", path: "memory/selected.md", source: "memory" },
+      ]);
+      expect(plan.embeddingCacheRows).toBe(0);
+      expect(await planMemoryIndex(indexSelection(), options)).toEqual({
+        chunks: [],
+        sources: [],
+        ftsRows: 0,
+        vectorRows: 0,
+        embeddingCacheRows: 0,
+        hasVectorTable: false,
+      });
+      await expect(fs.access(alternate)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      release.resolve();
+      await reading.catch(() => undefined);
+      transport.mockRestore();
+      vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
+    }
   });
 
   it.each([
@@ -78,6 +141,13 @@ describe("memory forget source removal", () => {
               })
             : listMemoryEntryOrigins({ agentId: "main" });
         await expect(reading()).rejects.toThrow(message);
+        await expect(
+          planMemoryIndex(indexSelection(), {
+            agentId: "main",
+            path: databasePath,
+            env: { OPENCLAW_STATE_DIR: fixture.stateDir },
+          }),
+        ).rejects.toThrow(message);
         expect(await fs.readFile(databasePath)).toEqual(beforeRead);
       } finally {
         await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
@@ -181,7 +251,7 @@ describe("memory forget source removal", () => {
     },
   );
 
-  it("refuses a retired borrowed handle without writing to its successor after vector loading", async () => {
+  it("refuses a retired borrowed handle without writing to its successor after vector preparation", async () => {
     await seedMemoryForgetSession("target");
     const origin = {
       entryKey: "selected-entry",
@@ -213,24 +283,31 @@ describe("memory forget source removal", () => {
       "selected-snapshot",
       new Float32Array([1, 0]),
     );
-    const nativeLoaded = createDeferred<void>();
+    const borrowCaptured = createDeferred<void>();
     const resume = createDeferred<void>();
     let intercepted = false;
-    const loadSpy = vi
-      .spyOn(storage, "loadSqliteVecExtension")
-      .mockImplementation(async (params) => {
-        const result = await load(params);
-        if (params.db === db && !intercepted) {
-          if (!result.ok) {
-            throw new Error(
-              `Real borrowed-handle vector load failed: ${result.error ?? "unknown"}`,
-            );
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+    const openSpy = vi
+      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+      .mockImplementation(async (...args) => {
+        const [, source, worker] = args;
+        if (source === db && !intercepted) {
+          const input = worker.input;
+          if (
+            typeof input !== "object" ||
+            input === null ||
+            !("kind" in input) ||
+            input.kind !== "forget" ||
+            !("extensionPath" in input) ||
+            typeof input.extensionPath !== "string"
+          ) {
+            throw new Error("Expected Forget's original borrow with prepared vector extension");
           }
           intercepted = true;
-          nativeLoaded.resolve();
+          borrowCaptured.resolve();
           await resume.promise;
         }
-        return result;
+        return await open(...args);
       });
     const forgetting = forgetMemoryEntries({
       cfg: fixture.cfg,
@@ -251,9 +328,11 @@ describe("memory forget source removal", () => {
     });
     try {
       await Promise.race([
-        nativeLoaded.promise,
+        borrowCaptured.promise,
         settled.then(() => {
-          throw new Error("Forget settled before its real borrowed-handle vector load completed");
+          throw new Error(
+            "Forget settled before its original borrow reached the canonical Worker opener",
+          );
         }),
       ]);
       // Explicit canonical disposal revokes even a live borrow; eviction would retain it.
@@ -270,7 +349,7 @@ describe("memory forget source removal", () => {
       const after = await readDurable(successor);
       expect.soft(outcome).toMatchObject({
         ok: false,
-        error: { message: "Borrowed agent database closed or changed before write admission" },
+        error: { message: "Borrowed agent database closed or changed before Worker admission" },
       });
       expect(after).toEqual(before);
       expect(after.tombstones).toEqual([]);
@@ -278,7 +357,7 @@ describe("memory forget source removal", () => {
       expect(after.memory).toBe(content);
     } finally {
       resume.resolve();
-      loadSpy.mockRestore();
+      openSpy.mockRestore();
       await Promise.allSettled([forgetting]);
       await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
     }
@@ -325,28 +404,8 @@ describe("memory forget source removal", () => {
       expect(db.prepare("SELECT count(*) AS count FROM memory_index_sources").get()).toEqual({
         count: 34,
       });
-      const prepare = db.prepare.bind(db);
-      let sourceDeletes = 0;
-      let tombstoneInserts = 0;
-      const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        const sourceDelete = sql.startsWith('delete from "memory_index_sources"');
-        const tombstoneInsert = sql.startsWith('insert into "memory_session_tombstones"');
-        if (sourceDelete || tombstoneInsert) {
-          // Preserve positional and named bindings at the native receiver boundary.
-          statement.run = new Proxy(statement.run.bind(statement), {
-            apply(run, receiver, args) {
-              if (sourceDelete) {
-                sourceDeletes += 1;
-              } else {
-                tombstoneInserts += 1;
-              }
-              return Reflect.apply(run, receiver, args);
-            },
-          });
-        }
-        return statement;
-      });
+      const reportPath = path.join(fixture.stateDir, "forget-native-counts.jsonl");
+      const restore = observeMemoryForgetWorker(db, { reportPath });
       try {
         const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
         expect(result).toEqual({ ...preview, dryRun: false });
@@ -357,17 +416,35 @@ describe("memory forget source removal", () => {
         expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject(
           sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
         );
+        let sourceDeletes = 0;
+        let tombstoneInserts = 0;
+        const reports = (await fs.readFile(reportPath, "utf8")).trim().split("\n");
+        for (const report of reports) {
+          const counts: unknown = JSON.parse(report);
+          if (
+            typeof counts !== "object" ||
+            counts === null ||
+            !("sourceDeletes" in counts) ||
+            typeof counts.sourceDeletes !== "number" ||
+            !("tombstoneInserts" in counts) ||
+            typeof counts.tombstoneInserts !== "number"
+          ) {
+            throw new Error("Invalid native Forget execution counts");
+          }
+          sourceDeletes += counts.sourceDeletes;
+          tombstoneInserts += counts.tombstoneInserts;
+        }
         expect(sourceDeletes).toBeGreaterThan(0);
         expect(sourceDeletes).toBeLessThanOrEqual(2);
         expect(tombstoneInserts).toBeGreaterThan(0);
         expect(tombstoneInserts).toBeLessThanOrEqual(2);
       } finally {
-        prepareSpy.mockRestore();
+        restore();
       }
     },
   );
 
-  it.each(["ABORT", "FAIL"])(
+  it.each(["ABORT", "FAIL"] as const)(
     "keeps the index intact when admission fails with %s",
     async (failure) => {
       const { cfg } = fixture;
@@ -384,18 +461,26 @@ describe("memory forget source removal", () => {
       const sources = db.prepare("SELECT * FROM memory_index_sources").all();
       const chunks = db.prepare("SELECT * FROM memory_index_chunks").all();
       const revision = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get();
-      db.exec(`CREATE TEMP TRIGGER fail_forget_admission BEFORE INSERT ON memory_session_tombstones
-      WHEN NEW.session_id = 'target-129' BEGIN SELECT RAISE(${failure}, 'synthetic admission failure'); END`);
-      await expect(forgetMemoryEntries({ cfg, agentId: "main", sessionIds })).rejects.toThrow(
-        "synthetic admission failure",
-      );
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
-      expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual(sources);
-      expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual(chunks);
-      expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
-        revision,
-      );
-      db.exec("DROP TRIGGER fail_forget_admission");
+      const restore = observeMemoryForgetWorker(db, {
+        trigger: {
+          event: "BEFORE INSERT ON memory_session_tombstones WHEN NEW.session_id = 'target-129'",
+          message: "synthetic admission failure",
+          action: failure,
+        },
+      });
+      try {
+        await expect(forgetMemoryEntries({ cfg, agentId: "main", sessionIds })).rejects.toThrow(
+          "synthetic admission failure",
+        );
+        expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+        expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual(sources);
+        expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual(chunks);
+        expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
+          revision,
+        );
+      } finally {
+        restore();
+      }
       const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
       expect(result.artifacts.indexSources).toBe(1);
       expect(result.artifacts.indexChunks).toBe(1);

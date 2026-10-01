@@ -52,11 +52,6 @@ import {
 
 export { createCodexSessionCatalogControl } from "./session-catalog-control.js";
 export { createCodexSessionCatalogNodeHostCommands } from "./session-catalog-listing.js";
-export {
-  CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-} from "./session-catalog-parsing.js";
-
 /** Allows read-only catalog and transcript commands on supported paired-node platforms. */
 export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [

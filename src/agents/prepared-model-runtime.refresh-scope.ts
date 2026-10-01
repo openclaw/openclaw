@@ -286,6 +286,7 @@ export function createPreparedModelRuntimeRecovery(host: {
   owners: Map<string, PreparedModelRuntimeOwner>;
   canRecover: () => boolean;
   getReplacement: () => PreparedModelRuntimeReplacement | undefined;
+  getAdmissionReplacement: () => PreparedModelRuntimeReplacement | undefined;
   captureLifetime: () => () => void;
   publish: (
     config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
@@ -316,7 +317,7 @@ export function createPreparedModelRuntimeRecovery(host: {
       return;
     }
     const assertLifetime = host.captureLifetime();
-    const replacement = host.getReplacement();
+    const replacement = host.getAdmissionReplacement();
     if (replacement && !replacement.degraded) {
       const joinsRecovery = recovery.replacementGateId === replacement.gateId;
       // A publication for another scope must not spend this failure's scheduled opportunity.

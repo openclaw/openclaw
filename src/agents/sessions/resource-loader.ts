@@ -363,7 +363,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 
     const enabledSkills = enabledSkillResources.map(mapSkillPath);
 
-    // Add CLI paths metadata
     for (const r of [...cliExtensionPaths.extensions, ...cliExtensionPaths.skills]) {
       if (!metadataByPath.has(r.path)) {
         metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
@@ -384,7 +383,6 @@ export class DefaultResourceLoader implements ResourceLoader {
     extensionsResult.extensions.push(...inlineExtensions.extensions);
     extensionsResult.errors.push(...inlineExtensions.errors);
 
-    // Detect extension conflicts (tools, commands, flags with same names from different extensions)
     // Keep all extensions loaded. Conflicts are reported as diagnostics, and precedence is handled by load order.
     const conflicts = this.detectExtensionConflicts(extensionsResult.extensions);
     for (const conflict of conflicts) {

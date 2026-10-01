@@ -83,7 +83,6 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createGatewaySchedulerClock,
@@ -121,6 +120,7 @@ import {
   createTestConfigRevisionProjector,
   createConfigWriteListenerRef,
   createManagedReloadAuthFixture,
+  createMonitorPublicationFailure,
   createManagedRestartSequenceConfigs,
   createConfigWriteNotification,
   createCronRestartPlan,
@@ -132,6 +132,7 @@ import {
   createTestCronState,
   createValidConfigSnapshot,
   enableChannelReloadsForTest,
+  makePluginReloadResult,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
@@ -215,7 +216,7 @@ function createGatewayReloadHandlers(
     pruneInactiveChannelAccountState: vi.fn(),
     stopPostReadySidecars: vi.fn(),
     reloadPlugins: vi.fn<ReloadHandlerParams["reloadPlugins"]>(async ({ prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
       return makePluginReloadResult();
     }),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -252,7 +253,7 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     reloadPlugins: vi.fn<ReloadHandlerParams["reloadPlugins"]>(async ({ prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
       return makePluginReloadResult();
     }),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -403,6 +404,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   advancePreparedModelRuntimeConfig: hoisted.advancePreparedModelRuntimeConfig,
+  beginPreparedModelRuntimePluginDrain: () => ({ pendingPublication: false, release: () => {} }),
   markPreparedModelRuntimeSnapshotsStale: (
     reason?: string,
     options?: { waitForReplacement?: boolean; preserveReplacementWait?: boolean },
@@ -433,7 +435,7 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   reloadSessionMcpRuntimes: hoisted.reloadSessionMcpRuntimes,
 }));
 
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
   clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
   loadInstalledPluginIndexInstallRecordsSync: vi.fn(() => ({})),
@@ -534,16 +536,6 @@ async function withReloadChannelManager(
       expect(outcome.status).toBe("fulfilled");
     }
   }
-}
-
-function makePluginReloadResult(
-  overrides: Partial<GatewayPluginReloadResult> = {},
-): GatewayPluginReloadResult {
-  return {
-    runtime: { operationId: "test-reload", generation: 1, pluginIds: [] },
-    activeChannels: new Set(),
-    ...overrides,
-  };
 }
 
 function createTestCronReconciliation() {
@@ -1192,7 +1184,7 @@ async function withManagedChannelSecretFixture(
     startChannel: manager.startChannel,
     stopChannel: manager.stopChannel,
     reloadPlugins: async ({ commitRuntime, prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(["notes"]), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(["notes"]), channels: new Set() }).retire();
       await commitRuntime();
       return makePluginReloadResult({
         activeChannels: new Set(["mattermost"]),
@@ -2132,7 +2124,7 @@ describe("gateway hot reload model state", () => {
         broadcast: vi.fn(),
       });
       cronState.cron.pauseScheduling();
-      const db = openOpenClawStateDatabase().db;
+      const publicationFailure = createMonitorPublicationFailure();
       let state = createDefaultGatewayReloadState({ cronState });
       const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
       const handlers = createGatewayReloadHandlers({
@@ -2179,11 +2171,7 @@ describe("gateway hot reload model state", () => {
           .map((job) => (job.schedule.kind === "every" ? job.schedule.everyMs : undefined));
       try {
         await expect(cronState.reconcileSystemJobs()).resolves.toBe("converged");
-        // Cron writes use a worker connection, which cannot see this connection's TEMP schema.
-        db.exec(`CREATE TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
-          WHEN json_extract(NEW.job_json, '$.agentId') = 'second'
-            AND json_extract(NEW.job_json, '$.schedule.everyMs') = 7200000
-          BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`);
+        publicationFailure.install();
         const result = await managed
           .onHotReload(
             buildGatewayReloadPlan([
@@ -2199,7 +2187,7 @@ describe("gateway hot reload model state", () => {
         expect(result).toBe("applied-restart-required");
         expect(markRuntimeCommitted).toHaveBeenCalledOnce();
         expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(nextConfig);
-        db.exec("DROP TRIGGER monitor_publication_failure");
+        publicationFailure.remove();
         const successorConfig = { ...nextConfig, logging: { level: "debug" as const } };
         if (successor === "rejected") {
           await expect(
@@ -2228,10 +2216,13 @@ describe("gateway hot reload model state", () => {
             .map((job) => job.enabled),
         ).toEqual([false, false]);
       } finally {
-        db.exec("DROP TRIGGER IF EXISTS monitor_publication_failure");
-        handlers.stopRestartRetries();
-        cronState.cron.stop();
-        await scheduler.stop();
+        try {
+          publicationFailure.dispose();
+        } finally {
+          handlers.stopRestartRetries();
+          cronState.cron.stop();
+          await scheduler.stop();
+        }
       }
     },
   );
@@ -2571,7 +2562,10 @@ describe("gateway targeted service reload", () => {
         getPluginRegistry: () => registry,
         reloadPluginServices,
         reloadPlugins: async ({ commitRuntime, prepareConfigEffects }) => {
-          prepareConfigEffects({ pluginIds: new Set(runtime.pluginIds), channels: new Set() });
+          prepareConfigEffects({
+            pluginIds: new Set(runtime.pluginIds),
+            channels: new Set(),
+          }).retire();
           await commitRuntime();
           events.push("replaced-plugin");
           if (outcome === "plugin failure") {
@@ -5776,10 +5770,12 @@ describe("gateway plugin hot reload handlers", () => {
     const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
     const pruneInactiveChannelAccountState = vi.fn();
     const reloadPlugins = vi.fn<ReloadHandlerParams["reloadPlugins"]>(async (params) => {
-      params.prepareConfigEffects({
-        pluginIds: new Set(runtime.pluginIds),
-        channels: new Set(["discord"]),
-      });
+      params
+        .prepareConfigEffects({
+          pluginIds: new Set(runtime.pluginIds),
+          channels: new Set(["discord"]),
+        })
+        .retire();
       await params.commitRuntime();
       current = false;
       return makePluginReloadResult({

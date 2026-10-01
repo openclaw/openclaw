@@ -2,8 +2,6 @@ import { ChildProcess } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { clearTimeout as nativeClearTimeout, setTimeout as nativeSetTimeout } from "node:timers";
-import { setTimeout as nativeDelay } from "node:timers/promises";
 import { expect, it, vi, type TestContext } from "vitest";
 import { runBounded } from "../../.github/actions/ios-signing-keychain/keychain.mjs";
 import { racePromiseWithAbortSignal } from "../../src/infra/abort-signal.js";
@@ -26,25 +24,6 @@ type NativeBoundedFixture = {
 };
 
 const testNodeExecPath = resolveTestNodeExecPath();
-const JOIN_MS = 2_000;
-const nativeNow = Date.now;
-
-async function withinCleanupBudget<T>(promise: Promise<T>, deadline: number, label: string) {
-  let timer: ReturnType<typeof nativeSetTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = nativeSetTimeout(
-          () => reject(new Error(label)),
-          Math.max(1, deadline - nativeNow()),
-        );
-      }),
-    ]);
-  } finally {
-    nativeClearTimeout(timer);
-  }
-}
 
 async function withNativeBoundedFixture(
   context: Pick<TestContext, "signal" | "onTestFinished">,
@@ -86,7 +65,6 @@ async function withNativeBoundedFixture(
     (pendingStop ??= lifetime.verifyCleanup(async () => {
       finished.abort();
       fault = undefined;
-      const deadline = nativeNow() + JOIN_MS;
       try {
         if (outcome && !child) {
           throw new Error("Native fixture child identity was not captured");
@@ -96,31 +74,22 @@ async function withNativeBoundedFixture(
           child.kill("SIGKILL");
         }
         if (closed) {
-          await withinCleanupBudget(closed, deadline, "Native fixture child did not close");
+          await closed;
         }
         if (child?.pid) {
-          for (;;) {
-            inspectGroup();
-            if (groupRetired) {
-              break;
-            }
-            if (nativeNow() >= deadline) {
-              throw new Error("Native fixture group exit was not confirmed");
-            }
-            await nativeDelay(Math.min(10, Math.max(1, deadline - nativeNow())));
+          // The exact child close reaps the only process in this fixture's group.
+          inspectGroup();
+          if (!groupRetired) {
+            throw new Error("Native fixture group exit was not confirmed");
           }
         }
         if (outcome) {
-          await withinCleanupBudget(outcome, deadline, "Bounded command did not settle");
+          await outcome;
         }
         if (verification) {
-          await withinCleanupBudget(
-            verification.then(
-              () => {},
-              () => {},
-            ),
-            deadline,
-            "Native fixture verifier did not settle",
+          await verification.then(
+            () => {},
+            () => {},
           );
         }
       } finally {

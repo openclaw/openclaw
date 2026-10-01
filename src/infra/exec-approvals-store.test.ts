@@ -24,18 +24,19 @@ import {
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
 import {
-  ensureExecApprovals,
+  ensureExecApprovalsSnapshot,
   loadExecApprovals,
   loadExecApprovalsReadOnly,
   loadExecApprovalsReadOnlyAsync,
   readExecApprovalsSnapshot,
-  restoreExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
-  saveExecApprovals,
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
 } from "./exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "./exec-approvals-store.test-support.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -253,10 +254,10 @@ describe("exec approvals SQLite store", () => {
     expect(updated?.file.defaults?.security).toBe("full");
   });
 
-  it("mints one socket token and reuses it on later initialization", () => {
-    const first = ensureExecApprovals();
+  it("mints one socket token and reuses it on later initialization", async () => {
+    const first = (await ensureExecApprovalsSnapshot()).file;
     const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
-    const second = ensureExecApprovals();
+    const second = (await ensureExecApprovalsSnapshot()).file;
     expect(writes).not.toHaveBeenCalled();
     writes.mockRestore();
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
@@ -437,7 +438,7 @@ describe("exec approvals SQLite store", () => {
       throw new Error("missing newer snapshot");
     }
     expect(await restoreExecApprovalsSnapshotLocked(original, original.hash)).toBe(false);
-    restoreExecApprovalsSnapshot(original);
+    expect(await restoreExecApprovalsSnapshotLocked(original, newer.hash)).toBe(true);
     expect(loadExecApprovals().defaults?.security).toBe("allowlist");
   });
 

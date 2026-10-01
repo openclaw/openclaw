@@ -10,7 +10,8 @@ export class CronExecutionRootRuntimeError extends Error {
 
 /** Shared admission predicate for turns that must enforce a host-owned execution root. */
 export function supportsCronExecutionRoot(runtime: string, rootedCliExecution: boolean): boolean {
-  return runtime === "openclaw" || rootedCliExecution;
+  // Codex required-root turns use host tools and attest the restricted native surface before dispatch.
+  return runtime === "openclaw" || runtime === "codex" || rootedCliExecution;
 }
 
 export function assertCronExecutionRootRuntime(

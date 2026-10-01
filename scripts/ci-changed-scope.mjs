@@ -1,6 +1,6 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
@@ -520,6 +520,9 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
   if (isNativeCanonicalV2Migration(changedPaths, generatedPaths)) {
     return;
   }
+  if (isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths)) {
+    return;
+  }
   throw new NativeGeneratedArtifactsMixedError(
     [
       "Native generated locale artifacts must be isolated from source changes.",
@@ -528,6 +531,47 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
       ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
+  );
+}
+
+/**
+ * The projection retirement must carry its output-only translations into canonical inputs.
+ * Requiring the deleted lookup path confines this exception to the cutover diff.
+ * @param {string[]} changedPaths
+ * @param {string[]} generatedPaths
+ * @param {string[]} sourcePaths
+ */
+function isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths) {
+  const retiredLookup =
+    "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt";
+  const owners = [
+    ".github/workflows/native-app-locale-refresh.yml",
+    "apps/.i18n/native-source.json",
+    "apps/android/app/build.gradle.kts",
+    "scripts/android-app-i18n.ts",
+    "scripts/native-app-i18n.ts",
+    "scripts/ci-changed-scope.mjs",
+    "test/scripts/android-app-i18n.test.ts",
+    "test/scripts/native-app-i18n.test.ts",
+    "src/scripts/ci-changed-scope.native-i18n.test.ts",
+  ];
+  return (
+    changedPaths.includes(retiredLookup) &&
+    !existsSync(new URL(`../${retiredLookup}`, import.meta.url)) &&
+    owners.every((owner) => changedPaths.includes(owner)) &&
+    sourcePaths.every(
+      (filePath) =>
+        owners.includes(filePath) ||
+        filePath === "package.json" ||
+        filePath === "apps/android/README.md",
+    ) &&
+    generatedPaths.every(
+      (filePath) =>
+        filePath === retiredLookup ||
+        /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/res\/values-[^/]+\/strings\.xml)$/.test(
+          filePath,
+        ),
+    )
   );
 }
 

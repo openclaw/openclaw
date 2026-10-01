@@ -296,10 +296,9 @@ extension OpenClawChatViewModel {
         return result
     }
 
-    func sessionIndexForModelState(sessionKey: String) -> Int? {
-        if let exact = self.sessions.firstIndex(where: { $0.key == sessionKey }) {
-            return exact
-        }
+    func sessionIndexForModelState(sessionKey: String, exactMatchOnly: Bool = false) -> Int? {
+        let exact = self.sessions.firstIndex(where: { $0.key == sessionKey })
+        guard exact == nil, !exactMatchOnly else { return exact }
         return self.sessions.firstIndex(where: {
             self.matchesCurrentSessionKey(incoming: $0.key, current: sessionKey)
         })
@@ -342,10 +341,7 @@ extension OpenClawChatViewModel {
 
     static func providerQualifiedModelSelectionID(modelID: String, provider: String) -> String {
         let providerPrefix = "\(provider)/"
-        if modelID.hasPrefix(providerPrefix) {
-            return modelID
-        }
-        return "\(provider)/\(modelID)"
+        return modelID.hasPrefix(providerPrefix) ? modelID : "\(providerPrefix)\(modelID)"
     }
 
     public var sessionChoices: [OpenClawChatSessionEntry] {

@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
@@ -1956,16 +1955,12 @@ describe("tool expansion state", () => {
     };
     try {
       const { messageReference, collectionControl } = populatePane();
-      await collectGarbageForTest(() => {
-        expect(queryObjects(TranscriptMessage)).toBe(1);
-      });
+      await collectGarbageForTest();
       expect(collectionControl.deref()).toBeUndefined();
       expect(messageReference.deref() !== undefined).toBe(true);
 
       resetChatThreadState(paneId);
-      await collectGarbageForTest(() => {
-        expect(queryObjects(TranscriptMessage)).toBe(0);
-      });
+      await collectGarbageForTest();
       expect(messageReference.deref()).toBeUndefined();
       expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
     } finally {

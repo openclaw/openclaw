@@ -296,6 +296,15 @@ public struct OpenClawChatSessionSettingsPatch: Sendable, Equatable {
     public let permissionMode: OpenClawChatPermissionMode??
     public let toolOverrides: OpenClawChatSessionToolOverrides??
 
+    public var requiresSessionSettingsContract: Bool {
+        self.expectedSessionID != nil || self.permissionMode != nil || self.toolOverrides != nil
+    }
+
+    public var requiresSessionSettingsCAS: Bool {
+        self.expectedPermissionMode != nil || self.expectedToolOverrides != nil ||
+            self.permissionMode != nil || self.toolOverrides != nil
+    }
+
     public init(
         expectedSessionID: String? = nil,
         expectedPermissionMode: OpenClawChatPermissionMode?? = nil,
@@ -604,6 +613,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var pinnedAt: Double?
     public var archived: Bool?
     public var archivedAt: Double?
+    public var snoozedUntil: Double?
+    public var snoozedAt: Double?
     public var unread: Bool?
     public var agentStatus: OpenClawChatSessionAgentStatus?
     public var observerDigest: OpenClawChatSessionObserverDigest?
@@ -700,6 +711,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         pinnedAt: Double? = nil,
         archived: Bool? = nil,
         archivedAt: Double? = nil,
+        snoozedUntil: Double? = nil,
+        snoozedAt: Double? = nil,
         unread: Bool? = nil,
         agentStatus: OpenClawChatSessionAgentStatus? = nil,
         observerDigest: OpenClawChatSessionObserverDigest? = nil,
@@ -750,6 +763,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.pinnedAt = pinnedAt
         self.archived = archived
         self.archivedAt = archivedAt
+        self.snoozedUntil = snoozedUntil
+        self.snoozedAt = snoozedAt
         self.unread = unread
         self.agentStatus = agentStatus
         self.observerDigest = observerDigest
@@ -831,6 +846,11 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var isArchived: Bool {
         self.archived == true
     }
+
+    public func isSnoozed(at now: Date = .now) -> Bool {
+        guard let snoozedUntil, snoozedUntil.isFinite else { return false }
+        return snoozedUntil / 1000 > now.timeIntervalSince1970
+    }
 }
 
 /// Client-side session list policy shared by every session list surface.
@@ -868,19 +888,30 @@ public enum OpenClawChatSessionListOrganizer {
     }
 }
 
+public struct OpenClawChatChildSessionsResult: Sendable {
+    public let rows: [OpenClawChatSessionEntry]
+    public let isComplete: Bool
+
+    public init(rows: [OpenClawChatSessionEntry], isComplete: Bool) {
+        self.rows = rows
+        self.isComplete = isComplete
+    }
+}
+
 public enum OpenClawChatChildSessionPager {
     private static let maxCollectedSessions = 100_000
     private static let maxPageRequests = 100
 
     public static func collect(
         fetchPage: (Int) async throws -> OpenClawChatSessionsListResponse) async throws
-        -> [OpenClawChatSessionEntry]
+        -> OpenClawChatChildSessionsResult
     {
         var rowsByKey: [String: OpenClawChatSessionEntry] = [:]
+        var expectedTotal: Int?
         var remainingPageRequests = Self.maxPageRequests
         for _ in 0..<4 {
             let rowsBeforePass = rowsByKey.count
-            var expectedTotal: Int?
+            var reachedEnd = false
             var seenOffsets = Set<Int>()
             var offset = 0
             while remainingPageRequests > 0,
@@ -889,7 +920,11 @@ public enum OpenClawChatChildSessionPager {
             {
                 remainingPageRequests -= 1
                 let page = try await fetchPage(offset)
-                expectedTotal = page.totalCount
+                // Preserve known totals across moving pages/passes, as in
+                // ui/src/lib/sessions/paged-session-rows.ts:43; later omissions cannot certify a partial list.
+                if let total = page.totalCount {
+                    expectedTotal = max(expectedTotal ?? 0, total)
+                }
                 for row in page.sessions {
                     rowsByKey[row.key] = row
                     if rowsByKey.count >= Self.maxCollectedSessions {
@@ -897,22 +932,23 @@ public enum OpenClawChatChildSessionPager {
                     }
                 }
                 if rowsByKey.count >= Self.maxCollectedSessions {
-                    return Array(rowsByKey.values)
+                    return OpenClawChatChildSessionsResult(rows: Array(rowsByKey.values), isComplete: false)
                 }
-                let hasMore = page.hasMore ?? expectedTotal.map { offset + page.sessions.count < $0 } ?? false
-                let nextOffset = page.nextOffset ?? (offset + page.sessions.count)
-                guard hasMore, !page.sessions.isEmpty, nextOffset > offset else { break }
+                // ui/src/lib/sessions/paged-session-rows.ts:50 uses the flag/count, never the cursor alone.
+                let hasMore = page.hasMore ?? page.totalCount.map { offset + page.sessions.count < $0 } ?? false
+                reachedEnd = !hasMore
+                let nextOffset = page.nextOffset ?? ((page.offset ?? offset) + page.sessions.count)
+                guard hasMore, nextOffset > offset else { break }
                 offset = nextOffset
             }
-            let added = rowsByKey.count - rowsBeforePass
-            if remainingPageRequests == 0 ||
-                added == 0 ||
-                expectedTotal.map({ rowsByKey.count >= $0 }) != false
-            {
+            if reachedEnd, expectedTotal.map({ rowsByKey.count >= $0 }) != false {
+                return OpenClawChatChildSessionsResult(rows: Array(rowsByKey.values), isComplete: true)
+            }
+            if remainingPageRequests == 0 || rowsByKey.count == rowsBeforePass {
                 break
             }
         }
-        return Array(rowsByKey.values)
+        return OpenClawChatChildSessionsResult(rows: Array(rowsByKey.values), isComplete: false)
     }
 }
 

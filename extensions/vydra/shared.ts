@@ -202,13 +202,9 @@ function resolveVydraAssetRequestHeaders(
   url: string,
   policy: VydraRequestPolicy,
 ): Headers | undefined {
-  try {
-    // Same-origin assets may need the configured provider headers. Cross-origin
-    // result URLs must not receive the Vydra API credential or custom headers.
-    return new URL(url).origin === policy.headerOrigin ? policy.headers : undefined;
-  } catch {
-    return undefined;
-  }
+  // Same-origin assets may need the configured provider headers. Cross-origin
+  // result URLs must not receive the Vydra API credential or custom headers.
+  return URL.parse(url)?.origin === policy.headerOrigin ? policy.headers : undefined;
 }
 
 export async function downloadVydraAsset(params: {

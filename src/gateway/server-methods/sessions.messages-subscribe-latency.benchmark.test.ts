@@ -15,8 +15,15 @@ import * as lifetime from "../session-utils-read-lifetime.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
+import { proveSubscriptionDoesNotWaitForDisplayRows } from "./sessions.messages-subscribe-wait.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("subscribes during an active turn among 8,000 sessions without waiting for display facts", async ({
+  signal,
+}) => {
+  await proveSubscriptionDoesNotWaitForDisplayRows(8_000, signal);
+});
 
 it("measures subscription dispatch with a 160k-token transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

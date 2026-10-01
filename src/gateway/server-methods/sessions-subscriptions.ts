@@ -104,6 +104,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         sessionMutationAuthorization,
         hasCurrentClientAuthority,
         signal,
+        markSessionSubscribePhase: mark,
       } = options;
 
       const connId = client?.connId?.trim();
@@ -139,13 +140,17 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       let read: ReturnType<typeof retainSessionScopedRead>;
       let prepared: PreparedSessionApprovalReplay | undefined;
       try {
+        mark?.("retainedReadAdmission");
         sessionMutationAuthorization?.assertCurrent();
         read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
+          // Activity and labels may change while approvals load without revoking access.
+          allowMetadataChanges: true,
           requireMaterialized:
             readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
         });
         options.sessionMutationCommitGuard?.();
         if (connId) {
+          mark?.("observerCommit");
           let approvalReplay;
           if (p.includeApprovals === true) {
             // Subscribe before the authoritative snapshot so a transition cannot
@@ -161,6 +166,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               },
             );
             try {
+              mark?.("replayPreparation");
               prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
@@ -173,6 +179,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               if (prepared && !prepared.isCurrent()) {
                 throw new Error("session approval replay changed during preparation");
               }
+              mark?.("observerCommit");
               approvalReplay = prepared?.replay;
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
@@ -225,6 +232,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               throw error;
             }
           }
+          mark?.("response");
           respond(
             true,
             {
@@ -241,6 +249,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        mark?.("response");
         respond(
           true,
           { subscribed: false, key: canonicalKey, agentId: requestedAgentId },
@@ -252,6 +261,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         }
         respond(false, undefined, error.error);
       } finally {
+        mark?.("cleanup");
         prepared?.release();
         read?.release();
       }

@@ -1144,8 +1144,10 @@ function createRawOllamaStreamFn(
           }
 
           if (
-            pendingFinalVisibleContent !== undefined &&
-            isLikelyGarbledVisibleText({ text: pendingFinalVisibleContent, modelId: model.id })
+            isLikelyGarbledVisibleText({
+              text: pendingFinalVisibleContent || accumulatedVisibleContent,
+              modelId: model.id,
+            })
           ) {
             throw new Error(
               `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
@@ -1153,12 +1155,6 @@ function createRawOllamaStreamFn(
           }
 
           flushVisibleText(pendingFinalVisibleContent);
-
-          if (isLikelyGarbledVisibleText({ text: accumulatedVisibleContent, modelId: model.id })) {
-            throw new Error(
-              `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
-            );
-          }
 
           finalResponse.message.content = accumulatedVisibleContent;
           if (accumulatedThinking) {

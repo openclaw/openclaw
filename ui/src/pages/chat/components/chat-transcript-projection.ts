@@ -6,11 +6,9 @@ import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
-import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -19,7 +17,6 @@ import {
   getExpandedToolCards,
   getExpandedUserMessages,
   persistedMessageEntryId,
-  pruneAssistantMessageExpansions,
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
@@ -42,6 +39,7 @@ import {
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
   isTranscriptGlobalAlias,
@@ -49,11 +47,13 @@ import {
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   expandReplyTargetWork,
   projectTranscriptChain,
   projectTranscriptIndex,
 } from "./chat-transcript-message-index.ts";
+import { pruneTranscriptExpansions } from "./chat-transcript-recovery.ts";
 import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
@@ -69,6 +69,9 @@ import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+const workPreviewCache =
+  createTranscriptMemo<ReturnType<typeof renderWorkGroupBrowserTabPreviews>>();
+const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
 export function projectChatTranscript(
   props: ChatThreadProps,
@@ -100,13 +103,7 @@ export function projectChatTranscript(
   const expandedAssistantMessages = transcript.expandedAssistantMessages;
   const recoveryKey = (messageId: string) =>
     messageRecoveryKey(props.fullMessageAgentId, messageId);
-  if (expandedAssistantMessages.size > 0) {
-    pruneAssistantMessageExpansions(expandedAssistantMessages, props.fullMessageAgentId, [
-      ...props.messages,
-      ...props.toolMessages,
-      ...(props.pendingInputs ?? []).map((input) => input.message),
-    ]);
-  }
+  pruneTranscriptExpansions(expandedAssistantMessages, props);
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -152,26 +149,8 @@ export function projectChatTranscript(
         : undefined,
   } satisfies Parameters<typeof buildCachedChatItems>[0];
   const chatItems = buildCachedChatItems(chatItemsInput);
-  const workingIndicator = chatItems.find((item) => item.kind === "reading-indicator");
-  const activityRunId = workingIndicator?.runId ?? props.runId;
-  const activityGroupKey =
-    props.runActive && activityRunId
-      ? chatItems.findLast(
-          (item) =>
-            item.kind === "group" &&
-            item.messages.some(
-              ({ message }) =>
-                transcriptRunId(message) === activityRunId &&
-                readPreparedActivity(message).some(
-                  (activity) =>
-                    !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
-                ),
-            ),
-        )?.key
-      : undefined;
-  const runOutputTokens = workingIndicator?.runId
-    ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
-    : null;
+  const { workingIndicator, activityRunId, activityGroupKey, runOutputTokens } =
+    projectTranscriptActivity(chatItems, props);
   const latestBrowserTabs = props.latestBrowserTabs;
   syncToolCardExpansionState(
     props.sessionKey,
@@ -194,11 +173,20 @@ export function projectChatTranscript(
   }
   const { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows } =
     projectTranscriptIndex(transcriptChain, expandedToolCards, props);
-  const workPreviews = renderWorkGroupBrowserTabPreviews(
-    transcriptItems.flatMap((item) =>
-      item.kind === "work-group" && !expandedToolCards.get(item.key) ? [item] : [],
-    ),
-    { sessionKey: props.sessionKey, latestBrowserTabs },
+  const latestBrowserTabsKey = JSON.stringify([...(latestBrowserTabs ?? [])]);
+  const workPreviews = workPreviewCache(
+    transcriptChain.workGroups,
+    [
+      expandedToolCards,
+      getExpansionStateVersion(expandedToolCards),
+      props.sessionKey,
+      latestBrowserTabsKey,
+    ],
+    () =>
+      renderWorkGroupBrowserTabPreviews(
+        transcriptChain.workGroups.filter((item) => !expandedToolCards.get(item.key)),
+        { sessionKey: props.sessionKey, latestBrowserTabs },
+      ),
   );
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
@@ -509,8 +497,8 @@ export function projectChatTranscript(
   if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
     turnRecapByGroupKey.set(tailStatusOwner.key, turnRecap);
   }
-  const transcriptRows: TranscriptRow<ChatRenderItem>[] = [];
-  for (const row of rows) {
+  const transcriptRows: TranscriptRow<ChatRenderItem>[] = workPreviews.size ? [] : rows.slice();
+  for (const row of workPreviews.size ? rows : []) {
     transcriptRows.push(row);
     const previews = workPreviews.get(row.key);
     if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
@@ -523,17 +511,19 @@ export function projectChatTranscript(
       });
     }
   }
-  // Only ID-bearing voice captions need a history scan. Keep membership local
-  // to this projection so history replacement and search cannot stale it.
-  let persistedIds: Set<string | null> | undefined;
+  // Voice captions reconcile against unfiltered immutable history, not the
+  // current search or streaming projection.
   const realtimeConversation = renderRealtimeTalkConversation({
     ...props,
     realtimeTalkConversation: props.realtimeTalkConversation?.filter((entry) => {
       if (!entry.transcriptId) {
         return true;
       }
-      persistedIds ??= new Set(props.messages.map(persistedMessageEntryId));
-      return !persistedIds.has(entry.transcriptId);
+      return !persistedMessageIds(
+        props.messages,
+        [],
+        () => new Set(props.messages.map(persistedMessageEntryId)),
+      ).has(entry.transcriptId);
     }),
   });
   if (realtimeConversation !== nothing) {
@@ -577,7 +567,7 @@ export function projectChatTranscript(
     getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
-    JSON.stringify([...(latestBrowserTabs ?? [])]),
+    latestBrowserTabsKey,
     props.sessionKey,
     props.presented,
     props.transcriptVisible,
@@ -642,9 +632,13 @@ export function projectChatTranscript(
   ]);
   // Rebind disclosures to the current pane without repainting unchanged rows.
   state.transcriptRenderContext.onRequestUpdate = props.onRequestUpdate;
+  const unfilteredItems = () =>
+    buildCachedChatItems(
+      { ...chatItemsInput, searchOpen: false, searchQuery: "", messageRecovery: undefined },
+      "unfiltered",
+    );
   state.transcriptRenderContext.turnVideoMessages = projectTurnVideoMessages(
-    chatItems,
-    searchFiltering ? chatItemsInput : undefined,
+    searchFiltering ? unfilteredItems() : chatItems,
   );
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
@@ -653,6 +647,8 @@ export function projectChatTranscript(
     // owners as visible targets rather than requiring a history loader.
     const targetChain = searchFiltering
       ? projectTranscriptChain(
+          // Navigation expands the stabilized row keys of the visible cache;
+          // the gallery cache owns membership, not mounted disclosure identity.
           buildCachedChatItems({ ...chatItemsInput, searchOpen: false, searchQuery: "" }),
           {
             sessionKey: props.sessionKey,

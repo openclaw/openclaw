@@ -605,6 +605,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       workspaceDir: tmpDir,
     });
     const pluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: preparedRuntimeLease.snapshot.metadataSnapshot,

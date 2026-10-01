@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { finished } from "node:stream/promises";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { readFlagValue } from "./lib/arg-utils.mts";
 import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -91,6 +92,7 @@ export async function runPreparedTsgoCommand(
   evidence: { evidenceId?: string; onEvidence?: () => void } = {},
 ): Promise<number> {
   try {
+    await ensureKyselyTypes(findRepoRoot(command.cwd) ?? command.cwd);
     const tsBuildInfoFile = readFlagValue(command.args, "--tsBuildInfoFile");
     if (tsBuildInfoFile) {
       fs.mkdirSync(path.dirname(path.resolve(command.cwd, tsBuildInfoFile)), { recursive: true });

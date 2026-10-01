@@ -1,15 +1,11 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEntryOrigin } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
   openOpenClawAgentSqliteWorkerStore,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
-  runSqliteImmediateTransactionSync,
   withOpenClawAgentDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -21,25 +17,10 @@ import type {
   MemorySessionTombstone,
   MemoryOriginReadTarget,
 } from "./memory-entry-origins-task.js";
-import { ensureMemorySessionTombstones } from "./memory-session-tombstones.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 export type { MemoryEntryOrigin };
-export { deleteMemoryEntryOriginsInDatabase } from "./memory-entry-origins-delete.js";
 
-type MemorySessionTombstoneRow = {
-  session_id: string;
-  agent_id: string;
-  reason: string;
-  created_at: number;
-};
-
-type MemoryOriginDatabase = {
-  memory_session_tombstones: MemorySessionTombstoneRow;
-  memory_index_state: { id: number; revision: number };
-};
-// Four bindings per row stay below SQLite's historical 999-variable default.
-const TOMBSTONE_INSERT_BATCH_SIZE = 128;
 // Lazy: the runtime-api graph must not statically reach the manager sidecar modules.
 const loadMemoryCpuProcessEntrypoints = createLazyRuntimeModule(
   () => import("./memory/manager-cpu-entrypoints.js"),
@@ -54,7 +35,7 @@ function captureOriginDatabaseOptions(agentId: string) {
   return { agentId, env, path: resolveOpenClawAgentSqlitePath({ agentId, env }) };
 }
 
-async function executeOriginCommand<Key extends keyof MemoryEntryOriginOperations>(
+async function executeOriginCommand<Key extends "record" | "delete">(
   options: OriginDatabaseOptions,
   command: { type: Key; input: MemoryEntryOriginOperations[Key]["input"] },
   assertOriginal?: () => void,
@@ -77,7 +58,7 @@ async function executeOriginCommand<Key extends keyof MemoryEntryOriginOperation
             db,
             {
               moduleUrl,
-              input: undefined,
+              input: { kind: "origin" },
             },
           );
           try {
@@ -134,58 +115,6 @@ export async function listMemorySessionTombstones(params: {
   const sessionIds = params.sessionIds ? [...params.sessionIds] : undefined;
   const { runMemoryTombstoneRows } = await loadMemoryCpuWorkerRuntime();
   return runMemoryTombstoneRows(target, sessionIds);
-}
-
-/** Record on the supplied connection; the caller retains write admission. */
-export function recordMemorySessionTombstonesInDatabase(
-  db: DatabaseSync,
-  params: {
-    agentId: string;
-    sessionIds: readonly string[];
-    reason?: string;
-    createdAt?: number;
-  },
-): number {
-  const sessionIds = [...new Set(params.sessionIds)];
-  if (sessionIds.length === 0) {
-    return 0;
-  }
-  ensureMemorySessionTombstones(db);
-  const reason = params.reason ?? "forgotten";
-  const createdAt = params.createdAt ?? Date.now();
-  return runSqliteImmediateTransactionSync(db, () => {
-    const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
-    let recorded = 0;
-    for (let start = 0; start < sessionIds.length; start += TOMBSTONE_INSERT_BATCH_SIZE) {
-      const result = executeSqliteQuerySync(
-        db,
-        kysely
-          .insertInto("memory_session_tombstones")
-          .values(
-            sessionIds.slice(start, start + TOMBSTONE_INSERT_BATCH_SIZE).map((sessionId) => ({
-              session_id: sessionId,
-              agent_id: params.agentId,
-              reason,
-              created_at: createdAt,
-            })),
-          )
-          .onConflict((conflict) => conflict.column("session_id").doNothing()),
-      );
-      recorded += Number(result.numAffectedRows ?? 0n);
-    }
-    if (recorded > 0) {
-      // A shadow index can have no published chunks yet. Its existing revision
-      // fence must still reject a rebuild prepared before this deletion.
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("memory_index_state")
-          .set((expression) => ({ revision: expression("revision", "+", 1) }))
-          .where("id", "=", 1),
-      );
-    }
-    return recorded;
-  });
 }
 
 export async function recordMemoryEntryOrigins(

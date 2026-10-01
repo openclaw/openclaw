@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expect, it, vi } from "vitest";
-import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -20,7 +20,10 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
+import {
+  discoverUpdateStateSchemaInspectionInProcess,
+  readUpdateDatabaseGenerationsIsolated,
+} from "./update-candidate-state.js";
 import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import { restoreUpdateDatabaseBackup } from "./update-database-restore.js";
@@ -263,7 +266,11 @@ it.each(["a changed snapshot", "missing current update history"] as const)(
       await fixture.close();
       const assertUnchanged = await unchangedFiles(fixture);
       if (failure === "a changed snapshot") {
-        await fs.appendFile(fixture.backup.databases[1]!.snapshotPath, "corrupt");
+        const snapshotPath = fixture.backup.databases[1]!.snapshotPath;
+        const corrupted = await fs.readFile(snapshotPath);
+        const offset = corrupted.length - 1;
+        corrupted.writeUInt8(corrupted.readUInt8(offset) ^ 1, offset);
+        await fs.writeFile(snapshotPath, corrupted);
       }
       await expect(fixture.restore()).rejects.toThrow(
         failure === "a changed snapshot"
@@ -334,19 +341,76 @@ it.each(["collision", "after-rename"] as const)(
   },
 );
 
-it.each([false, true])(
-  "restores settled WAL databases only while their captured generation is current (foreignWrite=%s)",
-  async (foreignWrite) => {
+it.each([
+  "settled",
+  "checkpoint",
+  "foreign",
+  "checkpoint-foreign",
+  "checkpoint-reverted",
+  "checkpoint-identical",
+] as const)(
+  "restores WAL databases only while their captured generation is current (%s)",
+  async (transition) => {
     await withFixture(async (fixture) => {
+      const checkpoint = transition.startsWith("checkpoint");
+      const foreignWrite = transition.endsWith("foreign");
+      const revertedWrite = transition.endsWith("reverted");
       for (const owner of [fixture.shared, fixture.agent]) {
         expect(owner.db.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       }
-      await fixture.close();
       const paths = [
         ...fixture.backup.databases.map((entry) => entry.path),
         ...fixture.backup.missingPaths,
       ];
-      const expectedGenerations = readUpdateDatabaseGenerations(paths);
+      await fixture.close();
+      let expectedGenerations;
+      if (checkpoint) {
+        const pathname = fixture.agent.path;
+        const familyPaths = [pathname, `${pathname}-wal`, `${pathname}-shm`];
+        const writer = new DatabaseSync(pathname);
+        let family: Buffer[];
+        try {
+          writer.exec("PRAGMA wal_autocheckpoint=0; CREATE TABLE checkpoint_witness(value TEXT);");
+          expectedGenerations = await readUpdateDatabaseGenerationsIsolated(paths, {
+            env: fixture.state.env,
+          });
+          if (revertedWrite) {
+            writer.exec(
+              "UPDATE restore_witness SET value='foreign'; UPDATE restore_witness SET value='candidate';",
+            );
+          }
+          family = await Promise.all(familyPaths.map((file) => fs.readFile(file)));
+        } finally {
+          writer.close();
+        }
+        const committed = await fs.readFile(pathname);
+        // Retain the committed family after writer settlement, as a stopped
+        // Gateway can leave it. Exclusive removal uses a private WAL index.
+        for (const [index, file] of familyPaths.entries()) {
+          await fs.writeFile(file, family[index]!);
+        }
+        expect(family[1]!.length).toBeGreaterThan(32);
+        const exclusion = new DatabaseSync(pathname);
+        try {
+          exclusion.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;");
+          if (transition === "checkpoint-identical") {
+            // An exact reversal with unchanged retained write evidence leaves
+            // no later data to lose. Admitting rollback is intentional.
+            exclusion.exec(
+              "UPDATE restore_witness SET value='foreign'; UPDATE restore_witness SET value='candidate';",
+            );
+          }
+          expect(exclusion.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+            busy: 0,
+          });
+        } finally {
+          exclusion.close();
+        }
+        expect(await fs.readFile(pathname)).toEqual(committed);
+        expect(await fs.readFile(`${pathname}-shm`)).toEqual(family[2]);
+      } else {
+        expectedGenerations = readUpdateDatabaseGenerations(paths);
+      }
       for (const { path: pathname } of fixture.backup.databases) {
         await expect(fs.lstat(`${pathname}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
       }
@@ -366,7 +430,7 @@ it.each([false, true])(
         assertCurrent: () => undefined,
         expectedGenerations,
       });
-      if (foreignWrite) {
+      if (foreignWrite || revertedWrite) {
         expect(displaced).toBeNull();
         expect(fixture.backup.restoreRefusal).toContain(fixture.agent.path);
         await assertUnchanged();
@@ -378,11 +442,12 @@ it.each([false, true])(
         try {
           expect(restored.prepare("SELECT value FROM restore_witness").all()).toEqual([
             {
-              value: foreignWrite
-                ? pathname === fixture.agent.path
-                  ? "foreign"
-                  : "candidate"
-                : "baseline",
+              value:
+                foreignWrite || revertedWrite
+                  ? foreignWrite && pathname === fixture.agent.path
+                    ? "foreign"
+                    : "candidate"
+                  : "baseline",
             },
           ]);
         } finally {
@@ -440,7 +505,7 @@ it("refuses replacement while a competing native SQLite reader owns exclusion", 
   });
 });
 
-it("refuses replacement while a foreign process owns state maintenance", async () => {
+it("refuses replacement while a foreign process owns state maintenance", async ({ signal }) => {
   await withFixture(async (fixture) => {
     await fixture.close();
     const assertUnchanged = await unchangedFiles(fixture);
@@ -459,17 +524,32 @@ it("refuses replacement while a foreign process owns state maintenance", async (
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
     );
+    const closed = once(child, "close");
+    void closed.catch(() => undefined);
     try {
-      expect((await once(child, "message", { signal: AbortSignal.timeout(5_000) }))[0]).toEqual({
+      expect(
+        (
+          await withinTest(
+            awaitGateBeforeSettlement(
+              once(child, "message"),
+              closed,
+              "Foreign state owner exited before readiness",
+            ),
+            signal,
+          )
+        )[0],
+      ).toEqual({
         ready: true,
       });
       await expect(fixture.restore()).rejects.toThrow("failed to acquire gateway state ownership");
       await assertUnchanged();
-      const closed = once(child, "close", { signal: AbortSignal.timeout(5_000) });
       child.send({ release: true });
-      expect(await closed).toEqual([0, null]);
+      expect(await withinTest(closed, signal)).toEqual([0, null]);
     } finally {
-      await stopChildProcess(child, 5_000);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
     }
   });
 });

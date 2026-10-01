@@ -28,7 +28,7 @@ export function startUpdateRunWatcher(params: {
   log: { warn: (message: string) => void };
 }): { stop: () => Promise<void> } {
   const work = new AsyncWorkScope();
-  const scheduler = params.lifecycle.scheduler;
+  const scheduler = params.lifecycle.scheduler.scope();
   let timer: GatewayScheduledJob | undefined;
   let publicationTimer: GatewayScheduledJob | undefined;
   let watched: { runId: string; revision?: number; phase?: UpdateRunPhase } | undefined;
@@ -236,15 +236,12 @@ export function startUpdateRunWatcher(params: {
   wakeCurrentWatcher = wake;
   wake();
   return {
-    stop: () => {
-      timer?.cancel();
-      timer = undefined;
-      publicationTimer?.cancel();
-      publicationTimer = undefined;
+    stop: async () => {
+      work.beginClose();
       if (wakeCurrentWatcher === wake) {
         wakeCurrentWatcher = undefined;
       }
-      return work.drain();
+      await Promise.all([scheduler.stop(), work.drain()]);
     },
   };
 }

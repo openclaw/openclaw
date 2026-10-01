@@ -277,8 +277,11 @@ public final class OpenClawChatSidebarPeople {
 
     func cardSessions(
         for person: Person,
-        sessions: [OpenClawChatSessionEntry])
-        -> (viewing: [OpenClawChatSessionEntry], recent: [OpenClawChatSessionEntry])
+        sessions: [OpenClawChatSessionEntry],
+        recentKeys: [String]? = nil)
+        -> (
+            viewing: [OpenClawChatSessionEntry], viewingKeys: [String],
+            recent: [OpenClawChatSessionEntry], recentKeys: [String])
     {
         func identity(_ key: String, _ owner: String?) -> String {
             let parsedAgent = OpenClawChatSessionKey.agentID(from: key.lowercased())
@@ -296,13 +299,16 @@ public final class OpenClawChatSidebarPeople {
         }
         let watched = Set(person.watchedSessions.map { identity($0, nil) })
         var seen = Set<String>()
-        // ui/src/components/person-activity-card.ts:265: watched keys are hints, never permission to reveal a title.
+        // ui/src/components/person-activity-card.ts:243: watched keys are hints, never permission to reveal a title.
         let rows = sessions.filter { seen.insert(identity($0.key, $0.agentId)).inserted }.sorted {
             if ($0.updatedAt ?? 0) != ($1.updatedAt ?? 0) { return ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
             return identity($0.key, $0.agentId).localizedCompare(identity($1.key, $1.agentId)) == .orderedAscending
         }
         let viewing = rows.filter { watched.contains(identity($0.key, $0.agentId)) }
-        let recent = rows.filter { row in
+        let candidates = recentKeys.map { keys in
+            keys.compactMap { key in rows.first { identity($0.key, $0.agentId) == key } }
+        } ?? rows
+        let recent = candidates.filter { row in
             !watched.contains(identity(row.key, row.agentId)) && [row.owner?.actor, row.createdActor]
                 .contains { actor in
                     guard let identity = actor?.identity?.value as? [String: AnyCodable] else { return false }
@@ -310,7 +316,12 @@ public final class OpenClawChatSidebarPeople {
                         person.profileID != nil && identity["id"]?.value as? String == person.profileID
                 }
         }
-        return (Array(viewing.prefix(3)), Array(recent.prefix(3)))
+        // person-activity-card.ts:262: an open card retires ineligible recent links without reordering or backfilling.
+        let visible = Array(viewing.prefix(3))
+        let selected = Array(recent.prefix(3))
+        return (
+            visible, visible.map { identity($0.key, $0.agentId) },
+            selected, selected.map { identity($0.key, $0.agentId) })
     }
 
     // ui/src/lib/sessions/session-key.ts:90: catalog, Matrix and Signal IDs have opaque, case-sensitive tails.

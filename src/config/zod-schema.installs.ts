@@ -69,7 +69,7 @@ const PluginInstallRecordShape = {
   marketplaceSource: z.string().optional(),
   marketplacePlugin: z.string().optional(),
   acceptedSurface: z
-    .object({
+    .strictObject({
       channels: z.array(z.string().min(1)),
       providers: z.array(z.string().min(1)),
       tools: z.array(z.string().min(1)),
@@ -81,7 +81,6 @@ const PluginInstallRecordShape = {
       skills: z.array(z.string().min(1)),
       dangerousConfigFlags: z.array(z.string().min(1)),
     })
-    .strict()
     .optional(),
   acceptedSurfaceHash: z.string().optional(),
   acceptedSurfaceAt: z.string().optional(),

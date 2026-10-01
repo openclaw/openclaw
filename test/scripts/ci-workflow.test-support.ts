@@ -96,6 +96,7 @@ export function evaluateWorkflowExpression(
     validationTier?: "full" | "main";
     repository: string;
     runCheck?: boolean;
+    runWindowsCi?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
     requestedRunnerBackend?: "default" | "hybrid" | "runson";
     ciShape?: "default" | "main";
@@ -107,6 +108,7 @@ export function evaluateWorkflowExpression(
     runId?: number;
     runNumber?: number;
     sha?: string;
+    skipDefenderExclusions?: boolean;
     steps?: Record<
       string,
       { outputs: Record<string, string>; outcome?: "success" | "failure" | "cancelled" | "skipped" }
@@ -117,6 +119,7 @@ export function evaluateWorkflowExpression(
     workflow?: string;
     workflowSha?: string;
     workflowToken?: string;
+    windowsCiReplay?: string;
     workspace?: string;
   },
 ) {
@@ -203,6 +206,9 @@ export function evaluateWorkflowExpression(
       target_context_ref: context.targetContextRef ?? "",
       target_ref: context.targetRef ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
+      run_windows_ci: context.runWindowsCi ?? false,
+      skip_defender_exclusions: context.skipDefenderExclusions ?? false,
+      windows_ci_replay: context.windowsCiReplay ?? "",
     },
     env: context.env ?? {},
     matrix: context.matrix ?? {},

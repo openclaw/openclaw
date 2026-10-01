@@ -208,7 +208,6 @@ export function buildDiscordComponentMessage(params: {
   const entries: DiscordComponentEntry[] = [];
   const consumptionGroupId = createShortId("grp_");
   const modals: DiscordModalEntry[] = [];
-  const components: TopLevelComponents[] = [];
   const containerChildren: Container["components"] = [];
 
   const addEntry = (entry: DiscordComponentEntry) => {
@@ -350,12 +349,11 @@ export function buildDiscordComponentMessage(params: {
   }
 
   const container = new Container(containerChildren, params.spec.container);
-  components.push(container);
   const consumptionGroupEntryIds = entries.map((entry) => entry.id);
   for (const entry of entries) {
     entry.consumptionGroupEntryIds = consumptionGroupEntryIds;
   }
-  return { components, entries, modals };
+  return { components: [container], entries, modals };
 }
 
 export function buildDiscordComponentMessageFlags(

@@ -75,7 +75,7 @@ extension DashboardWindowOwnershipTests {
         recordDeviceReply('status', {type: 'status'});
         null;
         """)
-        try await DashboardTestWait.state("device settings consent sheet") { window.attachedSheet != nil }
+        try await TestWait.state("device settings consent sheet") { window.attachedSheet != nil }
 
         var replacement: DashboardWindowController?
         defer { replacement?.closeDashboard() }
@@ -128,7 +128,7 @@ extension DashboardWindowOwnershipTests {
         let retired = ["replacement", "committed", "close"].contains(transition)
         let allowed = transition == "provisional" || transition == "normalize-profile"
         if retired {
-            try await DashboardTestWait.state("retired device settings consent") { window.attachedSheet == nil }
+            try await TestWait.state("retired device settings consent") { window.attachedSheet == nil }
         } else {
             #expect(window.attachedSheet != nil)
         }
@@ -169,7 +169,7 @@ extension DashboardWindowOwnershipTests {
             if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
             fresh.cancel()
         }
-        try await DashboardTestWait.state("fresh device settings consent sheet") { window.attachedSheet != nil }
+        try await TestWait.state("fresh device settings consent sheet") { window.attachedSheet != nil }
         let freshSheet = try #require(window.attachedSheet)
         window.endSheet(freshSheet, returnCode: .alertFirstButtonReturn)
         #expect(await fresh.value == false)
@@ -183,7 +183,7 @@ extension DashboardWindowOwnershipTests {
 
     private static func waitForDeviceReplies(_ webView: WKWebView) async throws -> [[String: Any]] {
         var replies: [[String: Any]] = []
-        try await DashboardTestWait.state("device settings replies") {
+        try await TestWait.state("device settings replies") {
             replies = try #require(try await webView.evaluateJavaScript("window.deviceReplies") as? [[String: Any]])
             return replies.count == 2
         }

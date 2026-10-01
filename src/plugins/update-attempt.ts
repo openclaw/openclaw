@@ -369,6 +369,7 @@ export async function runPluginUpdateAttempt(params: {
   config: OpenClawConfig;
   dryRun: boolean;
   effectiveSpec?: string;
+  npmMetadata?: Parameters<typeof installPluginFromNpmSpec>[0]["npmMetadata"];
   extensionsDir?: string;
   timeoutMs?: number;
   workTimeoutMs?: number | null;
@@ -406,6 +407,7 @@ export async function runPluginUpdateAttempt(params: {
         ? await installNpmSpec(
             installParams({
               spec: params.effectiveSpec!,
+              npmMetadata: params.npmMetadata,
               ...commonInstallOptions(),
               trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
               expectedReplacementPluginId: params.expectedReplacementPluginId,

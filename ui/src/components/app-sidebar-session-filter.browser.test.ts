@@ -150,6 +150,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.tab();
       await expect.element(active).toHaveFocus();
       await userEvent.keyboard("{ArrowRight}");
+      await expect.element(page.getByRole("radio", { name: "Snoozed", exact: true })).toHaveFocus();
+      expect(loadStoredSidebarSessionStatusFilter()).toBe("snoozed");
+      await userEvent.keyboard("{ArrowRight}");
       await expect
         .element(page.getByRole("radio", { name: "Archived", exact: true }))
         .toHaveFocus();

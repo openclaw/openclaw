@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { createSessionStoreSummaryReaderStub } from "../config/sessions/session-store-summary.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
@@ -32,8 +33,8 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     vi.doMock("../config/sessions/paths.js", () => ({
       resolveSessionStorePathCore: () => sessionStorePath,
     }));
-    vi.doMock("../config/sessions/session-accessor.js", () => ({
-      readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
+    vi.doMock("../config/sessions/session-entry-read-runtime.js", () => ({
+      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(),
     }));
     vi.doMock("../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => inventoryPlugins,

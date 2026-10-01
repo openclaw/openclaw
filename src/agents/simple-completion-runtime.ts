@@ -81,7 +81,7 @@ type SimpleCompletionSelectionParams = {
   agentId: string;
   agentDir?: string;
   modelRef?: string;
-  useUtilityModel?: boolean;
+  useUtilityModel?: boolean | "required";
   manifestPlugins?:
     | PluginMetadataSnapshot["plugins"]
     | Pick<PluginMetadataSnapshot, "plugins" | "owners">;
@@ -101,7 +101,7 @@ function resolveSimpleCompletionSelectionRequest(
     manifestPlugins: params.manifestPlugins,
   });
   // Utility routing derives a provider-declared small model when unset and
-  // treats an explicit empty utilityModel as "use the primary" (disabled).
+  // optional routing treats an empty utilityModel as "use the primary" (disabled).
   const modelRef =
     params.modelRef?.trim() ||
     (params.useUtilityModel
@@ -119,7 +119,9 @@ function resolveSimpleCompletionSelectionRequest(
             : {}),
         })
       : undefined) ||
-    resolveNativeModelPrimary(params.cfg, params.agentId);
+    (params.useUtilityModel === "required"
+      ? undefined
+      : resolveNativeModelPrimary(params.cfg, params.agentId));
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -137,6 +139,9 @@ function resolveSimpleCompletionSelectionRequest(
         manifestPlugins: params.manifestPlugins,
       })
     : null;
+  if (params.useUtilityModel === "required" && !resolved) {
+    return null;
+  }
   const provider = resolved?.ref.provider ?? fallbackRef.provider;
   const modelId = resolved?.ref.model ?? fallbackRef.model;
   if (!provider || !modelId) {

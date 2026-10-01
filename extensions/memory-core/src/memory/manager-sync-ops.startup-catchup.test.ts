@@ -45,7 +45,7 @@ describe("session startup catch-up", () => {
     vi.useRealTimers();
     resetTranscriptUpdateListener();
     for (const database of startupHarnessDatabases) {
-      database.close();
+      await database.closeShadow();
     }
     startupHarnessDatabases.clear();
     await testState.restoreEnv();

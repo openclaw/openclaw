@@ -94,25 +94,37 @@ function isValidPid(pid: number): boolean {
 }
 
 /**
- * Check if every thread has exited by reading Linux /proc/<pid>/status.
- * Returns false on non-Linux platforms or if the proc file can't be read.
+ * Check whether a Linux task is terminal and has no live sibling threads.
+ * Missing or reaped procfs snapshots require a fresh existence probe.
  */
-function isZombieProcess(pid: number): boolean {
+function isExitedLinuxProcess(pid: number): boolean {
   if (process.platform !== "linux") {
     return false;
   }
   try {
     const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
-    const stateMatch = status.match(/^State:\s+(\S)/m);
-    // pthread_exit can leave a zombie leader with live workers; missing thread
-    // evidence must not revoke a live process's locks or cleanup obligations.
-    return stateMatch?.[1] === "Z" && /^Threads:[ \t]+1[ \t]*$/m.test(status);
+    const state = status.match(/^State:\s+(\S)/m)?.[1];
+    const threads = status.match(/^Threads:[ \t]+(\d+)[ \t]*$/m)?.[1];
+    if (threads !== "0") {
+      // pthread_exit can leave a terminal leader with live workers. Reaping also
+      // moves the last retained task from Z to X before removing its PID.
+      return (state === "Z" || state === "X") && threads === "1";
+    }
   } catch {
-    return false;
+    // Reaping can remove procfs after the caller's existence probe.
   }
+  // A successful read can outlive the task's signal metadata and report zero
+  // threads. PID reuse or a nonleader exec can still leave a live current owner.
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    // SAFETY: Node's process.kill reports syscall failures as ErrnoException.
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+  return false;
 }
 
-/** Returns true only when a positive PID exists and is not a Linux zombie process. */
+/** Returns true only when a positive PID exists and is not a known terminal Linux task. */
 export function isPidAlive(pid: number): boolean {
   if (!isValidPid(pid)) {
     return false;
@@ -127,10 +139,10 @@ export function isPidAlive(pid: number): boolean {
       return false;
     }
   }
-  return !isZombieProcess(pid);
+  return !isExitedLinuxProcess(pid);
 }
 
-/** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
+/** Returns true only when the PID is invalid, missing, or a known terminal Linux task. */
 export function isPidDefinitelyDead(pid: number): boolean {
   if (!isValidPid(pid)) {
     return true;
@@ -140,7 +152,7 @@ export function isPidDefinitelyDead(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "ESRCH";
   }
-  return isZombieProcess(pid);
+  return isExitedLinuxProcess(pid);
 }
 
 function getDarwinProcessStartTime(

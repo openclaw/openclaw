@@ -63,7 +63,6 @@ export function findVerifiedGatewayListenerPidsOnPortSync(
     .filter((pid) => inspectGatewayProcess(pid, { ...context, port }).kind === "openclaw");
 }
 
-/** Format gateway PIDs for human-facing diagnostics. */
 export function formatGatewayPidList(pids: number[]): string {
   return pids.join(", ");
 }

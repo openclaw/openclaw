@@ -110,10 +110,6 @@ function getAgentResourceTempDir(agentDir: string): string {
   return tempDir;
 }
 
-function isPattern(s: string): boolean {
-  return isOverridePattern(s) || hasGlobPattern(s);
-}
-
 function isOverridePattern(s: string): boolean {
   return s.startsWith("!") || s.startsWith("+") || s.startsWith("-");
 }
@@ -126,7 +122,7 @@ function splitPatterns(entries: string[]): { plain: string[]; patterns: string[]
   const plain: string[] = [];
   const patterns: string[] = [];
   for (const entry of entries) {
-    if (isPattern(entry)) {
+    if (isOverridePattern(entry) || hasGlobPattern(entry)) {
       patterns.push(entry);
     } else {
       plain.push(entry);

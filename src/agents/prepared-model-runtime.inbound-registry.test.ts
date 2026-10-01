@@ -24,6 +24,8 @@ import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  beginPreparedModelRuntimePluginDrain,
+  getPendingPreparedModelRuntimeReplacement,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
@@ -636,12 +638,7 @@ describe("catalog-worker replacement demand", () => {
     const foreground = dispatch();
     let background: ReturnType<typeof dispatch> | undefined;
     try {
-      await Promise.race([
-        started.promise,
-        foreground.then(() => {
-          throw new Error("Demand admission finished before preparing its replacement");
-        }),
-      ]);
+      expect(await Promise.race([started.promise, foreground])).toBeUndefined();
       background = dispatch("scheduled");
       finish.resolve();
       const recovered = await foreground;
@@ -680,18 +677,22 @@ describe("catalog-worker replacement demand", () => {
       clock.mockRestore();
     }
   });
-
   it("does not spend the scheduled check while waiting for an unrelated failed replacement", async () => {
     await failReplacement(undefined, ["default", "other"]);
+    const drain = beginPreparedModelRuntimePluginDrain();
+    const waiting = dispatch("scheduled");
+    const prematureReplacement = getPendingPreparedModelRuntimeReplacement();
     const gate = markPreparedModelRuntimeSnapshotsStale("other agent reload", {
       waitForReplacement: true,
       agentIds: new Set(["other"]),
     });
-    const waiting = dispatch("scheduled");
     const unrelatedFailure = new Error("other agent reload failed");
     const rejected = expect(waiting).rejects.toBe(unrelatedFailure);
+    drain.release();
+    await Promise.resolve();
     rejectPendingPreparedModelRuntimeReplacement(gate, unrelatedFailure);
     await rejected;
+    expect(prematureReplacement).toBeUndefined();
     mocks.resolveAmbientCredentials.mockClear();
     expect(await dispatch("scheduled")).toMatchObject({ agentId: "default" });
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalled();

@@ -14,10 +14,6 @@ function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
 }
 
-export function normalizeBootstrapWarningSignatures(signatures?: string[]): string[] {
-  return normalizeUniqueTrimmedStringList(signatures);
-}
-
 function appendSeenSignature(signatures: string[], signature: string): string[] {
   if (!signature.trim() || signatures.includes(signature)) {
     return signatures;
@@ -126,7 +122,7 @@ export function buildBootstrapPromptWarning(params: {
   maxFiles?: number;
 }): BootstrapPromptWarning {
   const signature = buildBootstrapTruncationSignature(params.analysis);
-  let seenSignatures = normalizeBootstrapWarningSignatures(params.seenSignatures);
+  let seenSignatures = normalizeUniqueTrimmedStringList(params.seenSignatures);
   if (params.previousSignature && !seenSignatures.includes(params.previousSignature)) {
     seenSignatures = appendSeenSignature(seenSignatures, params.previousSignature);
   }

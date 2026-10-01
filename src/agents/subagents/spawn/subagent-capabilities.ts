@@ -38,14 +38,7 @@ export type {
 
 /** Resolved role for a main session, orchestrating subagent, or leaf subagent. */
 export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
-const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
-  "main",
-  "orchestrator",
-  "leaf",
-] as const;
-
 type SubagentControlScope = "children" | "none";
-const SUBAGENT_CONTROL_SCOPES: readonly SubagentControlScope[] = ["children", "none"] as const;
 
 type PersistedSubagentToolPolicyEnvelope = {
   sessionKey: string;
@@ -57,12 +50,14 @@ type PersistedSubagentToolPolicyEnvelope = {
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  return SUBAGENT_SESSION_ROLES.find((entry) => entry === trimmed);
+  return trimmed === "main" || trimmed === "orchestrator" || trimmed === "leaf"
+    ? trimmed
+    : undefined;
 }
 
 function normalizeSubagentControlScope(value: unknown): SubagentControlScope | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  return SUBAGENT_CONTROL_SCOPES.find((entry) => entry === trimmed);
+  return trimmed === "children" || trimmed === "none" ? trimmed : undefined;
 }
 
 function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {

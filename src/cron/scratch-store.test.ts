@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
@@ -34,7 +35,6 @@ import * as cronStore from "./store.js";
 import { loadCronJobsStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { replaceCronRows, upsertCronJobRow } from "./store/row-codec.js";
-import { tryParseJsonObject } from "./store/scalar-codec.js";
 import { getCronStoreKysely } from "./store/schema.js";
 import type { CronJob } from "./types.js";
 
@@ -168,7 +168,7 @@ describe("cron scratch worker service", () => {
             .where("job_id", "=", job.id),
         ).rows[0];
         const { createdAtMs: _createdAtMs, ...legacy } = expectDefined(
-          tryParseJsonObject(expectDefined(row, "stored scratch job").job_json),
+          safeParseJsonRecord(expectDefined(row, "stored scratch job").job_json),
           "stored scratch job definition",
         );
         const writeDefinition = (definition: unknown) =>

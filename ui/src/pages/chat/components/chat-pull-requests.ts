@@ -329,7 +329,6 @@ export function renderChatPullRequests(props: {
     <div class="chat-prs" aria-live="polite">
       ${repeat(visible, chatPullRequestId, (pullRequest) => {
         const merged = pullRequest.state === "merged";
-        const rowPublication = pullRequest === visible[0] ? recovery : undefined;
         return html`
           <article class="chat-pr" data-state=${pullRequest.state}>
             <a
@@ -361,7 +360,6 @@ export function renderChatPullRequests(props: {
                     >`
               }
               ${!merged || props.status === "unavailable" ? renderStatusWarning(props.status) : nothing}
-              ${rowPublication && !published ? renderGitHubPublicationAction(rowPublication) : nothing}
               <button
                 class="chat-pr__dismiss"
                 type="button"
@@ -379,10 +377,29 @@ export function renderChatPullRequests(props: {
                 ${icons.x}
               </button>
             </span>
-            ${rowPublication ? renderGitHubPublicationDetails(rowPublication) : nothing}
           </article>
         `;
       })}
+      ${recovery ? renderPublicationRecovery(recovery) : nothing}
     </div>
   `;
+}
+
+function renderPublicationRecovery(publication: GitHubPublicationView) {
+  const content = html`<div class="chat-pr__publication-recovery">
+    ${renderGitHubPublicationDetails(publication)}
+    ${
+      publication.result?.status !== "published"
+        ? html`<div>${renderGitHubPublicationAction(publication)}</div>`
+        : nothing
+    }
+  </div>`;
+  // A session attempt has no proven relationship to any listed PR. Keep its
+  // failed receipt inspectable without presenting it as that PR’s current state.
+  return publication.result?.status === "failed"
+    ? html`<details class="chat-pr__publication-history">
+        <summary>${t("githubPublication.failedAttempt")}</summary>
+        ${content}
+      </details>`
+    : content;
 }

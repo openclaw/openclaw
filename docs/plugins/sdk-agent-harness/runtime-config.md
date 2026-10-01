@@ -88,9 +88,10 @@ diagnostics, and the names of omitted requester-scoped servers, without opening
 connections. The same SDK exports `decodeHeaderEnvPlaceholder` for recognizing
 `${NAME}` and `Bearer ${NAME}` header references; the harness resolves the value
 for its own transport.
-`resolveConfiguredMcpTransport` applies the shared runtime rule: an explicit
-`transport` takes precedence over a legacy CLI `type` alias. Transport support and
-the default for servers without either field remain the caller's responsibility.
+Read the returned server's `transport` field. Doctor normalizes operator config,
+and bundle loading translates external `type` fields before this boundary.
+Transport support and the default for servers without `transport` remain the
+harness's responsibility.
 
 ## Runtime strictness
 

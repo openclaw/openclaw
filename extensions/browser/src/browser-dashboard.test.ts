@@ -676,7 +676,7 @@ describe("Browser dashboard lifetime", () => {
             openKeyedStore: (options: OpenKeyedStoreOptions) =>
               createPluginStateKeyedStoreForTests("browser", options),
           },
-          gateway: { isAvailable: async () => true, request: fixture.readBoard },
+          gateway: fixture.gateway,
         } as unknown as PluginRuntime,
         registerService: (value) => {
           services.push(value);

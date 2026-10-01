@@ -67,7 +67,7 @@ utility model; the system assistant follows the primary model normally.
 On an existing installation, choosing Apple preserves your primary model,
 fallbacks, and credentials. If an older config relied on an implicit primary,
 setup records that existing route before adding the Apple provider. Doctor and
-normal config writes apply the same [utility-model migration](/gateway/config-agents/models#agentsdefaultsmodel).
+normal config writes apply the same [utility-model migration](/gateway/config-agents/models#agents.defaults.model).
 If that migration is still pending, setup asks you to run `openclaw doctor --fix`
 or choose an explicit primary before connecting Apple.
 Explicit utility-model configuration can also be set per agent

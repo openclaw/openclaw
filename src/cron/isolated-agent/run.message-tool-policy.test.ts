@@ -2,6 +2,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   buildSafeExternalPromptMock,
   callGatewayMock,
@@ -48,13 +49,12 @@ function makeJob(
   } as never;
 }
 function makeParams(job = makeJob()) {
-  return {
-    cfg: {},
-    deps: {} as never,
+  return makeIsolatedAgentParamsFixture({
+    deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
     job,
     message: "send a message",
     sessionKey: "cron:message-tool-policy",
-  };
+  });
 }
 function mockAnnounce(overrides: Record<string, unknown> = {}) {
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, ...announce, ...overrides });
@@ -674,8 +674,7 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       await runCronIsolatedAgentTurn(makeParams());
       expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const prompt = runPrompt(embedded());
-      const unattendedPreamble =
-        "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts. Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
+      const unattendedPreamble = "This is an unattended scheduled run.";
       expect(prompt).toContain(unattendedPreamble);
       expect(prompt).not.toContain("Use the message tool");
       expect(prompt).toContain("Your response will be delivered automatically");

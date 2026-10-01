@@ -46,6 +46,15 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
     },
+    readSessionFacts: async (params) => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.readTrustedPluginSessionFacts(params);
+    },
+    withUserProfileIdentity: async (params, run) => {
+      const captured = { profileId: params.profileId, emails: params.emails.slice() };
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.withTrustedPluginUserProfileIdentity(captured, run);
+    },
   };
 }
 

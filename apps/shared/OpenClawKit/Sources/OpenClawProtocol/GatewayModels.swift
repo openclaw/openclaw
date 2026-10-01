@@ -2551,6 +2551,133 @@ public struct AuditRunInspectResult: Codable, Sendable {
     }
 }
 
+public struct BackupRunLocation: Codable, Sendable {
+    public let name: String
+    public let provider: String
+    public let locationid: String
+    public let key: String
+    public let namespace: String
+    public let plaintextbytes: Int
+    public let storedbytes: Int
+
+    public init(
+        name: String,
+        provider: String,
+        locationid: String,
+        key: String,
+        namespace: String,
+        plaintextbytes: Int,
+        storedbytes: Int)
+    {
+        self.name = name
+        self.provider = provider
+        self.locationid = locationid
+        self.key = key
+        self.namespace = namespace
+        self.plaintextbytes = plaintextbytes
+        self.storedbytes = storedbytes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case provider
+        case locationid = "locationId"
+        case key
+        case namespace
+        case plaintextbytes = "plaintextBytes"
+        case storedbytes = "storedBytes"
+    }
+}
+
+public struct BackupRunRecord: Codable, Sendable {
+    public let id: String
+    public let createdat: Double
+    public let archivepath: String
+    public let status: AnyCodable
+    public let kind: AnyCodable
+    public let target: String?
+    public let namespace: String?
+    public let error: String?
+    public let pushfailed: Bool?
+    public let bytes: Int?
+    public let location: BackupRunLocation?
+    public let retention: BackupRunRetention?
+
+    public init(
+        id: String,
+        createdat: Double,
+        archivepath: String,
+        status: AnyCodable,
+        kind: AnyCodable,
+        target: String? = nil,
+        namespace: String? = nil,
+        error: String? = nil,
+        pushfailed: Bool? = nil,
+        bytes: Int? = nil,
+        location: BackupRunLocation? = nil,
+        retention: BackupRunRetention? = nil)
+    {
+        self.id = id
+        self.createdat = createdat
+        self.archivepath = archivepath
+        self.status = status
+        self.kind = kind
+        self.target = target
+        self.namespace = namespace
+        self.error = error
+        self.pushfailed = pushfailed
+        self.bytes = bytes
+        self.location = location
+        self.retention = retention
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case createdat = "createdAt"
+        case archivepath = "archivePath"
+        case status
+        case kind
+        case target
+        case namespace
+        case error
+        case pushfailed = "pushFailed"
+        case bytes
+        case location
+        case retention
+    }
+}
+
+public struct BackupRunRetention: Codable, Sendable {
+    public let kept: Int
+    public let deleted: Int
+
+    public init(
+        kept: Int,
+        deleted: Int)
+    {
+        self.kept = kept
+        self.deleted = deleted
+    }
+}
+
+public struct BackupStatusParams: Codable, Sendable {}
+
+public struct BackupStatusResult: Codable, Sendable {
+    public let targets: [[String: AnyCodable]]
+    public let schedules: [[String: AnyCodable]]
+    public let locations: [[String: AnyCodable]]
+
+    public init(
+        targets: [[String: AnyCodable]],
+        schedules: [[String: AnyCodable]],
+        locations: [[String: AnyCodable]])
+    {
+        self.targets = targets
+        self.schedules = schedules
+        self.locations = locations
+    }
+}
+
 public struct BoardCanvasDocumentSource: Codable, Sendable {
     public let kind: String
     public let docid: String
@@ -15772,6 +15899,8 @@ public struct SessionRow: Codable, Sendable {
     public let archivereason: AnyCodable?
     public let pinned: Bool?
     public let pinnedat: Double?
+    public let snoozeduntil: Double?
+    public let snoozedat: Double?
     public let unread: Bool?
     public let lastreadat: Double?
     public let markedunreadat: Double?
@@ -15867,6 +15996,8 @@ public struct SessionRow: Codable, Sendable {
         archivereason: AnyCodable? = nil,
         pinned: Bool? = nil,
         pinnedat: Double? = nil,
+        snoozeduntil: Double? = nil,
+        snoozedat: Double? = nil,
         unread: Bool? = nil,
         lastreadat: Double? = nil,
         markedunreadat: Double? = nil,
@@ -15961,6 +16092,8 @@ public struct SessionRow: Codable, Sendable {
         self.archivereason = archivereason
         self.pinned = pinned
         self.pinnedat = pinnedat
+        self.snoozeduntil = snoozeduntil
+        self.snoozedat = snoozedat
         self.unread = unread
         self.lastreadat = lastreadat
         self.markedunreadat = markedunreadat
@@ -16057,6 +16190,8 @@ public struct SessionRow: Codable, Sendable {
         case archivereason = "archiveReason"
         case pinned
         case pinnedat = "pinnedAt"
+        case snoozeduntil = "snoozedUntil"
+        case snoozedat = "snoozedAt"
         case unread
         case lastreadat = "lastReadAt"
         case markedunreadat = "markedUnreadAt"
@@ -16768,6 +16903,70 @@ public struct SessionsCatalogContinueResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionsCatalogImportParams: Codable, Sendable {
+    public let catalogid: String
+    public let hostid: String
+    public let threadid: String
+    public let agentid: String?
+    public let sourcehomeid: String?
+    public let displayname: String?
+
+    public init(
+        catalogid: String,
+        hostid: String,
+        threadid: String,
+        agentid: String? = nil,
+        sourcehomeid: String? = nil,
+        displayname: String? = nil)
+    {
+        self.catalogid = catalogid
+        self.hostid = hostid
+        self.threadid = threadid
+        self.agentid = agentid
+        self.sourcehomeid = sourcehomeid
+        self.displayname = displayname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogid = "catalogId"
+        case hostid = "hostId"
+        case threadid = "threadId"
+        case agentid = "agentId"
+        case sourcehomeid = "sourceHomeId"
+        case displayname = "displayName"
+    }
+}
+
+public struct SessionsCatalogImportResult: Codable, Sendable {
+    public let sessionkey: String
+    public let importeditems: Int
+    public let totalitems: Int
+    public let complete: Bool
+    public let created: Bool
+
+    public init(
+        sessionkey: String,
+        importeditems: Int,
+        totalitems: Int,
+        complete: Bool,
+        created: Bool)
+    {
+        self.sessionkey = sessionkey
+        self.importeditems = importeditems
+        self.totalitems = totalitems
+        self.complete = complete
+        self.created = created
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case importeditems = "importedItems"
+        case totalitems = "totalItems"
+        case complete
+        case created
     }
 }
 
@@ -18230,6 +18429,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let ttlminutes: Int?
     public let archived: Bool?
     public let pinned: Bool?
+    public let snoozeduntil: AnyCodable?
     public let unread: Bool?
     public let contextwindow: AnyCodable?
     public let thinkinglevel: AnyCodable?
@@ -18269,6 +18469,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         ttlminutes: Int? = nil,
         archived: Bool? = nil,
         pinned: Bool? = nil,
+        snoozeduntil: AnyCodable? = nil,
         unread: Bool? = nil,
         contextwindow: AnyCodable? = nil,
         thinkinglevel: AnyCodable? = nil,
@@ -18307,6 +18508,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.ttlminutes = ttlminutes
         self.archived = archived
         self.pinned = pinned
+        self.snoozeduntil = snoozeduntil
         self.unread = unread
         self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
@@ -18347,6 +18549,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case ttlminutes = "ttlMinutes"
         case archived
         case pinned
+        case snoozeduntil = "snoozedUntil"
         case unread
         case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
@@ -18397,6 +18600,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let ttlminutes: Int?
     public let archived: Bool?
     public let pinned: Bool?
+    public let snoozeduntil: AnyCodable?
     public let unread: Bool?
     public let contextwindow: AnyCodable?
     public let thinkinglevel: AnyCodable?
@@ -18445,6 +18649,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         ttlminutes: Int? = nil,
         archived: Bool? = nil,
         pinned: Bool? = nil,
+        snoozeduntil: AnyCodable? = nil,
         unread: Bool? = nil,
         contextwindow: AnyCodable? = nil,
         thinkinglevel: AnyCodable? = nil,
@@ -18492,6 +18697,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.ttlminutes = ttlminutes
         self.archived = archived
         self.pinned = pinned
+        self.snoozeduntil = snoozeduntil
         self.unread = unread
         self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
@@ -18541,6 +18747,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case ttlminutes = "ttlMinutes"
         case archived
         case pinned
+        case snoozeduntil = "snoozedUntil"
         case unread
         case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
@@ -20568,6 +20775,54 @@ public struct StateVersion: Codable, Sendable {
     {
         self.presence = presence
         self.health = health
+    }
+}
+
+public struct StorageLocationsListParams: Codable, Sendable {}
+
+public struct StorageLocationsListResult: Codable, Sendable {
+    public let locations: [[String: AnyCodable]]
+
+    public init(
+        locations: [[String: AnyCodable]])
+    {
+        self.locations = locations
+    }
+}
+
+public struct StorageLocationsProbeParams: Codable, Sendable {
+    public let name: String
+
+    public init(
+        name: String)
+    {
+        self.name = name
+    }
+}
+
+public struct StorageLocationsProbeResult: Codable, Sendable {
+    public let state: AnyCodable
+    public let freebytes: Double?
+    public let totalbytes: Double?
+    public let message: String?
+
+    public init(
+        state: AnyCodable,
+        freebytes: Double? = nil,
+        totalbytes: Double? = nil,
+        message: String? = nil)
+    {
+        self.state = state
+        self.freebytes = freebytes
+        self.totalbytes = totalbytes
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case freebytes = "freeBytes"
+        case totalbytes = "totalBytes"
+        case message
     }
 }
 

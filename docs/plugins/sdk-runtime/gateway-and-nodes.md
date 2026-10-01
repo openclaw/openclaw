@@ -142,6 +142,33 @@ applicable policy also requires fresh publication admission.
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
 
+    `await api.runtime.gateway.readSessionFacts({ sessionKeys })` reads at most
+    40 sessions and returns typed `{ sessions, warnings? }` data. Each session
+    includes its key, identity, agent, bounded redacted title and message preview,
+    run state (`active`, `idle`, or `failed`), optional observer digest
+    (health, headline, assessment, revision), pull-request numbers and states,
+    archive state, and last activity time. The message preview is capped at
+    400 characters. `pullRequestsUnavailable` distinguishes unknown PR state
+    from a confirmed empty list. This lifecycle-bound read reuses the Gateway's
+    session projection and context-bound PR snapshot owner, preserves current
+    caller authority and session visibility, and omits incognito sessions.
+    Retained handles reject after their owner closes; no new SDK barrel export
+    is needed.
+
+    `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails }, run)`
+    prepares the canonical profile's original binding lifetimes for up to 500
+    selected email aliases under the existing `users.list` / `operator.read`
+    permission. The callback receives a synchronous `assertCurrent()` function.
+    Compose it with the action's own authorization in the store's final commit
+    guard and immediately before dispatching an external mutation. It reads
+    current facts published by the profile owner without querying SQLite on the
+    calling thread. Moving an alias away and back, merging the selected profile,
+    an unsettled profile mutation, or closing the caller invalidates the check.
+    Unselected email bindings can change independently. The preparation is
+    released when the callback settles, and retained assertions then reject.
+    This capability checks the selected identity; it does not grant permission
+    to perform the action or roll back a mutation already accepted externally.
+
   </Accordion>
   <Accordion title="api.runtime.nodes">
     List connected nodes and invoke a node-host command from Gateway-loaded plugin code or from plugin CLI commands. Use this when a plugin owns local work on a paired device, for example a browser or audio bridge on another Mac.

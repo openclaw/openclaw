@@ -98,6 +98,18 @@ describe("shared-state worker error transport", () => {
     },
   );
 
+  it.each([
+    { code: "ERR_SQLITE_ERROR", errcode: 5 },
+    { code: "ERR_SQLITE_ERROR", errcode: 6 },
+    { code: "ERR_SQLITE_ERROR", errcode: 517 },
+    { code: "ERR_SQLITE_ERROR", errcode: 262 },
+    { code: "SQLITE_BUSY" },
+    { code: "SQLITE_LOCKED" },
+  ])("preserves native SQLite contention without an enclosing domain error (%j)", (fields) => {
+    const original = Object.assign(new Error("native lock contention"), fields);
+    expect(roundTrip(original)).toMatchObject(fields);
+  });
+
   it.each(
     [RangeError, SyntaxError, TypeError, SkillUploadRequestError].flatMap((ErrorType) =>
       [false, true].map((aggregate) => ({ ErrorType, name: ErrorType.name, aggregate })),
@@ -218,8 +230,11 @@ describe("shared-state worker error transport", () => {
     expect(findStartupMaintenanceRequiredError(hydrated)).toBeInstanceOf(SqliteSchemaVersionError);
   });
 
-  it("keeps outcome-unknown explicit instead of hydrating a maintenance payload", () => {
-    const payload = encodeOpenClawStateWorkerError(new SqliteSchemaVersionError("newer schema"));
+  it.each([
+    new SqliteSchemaVersionError("newer schema"),
+    Object.assign(new Error("native lock contention"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
+  ])("keeps outcome-unknown explicit instead of hydrating %s", (original) => {
+    const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
     const job: Job = {
       request: {
@@ -336,7 +351,7 @@ describe("shared-state worker error transport", () => {
   });
 
   it("encodes and hydrates ordinary error graphs only with an explicit opt-in", () => {
-    const cause = Object.assign(new Error("native failure"), { code: "SQLITE_BUSY" });
+    const cause = Object.assign(new Error("native failure"), { code: "SQLITE_IOERR" });
     const original = new AggregateError([cause], "load and cleanup", { cause });
     cause.cause = original;
     expect(encodeOpenClawStateWorkerError(original)).toBeUndefined();
@@ -345,7 +360,7 @@ describe("shared-state worker error transport", () => {
     const retained = remoteError(structuredClone(payload));
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
     const decoded = hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true });
-    expect(decoded.cause).toMatchObject({ message: "native failure", code: "SQLITE_BUSY" });
+    expect(decoded.cause).toMatchObject({ message: "native failure", code: "SQLITE_IOERR" });
     assert(decoded instanceof AggregateError && decoded.cause instanceof Error);
     expect(decoded.errors[0]).toBe(decoded.cause);
     expect(decoded.cause.cause).toBe(decoded);

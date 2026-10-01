@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import {
   type ResponsesInputItem,
@@ -57,6 +58,16 @@ export function extractLatestScenarioFamilyPrompt(
 
 export function extractLastUserText(input: ResponsesInputItem[]) {
   return extractLastMatchingUserTurn(input)?.text ?? "";
+}
+
+export function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
+  if (Array.isArray(value)) {
+    return value.map(asOptionalRecord).filter((item) => item !== undefined);
+  }
+  if (typeof value === "string") {
+    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
+  }
+  return [];
 }
 
 export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern?: RegExp) {
@@ -371,6 +382,12 @@ export function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]
     .slice(latestToolOutputIndex + 1)
     .filter((item) => item.role === "user")
     .map((item) => extractInputText(item.content))
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
+  return [extractAllToolOutputText(input), extractUserTextAfterLatestToolOutput(input)]
     .filter(Boolean)
     .join("\n");
 }

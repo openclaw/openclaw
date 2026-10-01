@@ -9,8 +9,8 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { resolveSessionAgentId } from "../../agent-scope.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   ensureSubagentControllerOwnsRun,
   getLatestOwnedSubagentRun,
@@ -77,12 +77,10 @@ export async function withSubagentKillScope<T>(
   };
   const cancellationControl = {
     prepareRead: params.prepareRead,
-    assertCurrent: () => {
-      assertCurrent();
-    },
+    assertCurrent,
   };
   const selected = new Set<string>();
-  const releaseSessions: Array<() => void> = [];
+  const releaseSessions: Array<SubagentKillSession["release"]> = [];
   const releaseRetirements: Array<() => void> = [];
   const completeRetirementPublications: Array<() => void> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
@@ -199,6 +197,7 @@ export async function withSubagentKillScope<T>(
               entry.childSessionKey,
               () => assertSubagentRegistryWriteSourceCurrent(stateContext),
               entry.execution.transcriptTarget,
+              entry.childAgentId,
             );
             releaseSessions.push(session.release);
             if (!tree.canTraverse(false)) {
@@ -231,10 +230,7 @@ export async function withSubagentKillScope<T>(
     for (const { tree } of pending) {
       const controller = {
         controllerSessionKey: tree.entry.childSessionKey,
-        controllerAgentId: resolveSessionAgentId({
-          config: params.cfg,
-          sessionKey: tree.entry.childSessionKey,
-        }),
+        controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
       };
       capture(
         pending,
@@ -280,10 +276,7 @@ export async function withSubagentKillScope<T>(
         hold(tree);
         const controller = {
           controllerSessionKey: tree.entry.childSessionKey,
-          controllerAgentId: resolveSessionAgentId({
-            config: params.cfg,
-            sessionKey: tree.entry.childSessionKey,
-          }),
+          controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
         };
         // Retirement preserves captured work, not discovery beneath a missing ancestor.
         const candidates = await withSubagentRunReadSnapshot(
@@ -363,11 +356,13 @@ export async function withSubagentKillScope<T>(
   completeRetirementPublications.forEach((complete) => complete());
   const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
   const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
-  releaseSessions.forEach((release) => release());
+  const releasedSessions = await Promise.allSettled(
+    releaseSessions.map(async (release) => release()),
+  );
   if (!outcome.ok) {
     throw outcome.error;
   }
-  for (const result of [...released, ...retired]) {
+  for (const result of [...released, ...retired, ...releasedSessions]) {
     if (result.status === "rejected") {
       throw result.reason;
     }

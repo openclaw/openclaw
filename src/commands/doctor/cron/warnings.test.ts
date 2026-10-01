@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
+  noteLegacyWhatsAppCrontabHealthCheck,
 } from "./warnings.js";
 
 const mocks = vi.hoisted(() => ({
@@ -166,4 +167,37 @@ describe("collectLegacyWhatsAppCrontabHealthWarning", () => {
       timeoutMs: 5_000,
     });
   });
+});
+
+it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
+  await noteLegacyWhatsAppCrontabHealthCheck({
+    platform: "linux",
+    readCrontab: async () => ({
+      stdout: [
+        "# keep comments ignored",
+        "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh >> ~/.openclaw/logs/whatsapp-health.log 2>&1",
+        "0 9 * * * /usr/bin/true",
+        "",
+      ].join("\n"),
+    }),
+  });
+
+  expect(mocks.note).toHaveBeenCalledWith(
+    expect.stringContaining("Legacy WhatsApp crontab health check detected"),
+    "Cron",
+  );
+  expect(mocks.note).toHaveBeenCalledWith(
+    expect.stringContaining("systemd user bus environment is missing"),
+    "Cron",
+  );
+  expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("Matched 1 entry"), "Cron");
+});
+
+it("ignores a missing crontab", async () => {
+  await noteLegacyWhatsAppCrontabHealthCheck({
+    platform: "linux",
+    readCrontab: () =>
+      Promise.reject(Object.assign(new Error("crontab missing"), { code: "ENOENT" })),
+  });
+  expect(mocks.note).not.toHaveBeenCalled();
 });

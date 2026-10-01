@@ -94,13 +94,21 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
           >("wa-tooltip");
         const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
         const bounds = body?.getBoundingClientRect();
+        // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
+        // markup whitespace is in textContent but never rendered or announced.
+        const readableText = (node: Node): string =>
+          node instanceof Element && node.getAttribute("aria-hidden") === "true"
+            ? ""
+            : node instanceof Text
+              ? node.data
+              : Array.from(node.childNodes, readableText).join("");
         return {
           anchorMatches: tooltip?.anchor === element,
           height: bounds?.height ?? 0,
           hidden: body?.hidden ?? true,
           open: tooltip?.hasAttribute("open") ?? false,
           popupActive: tooltip?.popup?.active ?? false,
-          text: tooltip?.textContent?.trim() ?? "",
+          text: tooltip ? readableText(tooltip).trim() : "",
           width: bounds?.width ?? 0,
         };
       }),

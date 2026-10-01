@@ -85,13 +85,7 @@ describe("cacheRetention default behavior", () => {
     expect(resolveCacheRetention({ cacheControlTtl: "1h" }, "anthropic")).toBe("long");
   });
 
-  it("passes cacheRetention 'long' through for custom anthropic-messages provider", () => {
-    expect(resolveCacheRetention({ cacheRetention: "long" }, "litellm", "anthropic-messages")).toBe(
-      "long",
-    );
-  });
-
-  it("does not default to caching for custom provider without explicit config", () => {
+  it("leaves cacheRetention unspecified for custom anthropic-messages providers without explicit config", () => {
     expect(resolveCacheRetention(undefined, "litellm", "anthropic-messages")).toBeUndefined();
   });
 

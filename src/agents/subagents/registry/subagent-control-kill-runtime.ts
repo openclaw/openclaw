@@ -17,10 +17,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { isCurrentSubagentRun } from "./subagent-control-scope.js";
-import {
-  persistSubagentAbortedLastRun,
-  type SubagentKillSession,
-} from "./subagent-control-session.js";
+import type { SubagentKillSession } from "./subagent-control-session.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
   type SubagentCancellationControl,
@@ -465,23 +462,6 @@ export async function killSubagentRun(params: {
       if (declined && !stopAccepted) {
         return declined;
       }
-      const persistAbortedLastRun = (abortedLastRun: boolean, strict = false) =>
-        persistSubagentAbortedLastRun({
-          childSessionKey,
-          storePath: resolved.storePath,
-          hasSessionEntry: resolved.entry !== undefined,
-          expectedSessionId: sessionId,
-          expectedLifecycleRevision: sessionLifecycleRevision,
-          abortedLastRun,
-          isCurrent: () => killOwnerCurrent(),
-          assertCommitAllowed: () => {
-            assertState();
-            if (!killOwnerCurrent()) {
-              throw new Error("subagent kill lifecycle retired before abort-marker commit");
-            }
-          },
-          strict,
-        });
       if (!killClaim) {
         try {
           killClaim = await claimSelectedRunKill();
@@ -562,7 +542,6 @@ export async function killSubagentRun(params: {
             targetState: resolveSubagentKillTargetState(params.entry),
           };
         }
-        await persistAbortedLastRun(true);
         return { killed: marked > 0, sessionId };
       };
       try {
@@ -603,7 +582,19 @@ export async function killSubagentRun(params: {
         if (declinedBeforeQueueClear) {
           return stopAccepted ? await settleTargetCancellation() : declinedBeforeQueueClear;
         }
-        const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
+        const cleared = runtime.clearSessionLifecycleQueues({
+          keys: [childSessionKey, sessionId],
+          agentId: resolved.agentId,
+          sessionKey: childSessionKey,
+          sessionId,
+          assertCurrent: () => {
+            assertState();
+            params.cancellationControl?.assertCurrent();
+            if (!killOwnerCurrent()) {
+              throw new Error("Subagent queue cleanup lost its original kill claim.");
+            }
+          },
+        });
         if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
           logVerbose(
             `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,

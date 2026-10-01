@@ -18,7 +18,7 @@ const SafeRelativeModulePathSchema = z
   .refine(isSafeRelativeModulePath, "module must be a safe relative path (no absolute paths)");
 
 export const HookMappingSchema = z
-  .object({
+  .strictObject({
     id: z.string().optional(),
     match: z
       .object({
@@ -49,14 +49,12 @@ export const HookMappingSchema = z
     thinking: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     transform: z
-      .object({
+      .strictObject({
         module: SafeRelativeModulePathSchema,
         export: z.string().optional(),
       })
-      .strict()
       .optional(),
   })
-  .strict()
   .optional();
 
 export type HookMappingConfigInput = NonNullable<z.input<typeof HookMappingSchema>>;
@@ -72,23 +70,21 @@ const HookConfigSchema = z
   .passthrough();
 
 export const InternalHooksSchema = z
-  .object({
+  .strictObject({
     enabled: z.boolean().optional(),
     entries: z.record(z.string(), HookConfigSchema).optional(),
     load: z
-      .object({
+      .strictObject({
         extraDirs: z.array(z.string()).optional(),
       })
-      .strict()
       .optional(),
   })
-  .strict()
   .optional();
 
 export type InternalHooksConfigInput = NonNullable<z.input<typeof InternalHooksSchema>>;
 
 export const HooksGmailSchema = z
-  .object({
+  .strictObject({
     account: z.string().optional(),
     label: z.string().optional(),
     topic: z.string().optional(),
@@ -100,20 +96,18 @@ export const HooksGmailSchema = z
     renewEveryMinutes: z.number().int().positive().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
     serve: z
-      .object({
+      .strictObject({
         bind: z.string().optional(),
         port: z.number().int().positive().optional(),
         path: z.string().optional(),
       })
-      .strict()
       .optional(),
     tailscale: z
-      .object({
+      .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
         path: z.string().optional(),
         target: z.string().optional(),
       })
-      .strict()
       .optional(),
     model: z.string().optional(),
     thinking: z
@@ -126,7 +120,6 @@ export const HooksGmailSchema = z
       ])
       .optional(),
   })
-  .strict()
   .optional();
 
 export type HooksGmailConfigInput = NonNullable<z.input<typeof HooksGmailSchema>>;

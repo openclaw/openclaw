@@ -1,4 +1,7 @@
 export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS: readonly string[];
+export function usesStructuredToolSearchAtBaseline(
+  baselineVersion: string | null | undefined,
+): boolean;
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario: string): boolean;
 export function normalizeUpgradeSurvivorBaselineSpec(raw: string | undefined): string | undefined;
 export function assertSupportedUpgradeSurvivorBaselineSpec(spec: string | undefined): void;

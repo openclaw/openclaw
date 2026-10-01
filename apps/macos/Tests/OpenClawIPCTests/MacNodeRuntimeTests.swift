@@ -5,6 +5,7 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 struct MacNodeRuntimeTests {
     private actor ComputerProviderWorkerProbe: MacNodeHostWorking {
         private let commands: Set<String>
@@ -67,11 +68,13 @@ struct MacNodeRuntimeTests {
     private final class LockedCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
+        let changed = AsyncTestSignal()
 
         func increment() {
             self.lock.lock()
             self.count += 1
             self.lock.unlock()
+            self.changed.notify()
         }
 
         func value() -> Int {
@@ -117,12 +120,13 @@ struct MacNodeRuntimeTests {
         }
     }
 
-    private func waitForCount(_ expected: Int, counter: LockedCounter) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(10))
-        while counter.value() < expected, clock.now < deadline {
-            await Task.yield()
-        }
+    private func waitForCount(
+        _ expected: Int,
+        counter: LockedCounter,
+        _ stage: String,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> Bool
+    {
+        try await counter.changed.wait(stage, sourceLocation: sourceLocation) { counter.value() >= expected }
         return counter.value() >= expected
     }
 
@@ -402,34 +406,29 @@ struct MacNodeRuntimeTests {
 
     @Test func `Claude catalog worker serializes filesystem operations`() async throws {
         let secondStarted = AsyncTestGate()
+        let secondFinished = AsyncTestGate()
         let probe = CatalogWorkerProbe()
         let worker = MacNodeClaudeSessionCatalogWorker(
             listOperation: { _ in probe.run() },
             readOperation: { _ in probe.run() })
         let first = Task { try await worker.list(paramsJSON: nil) }
         let second = Task {
+            defer { secondFinished.open() }
             await probe.firstStarted.wait()
             secondStarted.open()
             return try await worker.read(paramsJSON: nil)
         }
-        let watchdog = Task {
-            try await Task.sleep(for: .seconds(10))
-            Issue.record("timed out waiting for Claude catalog worker cancellation")
-            probe.firstStarted.open()
-            secondStarted.open()
-            probe.release()
-        }
         defer {
-            watchdog.cancel()
             first.cancel()
             second.cancel()
             probe.release()
         }
-        await probe.firstStarted.wait()
-        await secondStarted.wait()
+        try await probe.firstStarted.wait("first catalog operation")
+        try await secondStarted.wait("queued catalog operation")
 
         #expect(probe.snapshot().calls == 1)
         second.cancel()
+        try await secondFinished.wait("queued catalog cancellation")
         await #expect(throws: CancellationError.self) {
             try await second.value
         }
@@ -440,7 +439,7 @@ struct MacNodeRuntimeTests {
         #expect(probe.snapshot().peakActive == 1)
     }
 
-    @Test func `Claude catalog worker propagates caller cancellation`() async {
+    @Test func `Claude catalog worker propagates caller cancellation`() async throws {
         let started = AsyncStream<Void>.makeStream()
         let worker = MacNodeClaudeSessionCatalogWorker(
             listOperation: { _ in
@@ -452,16 +451,17 @@ struct MacNodeRuntimeTests {
             },
             readOperation: { _ in "unused" })
         let task = Task { try await worker.list(paramsJSON: nil) }
-        let watchdog = Task {
-            try? await Task.sleep(for: .seconds(10))
-            guard !Task.isCancelled else { return }
-            Issue.record("timed out waiting for Claude catalog worker start")
+        defer {
             task.cancel()
             started.continuation.finish()
         }
         var iterator = started.stream.makeAsyncIterator()
-        #expect(await iterator.next() != nil)
-        watchdog.cancel()
+        let didStart = await iterator.next() != nil
+        guard !Task.isCancelled else {
+            Issue.record("Still waiting for catalog worker start")
+            throw CancellationError()
+        }
+        #expect(didStart)
         started.continuation.finish()
 
         task.cancel()
@@ -1029,11 +1029,11 @@ struct MacNodeRuntimeTests {
         let first = Task {
             await self.invoke(runtime, "req-computer-single-flight-1", OpenClawComputerCommand.act.rawValue, json)
         }
-        try #require(await waitForCount(1, counter: factoryCalls))
+        try #require(try await waitForCount(1, counter: factoryCalls, "services factory call"))
         let second = Task {
             await self.invoke(runtime, "req-computer-single-flight-2", OpenClawComputerCommand.act.rawValue, json)
         }
-        try #require(await waitForCount(2, counter: admissionCalls))
+        try #require(try await waitForCount(2, counter: admissionCalls, "second invoke admission"))
         // The actor barrier proves the second invoke reached its first suspension.
         await runtime.updateMainSessionKey("single-flight-barrier")
 
@@ -1132,7 +1132,7 @@ struct MacNodeRuntimeTests {
         let invoke = Task {
             await self.invoke(runtime, "req-computer-release-during-init", OpenClawComputerCommand.act.rawValue, json)
         }
-        try #require(await waitForCount(1, counter: factoryCalls))
+        try #require(try await waitForCount(1, counter: factoryCalls, "services factory call"))
 
         await runtime.releaseHeldComputerInput()
         factoryGate.open()

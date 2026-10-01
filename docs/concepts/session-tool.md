@@ -112,7 +112,7 @@ Use [`sessions_search`](/concepts/session-search) for exact full-text recall acr
 
 ## Managing session settings and groups
 
-The `sessions` tool exposes bounded self-service surfaces. Gateway owners retain the full tool. An explicit non-owner sender receives `assign_owner` for visible sessions. An admitted non-admin operator with `operator.write` additionally retains archive, restore, and stop controls for sessions they created or are assigned to as a human owner, subject to existing session access checks. The narrower `operator.sessions.write` scope alone does not expose those controls. Other settings, deletion, cloud-profile discovery, and global group actions remain owner-gated. Senderless system runs keep their existing session-management surface, subject to tool policy, scopes, and live caller checks.
+The `sessions` tool exposes bounded self-service surfaces. Gateway owners retain the full tool. An explicit non-owner sender receives `assign_owner` for visible sessions. An admitted non-admin operator with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to as a human owner, subject to existing session access checks. The narrower `operator.sessions.write` scope alone does not expose those controls. Other settings, deletion, cloud-profile discovery, and global group actions remain owner-gated. Senderless system runs keep their existing session-management surface, subject to tool policy, scopes, and live caller checks.
 
 Explicit tool denies still remove the tool. Standalone HTTP/RPC tool invocation and session-bound MCP attach grants retain their owner gate and do not gain agent identity. Assignment without affirmative owner authority requires a live admitted agent turn, rechecked at the owner write. Tool discovery never grants access to another session; revoked authority and replaced session generations cannot be reused.
 
@@ -226,7 +226,7 @@ agent-to-agent replies use the same completion observation.
 The low-level Gateway `sessions.send` RPC has a different contract: its JSON
 `timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
 to keep the receiver's configured budget; bound the CLI wait separately with
-[`gateway call --timeout`](/cli/gateway/query#gateway-call-method).
+[`gateway call --timeout`](/cli/gateway/query#gateway-call-%3Cmethod%3E).
 
 An accepted result keeps target admission separate from announcement delivery.
 `targetDisposition` is `queued` for a new turn or `steered` for an active turn, including default sends with no reply wait to your own running child;
@@ -279,6 +279,10 @@ This check prevents accidental loss of attribution; the environment marker is
 not authentication or isolation from other processes running as the same OS user.
 
 After an independent peer session responds, OpenClaw can run a **reply-back loop** where the agents alternate messages up to the built-in limit. The target agent can reply `REPLY_SKIP` to stop early. Control UI requesters instead receive the target result once; their human-facing response is not fed back into the target session.
+
+Nonblocking sends retain the requester's reply authority before returning. Finishing
+the requester turn does not cancel the accepted reply; access revocation or Gateway
+replacement still stops it.
 
 Subagent coordination does not use this loop. A child report goes to its recipient once, without an automatic acknowledgment turn in the child. An explicitly waiting caller can still receive the recipient's reply inline. For a new child turn, the child's reply returns inline or is delivered once after the wait expires; the receiver's response is not sent back to the child.
 

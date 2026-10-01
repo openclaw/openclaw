@@ -97,6 +97,7 @@ async function runCron(
     mode: "explicit",
   });
   await runCronIsolatedAgentTurn({
+    deliveryAttemptFence: null,
     cfg,
     deps: {} as never,
     job: {

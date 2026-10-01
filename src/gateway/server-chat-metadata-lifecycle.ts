@@ -235,6 +235,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       readParams.assertCurrent?.();
       return await runtime.read(readParams);
     },
+    readModelsList: runtime.readModelsList,
     readStartup: async (readParams: Parameters<typeof runtime.readStartup>[0]) => {
       if (readParams.readPolicy !== "ready") {
         const { ensureGatewayPreparedModelRuntimeReady } =

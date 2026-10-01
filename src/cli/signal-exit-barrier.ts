@@ -1,6 +1,7 @@
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type SignalExitBarrier = () => Promise<void>;
+type CliExitSignal = "SIGINT" | "SIGTERM";
 
 type SignalExitOwner = (code: number | string) => void;
 // Process custody outlives the Gateway generations that reset ordinary barriers.
@@ -33,10 +34,10 @@ const activeBarriers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitBarriers"),
   "close-and-restart",
 );
-const activeGates = resolveGlobalSet<{ finished: Promise<void>; interrupt?: () => void }>(
-  Symbol.for("openclaw.signalExitGates"),
-  "close-and-restart",
-);
+const activeGates = resolveGlobalSet<{
+  finished: Promise<void>;
+  interrupt?: (signal?: CliExitSignal) => void;
+}>(Symbol.for("openclaw.signalExitGates"), "close-and-restart");
 const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitFinalizers"),
   "close-and-restart",
@@ -44,7 +45,7 @@ const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
 
 export function registerSignalExitGate(
   finished: Promise<void>,
-  interrupt?: () => void,
+  interrupt?: (signal?: CliExitSignal) => void,
 ): () => void {
   const gate = { finished, interrupt };
   activeGates.add(gate);
@@ -95,17 +96,17 @@ export function exitAfterSignalExitBarriers(code: number | string): void {
     });
 }
 
-export function waitForSignalExitBarriers(): Promise<void> {
-  pendingSignalExitDrain ??= drainSignalExitBarriers().finally(() => {
+export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
+  pendingSignalExitDrain ??= drainSignalExitBarriers(signal).finally(() => {
     pendingSignalExitDrain = undefined;
   });
   return pendingSignalExitDrain;
 }
 
-async function drainSignalExitBarriers(): Promise<void> {
+async function drainSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
   const gates = [...activeGates];
   for (const gate of gates) {
-    gate.interrupt?.();
+    gate.interrupt?.(signal);
   }
   const gateResults = await Promise.allSettled(gates.map((gate) => gate.finished));
   const barrierResults = await Promise.allSettled(
@@ -126,7 +127,7 @@ let cliSignalExit: Promise<void> | undefined;
 let cliSignalOwners = 0;
 let cliDoctorSignalOwner = false;
 
-function handleCliSignal(signal: "SIGINT" | "SIGTERM"): void {
+function handleCliSignal(signal: CliExitSignal): void {
   if (cliSignalExit) {
     return;
   }
@@ -140,7 +141,7 @@ function handleCliSignal(signal: "SIGINT" | "SIGTERM"): void {
     detachCliSignalExitHandlers();
     return;
   }
-  cliSignalExit = waitForSignalExitBarriers()
+  cliSignalExit = waitForSignalExitBarriers(signal)
     .catch(() => {
       process.stderr.write(
         "CLI signal cleanup did not complete. Retry the command to reclaim interrupted snapshots.\n",

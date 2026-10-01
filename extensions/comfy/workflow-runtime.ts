@@ -278,10 +278,8 @@ function resolveComfyNetworkPolicy(params: {
   explicitAllowPrivateNetwork: boolean;
   mode: ComfyMode;
 }): SsrFPolicy | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.baseUrl);
-  } catch {
+  const parsed = URL.parse(params.baseUrl);
+  if (!parsed) {
     return undefined;
   }
 

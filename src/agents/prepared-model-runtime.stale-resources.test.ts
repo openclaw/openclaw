@@ -122,7 +122,7 @@ async function withStaleResourceFixture(
         await resetPreparedModelRuntimeSnapshotsForTest();
         clearPluginMetadataLifecycleCaches();
         try {
-          const root = loadAndActivateRootPluginRegistry({
+          const root = await loadAndActivateRootPluginRegistry({
             config,
             cache: false,
             onlyPluginIds: [engineId],

@@ -346,16 +346,6 @@ function resolveWizardSetup(params: {
   };
 }
 
-function copyProviderAuthOptions(value: unknown): SingleProviderPluginApiKeyAuthOptions[] {
-  return copyArrayEntries(value).filter(
-    isRecordWithoutThrowing,
-  ) as SingleProviderPluginApiKeyAuthOptions[];
-}
-
-function copyProviderAuthMethods(value: unknown): ProviderAuthMethod[] {
-  return copyArrayEntries(value).filter(isRecordWithoutThrowing) as ProviderAuthMethod[];
-}
-
 function resolveEnvVars(params: {
   envVars?: unknown;
   auth?: SingleProviderPluginApiKeyAuthOptions[];
@@ -404,7 +394,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
         ) {
           throw new Error(`Missing modelCatalog.providers.${providerId}`);
         }
-        const providerAuth = copyProviderAuthOptions(
+        const providerAuth = copyArrayEntries(
           provider.auth ??
             resolveManifestProviderAuth({
               manifest: options.manifest,
@@ -412,7 +402,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               providerLabel: provider.label,
               overrides: provider.manifestAuth,
             }),
-        );
+        ).filter(isRecordWithoutThrowing) as SingleProviderPluginApiKeyAuthOptions[];
         const acceptedProviderAuth: SingleProviderPluginApiKeyAuthOptions[] = [];
         const auth = providerAuth.flatMap((entry) => {
           try {
@@ -440,7 +430,16 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           envVars: provider.envVars,
           auth: acceptedProviderAuth,
         });
-        auth.push(...copyProviderAuthMethods(provider.extraAuth));
+        auth.push(
+          ...(copyArrayEntries(provider.extraAuth).filter(
+            isRecordWithoutThrowing,
+          ) as ProviderAuthMethod[]),
+        );
+        const buildManifestProvider = () =>
+          buildManifestModelProviderConfig({
+            providerId,
+            catalog: options.manifest?.modelCatalog?.providers?.[providerId],
+          });
         let catalog: ProviderPluginCatalog;
         if ("run" in provider.catalog) {
           const catalogRun = provider.catalog.run;
@@ -454,13 +453,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               normalizeProviderId,
             ),
           );
-          const buildProvider =
-            provider.catalog.buildProvider ??
-            (() =>
-              buildManifestModelProviderConfig({
-                providerId,
-                catalog: options.manifest?.modelCatalog?.providers?.[providerId],
-              }));
+          const buildProvider = provider.catalog.buildProvider ?? buildManifestProvider;
           catalog = {
             order: "simple",
             run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> => {
@@ -500,13 +493,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           "run" in provider.catalog
             ? undefined
             : (provider.catalog.buildStaticProvider ??
-              (provider.catalog.buildProvider
-                ? undefined
-                : () =>
-                    buildManifestModelProviderConfig({
-                      providerId,
-                      catalog: options.manifest?.modelCatalog?.providers?.[providerId],
-                    })));
+              (provider.catalog.buildProvider ? undefined : buildManifestProvider));
         const staticCatalog: ProviderPluginCatalog | undefined =
           "run" in provider.catalog
             ? provider.catalog.staticRun

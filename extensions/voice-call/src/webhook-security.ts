@@ -605,22 +605,21 @@ function validatePlivoV2Signature(params: {
   return safeEqualSecret(expected, provided);
 }
 
-type PlivoParamMap = Record<string, string[]>;
+type PlivoParamMap = Map<string, string[]>;
 
 function toParamMapFromSearchParams(sp: URLSearchParams): PlivoParamMap {
-  const map: PlivoParamMap = {};
+  const map: PlivoParamMap = new Map();
   for (const [key, value] of sp.entries()) {
-    if (!map[key]) {
-      map[key] = [];
-    }
-    map[key].push(value);
+    const values = map.get(key) ?? [];
+    values.push(value);
+    map.set(key, values);
   }
   return map;
 }
 
 function sortedPlivoParams(params: PlivoParamMap, format: "query" | "body"): string {
   const parts: string[] = [];
-  const entries = Object.entries(params).toSorted(([left], [right]) =>
+  const entries = [...params].toSorted(([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0,
   );
   for (const [key, entryValues] of entries) {
@@ -637,7 +636,7 @@ function constructPlivoV3BaseUrl(params: {
   url: string;
   postParams: PlivoParamMap;
 }): string {
-  const hasPostParams = Object.keys(params.postParams).length > 0;
+  const hasPostParams = params.postParams.size > 0;
   const u = new URL(params.url);
   const baseNoQuery = `${u.protocol}//${u.host}${u.pathname}`;
 

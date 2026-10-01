@@ -97,13 +97,9 @@ export function estimateToolSchemaTokenPressure(
   return Math.ceil(estimateToolSchemaTokens(tools) * SAFETY_MARGIN);
 }
 
-function estimateTranscriptBoundaryTokenPressure(params: {
-  messages: AgentMessage[];
-  systemPrompt?: string;
-  prompt: string;
-  replay?: CompactionReplayPressureContext;
-  toolSchemaTokens?: number;
-}): TranscriptBoundaryTokenPressure {
+function estimateTranscriptBoundaryTokenPressure(
+  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0],
+): TranscriptBoundaryTokenPressure {
   const replay = params.replay
     ? resolveCompactionReplayPressure(
         params.messages,
@@ -149,9 +145,13 @@ function estimateTranscriptBoundaryTokenPressure(params: {
   };
 }
 
-export function estimateLlmBoundaryTokenPressure(
-  params: Parameters<typeof estimateTranscriptBoundaryTokenPressure>[0],
-): number {
+export function estimateLlmBoundaryTokenPressure(params: {
+  messages: AgentMessage[];
+  systemPrompt?: string;
+  prompt: string;
+  replay?: CompactionReplayPressureContext;
+  toolSchemaTokens?: number;
+}): number {
   return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
 

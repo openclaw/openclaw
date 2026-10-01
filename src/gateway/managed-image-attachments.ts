@@ -242,18 +242,6 @@ export function buildManagedMediaFailureBlock(params: {
   };
 }
 
-function validateManagedImageBuffer(
-  buffer: Buffer,
-  alt: string,
-  limits: ManagedImageAttachmentLimits,
-): void {
-  if (buffer.byteLength > limits.maxBytes) {
-    throw createManagedImageAttachmentError(
-      `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
-    );
-  }
-}
-
 function maxBytesForManagedMediaKind(
   kind: ManagedMediaKind,
   imageLimits: ManagedImageAttachmentLimits,
@@ -261,14 +249,17 @@ function maxBytesForManagedMediaKind(
   return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
 }
 
-function createManagedMediaByteLimitError(params: {
-  kind: ManagedMediaKind;
-  label: string;
-  maxBytes: number;
-}): Error {
-  return createManagedImageAttachmentError(
-    `Managed ${params.kind} attachment ${JSON.stringify(params.label)} exceeds the ${formatLimitMiB(params.maxBytes)} byte limit`,
-  );
+function assertManagedMediaByteLimit(
+  size: number,
+  kind: ManagedMediaKind,
+  label: string,
+  maxBytes: number,
+): void {
+  if (size > maxBytes) {
+    throw createManagedImageAttachmentError(
+      `Managed ${kind} attachment ${JSON.stringify(label)} exceeds the ${formatLimitMiB(maxBytes)} byte limit`,
+    );
+  }
 }
 
 function estimateBase64DecodedByteLength(base64: string): number {
@@ -495,9 +486,12 @@ function parseMediaDataUrl(
   }
 
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits);
-  if (estimateBase64DecodedByteLength(base64Part) > maxBytes) {
-    throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
-  }
+  assertManagedMediaByteLimit(
+    estimateBase64DecodedByteLength(base64Part),
+    mediaKind,
+    label,
+    maxBytes,
+  );
 
   return {
     kind: "media-data-url",
@@ -1254,9 +1248,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
           throw new Error("Local audio/video media requires an explicitly trusted reply payload");
         }
         const maxBytes = maxBytesForManagedMediaKind(mediaKind, limits);
-        if (savedOriginal.size > maxBytes) {
-          throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
-        }
+        assertManagedMediaByteLimit(savedOriginal.size, mediaKind, label, maxBytes);
 
         let originalStats: Awaited<ReturnType<typeof getVariantStats>> = {
           width: null,
@@ -1268,7 +1260,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
             parsedDataUrl.kind === "media-data-url"
               ? parsedDataUrl.buffer
               : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
-          validateManagedImageBuffer(originalBuffer, label, limits);
+          assertManagedMediaByteLimit(originalBuffer.byteLength, "image", label, limits.maxBytes);
           let originalDisplayMetadata: { width: number; height: number } | undefined;
           for (let resizeAttempt = 0; ; resizeAttempt += 1) {
             originalStats = await getVariantStats({
@@ -1311,7 +1303,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
               transparent: { format: "png", compressionLevel: 9 },
               transparency: "auto",
             });
-            validateManagedImageBuffer(resized.data, label, limits);
+            assertManagedMediaByteLimit(resized.data.byteLength, "image", label, limits.maxBytes);
             const replacement = await saveMediaBuffer(
               resized.data,
               resized.mimeType,

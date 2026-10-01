@@ -141,6 +141,19 @@ from the thread list when its agent entry is available, and its loaded children
 remain reachable. If the agent catalog is unavailable, the primary thread remains
 in the list for recovery.
 
+## Online people
+
+The native sidebar's **Online** section includes your own identity and distinguishes
+active, idle, and unobserved activity. Collapse it to a compact facepile. Open and
+running session counts come from the Gateway across agents, independently of the
+loaded thread list; unavailable counts stay unknown and offer retry after a failure.
+
+Hover or focus a person to inspect reported connections, interaction times, and
+visible session links. Recent links stay in place while the card is open and
+disappear if they become ineligible. **View Activity** opens that person's Activity
+page in the Dashboard for the same Gateway. Thread rows show other viewers,
+combining duplicate connections and excluding your own identity.
+
 ## Pending questions and approvals
 
 Thread rows, agent rows, and collapsed group headings show a question or approval

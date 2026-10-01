@@ -10,7 +10,7 @@ import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/sessi
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { stringEnum } from "../schema/typebox.js";
+import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsListTool,
@@ -52,12 +52,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
-  user: Type.Optional(
-    Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
-    }),
-  ),
+  user: requesterProfileSchema(),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
@@ -520,20 +515,12 @@ export function createSessionsListTool(opts?: {
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
             sessionId,
-            sessionKey: resolveInternalSessionKey({
-              key,
-              alias,
-              mainKey,
-            }),
+            sessionKey: resolveInternalSessionKey({ key, alias }),
             agentId: resolvedAgentId,
           });
         }
         if (messageLimit > 0) {
-          const resolvedKey = resolveInternalSessionKey({
-            key,
-            alias,
-            mainKey,
-          });
+          const resolvedKey = resolveInternalSessionKey({ key, alias });
           historyTargets.push({ row, resolvedKey });
         }
         rows.push(row);

@@ -1,4 +1,6 @@
 import {
+  decodeJsonPointerSegment,
+  decodeLocalSchemaRefFragment,
   normalizeJsonSchemaForTypeBox,
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
@@ -120,16 +122,6 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
   return `${path}.type: expected string or non-empty string array`;
 }
 
-function decodePointerSegment(segment: string): string {
-  let decodedSegment;
-  try {
-    decodedSegment = decodeURIComponent(segment);
-  } catch {
-    decodedSegment = segment;
-  }
-  return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
 function parseJsonPointerArrayIndex(segment: string): number | undefined {
   if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
     return undefined;
@@ -168,14 +160,18 @@ function resolveLocalRef(
       return resolveLocalRef(resourceRoot, ref.slice(resourceRoot.$id.length), resourceBaseId);
     }
   }
-  if (ref === "#") {
+  const fragment = decodeLocalSchemaRefFragment(ref);
+  if (fragment === undefined) {
+    return { found: false };
+  }
+  if (fragment === "") {
     return { found: true, schema: resourceRoot, resourceRoot, resourceBaseId };
   }
-  if (ref.startsWith("#/")) {
+  if (fragment.startsWith("/")) {
     let current: unknown = resourceRoot;
     let currentResourceRoot = resourceRoot;
     let currentResourceBaseId = resourceBaseId;
-    for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
+    for (const segment of fragment.slice(1).split("/").map(decodeJsonPointerSegment)) {
       if (Array.isArray(current)) {
         const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {
@@ -201,22 +197,10 @@ function resolveLocalRef(
         }
       : { found: false };
   }
-  if (ref.startsWith("#")) {
-    // The pointer branch decodes through decodePointerSegment's try/catch;
-    // anchor fragments deserve the same tolerance so a malformed escape
-    // resolves to "not found" instead of throwing a raw URIError.
-    let anchor: string;
-    try {
-      anchor = decodeURIComponent(ref.slice(1));
-    } catch {
-      return { found: false };
-    }
-    const resolved = resolveLocalAnchor(resourceRoot, anchor);
-    return resolved === undefined
-      ? { found: false }
-      : { found: true, schema: resolved, resourceRoot, resourceBaseId };
-  }
-  return { found: false };
+  const resolved = resolveLocalAnchor(resourceRoot, fragment);
+  return resolved === undefined
+    ? { found: false }
+    : { found: true, schema: resolved, resourceRoot, resourceBaseId };
 }
 
 function splitResourceRef(ref: string): { resource: string; fragment: string } {

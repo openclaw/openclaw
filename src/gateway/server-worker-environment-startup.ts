@@ -399,7 +399,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getNodeTransport: () => deviceRuntime.getNodeTransport(),
     gatewayNamespace: nodeWorkerGatewayNamespace,
   });
-  const workerEnvironmentServiceBase = createWorkerEnvironmentService({
+  const workerEnvironmentService = createWorkerEnvironmentService({
     scheduler: params.scheduler,
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
@@ -553,10 +553,10 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     logger: workerEnvironmentLog,
   });
   try {
-    await workerEnvironmentServiceBase.ready();
+    await workerEnvironmentService.ready();
   } catch (error) {
     try {
-      await workerEnvironmentServiceBase.stop();
+      await workerEnvironmentService.stop();
     } catch (cleanupError) {
       if (cleanupError !== error) {
         if (cleanupError instanceof AggregateError && cleanupError.errors.includes(error)) {
@@ -571,7 +571,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     }
     throw error;
   }
-  const workerEnvironmentService = workerEnvironmentServiceBase;
   bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.resolveAvailability);
   bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
     const environmentIds = params.startup.store

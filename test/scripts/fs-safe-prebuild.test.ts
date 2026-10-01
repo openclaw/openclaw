@@ -93,11 +93,11 @@ async function createFixture() {
     if (process.env.FIXTURE_NPM_FAIL) process.exit(1);
     const prefix = args[args.indexOf("--prefix") + 1];
     const target = path.join(prefix, "node_modules", ${JSON.stringify(NATIVE_NAME)});
-    fs.mkdirSync(target, { recursive: true });
+    fs.mkdirSync(path.join(target, "lib"), { recursive: true });
     fs.writeFileSync(path.join(target, "package.json"), JSON.stringify({
-      name: ${JSON.stringify(NATIVE_NAME)}, version: process.env.FIXTURE_WRONG_VERSION ? "9.9.9" : ${JSON.stringify(NATIVE_VERSION)}, main: "index.cjs",
+      name: ${JSON.stringify(NATIVE_NAME)}, version: process.env.FIXTURE_WRONG_VERSION ? "9.9.9" : ${JSON.stringify(NATIVE_VERSION)}, main: "lib/index.cjs",
     }));
-    fs.writeFileSync(path.join(target, "index.cjs"), process.env.FIXTURE_BROKEN_DOWNLOAD
+    fs.writeFileSync(path.join(target, "lib/index.cjs"), process.env.FIXTURE_BROKEN_DOWNLOAD
       ? "throw new Error('addon load failed')"
       : "module.exports.readCloneFileMetadata = (paths) => paths;");
   `,
@@ -275,7 +275,7 @@ describe("packaged fs-safe prebuild restoration", () => {
         cli,
         `
       if (process.argv.includes("--version")) throw new Error("npm initialized before discovery completed");
-      if (process.env.NODE_OPTIONS?.includes("data:text/javascript")) throw new Error("discovery preload leaked into install");
+      if ([process.env.NODE_OPTIONS, process.env.BUN_OPTIONS].some(value => value?.includes("data:text/javascript"))) throw new Error("discovery preload leaked into install");
       ${original}
     `,
       );
@@ -287,7 +287,7 @@ describe("packaged fs-safe prebuild restoration", () => {
       );
       const result = fixture.run({ npm_execpath: undefined, PATH: bin });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
+      expect(result.stdout, result.stderr).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
       expect((await fs.readFile(fixture.callsPath, "utf8")).trim().split("\n")).toHaveLength(1);
       await expectCompleted(fixture);
     },

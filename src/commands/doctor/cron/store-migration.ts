@@ -14,7 +14,7 @@ import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { resolveCronCurrentSessionTarget } from "../../../cron/session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
-import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/store/types.js";
+import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,

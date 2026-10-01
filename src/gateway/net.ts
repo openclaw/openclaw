@@ -527,9 +527,6 @@ export function isSecureWebSocketUrl(
   }
   // Optional break-glass for trusted private-DNS overlays.
   if (opts?.allowPrivateWs) {
-    if (isPrivateOrLoopbackHost(parsed.hostname)) {
-      return true;
-    }
     // Hostnames may resolve to private networks (for example in VPN/Tailnet DNS),
     // but resolution is not available in this synchronous validator.
     const hostForIpCheck =

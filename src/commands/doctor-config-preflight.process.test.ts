@@ -19,6 +19,7 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   createBuiltRuntime,
   createSourceRuntime,
@@ -341,12 +342,14 @@ describe("doctor invalid config process exit", () => {
 // Synchronous CLI probes must not consume neighboring cases' timeout budgets.
 describe("Doctor repair followed by gateway readiness", () => {
   it("serves canonical state after Doctor repairs cron and preserves retired plugin sidecars", async () => {
+    const nodeExecutable = resolveTestNodeExecPath();
     const runtimeRoot = createBuiltRuntime(
       tempDirs.createTempDir("openclaw-cron-upgrade-runtime-"),
     );
     const instance = await createOpenClawTestInstance({
       name: "cron-upgrade-ready",
       cwd: runtimeRoot,
+      gatewayCommandPrefix: [nodeExecutable],
       entrypoint: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js")],
       startTimeoutMs: 30_000,
       stopTimeoutMs: 1_500,
@@ -422,7 +425,7 @@ describe("Doctor repair followed by gateway readiness", () => {
 
       const doctor = await instance.cli(
         ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-        { timeoutMs: 30_000 },
+        { execPath: nodeExecutable, timeoutMs: 30_000 },
       );
       const doctorOutput = `${doctor.stdout}\n${doctor.stderr}`;
       expect(doctor.code, doctorOutput).toBe(0);
@@ -441,7 +444,9 @@ describe("Doctor repair followed by gateway readiness", () => {
         const logs = instance.logs();
         expect(logs).not.toContain("Left plugin-state sidecar in place");
         expect(logs).not.toContain(STARTUP_REFUSAL);
-        const status = await instance.cli(["gateway", "call", "status", "--json"]);
+        const status = await instance.cli(["gateway", "call", "status", "--json"], {
+          execPath: nodeExecutable,
+        });
         expect(status.code, status.stdout + "\n" + status.stderr).toBe(0);
         expect(JSON.parse(status.stdout).startupMigrationWarning).toBeUndefined();
         expect(fs.readFileSync(sidecarPath)).toEqual(preservedSidecar);
@@ -453,7 +458,7 @@ describe("Doctor repair followed by gateway readiness", () => {
       const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
       expect(loaded.store.jobs.map((entry) => entry.id)).toContain("valid-job");
       expect(
-        loadCronQuarantinedJobs(storePath, env).map((entry) => ({
+        (await loadCronQuarantinedJobs(storePath, env)).map((entry) => ({
           sourceIndex: entry.sourceIndex,
           reason: entry.reason,
           id: entry.job?.id,

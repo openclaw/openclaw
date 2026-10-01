@@ -22,7 +22,7 @@ import {
 } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  assertCronRunReceiptCurrent,
+  readCronRunReceiptCurrentJob,
   CronRunReceiptRevisionError,
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
@@ -208,7 +208,7 @@ describe("cron runtime row publication", () => {
       }),
     );
     try {
-      assertCronRunReceiptCurrent({
+      readCronRunReceiptCurrentJob({
         handle,
         resolveAgentId: (current) => current.agentId ?? "main",
       });
@@ -216,7 +216,7 @@ describe("cron runtime row publication", () => {
       openOpenClawStateDatabase()
         .db.prepare("UPDATE cron_jobs SET job_json = '{}' WHERE store_key = ? AND job_id = ?")
         .run(handle.storeKey, job.id);
-      expect(() => assertCronRunReceiptCurrent({ handle, resolveAgentId: () => "main" })).toThrow(
+      expect(() => readCronRunReceiptCurrentJob({ handle, resolveAgentId: () => "main" })).toThrow(
         CronRunReceiptRevisionError,
       );
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(3);

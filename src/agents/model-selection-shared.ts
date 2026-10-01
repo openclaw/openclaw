@@ -26,6 +26,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { isVllmQwenThinkingCompat } from "./model-compat-catalog.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -1106,7 +1107,6 @@ export function resolveAllowedModelRefFromAliasIndex(
   return { ref: resolved.ref, key: status.key };
 }
 
-/** True when config contains provider model rows that should seed catalogs. */
 function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
   const providers = cfg.models?.providers;
   if (!providers || typeof providers !== "object") {
@@ -1247,16 +1247,6 @@ export function buildConfiguredModelCatalog(params: {
   }
 
   return catalog;
-}
-
-function isVllmQwenThinkingCompat(
-  providerId: string,
-  compat?: { thinkingFormat?: unknown } | null,
-): boolean {
-  return (
-    providerId === "vllm" &&
-    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
-  );
 }
 
 export function resolveHooksGmailModel(

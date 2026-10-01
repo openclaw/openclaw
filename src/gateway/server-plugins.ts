@@ -43,12 +43,14 @@ import {
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
 } from "./server-plugin-in-process-dispatch.js";
+import { readTrustedPluginSessionFacts } from "./server-plugin-session-facts.js";
 import {
   canTrustedOfficialPluginRequestScopes,
   createGatewaySubagentRuntime,
   resolvePluginSubagentOverridePolicies,
   type PluginSubagentOverridePolicies,
 } from "./server-plugin-subagent-runtime.js";
+import { withTrustedPluginUserProfileIdentity } from "./server-plugin-user-profile.js";
 import {
   createGatewayHooksRuntime,
   hasInProcessGatewayContext,
@@ -64,6 +66,7 @@ export {
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
+export { readTrustedPluginSessionFacts, withTrustedPluginUserProfileIdentity };
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
 
 export async function dispatchTrustedPluginGatewayMethod<T>(
@@ -216,6 +219,10 @@ function createGatewayPluginRuntimeBindings(
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
+        readSessionFacts: (params) =>
+          readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
+        withUserProfileIdentity: (params, run) =>
+          withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),
       },
       hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, signal),
@@ -229,12 +236,6 @@ export function loadGatewayPlugins(params: {
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
-  log: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-    debug: (msg: string) => void;
-  };
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];

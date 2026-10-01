@@ -85,13 +85,9 @@ function createLspSession(serverName: string, child: OwnedStdioProcess): LspSess
   };
 }
 
-function rememberLspFailure(session: LspSession, error: Error): void {
-  session.failure ??= error;
-}
-
 function failLspSession(session: LspSession, error: Error): void {
-  rememberLspFailure(session, error);
-  session.pendingRequests.rejectAll(session.failure ?? error);
+  session.failure ??= error;
+  session.pendingRequests.rejectAll(session.failure);
 }
 
 function lspProcessExitError(
@@ -113,7 +109,7 @@ function attachLspProcessHandlers(session: LspSession): void {
   });
   session.process.onExit((code, signal) => {
     // Block new requests immediately, but let stdout drain any final response before close.
-    rememberLspFailure(session, lspProcessExitError(session, code, signal));
+    session.failure ??= lspProcessExitError(session, code, signal);
   });
   void session.process.wait().then(
     ({ code, signal }) => failLspSession(session, lspProcessExitError(session, code, signal)),
@@ -360,7 +356,6 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
         }
       }
     }
-    // Notifications (no id) are logged but not acted on
     if ("method" in record && !("id" in record)) {
       logDebug(`bundle-lsp:${session.serverName}: notification ${String(record.method)}`);
     }

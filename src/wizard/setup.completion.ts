@@ -75,8 +75,7 @@ export async function setupWizardShellCompletion(params: {
   };
 
   if (completionStatus.usesSlowPattern) {
-    const cacheGenerated = await ensureCompletionCache();
-    if (cacheGenerated) {
+    if (await ensureCompletionCache()) {
       await installCompletionForSetup();
     }
     return;
@@ -103,13 +102,7 @@ export async function setupWizardShellCompletion(params: {
       return;
     }
 
-    const cacheGenerated = await ensureCompletionCache();
-    if (!cacheGenerated) {
-      return;
-    }
-
-    const completionInstalled = await installCompletionForSetup();
-    if (!completionInstalled) {
+    if (!(await ensureCompletionCache()) || !(await installCompletionForSetup())) {
       return;
     }
 

@@ -31,8 +31,8 @@ import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessages,
-  sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { HealthSummary } from "../health/types.js";
 import { createChatAbortMarker } from "../server-chat-state.js";

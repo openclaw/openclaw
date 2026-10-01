@@ -6,12 +6,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as userProfileReads from "../state/user-profile-reads.js";
 import {
-  ensureProfileForEmail,
   linkEmail,
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
-} from "../state/user-profiles.js";
+} from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   SESSION_KEY,
   SESSION_ID,

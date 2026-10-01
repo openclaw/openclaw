@@ -64,6 +64,7 @@ struct ChatSessionSidebar: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .selectionDisabled()
+            ChatSidebarOnlineSection(viewModel: self.viewModel)
             self.agentsSection(now: now)
             self.threadsHeading
             ForEach(sections) { section in

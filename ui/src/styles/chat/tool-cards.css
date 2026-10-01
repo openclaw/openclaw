@@ -60,7 +60,6 @@
   transform: rotate(-90deg);
 }
 
-/* ── Collapsed tool row ── */
 .chat-tool-msg-collapse {
   width: 100%;
   min-width: 0;
@@ -261,7 +260,6 @@
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
-/* ── Kind-aware tool rows ── */
 .chat-tool-row__prompt {
   flex-shrink: 0;
 }
@@ -324,7 +322,6 @@
   }
 }
 
-/* ── Diffstat chips (+N -M) ── */
 .chat-diffstat {
   display: inline-flex;
   align-items: center;
@@ -349,7 +346,6 @@
   color: var(--destructive);
 }
 
-/* ── Inline diff ── */
 .chat-diff {
   margin-top: 6px;
   border-radius: var(--radius-sm);
@@ -434,7 +430,6 @@
   color: color-mix(in srgb, var(--text) 72%, var(--muted) 28%);
 }
 
-/* ── Terminal-style command block ── */
 .chat-tool-term {
   margin-top: 0;
   background: transparent;
@@ -503,7 +498,6 @@
   color: inherit;
 }
 
-/* ── Key-value args (generic tools) ── */
 .chat-tool-kv {
   display: flex;
   flex-direction: column;
@@ -535,7 +529,6 @@
   overflow-wrap: anywhere;
 }
 
-/* ── Expanded tool row body ── */
 .chat-tool-msg-body {
   min-width: 0;
   max-width: 100%;
@@ -584,7 +577,6 @@
   overflow-wrap: anywhere;
 }
 
-/* ── Expanded tool detail ── */
 .chat-tools-inline {
   display: grid;
   gap: 2px;
@@ -833,7 +825,6 @@
   word-break: normal;
 }
 
-/* ── Canvas/document preview ── */
 .chat-tool-card__preview,
 .chat-tool-card__raw {
   margin-top: 8px;
@@ -1018,7 +1009,6 @@
   margin-inline: 12px;
 }
 
-/* ── Activity group (a turn's run of tool rows) ── */
 .chat-activity-group {
   width: 100%;
   min-width: 0;

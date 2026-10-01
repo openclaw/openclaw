@@ -5,13 +5,15 @@ import {
   loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite-bound.js";
-import { getDeliveryQueueEntryOwnersInDatabase } from "../../../infra/delivery-queue-sqlite.kernel.js";
+import {
+  getDeliveryQueueEntryOwnersInDatabase,
+  type DeliveryQueueStoredStatus,
+} from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue.records.js";
-import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -25,20 +27,35 @@ import {
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
+  type SubagentRunSqliteRow,
 } from "../registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
+import type {
+  SubagentCompletionMutation,
+  SubagentCompletionMutationResult,
+} from "./subagent-completion-mutation.types.js";
 
-type Operation = SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"];
 const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
 
 /** The shared-state worker owns queue insertion and its exact native completion owner. */
 export function admitSubagentCompletionInWorker(
-  input: Operation["input"],
+  input: {
+    writeId: string;
+    queueEntry: QueuedSessionDelivery;
+    expected: SubagentRunRecord;
+    subagent: SubagentRunRecord;
+  },
   database: OpenClawStateDatabase,
-): Operation["output"] {
+): {
+  writeId: string;
+  claimed: boolean;
+  status: DeliveryQueueStoredStatus;
+  row: SubagentRunSqliteRow;
+} {
   const { expected, subagent, queueEntry, writeId } = input;
   const owner = queueEntry.kind === "agentTurn" ? queueEntry.owner : undefined;
   const delivery = subagent.delivery;
@@ -144,9 +161,9 @@ export function admitSubagentCompletionInWorker(
 }
 
 export function mutateSubagentCompletionInWorker(
-  input: SessionDeliveryWorkerOperations["sessionDelivery.mutateSubagentCompletion"]["input"],
+  input: { writeId: string; mutation: SubagentCompletionMutation },
   database: OpenClawStateDatabase,
-): SessionDeliveryWorkerOperations["sessionDelivery.mutateSubagentCompletion"]["output"] {
+): SubagentCompletionMutationResult & { writeId: string } {
   return runOpenClawStateWriteTransaction(
     () => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: input.writeId });

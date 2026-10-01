@@ -24,7 +24,6 @@ import {
   beginSessionWorkAdmission,
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
@@ -32,6 +31,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import * as killSession from "./subagent-control-session.js";
+import { registerAdmissionDrainControlTests } from "./subagent-control.admission-drain.test-support.js";
 import {
   buildControlledSubagentRunsReadContext,
   killAllControlledSubagentRuns,
@@ -59,7 +59,7 @@ type ControlRuntime = typeof import("./subagent-control.runtime.js");
 const controlRuntimeMocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn<ControlRuntime["abortEmbeddedAgentRun"]>(() => false),
   isEmbeddedAgentRunActive: vi.fn<ControlRuntime["isEmbeddedAgentRunActive"]>(() => false),
-  clearSessionQueues: vi.fn<ControlRuntime["clearSessionQueues"]>(() => ({
+  clearSessionLifecycleQueues: vi.fn<ControlRuntime["clearSessionLifecycleQueues"]>(() => ({
     followupCleared: 0,
     laneCleared: 0,
     keys: [],
@@ -76,21 +76,21 @@ vi.mock("../../../gateway/call.js", () => ({
 }));
 
 function setSubagentControlDepsForTest(overrides: Partial<ControlRuntime> = {}) {
+  const { isEmbeddedAgentRunActive: isActive, clearSessionLifecycleQueues: clearQueues } =
+    overrides;
   controlRuntimeMocks.abortEmbeddedAgentRun.mockReset();
   controlRuntimeMocks.isEmbeddedAgentRunActive.mockReset();
-  controlRuntimeMocks.clearSessionQueues.mockReset();
+  controlRuntimeMocks.clearSessionLifecycleQueues.mockReset();
   // Default to the canonical store; individual race tests replace only their fault boundary.
   vi.mocked(applySessionEntryExactReplacements).mockReset();
   if (overrides.abortEmbeddedAgentRun) {
     controlRuntimeMocks.abortEmbeddedAgentRun.mockImplementation(overrides.abortEmbeddedAgentRun);
   }
-  if (overrides.isEmbeddedAgentRunActive) {
-    controlRuntimeMocks.isEmbeddedAgentRunActive.mockImplementation(
-      overrides.isEmbeddedAgentRunActive,
-    );
+  if (isActive) {
+    controlRuntimeMocks.isEmbeddedAgentRunActive.mockImplementation(isActive);
   }
-  if (overrides.clearSessionQueues) {
-    controlRuntimeMocks.clearSessionQueues.mockImplementation(overrides.clearSessionQueues);
+  if (clearQueues) {
+    controlRuntimeMocks.clearSessionLifecycleQueues.mockImplementation(clearQueues);
   }
 }
 
@@ -333,7 +333,7 @@ describe("killSubagentRunAdmin", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => true,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
 
     const pendingKill = killSubagentRunAdmin({
@@ -406,7 +406,7 @@ describe("killSubagentRunAdmin", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => false,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
 
     const pendingKill = killSubagentRunAdmin({
@@ -528,7 +528,7 @@ describe("killSubagentRunAdmin", () => {
     });
 
     expect(result).toMatchObject({ found: true, killed: true });
-    expect(abortedLastRunWrites).toEqual([]);
+    expect(abortedLastRunWrites).toEqual([true]);
   });
 
   it("reports when completion wins while the kill path awaits persistence", async () => {
@@ -874,7 +874,7 @@ describe("killSubagentRunAdmin", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => false,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
 
     const pendingKill = killSubagentRunAdmin({
@@ -1028,7 +1028,7 @@ describe("controlled subagent cancellation races", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: isActive,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: clearQueues,
+      clearSessionLifecycleQueues: clearQueues,
     });
 
     const pendingKills = oldRuns.map((entry) =>
@@ -1119,7 +1119,7 @@ describe("controlled subagent cancellation races", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => false,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: clearQueues,
+      clearSessionLifecycleQueues: clearQueues,
     });
     const persistMarker = killSession.persistSubagentAbortedLastRun;
     using markerSpy = vi.spyOn(killSession, "persistSubagentAbortedLastRun");
@@ -1216,7 +1216,7 @@ describe("controlled subagent cancellation races", () => {
         return true;
       },
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: clearQueues,
+      clearSessionLifecycleQueues: clearQueues,
     });
 
     await expect(
@@ -1452,7 +1452,7 @@ describe("controlled subagent cancellation races", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => recoveryActive,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
 
     const pendingKill = killAllControlledSubagentRuns({
@@ -1487,82 +1487,12 @@ describe("controlled subagent cancellation races", () => {
     }
   });
 
-  it.each([false, true])(
-    "releases queued=%s work when interrupted admission does not drain",
-    async (queued) => {
-      const controllerSessionKey = "agent:main:main";
-      const childSessionKey = "agent:main:subagent:kill-admission-timeout";
-      const sessionId = "sess-kill-admission-timeout";
-      const entry = createSubagentRunRecord({
-        runId: "run-kill-admission-timeout",
-        childSessionKey,
-        controllerSessionKey,
-        requesterSessionKey: controllerSessionKey,
-        task: "hold admission during kill",
-        createdAt: Date.now() - 2_000,
-        collect: queued,
-        execution: queued
-          ? { status: "queued" }
-          : { status: "running", startedAt: Date.now() - 1_000 },
-      });
-      addSubagentRunForTests(entry);
-      const storePath = await writeSessionStoreFixture("kill-admission-timeout", {
-        [childSessionKey]: { sessionId, updatedAt: Date.now() },
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [childSessionKey, sessionId],
-        assertAllowed: () => {},
-      });
-      setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => false,
-        abortEmbeddedAgentRun: () => false,
-        clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-      });
-
-      const dispatch = vi.fn(async () => {});
-      if (queued) {
-        enqueueSwarmRun({
-          groupId: "drain",
-          runId: entry.runId,
-          maxConcurrent: 1,
-          activeRunIds: ["holder"],
-          start: dispatch,
-          onStartFailure: () => true,
-        });
-      }
-      vi.useFakeTimers();
-      try {
-        const pendingKill = killAllControlledSubagentRuns({
-          cfg: cfgWithSessionStore(storePath),
-          controller: controllerFor(controllerSessionKey),
-          runs: [entry],
-        });
-        await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0));
-        if (queued) {
-          releaseSwarmRun("holder");
-        }
-        await Promise.resolve();
-        expect(dispatch).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
-
-        await expect(pendingKill).resolves.toMatchObject({
-          status: "error",
-          error:
-            "hold admission during kill: Subagent is still active; try the kill again in a moment.",
-        });
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.killIntent).toBeUndefined();
-        if (queued) {
-          await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
-        }
-      } finally {
-        admission.release();
-        swarmSchedulerTesting.reset();
-        vi.useRealTimers();
-      }
-    },
-  );
+  registerAdmissionDrainControlTests({
+    cfgWithSessionStore,
+    controllerFor,
+    setSubagentControlDepsForTest,
+    writeSessionStoreFixture,
+  });
 
   it("leaves restart recovery disabled when the kill tombstone cannot persist", async () => {
     const controllerSessionKey = "agent:main:main";
@@ -1695,7 +1625,7 @@ describe("killAllControlledSubagentRuns", () => {
           }
           return true;
         },
-        clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+        clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
       });
       const controller = {
         controllerSessionKey,
@@ -1850,7 +1780,7 @@ describe("killAllControlledSubagentRuns", () => {
       setSubagentControlDepsForTest({
         isEmbeddedAgentRunActive: () => true,
         abortEmbeddedAgentRun: () => true,
-        clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+        clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
       });
       try {
         await started.promise;
