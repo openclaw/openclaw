@@ -363,6 +363,14 @@ function formatPluginInspection(
     "Custom hooks",
     inspect.customHooks.map((entry) => `${entry.name}: ${entry.events.join(", ")}`),
   );
+  // Refused registrations. api.on() returns void, so this section is the only
+  // way the plugin's owner can see that a handler never went live.
+  appendSection(
+    "Blocked hooks",
+    inspect.blockedHooks.map(
+      (entry) => `${entry.severity.toUpperCase()} ${entry.hookName}: ${entry.message}`,
+    ),
+  );
   appendSection(
     "Tools",
     inspect.tools.map((entry) => {
