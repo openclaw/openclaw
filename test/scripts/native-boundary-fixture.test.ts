@@ -77,7 +77,7 @@ it.runIf(process.platform === "linux")(
       expect(result.status, result.stderr).toBe(0);
     } finally {
       Atomics.store(control, 0, 1);
-      worker.postMessage("cleanup");
+      worker.postMessage("cleanup", []);
       await exited;
     }
   },
