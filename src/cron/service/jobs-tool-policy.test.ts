@@ -48,6 +48,21 @@ describe("reconcileToolsAllowAuthority exec pin", () => {
     expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
   });
 
+  it("keeps the creator exec pin on a wildcard cap", () => {
+    const job = toolJob(["*"]);
+    reconcileToolsAllowAuthority({
+      job,
+      previouslyUsedToolRuntime: true,
+      explicitlyMutatesToolsAllow: true,
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+    });
+    expect(job.toolsAllowExecTargetRequirement).toEqual({
+      version: 1,
+      target: { version: 1, host: "gateway", ask: "always" },
+      grantIndex: 0,
+    });
+  });
+
   it("clears the pin when the cap is explicitly rewritten without the server fact", () => {
     const job = toolJob(["exec"]);
     job.toolsAllowExecTarget = { version: 1, host: "gateway", ask: "always" };

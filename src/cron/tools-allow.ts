@@ -1,4 +1,5 @@
-import type { CronJob } from "./types.js";
+import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
 type CronToolRuntimeSpec = Pick<CronJob, "payload" | "trigger">;
 
@@ -16,4 +17,30 @@ export function applyDefaultCronToolsAllow(job: CronToolRuntimeSpec): void {
   if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow === undefined) {
     job.payload.toolsAllow = ["*"];
   }
+}
+
+/** Resolve legacy automatic creator snapshots against the current owner policy. */
+export function resolveCronRunToolsAllow(
+  job: Pick<
+    CronStoredJob,
+    | "payload"
+    | "trigger"
+    | "owner"
+    | "scheduledToolPolicy"
+    | "runtimeAuthority"
+    | "runtimeAuthorityRecoveryRequired"
+  >,
+): string[] | undefined {
+  return job.payload.kind === "agentTurn" &&
+    job.payload.toolsAllowIsDefault === true &&
+    !job.trigger?.script.trim() &&
+    !job.runtimeAuthority &&
+    !job.runtimeAuthorityRecoveryRequired &&
+    resolveCronScheduledToolPolicy({
+      toolsAllow: job.payload.toolsAllow,
+      scheduledToolPolicy: job.scheduledToolPolicy,
+      owner: job.owner,
+    })
+    ? ["*"]
+    : job.payload.toolsAllow;
 }

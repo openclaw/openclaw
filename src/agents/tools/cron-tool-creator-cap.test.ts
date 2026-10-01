@@ -44,7 +44,7 @@ function readReadyPatch(plan: CronJobUpdatePatchPlan): Record<string, unknown> {
 }
 
 describe("cron tool creator cap", () => {
-  it("caps trigger-script creates without changing transport-only jobs", () => {
+  it("lets default agent turns follow their owner while scripts and runtime apps keep the creator cap", () => {
     const triggerJob = {
       trigger: { script: "return true" },
       payload: { kind: "systemEvent", text: "wake" },
@@ -52,8 +52,12 @@ describe("cron tool creator cap", () => {
     const plainJob = {
       payload: { kind: "systemEvent", text: "wake" },
     };
+    const agentJob = { payload: { kind: "agentTurn", message: "work" } };
+    const runtimeAppJob = { payload: { kind: "agentTurn", message: "work" } };
 
     capCronJobToolsAllowOnCreate(triggerJob, ["read", "cron"]);
+    capCronJobToolsAllowOnCreate(agentJob, ["read", "cron"]);
+    capCronJobToolsAllowOnCreate(runtimeAppJob, ["read", "cron"], true);
     capCronJobToolsAllowOnCreate(plainJob, ["read", "cron"]);
 
     // Legacy "cron" creator allowlists normalize to the canonical tool id.
@@ -63,7 +67,29 @@ describe("cron tool creator cap", () => {
       toolsAllow: ["read", "automations"],
       toolsAllowIsDefault: true,
     });
+    expect(agentJob.payload).toEqual({ kind: "agentTurn", message: "work", toolsAllow: ["*"] });
+    expect(runtimeAppJob.payload).toEqual({
+      kind: "agentTurn",
+      message: "work",
+      toolsAllow: ["read", "automations"],
+      toolsAllowIsDefault: true,
+    });
     expect(plainJob.payload).toEqual({ kind: "systemEvent", text: "wake" });
+  });
+
+  it("captures the creator cap when a wildcard agent turn becomes a script", () => {
+    const patch = readReadyPatch(
+      planCronJobUpdatePatch({
+        patch: { payload: { kind: "script", script: "return MCP.notes.read({})" } },
+        creatorToolAllowlist: ["read", "notes__read"],
+        currentJob: { payload: { kind: "agentTurn", message: "work", toolsAllow: ["*"] } },
+      }),
+    );
+
+    expect(patch.payload).toMatchObject({
+      kind: "script",
+      toolsAllow: ["read", "notes__read"],
+    });
   });
 
   it("caps explicit updates without loading the current job", () => {

@@ -39,6 +39,8 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 > & {
   /** Gateway-process one-shot proof consumed only at the matching cron write. */
   grant: CronCreatorAuthorityGrant;
+  /** The creator captured runtime app authority; its default list stays concrete. */
+  holdsRuntimeAuthority?: true;
 };
 
 export type CronToolOptions = {

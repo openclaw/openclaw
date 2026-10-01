@@ -233,6 +233,32 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
   );
 
   it(
+    "runs a legacy automatic snapshot with the current owner tool surface",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      await runCronIsolatedAgentTurn(makeParamsWithDefaultToolsAllow(["message", "read"]));
+
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["*"]);
+    },
+  );
+
+  it.each([
+    ["without a valid owner policy", { scheduledToolPolicy: undefined }],
+    ["behind a condition trigger", { trigger: { script: "return { fire: true }" } }],
+  ])(
+    "keeps a legacy automatic snapshot finite %s",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async (_label, override) => {
+      const params = makeParamsWithDefaultToolsAllow(["message", "read"]);
+      Object.assign(params.job as object, override);
+
+      await runCronIsolatedAgentTurn(params);
+
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["message", "read"]);
+    },
+  );
+
+  it(
     "preserves cron toolsAllow casing for downstream policy resolution",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {

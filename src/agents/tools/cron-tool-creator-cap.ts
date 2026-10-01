@@ -240,6 +240,7 @@ function capCronJobToolsAllow(params: {
   trigger?: unknown;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[];
   defaultToolsAllow?: unknown;
+  creatorHoldsRuntimeAuthority?: boolean;
 }): void {
   const writesToolsAllow = Object.hasOwn(params.payload, "toolsAllow");
   if (
@@ -252,22 +253,26 @@ function capCronJobToolsAllow(params: {
   }
 
   const creatorToolsAllow = normalizeCronCreatorToolsAllow(params.creatorToolAllowlist);
-  const creatorToolNames = creatorToolsAllow.map((tool) => tool.name);
   const requestedRaw = Object.hasOwn(params.payload, "toolsAllow")
     ? params.payload.toolsAllow
     : params.defaultToolsAllow;
-  if (!Array.isArray(requestedRaw)) {
-    params.payload.toolsAllow = creatorToolNames;
-    params.payload.toolsAllowIsDefault = true;
-    return;
-  }
-
-  const requestedToolsAllow = normalizeCronToolsAllow(
-    requestedRaw.filter((entry): entry is string => typeof entry === "string"),
-  );
+  const requestedToolsAllow = Array.isArray(requestedRaw)
+    ? normalizeCronToolsAllow(
+        requestedRaw.filter((entry): entry is string => typeof entry === "string"),
+      )
+    : ["*"];
   if (requestedToolsAllow.includes("*")) {
-    params.payload.toolsAllow = creatorToolNames;
-    params.payload.toolsAllowIsDefault = true;
+    if (
+      params.payload.kind === "agentTurn" &&
+      !hasCronTriggerScript(params.trigger) &&
+      !params.creatorHoldsRuntimeAuthority
+    ) {
+      params.payload.toolsAllow = ["*"];
+      delete params.payload.toolsAllowIsDefault;
+    } else {
+      params.payload.toolsAllow = creatorToolsAllow.map((tool) => tool.name);
+      params.payload.toolsAllowIsDefault = true;
+    }
     return;
   }
   if (requestedToolsAllow.length === 0 || creatorToolsAllow.length === 0) {
@@ -298,6 +303,7 @@ function capCronJobToolsAllow(params: {
 export function capCronJobToolsAllowOnCreate(
   value: unknown,
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined,
+  creatorHoldsRuntimeAuthority?: boolean,
 ): void {
   if (!isRecord(value) || !isRecord(value.payload)) {
     return;
@@ -309,6 +315,7 @@ export function capCronJobToolsAllowOnCreate(
     payload: value.payload,
     trigger: value.trigger,
     creatorToolAllowlist,
+    creatorHoldsRuntimeAuthority,
   });
 }
 
@@ -322,6 +329,7 @@ export function planCronJobUpdatePatch(params: {
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
   currentJob?: Record<string, unknown>;
   creatorAuthorityComplete?: boolean;
+  creatorHoldsRuntimeAuthority?: boolean;
 }): CronJobUpdatePatchPlan {
   const patch = structuredClone(params.patch);
   const payload = isRecord(patch.payload) ? patch.payload : undefined;
@@ -385,7 +393,9 @@ export function planCronJobUpdatePatch(params: {
     explicitToolsAllow === "absent" &&
     (startsToolPayload || startsToolTrigger) &&
     (existingPayloadRecord?.toolsAllowIsDefault === true ||
-      !Array.isArray(existingPayloadRecord?.toolsAllow));
+      !Array.isArray(existingPayloadRecord?.toolsAllow) ||
+      (existingPayloadRecord.toolsAllow.includes("*") &&
+        (payloadKind === "script" || startsToolTrigger)));
   const needsResolvedAuthority =
     explicitToolsAllow === "resolved" ||
     reusesDefaultAuthority ||
@@ -422,6 +432,7 @@ export function planCronJobUpdatePatch(params: {
       existingPayloadRecord && existingPayloadRecord.toolsAllowIsDefault !== true
         ? existingPayloadRecord.toolsAllow
         : undefined,
+    creatorHoldsRuntimeAuthority: params.creatorHoldsRuntimeAuthority,
   });
   return { kind: "ready", patch };
 }

@@ -1,5 +1,3 @@
-import { resolveStaticSessionMcpServerNames } from "../../agents/agent-bundle-mcp-runtime-config.js";
-import { resolveCodexMcpToolOverridesForAgent } from "../../agents/cli-runner/bundle-mcp-codex.js";
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -13,7 +11,6 @@ import {
   type CronDeliveryPlan,
 } from "../delivery-plan.js";
 import {
-  createCronRunDiagnosticsFromError,
   createCronRunDiagnosticsFromMissingWebSearchProvider,
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
@@ -165,26 +162,6 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
 }): Promise<CronRunDiagnostics | undefined> {
   const toolsAllow = params.agentPayload?.toolsAllow;
   if (params.agentPayload?.toolsAllowIsDefault === true) {
-    const hasEnabledStaticMcp =
-      resolveStaticSessionMcpServerNames({
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
-          agentId: params.agentId,
-          toolOverrides: undefined,
-        }),
-      }).length > 0;
-    if (
-      params.agentRuntime === "codex" &&
-      hasEnabledStaticMcp &&
-      params.toolsAllowProvenance?.source !== "final-executable-surface"
-    ) {
-      return createCronRunDiagnosticsFromError(
-        "cron-preflight",
-        `This automation's inherited tool cap predates final configured-MCP capture, so it continues with its stored finite tools and may omit MCP capabilities. Reauthorize in place with an exact explicit cap: openclaw automations edit ${params.jobId} --tools <tool,...>.`,
-        { severity: "warn" },
-      );
-    }
     return undefined;
   }
   if (!toolsAllowRequestsWebSearch(toolsAllow)) {

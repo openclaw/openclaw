@@ -34,6 +34,7 @@ import type { CronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
+import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import type { CronJob, CronRunDiagnostics } from "../types.js";
 import {
   resolveCronModelSelection,
@@ -481,7 +482,10 @@ export async function prepareCronRunContext(params: {
     });
     // Preserve explicit timeout provenance so the idle watchdog does not reapply 120s when defaults match.
     const runTimeoutOverrideMs = resolveCronRunTimeoutOverrideMs(explicitTimeoutSeconds);
-    const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
+    const agentPayload =
+      input.job.payload.kind === "agentTurn"
+        ? { ...input.job.payload, toolsAllow: resolveCronRunToolsAllow(input.job) }
+        : null;
     const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
     const modelApi =
       findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??
