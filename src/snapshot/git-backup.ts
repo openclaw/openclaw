@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
@@ -36,6 +37,8 @@ import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
+const GIT_BACKUP_SCOPES = ["global", "agents"];
+const GIT_BACKUP_METADATA_EXCLUSIONS = [":(exclude,glob)**/.DS_Store"];
 
 type GitBackupCreateResult = {
   repositoryPath: string;
@@ -191,7 +194,9 @@ async function isBackupOwnedScope(scopePath: string): Promise<boolean> {
   if (identity === undefined) {
     return true;
   }
-  if (!identity?.isDirectory()) {
+  // Only regular Finder metadata is ignored; a namesake directory or symlink
+  // must never be adopted as an empty backup scope and removed.
+  if (!identity?.isDirectory() || path.basename(scopePath) === ".DS_Store") {
     return false;
   }
   try {
@@ -222,16 +227,18 @@ async function removeStaleAgentScopes(
   retainedScopes: Set<string>,
 ): Promise<void> {
   const agentsPath = path.join(repositoryPath, "agents");
-  let entries: string[];
+  let entries: Dirent[];
   try {
-    entries = await fs.readdir(agentsPath);
+    entries = await fs.readdir(agentsPath, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return;
     }
     throw error;
   }
-  const scopes = entries.map((entry) => path.join(agentsPath, entry));
+  const scopes = entries
+    .filter((entry) => !(entry.name === ".DS_Store" && entry.isFile()))
+    .map((entry) => path.join(agentsPath, entry.name));
   await Promise.all(scopes.map(async (scope) => await assertBackupOwnedScope(scope)));
   await Promise.all(
     scopes
@@ -269,7 +276,15 @@ async function commitGitBackup(params: {
       : ["-c", "user.name=OpenClaw", "-c", "user.email=backup@openclaw.local"];
   await requireGit(
     params.repositoryPath,
-    [...identityArgs, "commit", "-m", params.message, "--", ...params.scopes],
+    [
+      ...identityArgs,
+      "commit",
+      "-m",
+      params.message,
+      "--",
+      ...params.scopes,
+      ...GIT_BACKUP_METADATA_EXCLUSIONS,
+    ],
     { env: params.env },
   );
   return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"], { env: params.env });
@@ -349,16 +364,17 @@ export async function createGitBackup(params: {
   // Keep both owned roots present so Git accepts both scoped pathspecs even on a first global-only
   // or agent-only backup. Empty directories remain untracked.
   await Promise.all(
-    ["global", "agents"].map(async (scope) =>
+    GIT_BACKUP_SCOPES.map(async (scope) =>
       fs.mkdir(path.join(repositoryPath, scope), { recursive: true, mode: 0o700 }),
     ),
   );
-  await requireGit(repositoryPath, ["add", "-A", "--", "global", "agents"], {
+  const backupPaths = [...GIT_BACKUP_SCOPES, ...GIT_BACKUP_METADATA_EXCLUSIONS];
+  await requireGit(repositoryPath, ["add", "-A", "--", ...backupPaths], {
     env: params.gitEnv,
   });
   const changed = await requireGit(
     repositoryPath,
-    ["status", "--porcelain", "--", "global", "agents"],
+    ["status", "--porcelain", "--", ...backupPaths],
     {
       env: params.gitEnv,
     },
@@ -371,10 +387,10 @@ export async function createGitBackup(params: {
     }
     const stagedBackupPaths = await requireGit(
       repositoryPath,
-      ["diff", "--cached", "--name-only", "--", "global", "agents"],
+      ["diff", "--cached", "--name-only", "--", ...backupPaths],
       { env: params.gitEnv },
     );
-    const commitScopes = ["global", "agents"].filter((scope) =>
+    const commitScopes = GIT_BACKUP_SCOPES.filter((scope) =>
       stagedBackupPaths.split("\n").some((entry) => entry.startsWith(`${scope}/`)),
     );
     commit = await commitGitBackup({
