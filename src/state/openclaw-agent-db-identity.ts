@@ -21,7 +21,9 @@ const identities = resolveGlobalSingleton(
 );
 
 /** Prepare physical and connection identity once at open; cached aliases are not resolved again. */
-export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
+export function registerOpenClawAgentDatabaseIdentity(
+  db: DatabaseSync,
+): OpenClawAgentDatabaseIdentity {
   const filename = db.location() ?? "";
   const file = filename ? statSync(filename, { bigint: true }) : undefined;
   const identity = file ? `${file.dev}:${file.ino}` : Symbol("incognito-agent-database");
@@ -31,6 +33,7 @@ export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
     incarnation: randomUUID(),
     filename,
   });
+  return identity;
 }
 
 /** Reuse facts captured at open; aliases must never be resolved again at a handoff. */

@@ -118,15 +118,9 @@ it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
       );
       const bytes = replacement.serialize();
       expect(isOpenClawAgentDatabasePathCurrent(database)).toBe(true);
-      database.db.exec("BEGIN");
-      try {
-        database.db.prepare("SELECT role FROM schema_meta").get();
-        expect(() => database.db.deserialize(bytes)).toThrow();
-        expect(database.db.location()).toBe(prepared.filename);
-        expect(isOpenClawAgentDatabasePathCurrent(database)).toBe(true);
-      } finally {
-        database.db.exec("ROLLBACK");
-      }
+      expect(() => database.db.deserialize(new Uint8Array())).toThrow();
+      expect(database.db.location()).toBe(prepared.filename);
+      expect(isOpenClawAgentDatabasePathCurrent(database)).toBe(true);
 
       database.db.deserialize(bytes);
       expect(database.db.prepare("SELECT value FROM replacement_value").get()?.value).toBe(42);

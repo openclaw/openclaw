@@ -6,7 +6,10 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
-import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import {
+  registerOpenClawAgentDatabaseIdentity,
+  type OpenClawAgentDatabaseIdentity,
+} from "./openclaw-agent-db-identity.js";
 import {
   classifyOpenClawAgentDatabaseReadError,
   recordOpenClawAgentDatabaseReadOpenFailure,
@@ -33,17 +36,25 @@ export type OpenClawAgentReadOnlyDatabaseHandle = OpenClawAgentReadOnlyDatabase 
   close: () => void;
 };
 
+type OpenClawAgentFreshReadOnlyDatabaseHandle = OpenClawAgentReadOnlyDatabaseHandle & {
+  identity: OpenClawAgentDatabaseIdentity;
+};
+
 export type OpenClawAgentDatabaseReadOnlyOpenResult =
   | { found: true; database: OpenClawAgentReadOnlyDatabaseHandle }
+  | { found: false; reason: "database-missing" | "schema-missing" };
+
+type OpenClawAgentDatabaseFreshReadOnlyOpenResult =
+  | { found: true; database: OpenClawAgentFreshReadOnlyDatabaseHandle }
   | { found: false; reason: "database-missing" | "schema-missing" };
 
 export type OpenClawAgentDatabaseReadOnlyResult<T> =
   | { found: true; value: T }
   | { found: false; reason: "database-missing" | "schema-missing" };
 
-export function readOpenClawAgentDatabase<T>(
-  database: OpenClawAgentReadOnlyDatabase,
-  operation: (database: OpenClawAgentReadOnlyDatabase) => T,
+export function readOpenClawAgentDatabase<TDatabase extends OpenClawAgentReadOnlyDatabase, T>(
+  database: TDatabase,
+  operation: (database: TDatabase) => T,
 ): { found: true; value: T } {
   try {
     return { found: true, value: operation(database) };
@@ -68,11 +79,11 @@ export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDa
 
 /** Fresh-only callers do not need the writable runtime's process-held connection cache. */
 export function withFreshOpenClawAgentDatabaseReadOnly<T>(
-  operation: (database: OpenClawAgentReadOnlyDatabase) => T,
+  operation: (database: OpenClawAgentFreshReadOnlyDatabaseHandle) => T,
   options: OpenClawAgentDatabaseOptions,
   behavior: { allowExtension?: boolean } = {},
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
-  const opened = openOpenClawAgentDatabaseReadOnly(options, behavior);
+  const opened = openFreshOpenClawAgentDatabaseReadOnly(options, behavior);
   if (!opened.found) {
     return opened;
   }
@@ -88,6 +99,13 @@ export function openOpenClawAgentDatabaseReadOnly(
   options: OpenClawAgentDatabaseOptions,
   behavior: { allowExtension?: boolean } = {},
 ): OpenClawAgentDatabaseReadOnlyOpenResult {
+  return openFreshOpenClawAgentDatabaseReadOnly(options, behavior);
+}
+
+function openFreshOpenClawAgentDatabaseReadOnly(
+  options: OpenClawAgentDatabaseOptions,
+  behavior: { allowExtension?: boolean } = {},
+): OpenClawAgentDatabaseFreshReadOnlyOpenResult {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
@@ -121,8 +139,8 @@ export function openOpenClawAgentDatabaseReadOnly(
     closed = true;
   };
   try {
-    registerOpenClawAgentDatabaseIdentity(db);
-    const database = { agentId, db, path: pathname, close };
+    const identity = registerOpenClawAgentDatabaseIdentity(db);
+    const database = { agentId, db, identity, path: pathname, close };
     if (!hasOpenClawAgentReadOnlySchema(database)) {
       close();
       return { found: false, reason: "schema-missing" };

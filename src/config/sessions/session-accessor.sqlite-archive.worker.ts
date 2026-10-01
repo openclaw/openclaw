@@ -17,7 +17,6 @@ import {
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { routeLogsToStderr } from "../../logging/console.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -368,10 +367,7 @@ export function publishTranscriptArchiveInWorker(
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) => {
-        if (
-          plan.databaseIdentity !== undefined &&
-          readOpenClawAgentDatabaseIdentity(database).identity !== plan.databaseIdentity
-        ) {
+        if (plan.databaseIdentity !== undefined && database.identity !== plan.databaseIdentity) {
           throw new Error("SQLite archive publication database was replaced");
         }
         const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
