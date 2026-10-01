@@ -6,6 +6,7 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { ensureAgentDeletionJournalSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -36,6 +37,7 @@ function createLegacyRegistryFixture() {
       PRIMARY KEY (agent_id, path)
     );
   `);
+  ensureAgentDeletionJournalSchema(database);
   database.close();
   const config: OpenClawConfig = {
     agents: { ownership: "explicit", entries: { main: {} } },
