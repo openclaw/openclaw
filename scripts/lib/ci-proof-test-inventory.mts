@@ -4947,7 +4947,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/commands/doctor-skill-workshop-sqlite.relocation-conflicts.test.ts",
   "src/commands/doctor-skill-workshop-sqlite.relocation.test.ts",
   "src/commands/doctor-state-integrity.transcripts.test.ts",
-  "src/commands/doctor/cron/native-tool-advisory.test.ts",
   "src/commands/onboard-agent.persistence.test.ts",
   "src/commands/onboard-config-provenance.integration.test.ts",
   "src/commands/onboard-interactive.test.ts",

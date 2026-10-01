@@ -409,7 +409,18 @@ export async function prepareCronRunContext(params: {
     // Preserve an explicit cron timeout even when it equals the agent default;
     // the embedded runner uses its presence to configure the idle watchdog.
     const runTimeoutOverrideMs = resolveCronRunTimeoutOverrideMs(explicitTimeoutSeconds);
-    const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
+    const storedAgentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
+    // Older builds froze an automatic snapshot of the creator's tools, which could
+    // miss tools the creator had. Such a run gets what its owner conversation gets,
+    // like a `*` job; Codex app authority stays bound to the list it was captured with.
+    const inheritsOwnerTools =
+      storedAgentPayload?.toolsAllowIsDefault === true &&
+      !input.job.runtimeAuthority &&
+      !input.job.runtimeAuthorityRecoveryRequired;
+    const agentPayload =
+      storedAgentPayload && inheritsOwnerTools
+        ? { ...storedAgentPayload, toolsAllow: ["*"], toolsAllowIsDefault: undefined }
+        : storedAgentPayload;
     const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
     const modelApi =
       findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??
@@ -423,11 +434,8 @@ export async function prepareCronRunContext(params: {
       modelApi,
       agentId: modelOwner.agentId,
       agentDir: modelOwner.agentDir,
-      workspaceDir: executionWorkspaceDir,
       sessionKey: agentSessionKey,
       agentPayload,
-      agentRuntime: effectiveAgentRuntime,
-      toolsAllowProvenance: input.job.toolsAllowProvenance,
     });
     const {
       deliveryPlan,

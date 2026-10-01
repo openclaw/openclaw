@@ -92,6 +92,14 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     });
   });
 
+  it("runs an automatic creator snapshot with its owner's tools", options, async () => {
+    // Older builds saved this snapshot without the creator's native shell.
+    await runCronIsolatedAgentTurn(makeParams(["message", "read"], { toolsAllowIsDefault: true }));
+    const call = runEmbeddedAgentMock.mock.calls[0]?.[0];
+    expect(call.toolsAllow).toEqual(["*"]);
+    expect(call.scheduledToolPolicy).toMatchObject(policy);
+  });
+
   it.each([
     ["unavailable shell tools", ["terminal", "node_exec", "node_process"]],
     ["a blank entry", [" "]],

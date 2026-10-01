@@ -39,6 +39,22 @@ describe("reconcileToolsAllowAuthority exec pin", () => {
     });
   });
 
+  it("keeps the creator's exec pin on a wildcard cap", () => {
+    const job = toolJob(["*"]);
+    reconcileToolsAllowAuthority({
+      job,
+      previouslyUsedToolRuntime: true,
+      explicitlyMutatesToolsAllow: true,
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+    });
+    expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
+    expect(job.toolsAllowExecTargetRequirement).toEqual({
+      version: 1,
+      target: { version: 1, host: "gateway", ask: "always" },
+      grantIndex: 0,
+    });
+  });
+
   it("never stamps a pin onto a cap that does not grant exec", () => {
     const job = toolJob(["read"]);
     reconcileToolsAllowAuthority({
