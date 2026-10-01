@@ -164,6 +164,8 @@ export type SqliteTransactionOptions = {
   beginDeadlineNs?: bigint;
   busyTimeoutMs?: number;
   databaseLabel?: string;
+  /** Prepared identifiers and counts only; never transcript or session payloads. */
+  diagnosticContext?: Readonly<Record<string, string | number | boolean | null | undefined>>;
   logger?: Pick<SubsystemLogger, "warn">;
   operationLabel?: string;
   slowTransactionHoldMs?: number;
@@ -191,7 +193,9 @@ function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined):
 
 function transactionDiagnosticLabels(
   db: DatabaseSync | undefined,
-  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel"> | undefined,
+  options:
+    | Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel" | "diagnosticContext">
+    | undefined,
 ) {
   let database = options?.databaseLabel;
   if (!database) {
@@ -205,6 +209,7 @@ function transactionDiagnosticLabels(
   return {
     database,
     operation: options?.operationLabel || captureSqliteReaderOwner()?.operation || "unlabeled",
+    ...(options?.diagnosticContext ? { context: { ...options.diagnosticContext } } : {}),
   };
 }
 

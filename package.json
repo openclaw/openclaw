@@ -1683,6 +1683,7 @@
     "android:version:pin": "node --import ./scripts/tsx.mjs scripts/android-pin-version.ts",
     "android:version:sync": "node --import ./scripts/tsx.mjs scripts/android-sync-versioning.ts --write",
     "audit:seams": "node --import ./scripts/tsx.mjs scripts/audit-seams.mts",
+    "bench:agent-database-holds": "node --import ./scripts/tsx.mjs scripts/bench-agent-database-holds.ts",
     "bench:plugins:invocation": "node --import ./scripts/tsx.mjs scripts/bench-plugin-invocation.ts",
     "bench:plugins:stream": "node --expose-gc --import ./scripts/tsx.mjs scripts/bench-plugin-stream.ts",
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",

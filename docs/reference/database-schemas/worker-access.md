@@ -94,6 +94,12 @@ failed lock waits therefore identify the domain operation without logging its
 input. Explicit labels take precedence; native callers outside a command scope
 must supply their own label for the same attribution.
 
+Slow agent transaction diagnostics retain their hold and lock-wait labels and
+include prepared session identifiers and counts. History snapshots report active
+events, active messages, and the reader operation; append diagnostics distinguish
+event type and message role. Diagnostics do not query additional rows or log
+transcript content.
+
 Move an existing domain operation across its worker boundary instead of creating
 a second store, generic SQL service, or cache manager. Read-only operations use the
 existing read-only worker scope and the relevant domain reader. Shared-state
@@ -123,6 +129,20 @@ authority, physical database identity, and read lifecycle checks remain in place
 Writes, schema transitions, lease grants, and all generic SQLite broker jobs
 retain immediate fresh ownership verification, including their transaction and
 commit grants. Schemas, retained data, and update behavior are unchanged.
+
+Restart-tombstone recovery clones the source transcript and records its archived
+successor in one transaction through the canonical agent writer. Transcript reads,
+decoding, inserts, and metadata changes stay in the worker even for large histories.
+The host retains FIFO admission, rechecks live recovery authority before native
+transaction and commit grants, and installs committed sharing and identity facts
+before releasing the writer. Incognito and maintenance scopes retain their native
+owner. Schemas, recovery atomicity, durability, and update behavior are unchanged.
+
+Full-transcript recovery checkpoints, usage aggregation, and MCP App reconstruction
+use the admitted history worker. Selectors return compact facts and retain one
+snapshot, including both MCP reconstruction passes. Process-held incognito
+databases retain their native owner. There is no synchronous fallback when the
+worker is busy and no retained summary cache.
 
 Legacy session-entry patches yield while waiting for a competing SQLite writer.
 Each `BEGIN IMMEDIATE` attempt uses a zero busy timeout and can retry within the
@@ -1050,13 +1070,20 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
+Runtime custom messages, prompt cache markers, bootstrap completion and prompt-error
+markers, and nested tool activity use the same awaited writer. The manager captures
+custom payloads before queueing, rechecks its current parent at admission, and adopts
+the committed version before publishing the result. Non-user asynchronous message
+appends use this worker; user-input custody and transaction-local callbacks retain
+their native transaction contract.
+
 Runtime report navigation and writes use the same broker's agent database owner.
 Custom report selectors consume prepared facts on the host, and the worker
 compares the transcript version before appending. Only a definite version conflict
 repeats selection; uncertain writes are never replayed. Startup orphan repair
 retains its native transaction so session settlement and the report remain atomic.
-Process-held incognito databases, user-input custody, custom-message writes, and
-the shipped synchronous SessionManager SDK remain separate migration work.
+Process-held incognito databases, user-input custody, compaction, provider replay,
+and the shipped synchronous SessionManager SDK remain separate migration work.
 Schemas, stored bytes, retention, and update behavior are unchanged.
 
 Channel identity administration, profile display and avatar edits, role assignments, email linking, and

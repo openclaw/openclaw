@@ -2146,7 +2146,6 @@ src/gateway/live-agent-probes.ts	1
 src/gateway/local-request-context.ts	2
 src/gateway/managed-image-attachments.ts	2
 src/gateway/mcp-app-operations.ts	1
-src/gateway/mcp-app-reconstruction.ts	1
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.schema.ts	2
 src/gateway/node-browser-proxy-policy.ts	1
