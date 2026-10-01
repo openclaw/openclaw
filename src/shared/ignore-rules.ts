@@ -191,6 +191,12 @@ function prefixIgnorePattern(line: string, prefix: string): string {
   // Git trims spaces only; escaped slashes still anchor rather than broaden nested rules.
   const matchPattern = normalized.replace(/ +$/, "");
   const depthGlob = prefix && !anchored && !matchPattern.slice(0, -1).includes("/") ? "**/" : "";
-  const prefixed = `${prefix}${depthGlob}${normalized}`;
+  // A leading `/` anchors to the ignore file's own directory. Nested ignore files keep that
+  // anchor through their directory prefix, but at the scan root the prefix is empty, so the
+  // stripped slash must be restored -- or `ignore` treats `/build` as name-anchored and it
+  // matches at any depth, which git would not (#162437). Negations like `!/keep` widen the
+  // same way and must stay root-scoped too.
+  const rootAnchor = anchored && !prefix && normalized ? "/" : "";
+  const prefixed = `${prefix}${rootAnchor}${depthGlob}${normalized}`;
   return negated ? `!${prefixed}` : prefixed;
 }

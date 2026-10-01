@@ -146,6 +146,32 @@ describe("addIgnoreRules", () => {
     expect(ig.ignores("locked/secret.txt")).toBe(true);
   });
 
+  it("anchors root ignore rules to the scan root like git", () => {
+    // From #162437: `/build` in the scan root's .gitignore must not also hide
+    // `deploy/build`, and `!/keep` must re-include the root entry only.
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), "/build\n/notes.md\nkeep\n!/keep\n", "utf-8");
+
+    const ig = addIgnoreRules(tempDir, tempDir);
+
+    expect(ig.ignores("build/output.js")).toBe(true);
+    expect(ig.ignores("notes.md")).toBe(true);
+    expect(ig.ignores("sub/build/output.js")).toBe(false);
+    expect(ig.ignores("sub/notes.md")).toBe(false);
+    expect(ig.ignores("keep")).toBe(false);
+    expect(ig.ignores("sub/keep")).toBe(true);
+  });
+
+  it("anchors nested ignore rules to their own directory", () => {
+    const nestedDir = path.join(tempDir, "deploy");
+    fs.mkdirSync(nestedDir);
+    fs.writeFileSync(path.join(nestedDir, ".gitignore"), "/build\n", "utf-8");
+
+    const ig = addIgnoreRules(nestedDir, tempDir);
+
+    expect(ig.ignores("deploy/build/x.js")).toBe(true);
+    expect(ig.ignores("deploy/tools/build.js")).toBe(false);
+  });
+
   it("follows a chain of symlinks to the final regular .gitignore", () => {
     const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-real-"));
     try {
