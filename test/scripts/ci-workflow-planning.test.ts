@@ -5693,7 +5693,9 @@ describe("ci workflow guards", () => {
       ...common,
       targetFiles: ["scripts/ci-sdk-declarations.mts"],
     });
-    for (const result of [previous, shared]) expect(result.status, result.output).toBe(0);
+    for (const result of [previous, shared]) {
+      expect(result.status, result.output).toBe(0);
+    }
     expect(previous.outputs.shared_sdk_declarations).toBe("false");
     expect(shared.outputs.shared_sdk_declarations).toBe("true");
     expect(shared.outputs.pr_job_count).toBe(previous.outputs.pr_job_count);
@@ -5721,6 +5723,7 @@ describe("ci workflow guards", () => {
     }
     const fork = {
       ...common,
+      runnerProfile: "github" as const,
       scopeEnv: {
         OPENCLAW_CI_HEAD_REPOSITORY: "contributor/openclaw",
         OPENCLAW_CI_AUTHOR_ASSOCIATION: "NONE",
@@ -5731,25 +5734,29 @@ describe("ci workflow guards", () => {
       ...fork,
       targetFiles: ["scripts/ci-sdk-declarations.mts"],
     });
-    for (const result of [forkPrevious, forkShared]) expect(result.status, result.output).toBe(0);
+    for (const result of [forkPrevious, forkShared]) {
+      expect(result.status, result.output).toBe(0);
+    }
     expect(forkPrevious.outputs.shared_sdk_declarations).toBe("false");
-    expect(forkShared.outputs.shared_sdk_declarations).toBe("true");
+    expect(forkShared.outputs.shared_sdk_declarations).toBe("false");
     expect(forkShared.outputs.pr_job_count).toBe(forkPrevious.outputs.pr_job_count);
     expect(forkShared.outputs.pr_check_job_count).toBe(forkPrevious.outputs.pr_check_job_count);
     const forkRows = JSON.parse(forkPrevious.outputs.check_additional_matrix!).include;
-    expect(JSON.parse(forkShared.outputs.check_additional_matrix!).include).toEqual(
-      forkRows.filter((row: { group: string }) => row.group !== "extension-package-boundary"),
-    );
-    expect(
-      evaluateWorkflowExpression(producer["runs-on"], {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        headRepository: "contributor/openclaw",
-        authorAssociation: "NONE",
-        runnerBackend: "hybrid",
-        runAttempt: 1,
-      }),
-    ).toBe("ubuntu-24.04");
+    expect(JSON.parse(forkShared.outputs.check_additional_matrix!).include).toEqual(forkRows);
+    for (const authorAssociation of ["OWNER", "NONE"]) {
+      for (const runAttempt of [1, 2]) {
+        expect(
+          evaluateWorkflowExpression(producer["runs-on"], {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            headRepository: "openclaw/openclaw",
+            authorAssociation,
+            runnerBackend: "hybrid",
+            runAttempt,
+          }),
+        ).toBe(runAttempt === 1 ? "blacksmith-32vcpu-ubuntu-2404" : "ubuntu-24.04");
+      }
+    }
     expect(producer.needs).toEqual(["preflight"]);
     expect(workflow.jobs["check-additional-shard"].needs).toEqual(["preflight"]);
     expect(workflow.jobs["check-test-types-hosted-core-shard"].needs).toEqual([

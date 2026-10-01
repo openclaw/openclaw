@@ -4313,7 +4313,7 @@ jobs:
     name: ${{ needs.preflight.outputs.shared_sdk_declarations == 'true' && 'check-additional-extension-package-boundary' || 'shared-sdk-declarations' }}
     needs: [preflight]
     if: needs.preflight.outputs.shared_sdk_declarations == 'true'
-    runs-on: ${{ github.run_attempt == 1 && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.run_attempt == 1 && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     outputs:
       artifact_id: ${{ steps.publish-sdk.outputs.artifact-id }}
