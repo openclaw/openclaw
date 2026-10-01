@@ -103,13 +103,26 @@ describe("safe npm install helpers", () => {
     expect(env.npm_config_strict_peer_deps).toBe("false");
   });
 
-  it("preserves npm 11 dependency-source defaults when no policy is configured", () => {
-    const env = createSafeNpmInstallEnv({
-      PATH: "/usr/bin:/bin",
-    });
+  it("preserves npm 11 dependency-source defaults when no policy is configured", async () => {
+    await withTempDir("openclaw-npm-source-policy-", async (dir) => {
+      const userconfig = path.join(dir, "user.npmrc");
+      const globalconfig = path.join(dir, "global.npmrc");
+      fsSync.writeFileSync(userconfig, "", "utf-8");
+      fsSync.writeFileSync(globalconfig, "", "utf-8");
 
-    expect(env.npm_config_allow_git).toBe("all");
-    expect(env.npm_config_allow_remote).toBe("all");
+      const env = createSafeNpmInstallEnv(
+        {
+          HOME: dir,
+          NPM_CONFIG_GLOBALCONFIG: globalconfig,
+          NPM_CONFIG_USERCONFIG: userconfig,
+          PATH: process.env.PATH,
+        },
+        { npmConfigCwd: dir },
+      );
+
+      expect(env.npm_config_allow_git).toBe("all");
+      expect(env.npm_config_allow_remote).toBe("all");
+    });
   });
 
   it("preserves quoted dependency-source restrictions from npmrc", async () => {

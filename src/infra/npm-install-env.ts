@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveBundledNpmCommand, resolveNpmCommand } from "./npm-command.js";
+import { resolveNpmCommand } from "./npm-command.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
@@ -250,7 +250,7 @@ export function findExplicitNpmConfigKeys(
     return found;
   }
 
-  const command = resolveBundledNpmCommand([
+  const command = resolveNpmCommand([
     "config",
     "list",
     "--location=project",

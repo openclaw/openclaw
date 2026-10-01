@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveBundledNpmCommand, resolveNpmCommand } from "./npm-command.js";
+import { resolveNpmCommand } from "./npm-command.js";
 
 const cliPath = path.join(
   path.dirname(createRequire(import.meta.url).resolve("npm/package.json")),
@@ -36,16 +36,6 @@ describe("npm invocation", () => {
       cliPath,
       "install",
       "--ignore-scripts",
-    ]);
-  });
-
-  it("resolves the bundled CLI explicitly under Node", () => {
-    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: undefined } });
-    expect(resolveBundledNpmCommand(["config", "list"])).toEqual([
-      process.execPath,
-      cliPath,
-      "config",
-      "list",
     ]);
   });
 
