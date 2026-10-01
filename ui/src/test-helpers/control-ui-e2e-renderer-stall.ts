@@ -87,18 +87,19 @@ function recordLongAnimationFrames() {
 }
 
 /**
- * Arm stalled-renderer evidence before navigation. A stall that ends leaves a
- * script-attributed long animation frame. For one that never ends, V8 services
- * `Debugger.pause` and `Performance.getMetrics` inside the busy task, but
- * `Debugger.enable` waits for it, so the agent must already be enabled.
+ * Arm stalled-renderer evidence when a page is created, before navigation and
+ * before the test opens CDP sessions. A stall that ends leaves a script-attributed
+ * long animation frame. For one that never ends, V8 services `Debugger.pause` and
+ * `Performance.getMetrics` inside the busy task, but `Debugger.enable` waits for
+ * it, so the agent must already be enabled.
  */
 export async function installControlUiE2eRendererStallProbe(page: Page): Promise<void> {
-  if (controlUiE2eRendererStallProbes.has(page) || page.isClosed()) {
+  if (controlUiE2eRendererStallProbes.has(page)) {
     return;
   }
-  const ring = page.addInitScript(recordLongAnimationFrames);
-  const probe = ring.then(async () => {
+  const probe = (async () => {
     try {
+      await page.addInitScript(recordLongAnimationFrames);
       const session = await page.context().newCDPSession(page);
       // Collected scripts stay collectable, so heap budgets measure the app alone.
       await session.send("Debugger.enable", { maxScriptsCacheSize: 0 });
@@ -107,14 +108,12 @@ export async function installControlUiE2eRendererStallProbe(page: Page): Promise
       await session.send("Performance.enable");
       return session;
     } catch {
-      // Non-Chromium contexts and pages closed during setup have no probe.
+      // Evidence is best effort: closed pages, non-Chromium contexts, and test
+      // doubles run without a probe.
       return null;
     }
-  });
-  controlUiE2eRendererStallProbes.set(
-    page,
-    probe.catch(() => null),
-  );
+  })();
+  controlUiE2eRendererStallProbes.set(page, probe);
   await probe;
 }
 

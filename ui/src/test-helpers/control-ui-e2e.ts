@@ -45,7 +45,6 @@ import {
   controlUiE2eWaitTimeoutMs,
   waitForControlUiInitialRoster,
 } from "./control-ui-e2e-readiness.ts";
-import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { createControlUiMockPresence } from "./control-ui-mock-presence.ts";
 import { createControlUiMockReactions } from "./control-ui-mock-reactions.ts";
@@ -2913,7 +2912,6 @@ export async function installMockGateway(
     }),
   );
   await installControlUiE2eUnhandledRejectionRing(page);
-  await installControlUiE2eRendererStallProbe(page);
   await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
   const rosterGates = new Set([
     "connect",
