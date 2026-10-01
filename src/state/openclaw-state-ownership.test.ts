@@ -14,7 +14,9 @@ import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
 } from "../infra/sqlite-lifecycle-errors.js";
+import * as readOnlyWorker from "../infra/sqlite-readonly-worker.js";
 import * as sqliteReadonlyLocation from "../infra/sqlite-snapshot-source.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -148,6 +150,7 @@ describe("external shared-state ownership", () => {
         databasePath,
         env,
         recoverOrphanedSidecars: scenario.recoverOrphanedSidecars,
+        openStateSchemaReadAdmission: () => () => {},
         signal: controller.signal,
       };
       await expect(assertOpenClawStateWriteAllowedAtPath(options)).rejects.toBe(reason);
@@ -157,6 +160,103 @@ describe("external shared-state ownership", () => {
     } finally {
       snapshot.mockRestore();
       prepared?.cleanup();
+    }
+  });
+
+  it.each([false, true])(
+    "reads active WAL ownership without copying the database (external=%s)",
+    async (external) => {
+      const root = tempDirs.make("ownership-native-reader-");
+      const databasePath = path.join(root, "state.sqlite");
+      const preload = path.join(root, "forbid-copy.cjs");
+      fs.writeFileSync(
+        preload,
+        `const fs = require('node:fs'); fs.fsyncSync = () => { throw new Error('ownership inspection copied the database'); }; require('node:module').syncBuiltinESMExports();`,
+      );
+      const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+      database.exec(
+        "PRAGMA journal_mode=WAL; CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT,updated_at_ms INTEGER);",
+      );
+      if (external) {
+        database.prepare("INSERT INTO config_machine_state VALUES(?,?,1)").run(
+          STATE_SUPERVISION_KEY,
+          JSON.stringify({
+            version: 1,
+            mode: "external",
+            managerId: "live-manager",
+            claimedAt: 1,
+          }),
+        );
+      }
+      const main = fs.readFileSync(databasePath);
+      const wal = fs.readFileSync(databasePath + "-wal");
+      database.exec("BEGIN IMMEDIATE;");
+      try {
+        await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
+          const admission = assertOpenClawStateWriteAllowedAtPath({ databasePath, env: {} });
+          if (external) {
+            await expect(admission).rejects.toThrow(OpenClawStateOwnershipError);
+          } else {
+            await expect(admission).resolves.toBeUndefined();
+          }
+        });
+        expect(database.isTransaction).toBe(true);
+        expect(fs.readFileSync(databasePath)).toEqual(main);
+        expect(fs.readFileSync(databasePath + "-wal")).toEqual(wal);
+      } finally {
+        database.exec("ROLLBACK;");
+        database.close();
+      }
+    },
+  );
+
+  it("preserves typed malformed metadata refusal from the native ownership worker", async () => {
+    const root = tempDirs.make("ownership-native-malformed-");
+    const databasePath = path.join(root, "state.sqlite");
+    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    database.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO config_machine_state VALUES('gateway.supervision','not-json');",
+    );
+    try {
+      const admission = assertOpenClawStateWriteAllowedAtPath({ databasePath });
+      await expect(admission).rejects.toBeInstanceOf(OpenClawStateOwnershipMetadataError);
+      await expect(admission).rejects.toThrow("reserved value is not valid JSON");
+      expect(
+        database.prepare("SELECT value_json FROM config_machine_state").get()?.value_json,
+      ).toBe("not-json");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects cancellation after the native ownership worker settles", async () => {
+    const root = tempDirs.make("ownership-native-cancel-");
+    const databasePath = path.join(root, "state.sqlite");
+    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    database.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT);",
+    );
+    const controller = new AbortController();
+    const reason = new Error("ownership worker stopped");
+    const run = readOnlyWorker.runSqliteReadOnlyWorker;
+    const worker = vi
+      .spyOn(readOnlyWorker, "runSqliteReadOnlyWorker")
+      .mockImplementationOnce(async (pathname, options) => {
+        const result = await run(pathname, options);
+        controller.abort(reason);
+        return result;
+      });
+    try {
+      await expect(
+        assertOpenClawStateWriteAllowedAtPath({ databasePath, signal: controller.signal }),
+      ).rejects.toBe(reason);
+      expect(worker).toHaveBeenCalledWith(databasePath, {
+        mode: "state-ownership",
+        signal: controller.signal,
+      });
+    } finally {
+      worker.mockRestore();
+      database.close();
     }
   });
 

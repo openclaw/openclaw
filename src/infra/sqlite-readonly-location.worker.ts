@@ -51,6 +51,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   if (
     (mode !== "sync" &&
       mode !== "async" &&
+      mode !== "state-ownership" &&
       mode !== "consolidated" &&
       mode !== "reclaim" &&
       !isSqliteSnapshotStagingMode(mode)) ||
@@ -126,6 +127,24 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
         process.stdin.destroy();
       }
       return { ok: true, warnings };
+    }
+    if (mode === "state-ownership") {
+      const { inspectOpenClawStateOwnershipInProcess } =
+        await import("../state/openclaw-state-ownership.js");
+      try {
+        return {
+          ok: true,
+          ownershipJson: JSON.stringify(inspectOpenClawStateOwnershipInProcess(pathname)),
+        };
+      } catch (error) {
+        const { encodeOpenClawStateWorkerError } =
+          await import("../state/openclaw-state-worker-error.js");
+        const workerError = encodeOpenClawStateWorkerError(error);
+        if (!workerError) {
+          throw error;
+        }
+        return { ok: true, ownershipJson: JSON.stringify({ workerError }) };
+      }
     }
     let prepared: PreparedSqliteReadOnlyLocation;
     if (mode === "consolidated") {

@@ -265,7 +265,11 @@ export function runSqliteReadOnlyWorker(
 ): Promise<SqliteAuthProfileRows>;
 export function runSqliteReadOnlyWorker(
   pathname: string,
-  options: { mode: "sync" | "async"; stagingRoot?: string; signal?: AbortSignal },
+  options: {
+    mode: "sync" | "async" | "state-ownership";
+    stagingRoot?: string;
+    signal?: AbortSignal;
+  },
 ): Promise<string>;
 export function runSqliteReadOnlyWorker(
   pathname: string,
