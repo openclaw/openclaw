@@ -321,10 +321,8 @@ describe("typed in-process agent continuation authorization", () => {
                           requesterSessionKey: "agent:main:requester",
                           requesterChannel: "webchat",
                           replyMode: "one-way",
-                          message: "Finish the task",
-                          waitRunId: "target-followup",
-                          announceTimeoutMs: 10_000,
-                          maxPingPongTurns: 0,
+                          runId: "target-followup",
+                          replyTimeoutMs: 10_000,
                           callGateway: async (request) => {
                             try {
                               return await callAgentToolGatewayRequest(request);
@@ -364,9 +362,12 @@ describe("typed in-process agent continuation authorization", () => {
         expect(startTurn).toHaveBeenCalledOnce();
         expect(startTurn.mock.calls[0]?.[0].preflight.request).toMatchObject({
           sessionKey: "agent:main:requester",
+          deliver: false,
+          sourceReplyDeliveryMode: "message_tool_only",
           inputProvenance: {
             sourceTool: "subagent_announce",
             sourceSessionKey: "agent:main:child",
+            sourceRole: "subagent",
           },
         });
       } finally {

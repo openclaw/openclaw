@@ -23,7 +23,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   const wait = vi.fn<typeof import("./tools/agents-wait-tool.js").waitForCollectorCompletion>();
   const subscribe =
     vi.fn<
-      typeof import("./subagents/registry/subagent-registry-state.js").onSubagentRegistryPersisted
+      typeof import("./subagents/registry/subagent-registry-publication.js").subscribeSubagentRunChanges
     >();
   const emit =
     vi.fn<typeof import("../sessions/session-lifecycle-events.js").emitSessionLifecycleEvent>();
@@ -46,11 +46,19 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     wait.mockImplementation(actual.waitForCollectorCompletion);
     return { ...actual, waitForCollectorCompletion: wait };
   });
-  vi.doMock("./subagents/registry/subagent-registry-state.js", async (importOriginal) => {
+  vi.doMock("./subagents/registry/subagent-registry-publication.js", async (importOriginal) => {
     const actual =
-      await importOriginal<typeof import("./subagents/registry/subagent-registry-state.js")>();
-    subscribe.mockImplementation(actual.onSubagentRegistryPersisted);
-    return { ...actual, onSubagentRegistryPersisted: subscribe };
+      await importOriginal<
+        typeof import("./subagents/registry/subagent-registry-publication.js")
+      >();
+    subscribe.mockImplementation(actual.subscribeSubagentRunChanges);
+    return {
+      ...actual,
+      subscribeSubagentRunChanges: ((phase, listener) =>
+        phase === "projection"
+          ? actual.subscribeSubagentRunChanges(phase, listener)
+          : subscribe(phase, listener)) satisfies typeof actual.subscribeSubagentRunChanges,
+    };
   });
   vi.doMock("../sessions/session-lifecycle-events.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../sessions/session-lifecycle-events.js")>();
@@ -241,7 +249,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     vi.restoreAllMocks();
     vi.doUnmock("./code-mode-swarm.runtime.js");
     vi.doUnmock("./subagents/registry/subagent-registry.js");
-    vi.doUnmock("./subagents/registry/subagent-registry-state.js");
+    vi.doUnmock("./subagents/registry/subagent-registry-publication.js");
     vi.doUnmock("./tools/agents-wait-tool.js");
     vi.doUnmock("../sessions/session-lifecycle-events.js");
     vi.resetModules();

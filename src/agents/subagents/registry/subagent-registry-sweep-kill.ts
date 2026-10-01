@@ -81,13 +81,6 @@ export async function reconcileDurableSubagentKillIntent(params: {
   );
   if (latest !== params.entry) {
     try {
-      if (
-        params.runs.get(params.runId) !== params.entry ||
-        getLatestSubagentRunByChildSessionKeyFromRuns(childRuns(), params.entry.childSessionKey) ===
-          params.entry
-      ) {
-        return false;
-      }
       await params.retireSupersededRun(params.runId, params.entry);
       return true;
     } catch (error) {

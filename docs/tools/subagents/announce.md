@@ -9,12 +9,11 @@ read_when:
 
 ## Announce
 
-Sub-agents report back via an announce step:
+Sub-agents report back through completion delivery:
 
-- The announce step runs inside the sub-agent session (not the requester session).
-- Runs spawned with `expectsCompletionMessage: false` skip the announce step entirely; the run registry records their delivery as not required.
-- An exact `ANNOUNCE_SKIP` response suppresses announce output.
-- Subagents must return a meaningful result or a concrete blocker. An exact child `NO_REPLY` response or no output triggers the normal missing-answer recovery; it cannot complete a child task.
+- The completed child's result is handed to the requester; delivery does not ask the child to generate a separate announcement.
+- Runs spawned with `expectsCompletionMessage: false` skip completion delivery entirely; the run registry records their delivery as not required.
+- Subagents must return a meaningful result or a concrete blocker. An exact child `NO_REPLY` response or no output cannot satisfy a missing child result and triggers normal missing-answer recovery. A retained completion without a visible result is handed to the requester as `(no output)`, including when several child results are collected together.
 - Duplicate delivery is suppressed through recorded completion and source-message delivery facts. Subagents and internal parent review turns do not use silent tokens for deduplication.
 
 By default, delivery depends on requester depth:
@@ -105,7 +104,7 @@ Announce context is normalized to a stable internal event block:
 | Type           | Announce type + task label                                                                               |
 | Status         | Derived from runtime outcome (`ok`, `error`, `timeout`, or `unknown`) — **not** inferred from model text |
 | Result content | Latest visible assistant text from the child                                                             |
-| Follow-up      | Instruction describing when to reply vs stay silent                                                      |
+| Follow-up      | Instruction to review the result, continue unfinished work, and report the outcome                       |
 
 The result is the child's complete visible final answer for the completed run.
 OpenClaw preserves prompt-data escaping and stable order when it delivers several
@@ -114,13 +113,13 @@ projection limits. The bounded lifecycle snapshot remains separate from the
 complete answer sent to the parent.
 
 A successful child with an empty final reply remains in the batch with its task
-identity, `ok` status, and `(no output)` result. Intentional silence and announce
-skip tokens keep their existing suppression behavior.
+identity, `ok` status, and `(no output)` result. Its successful execution status
+does not satisfy the required result.
 
 For nested work, descendant findings help the child form its answer. The child's
-own final answer is what travels onward to its parent. If the child sends its
-final answer through the message tool and then returns `NO_REPLY`, that final
-answer remains authoritative.
+own final answer is what travels onward to its parent. A final answer delivered
+through the message tool remains authoritative through its recorded source
+delivery, even if a later terminal response is empty or silent.
 
 Completion delivery can read an existing registered archive when child cleanup
 finishes before the parent resumes. The Control UI's **Tasks** inspector also

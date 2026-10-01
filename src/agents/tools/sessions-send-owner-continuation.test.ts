@@ -199,9 +199,7 @@ describe("child followup requester continuation", () => {
         requesterSessionKey: SESSION,
         requesterAgentId: "main",
         requesterSession: { sessionId: SESSION_ID, lifecycleRevision: "one" },
-        message: "finish authorized task",
-        announceTimeoutMs: 1_000,
-        maxPingPongTurns: 0,
+        replyTimeoutMs: 1_000,
         replyMode: "one-way",
       });
       await completion.settle(request!.runId, { status: "ok", replyText: "Child result" });
@@ -365,9 +363,7 @@ describe("child followup requester continuation", () => {
       displayKey: CHILD,
       requesterSessionKey: SESSION,
       requesterAgentId: "main",
-      message: "finish authorized task",
-      announceTimeoutMs: 1000,
-      maxPingPongTurns: 0,
+      replyTimeoutMs: 1000,
       replyMode: "one-way",
     });
     await released.promise;

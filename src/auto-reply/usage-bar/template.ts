@@ -126,20 +126,31 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
     }
   }
   const entry: CacheEntry = { template: result.template };
+  // The next load rereads the path and installs a fresh watcher.
+  const invalidate = () => {
+    entry.watcher?.close();
+    entry.watcher = undefined;
+    entry.template = undefined;
+  };
   if (entry.template) {
     try {
-      const watcher = watch(path, { persistent: false }, () => {
+      const watcher = watch(path, { persistent: false }, (eventType) => {
+        // A late event from an invalidated watcher must not repopulate a template it no longer tracks.
+        if (entry.watcher !== watcher) {
+          return;
+        }
+        // Atomic saves rename a new file over the path, leaving this watcher on the old inode.
+        if (eventType === "rename") {
+          invalidate();
+          return;
+        }
         const next = readTemplateFile(path);
         if (next.reason) {
           warnInvalidUsageTemplate("file", next.reason, path);
         }
         entry.template = next.template;
       });
-      watcher.on("error", () => {
-        watcher.close();
-        entry.watcher = undefined;
-        entry.template = undefined;
-      });
+      watcher.on("error", invalidate);
       entry.watcher = watcher;
     } catch {
       // Cache remains valid without live refresh.

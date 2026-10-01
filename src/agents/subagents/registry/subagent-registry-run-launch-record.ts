@@ -29,8 +29,6 @@ export type RegisterSubagentRunParams = {
   completionRequesterLifecycleRevision?: string;
   spawnMode?: "run" | "session";
   attachmentId?: string;
-  attachmentsDir?: string;
-  attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
   collect?: boolean;
   swarmRequesterSessionKey?: string;

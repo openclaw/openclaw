@@ -1,10 +1,9 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
@@ -37,9 +36,12 @@ import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js"
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { withEnv } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-plugin-restart-owner-");
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const loadPluginLookUpTable = vi.hoisted(() =>
@@ -690,7 +692,7 @@ describe("loadGatewayPlugins", () => {
       await import("../sessions/session-lifecycle-admission.js");
     const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
     const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-restart-owner-"));
+    const stateDir = sessionDirs.make();
     const storePath = path.join(stateDir, "sessions.json");
     const context = createTestContext("same-context-distinct-owners");
     const closingResolver = vi.fn(() => context);
@@ -811,7 +813,6 @@ describe("loadGatewayPlugins", () => {
       }
       await Promise.resolve();
       closeOpenClawAgentDatabasesForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 

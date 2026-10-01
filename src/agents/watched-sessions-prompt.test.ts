@@ -1,18 +1,16 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { buildWatchedSessionsHarnessContext } from "../plugin-sdk/agent-harness-runtime.js";
 import { registerMainSessionGroupWatch } from "../sessions/session-state-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { prepareWatchedSessionsPrompt } from "./watched-sessions-prompt.js";
 
-const tempDirs: string[] = [];
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-watched-sessions-");
 const mainSessionKey = "agent:main:main";
 const sessionReadTools = ["sessions_history", "sessions_search", "sessions_list"];
 
 function stubStateDir() {
-  const stateDir = makeTempDir(tempDirs, "openclaw-watched-sessions-");
+  const stateDir = sessionDirs.make();
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 }
 
@@ -21,13 +19,7 @@ function watchGroup(sessionKey: string) {
 }
 
 afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
-});
-
-afterAll(() => {
-  cleanupTempDirs(tempDirs);
 });
 
 describe("prepareWatchedSessionsPrompt", () => {

@@ -96,14 +96,8 @@ export function createChatDirectiveSuiteResources() {
         env,
         sessionKeys: [canonicalKey],
         readOnly: true,
-        onReadSource: (source, physical) => {
-          if (physical) {
-            captured = {
-              ...source,
-              databaseIdentity: physical.identity,
-              databaseBirthtime: physical.birthtime,
-            };
-          }
+        onReadSource: (source) => {
+          captured = source;
         },
       });
       const capturedReadSource = expectDefined(captured, "chat directive fixture database source");

@@ -6,8 +6,8 @@ import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -43,6 +43,7 @@ const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
 
 describe("requestCodexAppServerJson sandbox guard", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-preflight-");
   beforeEach(() => {
     sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
@@ -782,69 +783,68 @@ describe("requestCodexAppServerJson sandbox guard", () => {
 
   it("does not resume or publish a control attachment after its passive preflight times out", async () => {
     const { codexControlRequest } = await import("../command-rpc.js");
-    await withTempDir("openclaw-codex-preflight-", async (root) => {
-      const authority = {
-        config: {},
-        agentId: "main",
-        sessionKey: "agent:main:preflight",
-        sessionId: "preflight-session",
-        storePath: path.join(root, "sessions.json"),
-      };
-      await upsertSessionEntry({
-        ...authority,
-        entry: { sessionId: authority.sessionId, updatedAt: Date.now() },
-      });
-      vi.useFakeTimers();
-      let releasePreflight!: () => void;
-      const preflight = new Promise<void>((resolve) => {
-        releasePreflight = resolve;
-      });
-      const request = vi.fn(async (_method: string) => ({ thread: { id: "thread-1" } }));
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-      const onResponse = vi.fn();
-
-      try {
-        const result = codexControlRequest(
-          {},
-          "thread/resume",
-          { threadId: "thread-1" },
-          {
-            ...authority,
-            authProfileId: null,
-            timeoutMs: 50,
-            beforeRequest: async (send) => {
-              await send({
-                method: "thread/read",
-                requestParams: { threadId: "thread-1", includeTurns: false },
-              });
-              await preflight;
-            },
-            onResponse,
-          },
-        );
-        const settled = result.then(
-          (value) => ({ status: "fulfilled", value }),
-          (error: unknown) => ({ status: "rejected", error }),
-        );
-        await vi.advanceTimersByTimeAsync(50);
-        expect(await settled).toMatchObject({
-          status: "rejected",
-          error: expect.objectContaining({ message: expect.stringContaining("timed out") }),
-        });
-        releasePreflight();
-        await vi.advanceTimersByTimeAsync(0);
-
-        expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
-        expect(onResponse).not.toHaveBeenCalled();
-        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
-        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
-      } finally {
-        releasePreflight();
-        await vi.advanceTimersByTimeAsync(0);
-        vi.useRealTimers();
-        clearSessionStoreCacheForTest();
-      }
+    const root = sessionDirs.make();
+    const authority = {
+      config: {},
+      agentId: "main",
+      sessionKey: "agent:main:preflight",
+      sessionId: "preflight-session",
+      storePath: path.join(root, "sessions.json"),
+    };
+    await upsertSessionEntry({
+      ...authority,
+      entry: { sessionId: authority.sessionId, updatedAt: Date.now() },
     });
+    vi.useFakeTimers();
+    let releasePreflight!: () => void;
+    const preflight = new Promise<void>((resolve) => {
+      releasePreflight = resolve;
+    });
+    const request = vi.fn(async (_method: string) => ({ thread: { id: "thread-1" } }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const onResponse = vi.fn();
+
+    try {
+      const result = codexControlRequest(
+        {},
+        "thread/resume",
+        { threadId: "thread-1" },
+        {
+          ...authority,
+          authProfileId: null,
+          timeoutMs: 50,
+          beforeRequest: async (send) => {
+            await send({
+              method: "thread/read",
+              requestParams: { threadId: "thread-1", includeTurns: false },
+            });
+            await preflight;
+          },
+          onResponse,
+        },
+      );
+      const settled = result.then(
+        (value) => ({ status: "fulfilled", value }),
+        (error: unknown) => ({ status: "rejected", error }),
+      );
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await settled).toMatchObject({
+        status: "rejected",
+        error: expect.objectContaining({ message: expect.stringContaining("timed out") }),
+      });
+      releasePreflight();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
+      expect(onResponse).not.toHaveBeenCalled();
+      expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
+      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    } finally {
+      releasePreflight();
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      clearSessionStoreCacheForTest();
+    }
   });
 
   it("revokes scoped requests and mutation authority when their client lease ends", async () => {

@@ -1,11 +1,11 @@
 /** Tests inbound auto-reply handling across channel message contexts. */
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./reply/inbound-dedupe.js";
@@ -310,21 +310,11 @@ describe("inbound dedupe", () => {
   });
 });
 
-const senderMetaTempDirs = createSuiteTempRootTracker({
-  prefix: "openclaw-sender-meta-",
-});
+const senderMetaTempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sender-meta-");
 
 describe("initSessionState BodyStripped", () => {
-  beforeAll(async () => {
-    await senderMetaTempDirs.setup();
-  });
-
-  afterAll(async () => {
-    await senderMetaTempDirs.cleanup();
-  });
-
   it("prefers BodyForAgent over Body for group chats", async () => {
-    const root = await senderMetaTempDirs.make("group");
+    const root = senderMetaTempDirs.make();
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
@@ -346,7 +336,7 @@ describe("initSessionState BodyStripped", () => {
   });
 
   it("prefers BodyForAgent over Body for direct chats", async () => {
-    const root = await senderMetaTempDirs.make("direct");
+    const root = senderMetaTempDirs.make();
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 

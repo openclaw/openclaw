@@ -75,7 +75,6 @@ const hoisted = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),
   readAcpSessionMetaMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
-  resolveSessionTranscriptFileMock: vi.fn(),
   areHeartbeatsEnabledMock: vi.fn(),
   cleanupFailedAcpSpawnMock: vi.fn(),
   closeRuntimeOnFailureMock: vi.fn(),
@@ -132,10 +131,6 @@ vi.mock("../../../gateway/session-utils-store-worker.js", async () => {
 
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.cfg,
-}));
-
-vi.mock("../../../config/sessions/transcript.js", () => ({
-  resolveSessionTranscriptFile: hoisted.resolveSessionTranscriptFileMock,
 }));
 
 vi.mock("../../../gateway/call.js", () => ({
@@ -608,22 +603,6 @@ describe("spawnAcpDirect", () => {
     hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
     hoisted.readAcpSessionMetaMock.mockReset().mockReturnValue(undefined);
     mockSessionStore();
-    hoisted.resolveSessionTranscriptFileMock
-      .mockReset()
-      .mockImplementation(async (params: unknown) => {
-        const typed = params as { threadId?: string };
-        const sessionFile = typed.threadId
-          ? `/tmp/agents/codex/sessions/sess-123-topic-${typed.threadId}.jsonl`
-          : "/tmp/agents/codex/sessions/sess-123.jsonl";
-        return {
-          sessionFile,
-          sessionEntry: {
-            sessionId: "sess-123",
-            updatedAt: Date.now(),
-            sessionFile,
-          },
-        };
-      });
   });
 
   afterEach(() => {
@@ -1365,28 +1344,6 @@ describe("spawnAcpDirect", () => {
     );
   });
 
-  it("keeps ACP spawn running when session-file persistence fails", async () => {
-    hoisted.resolveSessionTranscriptFileMock.mockRejectedValueOnce(new Error("disk full"));
-
-    const result = await spawn(
-      {
-        mode: "run",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "telegram",
-        agentAccountId: "default",
-        agentTo: "telegram:6098642967",
-        agentThreadId: "1",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    expect(result.childSessionKey).toMatch(/^agent:codex:acp:/);
-    const agentCall = gatewayRequest("agent");
-    expect(agentCall?.params?.sessionKey).toBe(result.childSessionKey);
-  });
-
   it("rejects disallowed ACP agents", async () => {
     hoisted.state.cfg.acp = { enabled: true, backend: "acpx", allowedAgents: ["claudecode"] };
 
@@ -1433,7 +1390,6 @@ describe("spawnAcpDirect", () => {
         to: "channel:parent-channel",
         accountId: "default",
       },
-      emitStartNotice: false,
     });
     const dispatchOrder = expectDefined(
       hoisted.callGatewayMock.mock.invocationCallOrder[0],

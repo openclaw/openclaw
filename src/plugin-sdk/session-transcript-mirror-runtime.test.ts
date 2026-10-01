@@ -1,6 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   runExclusiveSqliteSessionWrite,
@@ -17,6 +16,7 @@ import {
   type SessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   readCodexSessionTranscriptEventsBeforeAdmission,
   withCodexSessionTranscriptMirrorWriteLock,
@@ -26,13 +26,13 @@ import {
   readSessionTranscriptVisibleMessageDelta,
 } from "./session-transcript-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-transcript-mirror-");
 
 describe("private session transcript mirror runtime", () => {
   let storePath: string;
 
   beforeEach(() => {
-    const tempDir = tempDirs.make("openclaw-sdk-transcript-mirror-");
+    const tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
   });
 
