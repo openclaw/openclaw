@@ -494,6 +494,24 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
     }
 
+    func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
+        guard let route = await self.currentSessionMutationRoute(),
+              let facts = await self.gateway.currentReactionAccess(ifCurrentRoute: route)
+        else { return nil }
+        return self.reactionsRouteLease(
+            routeID: facts.routeID,
+            access: OpenClawChatReactionAccess(
+                role: facts.role,
+                scopes: facts.scopes,
+                sessionCap: facts.sessionCap,
+                methods: facts.methods,
+                userID: facts.userID),
+            isCurrent: { await self.gateway.currentRoute() == route },
+            request: { request in
+                try await self.gateway.request(request, ifCurrentRoute: route)
+            })
+    }
+
     func resolveInlineWidgetResource(
         path: String,
         replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?

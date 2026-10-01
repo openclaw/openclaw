@@ -363,6 +363,8 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts
 src/commands/doctor/shared/legacy-config-migrations.ts
 src/commands/doctor/shared/legacy-config-migrations.web-search.ts
 src/commands/doctor/shared/legacy-config-record-shared.ts
+src/commands/doctor/shared/legacy-context-budget.ts
+src/commands/doctor/shared/legacy-copilot-discovery.ts
 src/commands/doctor/shared/legacy-model-ref-normalization.ts
 src/commands/doctor/shared/legacy-models-add-metadata.ts
 src/commands/doctor/shared/legacy-runtime-model-policy.ts
@@ -446,11 +448,9 @@ src/config/io.write-values.ts
 src/config/issue-format.ts
 src/config/json5-comments.ts
 src/config/legacy-codex-provider.ts
-src/config/legacy.context-budget.ts
 src/config/legacy.default-agent-owner-state.ts
 src/config/legacy.default-agent-owner.ts
 src/config/legacy.default-agent-roles.ts
-src/config/legacy.github-copilot.ts
 src/config/legacy.roster.ts
 src/config/legacy.shared.ts
 src/config/legacy.ts

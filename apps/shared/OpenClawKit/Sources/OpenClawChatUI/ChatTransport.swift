@@ -11,6 +11,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case sessionObserver(SessionObserverDigest)
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
+    case sessionReaction(OpenClawChatReactionEvent)
     case agent(OpenClawAgentEventPayload)
     case progressCardChanged(ProgressCardChangedEvent)
     case questionRequested(QuestionRecord)
@@ -826,6 +827,7 @@ public protocol OpenClawChatTransport: Sendable {
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
     func attachmentLimits() async -> GatewayAttachmentLimits?
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
+    func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
     func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext?
@@ -992,6 +994,10 @@ extension OpenClawChatTransport {
     }
 
     public func fetchProgressCard(sessionKey _: String, agentID _: String?) async throws -> ProgressCard? {
+        nil
+    }
+
+    public func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
         nil
     }
 

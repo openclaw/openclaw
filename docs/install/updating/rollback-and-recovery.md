@@ -37,8 +37,18 @@ are copied when supported. Regular-file launchers still require matching modes
 and contents. If backup verification fails, the report names the differing
 fields and the retained failed copy for inspection before retrying.
 
+Package rollback checks file hashes, inode identity, permissions, ownership, and
+symlink targets. It ignores regular `node_modules/.package-lock.json` files,
+which npm documents as a disposable cache, and link counts and change times
+that can change without altering the retained bytes. Executable `.bin` entries
+remain part of verification. During the original update process, a mismatch
+records up to five differing relative paths and field names (including `sha256`
+for changed contents) in the failure facts and report. Recovery after a process
+restart retains the saved digest check but cannot reconstruct that entry list.
+
 This behavior belongs to the installed updater. An older updater, including
-2026.9.4, can refuse a macOS launcher backup before the target version runs.
+2026.9.4, can refuse package or launcher verification before the target version runs
+and cannot gain these diagnostics from the candidate.
 Use the installation's [manual package-manager update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 if that first update is blocked.
 

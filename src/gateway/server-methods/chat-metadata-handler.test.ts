@@ -10,8 +10,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
@@ -127,6 +129,61 @@ function dispatchMetadata(
 }
 
 describe("chat metadata ownership", () => {
+  it("creates and reuses a legacy requester profile through chat.metadata without host SQL", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      ensureProfileForEmail("admitted@example.test");
+      const config: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+      const metadata = { models: [], swarmEnabled: false };
+      const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(
+        async () => metadata,
+      );
+      const context = createDirectChatContext({ getRuntimeConfig: () => config, readChatMetadata });
+      const respond = vi.fn<RespondFn>();
+      const client: NonNullable<GatewayRequestHandlerOptions["client"]> = {
+        connId: "metadata-legacy-connection",
+        authenticatedUserId: "metadata-legacy@example.test",
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+          role: "operator",
+          scopes: [READ_SCOPE],
+        },
+      };
+      requireNodeSqlite();
+      const sql = observeMainThreadSql();
+      try {
+        sql.calibrate();
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await expectDefined(
+            chatHistoryHandlers["chat.metadata"],
+            "metadata handler",
+          )({
+            params: { agentId: "main" },
+            context,
+            client,
+            respond,
+            req: { type: "req", id: `legacy-profile-${attempt}`, method: "chat.metadata" },
+            isWebchatConnect: () => false,
+          });
+        }
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+      const profile = ensureProfileForEmail("metadata-legacy@example.test");
+      expect(readChatMetadata).toHaveBeenCalledTimes(2);
+      for (const [scope] of readChatMetadata.mock.calls) {
+        expect(scope.requesterProfileId).toBe(profile.id);
+        expect(scope.assertCurrent).not.toThrow();
+      }
+      expect(respond.mock.calls).toEqual([
+        [true, metadata],
+        [true, metadata],
+      ]);
+    });
+  });
+
   it.each([READ_SCOPE, SESSION_READ_SCOPE])(
     "previews a retained personal account with %s without changing its cleared default",
     async (scope) => {
