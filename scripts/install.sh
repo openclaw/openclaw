@@ -45,6 +45,7 @@ installer_npm_version_error() {
 installer_clone_error() {
     ui_error "Could not publish the cloned checkout: ${1}"
     ui_info "Inspect the destination for partial files, move it or choose another --git-dir, then retry."
+    return 1
 }
 
 # OpenClaw Installer for macOS and Linux

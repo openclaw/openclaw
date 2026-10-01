@@ -291,7 +291,6 @@ try {
 NODE
     then
         installer_clone_error "$repo_dir"
-        return 1
     fi
 }
 
