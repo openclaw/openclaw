@@ -17,8 +17,8 @@ export function resolveLegacyDeliveryQueuePath(stateDir: string, dirName: string
 }
 
 export function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile[] {
-  const files = (directory: string) => {
-    const sources = new Map<string, { sourcePath: string; claimPaths: string[] }>();
+  const files = (directory: string, status: LegacyDeliveryQueueFile["status"]) => {
+    const sources = new Map<string, LegacyDeliveryQueueFile>();
     for (const entry of safeReadDir(directory)) {
       const name = resolveLegacyMigrationSourcePath(entry.name);
       if (!entry.isFile() || !name.endsWith(".json")) {
@@ -27,6 +27,7 @@ export function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQu
       const source = sources.get(name) ?? {
         sourcePath: path.join(directory, name),
         claimPaths: [],
+        status,
       };
       if (entry.name !== name) {
         source.claimPaths.push(path.join(directory, entry.name));
@@ -35,16 +36,7 @@ export function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQu
     }
     return [...sources.values()];
   };
-  const pending = files(queueDir).map((source) => ({
-    ...source,
-    status: "pending" as const,
-  }));
-  const failedDir = path.join(queueDir, "failed");
-  const failed = files(failedDir).map((source) => ({
-    ...source,
-    status: "failed" as const,
-  }));
-  return [...pending, ...failed];
+  return [...files(queueDir, "pending"), ...files(path.join(queueDir, "failed"), "failed")];
 }
 
 export function listLegacyDeliveryQueueDeliveredMarkers(queueDir: string): string[] {

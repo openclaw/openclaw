@@ -726,4 +726,3 @@ export async function migrateLegacyDeliveryQueues(params: {
     ...(!refused && warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
