@@ -140,19 +140,21 @@ export async function retainUpdateDoctorProcesses(
       // Root discovery may be unavailable during otherwise useful diagnostics.
       // Native installation custody is required before dispatching a child.
       if (!nativeCustody) {
-        if (!receipt.namespace) {
-          if (!root) {
-            throw new Error("Doctor process custody requires its installation root.");
-          }
-          receipt.namespace = pinNamespace({ roots: [root] });
+        const namespace = receipt.namespace ?? (root ? { roots: [root] } : undefined);
+        if (!namespace) {
+          throw new Error("Doctor process custody requires its installation root.");
         }
         nativeCustody = createManagedCommandProcessCustody({
-          ...receipt.namespace,
+          ...namespace,
           runId: receipt.runId,
           anchorOwner: `doctor:${receipt.nonce}`,
           parents: authority?.parents,
           assertCurrent,
         });
+        receipt.namespace ??= {
+          roots: namespace.roots,
+          databaseIdentity: nativeCustody.databaseIdentity,
+        };
       }
       const retained = nativeCustody.custody.reserve(argv);
       const slot: Receipt["slots"][number] = { id: ++sequence };
@@ -186,14 +188,6 @@ export type UpdateDoctorProcessNamespace = {
   roots: readonly string[];
   databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
 };
-
-function pinNamespace(namespace: UpdateDoctorProcessNamespace) {
-  const { databaseIdentity } = createManagedCommandProcessCustody({
-    ...namespace,
-    runId: "",
-  });
-  return { roots: [...namespace.roots], databaseIdentity };
-}
 
 export function createUpdateDoctorProcessCustody(
   runId: string,

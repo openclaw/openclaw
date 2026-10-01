@@ -1,5 +1,4 @@
 import path from "node:path";
-import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
@@ -14,11 +13,9 @@ import {
   markPackagePostInstallDoctorAdvisory,
 } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   formatUpdateDoctorConfigWriteRefusal,
   getUpdateDoctorConfigFailureReason,
-  type UpdateDoctorConfigChange,
 } from "../../infra/update-doctor-config.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -38,9 +35,6 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
-import type { UpdateRequester } from "../../infra/update-requester-authority.js";
-import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import {
   normalizeFallbackFailureReason,
   reportUpdateStepCompletion,
@@ -72,21 +66,9 @@ import {
 } from "./update-command-config-snapshot.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
+import type { PackageDoctorContext } from "./update-command-doctor-context.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
-
-type PackageDoctorContext = {
-  runId: string;
-  executorFence: UpdateRecoveryFence;
-  requester?: Readonly<UpdateRequester>;
-  inputHash: string;
-  changes: UpdateDoctorConfigChange[];
-  databaseBackup?: UpdateDatabaseBackup;
-  originalRecoveryCapture?: UpdateRecoveryBaselineRef;
-  assertCurrent: () => void;
-  assertBoundChildCurrent: () => void;
-  onStateHandoff?: () => void;
-};
 
 type PackageDoctorOptions = {
   root: string;
@@ -102,33 +84,6 @@ type PackageDoctorOptions = {
   onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
   getDoctorContext?: () => PackageDoctorContext | undefined;
 };
-
-export function preparePackageDoctorContext({
-  capable,
-  runId,
-  executorFence,
-  inputHash,
-  ...context
-}: Omit<PackageDoctorContext, "runId" | "executorFence" | "inputHash"> & {
-  capable: boolean;
-  runId?: string;
-  executorFence?: UpdateRecoveryFence;
-  inputHash?: string | null;
-}) {
-  context.assertCurrent();
-  if (!capable) {
-    return undefined;
-  }
-  if (!runId || !executorFence || inputHash === undefined) {
-    throw new Error("Validated Doctor requires its live update executor and captured config hash.");
-  }
-  return {
-    ...context,
-    runId,
-    executorFence,
-    inputHash: inputHash ?? hashConfigRaw(null),
-  };
-}
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   const assertCurrent = params.assertCurrent;

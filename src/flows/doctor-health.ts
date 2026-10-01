@@ -89,32 +89,21 @@ export async function runDoctorHealthFlow(
         }
       }
       const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
-      return withPluginLoadDiagnostics((diagnostics) =>
-        resultPath
-          ? captureUpdateDoctorConfigWrites(
-              resolveConfigPath(),
-              (capture) =>
-                runDoctorHealthFlowWithResult(
-                  runtime,
-                  options,
-                  preparedPreflight,
-                  diagnostics,
-                  { resultPath, capture },
-                  writeAuthority,
-                  resumeCapture,
-                ),
-              writeAuthority,
-            )
-          : runDoctorHealthFlowWithResult(
-              runtime,
-              options,
-              preparedPreflight,
-              diagnostics,
-              undefined,
-              writeAuthority,
-              resumeCapture,
-            ),
-      );
+      return withPluginLoadDiagnostics((diagnostics) => {
+        const runDoctor = (capture?: DoctorConfigCapture) =>
+          runDoctorHealthFlowWithResult(
+            runtime,
+            options,
+            preparedPreflight,
+            diagnostics,
+            resultPath && capture ? { resultPath, capture } : undefined,
+            writeAuthority,
+            resumeCapture,
+          );
+        return resultPath
+          ? captureUpdateDoctorConfigWrites(resolveConfigPath(), runDoctor, writeAuthority)
+          : runDoctor();
+      });
     });
   return await (custody ? withCommandProcessScope(run, undefined, custody) : run());
 }

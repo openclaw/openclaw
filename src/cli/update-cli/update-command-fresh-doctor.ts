@@ -49,7 +49,7 @@ import {
   createSanitizedCommandError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
-import { isPlainCommandExitFailure, runExec, type RunExecOptions } from "../../process/exec.js";
+import { isPlainCommandExitFailure, runExec, type CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
@@ -147,13 +147,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   let failure: { error: unknown } | undefined;
   assertCurrent();
   try {
-    const commandOptions: RunExecOptions = {
+    const commandOptions: CommandOptions = {
       cwd: params.root,
       // Normal updates also carry a default step allowance. Only operator opts
       // may impose a Doctor deadline; standalone finalization supplies its own.
       timeoutMs: params.opts ? parseUpdateTimeoutMs(params.opts.timeout) : params.timeoutMs,
-      maxBuffer: 4 * 1024 * 1024,
-      logOutput: false,
+      maxOutputBytes: 4 * 1024 * 1024,
+      terminateOnOutputLimit: true,
       onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),
       baseEnv,
       env: {
@@ -220,12 +220,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
               : {}),
           },
         },
-        (runCommand) =>
-          runCommand([...workerCommand, "--doctor"], {
-            ...commandOptions,
-            maxOutputBytes: commandOptions.maxBuffer,
-            terminateOnOutputLimit: true,
-          }),
+        (runCommand) => runCommand([...workerCommand, "--doctor"], commandOptions),
       );
       result = child;
       assertUpdateDoctorChildSucceeded(child);
@@ -242,11 +237,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           },
         },
         [params.nodeRunner ?? resolveNodeRunner(), ...args],
-        {
-          ...commandOptions,
-          maxOutputBytes: commandOptions.maxBuffer,
-          terminateOnOutputLimit: true,
-        },
+        commandOptions,
       );
       result = child;
       assertUpdateDoctorChildSucceeded(child);
