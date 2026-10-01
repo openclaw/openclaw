@@ -178,7 +178,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     agentId: sessionAgentId,
     cfg: params.config,
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
-    disableTools: params.disableTools,
+    disableTools: params.disableTools || params.requireWorkspaceOnly === true,
     toolsAllow: params.toolsAllow,
     manifestRegistry: bundleManifestRegistry,
     toolOverrides: codexMcpToolOverrides,
@@ -285,11 +285,14 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       }
     }
   }
-  const configuredMcpSurface = scheduledConfiguredMcpSurface
-    ? "scheduled"
-    : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
-      ? "transient"
-      : undefined;
+  const configuredMcpSurface =
+    params.requireWorkspaceOnly === true
+      ? undefined
+      : scheduledConfiguredMcpSurface
+        ? "scheduled"
+        : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
+          ? "transient"
+          : undefined;
   preDynamicStartupStages.mark("native-tool-surface");
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,

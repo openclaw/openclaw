@@ -1,5 +1,8 @@
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createProcessPollDeliveryContract } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import {
+  createProcessPollDeliveryContract,
+  createRequiredExecRuntimeContract,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -47,6 +50,51 @@ function callTool(
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("retains a required command as one native pending call until terminal collection", async () => {
+    const command = createRequiredExecRuntimeContract();
+    const harness = createStartedThreadHarness();
+    const params = createTestParams();
+    setCodexTestToolFactory(params, () => [{ ...command.tool, name: "sandbox_exec" }]);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const run = runCodexAppServerAttempt(params);
+    let response: ReturnType<typeof callTool> | undefined;
+    try {
+      await harness.waitForMethod("turn/start");
+      let collected = false;
+      response = callTool(harness, "sandbox_exec", "required-command", {
+        command: "verify-required",
+        required: true,
+      }).then((value) => {
+        collected = true;
+        return value;
+      });
+      await command.started;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(collected).toBe(false);
+      expect(command.spawn).toHaveBeenCalledOnce();
+      expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+      vi.useRealTimers();
+      command.finish();
+      await expect(response).resolves.toMatchObject({
+        success: true,
+        contentItems: [
+          { type: "inputText", text: expect.stringContaining("REQUIRED_NATIVE_RESULT") },
+        ],
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+    } finally {
+      vi.useRealTimers();
+      command.finish();
+      await response;
+      closeHost();
+      command.close();
+    }
+  });
+
   it("acknowledges a terminal sandbox process poll only after Codex accepts its exact result", async () => {
     const process = createProcessPollDeliveryContract("codex-result-delivery");
     const turnStarted = createDeferred<void>();

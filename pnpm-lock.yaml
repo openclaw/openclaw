@@ -369,8 +369,8 @@ importers:
         specifier: 1.2.10
         version: 1.2.10(supports-color@10.2.2)
       npm:
-        specifier: 11.20.0
-        version: 11.20.0
+        specifier: 12.1.0
+        version: 12.1.0
       openai:
         specifier: 7.20.0
         version: 7.20.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.21.3)(zod@4.6.5)
@@ -433,8 +433,8 @@ importers:
         specifier: 8.0.6
         version: 8.0.6
       '@copilotkit/aimock':
-        specifier: 1.42.1
-        version: 1.42.1(vitest@5.0.1)
+        specifier: 1.43.0
+        version: 1.43.0(vitest@5.0.1)
       '@lit-labs/signals':
         specifier: 0.3.0
         version: 0.3.0
@@ -1985,8 +1985,8 @@ importers:
   extensions/qa-lab:
     dependencies:
       '@copilotkit/aimock':
-        specifier: 1.42.1
-        version: 1.42.1(vitest@5.0.1)
+        specifier: 1.43.0
+        version: 1.43.0(vitest@5.0.1)
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.6.5)
@@ -3547,8 +3547,8 @@ packages:
   '@codemirror/view@6.43.13':
     resolution: {integrity: sha512-sihaFrUzAsYBQsL9J2t69y8nfMQGwcYmggAZsk+kjPbjYZMyuf2hU8tUNTZ+P+isb6XRr8JE22TZlJxBoVdH1A==}
 
-  '@copilotkit/aimock@1.42.1':
-    resolution: {integrity: sha512-Kc3a4sP89kDENdRypKdmlynnmmYsn96ZYHCPCRdbFd2kw0qg1XufzEWIemS0YP5b/f7ssuFm4Kt8KbGwlx2WkA==}
+  '@copilotkit/aimock@1.43.0':
+    resolution: {integrity: sha512-V8D8cjSMtAR4rHaD2ulp3DR/ZguXQjDNOqwKDNvjb/OJL/KR1I0SDf5xpRCd+TYKjhmf9fM8Xpg3QBKPmV9Kmw==}
     engines: {node: '>=20.15.0'}
     hasBin: true
     peerDependencies:
@@ -8700,15 +8700,16 @@ packages:
     resolution: {integrity: sha512-9qny7Z9DsQU8Ou39ERsPU4OZQlSTP47ShQzuKZ6PRXpYLtIFgl/DEBYEXKlvcEa+9tHVcK8CF81Y2V72qaZhWA==}
     engines: {node: '>=18'}
 
-  npm@11.20.0:
-    resolution: {integrity: sha512-dF3EDFwbYN+N5RUip+ZYDe0NeURK5BgqKOcvT1iNtUYhTMTl0FwWhBuXrS7KtXyduqyTMS5aaQaregnHDAxNgw==}
-    engines: {node: ^20.17.0 || >=22.9.0}
+  npm@12.1.0:
+    resolution: {integrity: sha512-Fyhu62pNx70YCs/5+dEmJQTFVmSKwvo5CA0qvBkGDRpob42MJ6G2RQ2tdxeKM4nYnIZDqkYAxEgqtoejn9QGtQ==}
+    engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
     hasBin: true
     bundledDependencies:
       - '@isaacs/string-locale-compare'
       - '@npmcli/arborist'
       - '@npmcli/config'
       - '@npmcli/fs'
+      - '@npmcli/git'
       - '@npmcli/map-workspaces'
       - '@npmcli/metavuln-calculator'
       - '@npmcli/package-json'
@@ -8718,9 +8719,11 @@ packages:
       - '@sigstore/tuf'
       - abbrev
       - archy
+      - bin-links
       - cacache
       - chalk
       - ci-info
+      - diff
       - fastest-levenshtein
       - fs-minipass
       - glob
@@ -11309,7 +11312,7 @@ snapshots:
       style-mod: 4.1.4
       w3c-keyname: 2.2.8
 
-  '@copilotkit/aimock@1.42.1(vitest@5.0.1)':
+  '@copilotkit/aimock@1.43.0(vitest@5.0.1)':
     optionalDependencies:
       vitest: 5.0.1(patch_hash=90ba2969491e095cc2e92a4d38256dfcf64f85078ec29e1762b9429a00b35901)(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(@vitest/browser-playwright@5.0.1)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.0(@types/node@26.6.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
@@ -16674,7 +16677,7 @@ snapshots:
       path-key: 4.0.0
       unicorn-magic: 0.3.0
 
-  npm@11.20.0: {}
+  npm@12.1.0: {}
 
   nth-check@3.0.1:
     dependencies:

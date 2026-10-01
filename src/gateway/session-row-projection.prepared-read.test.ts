@@ -1,6 +1,7 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
@@ -386,20 +387,29 @@ it.each([
   },
 );
 
-it("serves an exact description while an unrelated bulk placement refresh is held", async ({
-  signal,
-}) => {
+it.for([false, true])("keeps exact reads independent of bulk %s", async (category, { signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const placements = createWorkerSessionPlacementStore();
     const rows: PlacementRow[] = [];
     for (const name of ["exact", "bulk"]) {
       const sessionId = `independent-placement-${name}`;
       const key = `agent:main:${sessionId}`;
-      replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        {
+          sessionId,
+          updatedAt: 1,
+          label: category && name === "exact" ? "Fresh exact description" : undefined,
+        },
+      );
       rows.push({
         key,
         sessionId,
-        placement: await placements.startDispatch({ agentId: "main", sessionKey: key, sessionId }),
+        placement: await placements.startDispatch({
+          agentId: "main",
+          sessionKey: key,
+          sessionId,
+        }),
       });
     }
     const exactRow = rows[0]!;
@@ -465,10 +475,12 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         ),
         signal,
       );
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: exactRow.key },
-        { sessionId: exactRow.sessionId, updatedAt: 2, label: "Fresh exact description" },
-      );
+      if (!category) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: exactRow.key },
+          { sessionId: exactRow.sessionId, updatedAt: 2, label: "Fresh exact description" },
+        );
+      }
       exactRow.placement = placements.transition({
         sessionId: exactRow.sessionId,
         from: "requested",
@@ -476,6 +488,10 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         expectedGeneration: exactRow.placement.generation,
       });
       reportPlacementTransition(undefined, exactRow.placement);
+      const sql = observeHostDataSql();
+      if (category) {
+        sessionChanges.emit({ sessionKey: exactRow.key, factsInvalidated: "category" });
+      }
       const respond = vi.fn();
       const description = Promise.resolve(
         sessionByKeyReadHandlers["sessions.describe"]!({
@@ -488,7 +504,19 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         }),
       );
       pending.push(Promise.allSettled([description]));
-      await withinTest(description, signal);
+      const membership = category ? projection.prepareMembership() : Promise.resolve();
+      pending.push(Promise.allSettled([membership]));
+      try {
+        await withinTest(Promise.all([description, membership]), signal);
+        if (category) {
+          expect(
+            projection.sharingTargetState({ agentId: "main", key: exactRow.key }),
+          ).toMatchObject({ status: "ready" });
+        }
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
         session: expect.objectContaining({
           key: exactRow.key,

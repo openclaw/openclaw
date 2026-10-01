@@ -230,6 +230,12 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
+During Gateway restart drain, an accepted publication sequence retains its native
+agent lease until its publication store closes. Close rejects new publications,
+joins accepted work, and releases that lease before its database borrow. Normal
+idle retirement and per-command authority checks remain unchanged; updates need
+no schema or state migration.
+
 Memory Core standing-intent operations queue through the canonical agent writer
 before acquiring their database generation. Their connection-bound worker handles
 creation, listing, cancellation, matching, and lifecycle maintenance. Schema

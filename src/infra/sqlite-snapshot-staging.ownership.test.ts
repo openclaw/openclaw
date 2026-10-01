@@ -1,10 +1,12 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -160,6 +162,43 @@ function runChild(script: string, signal?: NodeJS.Signals) {
     expect(result.signal, result.stderr).toBe(signal);
   }
   return result.stdout;
+}
+
+async function runOwnedChild(script: string, signal: AbortSignal): Promise<string> {
+  const child = spawn(process.execPath, [...nodeArguments, script], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  let failure: Error | undefined;
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  child.once("error", (error) => {
+    failure = error;
+  });
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
+  let joined = false;
+  try {
+    await withinTest(closed, signal);
+    joined = true;
+    expect(failure, stderr).toBeUndefined();
+    expect(child.exitCode, stderr).toBe(0);
+    expect(child.signalCode, stderr).toBeNull();
+    return stdout;
+  } finally {
+    if (!joined) {
+      // The blocked reclaimer cannot run its own finally; retire its entire fixture family.
+      forceKillChildProcessTree(child);
+    }
+    await closed;
+  }
 }
 
 it("reconciles a released fresh token without waiting for idle reclamation", () => {
@@ -425,7 +464,7 @@ it("preserves a live snapshot when its owner PID is invisible", () => {
 
 it.skipIf(process.platform === "win32")(
   "arbitrates an orphan worker allocating after reclamation inspects its parent",
-  () => {
+  async ({ signal }) => {
     for (const { legacyParent, cacheContainer } of [
       { legacyParent: false, cacheContainer: false },
       { legacyParent: true, cacheContainer: false },
@@ -434,7 +473,6 @@ it.skipIf(process.platform === "win32")(
     ]) {
       for (const stage of ["inspection", "retirement"] as const) {
         const { root, cache, source } = createFixture();
-        const resultFile = path.join(root, "worker-result.json");
         const childPrelude = `
       import fs from 'node:fs';
       import path from 'node:path';
@@ -470,22 +508,34 @@ it.skipIf(process.platform === "win32")(
         } catch (error) {
           result = { error: error.message, code: error.code, causeCode: error.cause?.code };
         }
-        fs.writeFileSync(${JSON.stringify(`${resultFile}.partial`)}, JSON.stringify(result));
-        fs.renameSync(${JSON.stringify(`${resultFile}.partial`)}, ${JSON.stringify(resultFile)});
+        fs.writeSync(4, JSON.stringify(result));
+        fs.closeSync(4);
         process.removeAllListeners('message');
         process.once('message', () => { prepared?.cleanup(); process.disconnect(); });
       });
       process.send('ready');
     `;
-        const output = runChild(`${childPrelude}
+        const output = await runOwnedChild(
+          `${childPrelude}
       import { spawn } from 'node:child_process';
       import { once } from 'node:events';
-      const launch = (script) => spawn(process.execPath, [...${JSON.stringify(nodeArguments)}, script], {
-        stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+      import koffi from 'koffi';
+      const launch = (script, resultFd) => spawn(process.execPath, [...${JSON.stringify(nodeArguments)}, script], {
+        stdio: ['ignore', 'ignore', 'inherit', 'ipc', resultFd ?? 'ignore'],
       });
       const parent = launch(${JSON.stringify(parentScript)});
       const [directory] = await once(parent, 'message');
-      const worker = launch(${JSON.stringify(workerScript)});
+      // A real blocking pipe keeps the synchronous reclaimer observer on its original turn.
+      const libc = koffi.load(null);
+      const pipe = libc.func('int pipe(_Out_ int *fds)');
+      const close = libc.func('int close(int fd)');
+      const fcntl = libc.func('int fcntl(int fd, int cmd, ...)');
+      const resultPipe = [-1, -1];
+      if (pipe(resultPipe) !== 0) throw new Error('worker result pipe failed');
+      // POSIX F_SETFD=2/FD_CLOEXEC=1 prevents unrelated descendants retaining the writer.
+      if (resultPipe.some(fd => fcntl(fd, 2, 'int', 1) !== 0)) throw new Error('worker result pipe close-on-exec failed');
+      const worker = launch(${JSON.stringify(workerScript)}, resultPipe[1]);
+      close(resultPipe[1]);
       const workerClosed = once(worker, 'close');
       const parentClosed = once(parent, 'close');
       let inspected = false;
@@ -503,13 +553,9 @@ it.skipIf(process.platform === "win32")(
           if (String(pathname) === directory && !inspected) {
             inspected = true;
             worker.send(${JSON.stringify(cacheContainer)} ? path.join(directory, 'openclaw') : directory);
-            const deadline = Date.now() + 10_000;
-            const barrier = new Int32Array(new SharedArrayBuffer(4));
-            while (!fs.existsSync(${JSON.stringify(resultFile)})) {
-              if (Date.now() > deadline) throw new Error('worker did not reach allocation barrier');
-              Atomics.wait(barrier, 0, 0, 10);
-            }
-            outcome = JSON.parse(fs.readFileSync(${JSON.stringify(resultFile)}, 'utf8'));
+            const result = fs.readFileSync(resultPipe[0], 'utf8');
+            if (!result) throw new Error('worker did not reach allocation barrier');
+            outcome = JSON.parse(result);
           }
         };
         fs.readdirSync = (...args) => {
@@ -535,8 +581,11 @@ it.skipIf(process.platform === "win32")(
         if (worker.connected && outcome) worker.send('finish');
         else worker.kill('SIGKILL');
         await Promise.all([parentClosed, workerClosed]);
+        close(resultPipe[0]);
       }
-    `);
+    `,
+          signal,
+        );
         const result = JSON.parse(output) as {
           inspected: boolean;
           workerAlive: boolean;

@@ -17,7 +17,7 @@ const cfg: OpenClawConfig = {
     entries: {
       blocked: {
         model: "openai/blocked-model",
-        models: { "openai/blocked-model": { agentRuntime: { id: "codex" } } },
+        models: { "openai/blocked-model": { agentRuntime: { id: "unsupported-harness" } } },
       },
       first: { model: "anthropic/claude-sonnet-4-6" },
       second: { model: "anthropic/claude-sonnet-4-6" },

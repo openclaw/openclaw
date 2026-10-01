@@ -30,6 +30,10 @@ import {
 } from "./jsdom-custom-elements.ts";
 import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
 import {
+  closeLeakedSkillsWatchers,
+  rememberSkillsWatcherGenerations,
+} from "./skills-watcher-test-lifecycle.ts";
+import {
   drainSqliteTestAgentOwner,
   drainSqliteTestSingletons,
   hasRetainedSqliteTestCustody,
@@ -97,6 +101,14 @@ const nativeTimerGlobals = {
   setImmediate: globalThis.setImmediate,
   clearImmediate: globalThis.clearImmediate,
   Date: globalThis.Date,
+};
+// vi.resetModules() inside a test clears module exports before the next task boundary.
+// Remember skills watcher generations first so the file drain can still close them.
+let beforeModuleReset: (() => void) | undefined;
+const nativeResetModules = vi.resetModules;
+vi.resetModules = () => {
+  beforeModuleReset?.();
+  return nativeResetModules();
 };
 
 function getSharedTestHome(): string | undefined {
@@ -432,6 +444,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
 
   override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
+    beforeModuleReset = () => this.rememberSkillsWatchers();
     if (!this.config.isolate) {
       installCustomElementTracking();
     }
@@ -447,10 +460,12 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     await settleSqliteTestAgentCloses();
     await super.onBeforeRunTask(test);
     this.rememberSqliteAgentOwner();
+    this.rememberSkillsWatchers();
   }
 
   onTaskFinished() {
     this.rememberSqliteAgentOwner();
+    this.rememberSkillsWatchers();
   }
 
   private rememberSqliteAgentOwner() {
@@ -460,6 +475,14 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     const internals = this as unknown as TestRunnerInternals;
     rememberSqliteTestAgentOwner(
       (internals.workerState.evaluatedModules as EvaluatedModules).idToModuleMap.values(),
+      internals.workerState.moduleExecutionInfo,
+    );
+  }
+
+  private rememberSkillsWatchers() {
+    const internals = this as unknown as TestRunnerInternals;
+    rememberSkillsWatcherGenerations(
+      internals.workerState.evaluatedModules as ViteEvaluatedModules,
       internals.workerState.moduleExecutionInfo,
     );
   }
@@ -553,6 +576,19 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     ] as const) {
       clean(phase, run);
     }
+    // After the module reset nothing can reach this file's watchers, and their re-arms
+    // land on a later file's fake clock. Close them now and fail this file, not that one.
+    this.rememberSkillsWatchers();
+    await drain("skills watchers", async () => {
+      const leaked = await closeLeakedSkillsWatchers();
+      if (leaked > 0) {
+        throw new Error(
+          `left skills watchers open (${leaked} live watch entries); skills.status and skill snapshot preparation start real watchers, so close them in afterEach with closeSkillsWatchers(true) or disable watching with skills.load.watch: false`,
+        );
+      }
+    });
+    // The runner's own module reset below must not retain this file's closed generation.
+    beforeModuleReset = undefined;
     if (
       !(await drain("subagent registry", async () => {
         const api = (globalThis as Record<PropertyKey, unknown>)[SUBAGENT_REGISTRY_TEST_API] as

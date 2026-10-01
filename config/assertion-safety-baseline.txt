@@ -1785,7 +1785,7 @@ src/claws/package-update.ts	1
 src/claws/packages.ts	1
 src/claws/project-build.ts	4
 src/claws/project.ts	2
-src/claws/provenance.ts	6
+src/claws/provenance.ts	5
 src/claws/reader.ts	3
 src/claws/schema.ts	2
 src/claws/update-capability-changes.ts	7

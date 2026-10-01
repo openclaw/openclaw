@@ -19,6 +19,7 @@ import {
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
+import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
@@ -30,6 +31,45 @@ import {
   createGatewaySessionEntryReader,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+
+/** Capture retains published identity while category facts wait for worker reconciliation. */
+export function createSessionRowCapture(
+  lookup: (query: records.Lookup) => records.Row | undefined,
+  needsAcquisition: (row: records.Row) => boolean,
+  acquire: (row: records.Row) => records.Row | undefined,
+) {
+  return (query: records.Lookup) => {
+    const row = lookup(query);
+    return row && row.unresolvedDatabaseFacts !== "category" && needsAcquisition(row)
+      ? (acquire(row) ?? row)
+      : row;
+  };
+}
+
+/** Bind live projection state to the same prepared or resident source-read boundary. */
+export function createSessionRowModelFactsReader(params: {
+  lookup: (query: records.Lookup) => records.Row | undefined;
+  readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
+  state: () => Pick<
+    Parameters<typeof readSessionRowModelFacts>[0],
+    "cfg" | "modelCatalog" | "rowContext"
+  >;
+}) {
+  return (query: records.Lookup, metadataPrepared = false) => {
+    const row = params.lookup(query);
+    if (!row?.entry) {
+      throw new Error("Session changed while preparing search facts; retry the request");
+    }
+    return readSessionRowModelFacts({
+      ...params.state(),
+      ...row,
+      source: {
+        entry: row.storedEntry,
+        readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
+      },
+    });
+  };
+}
 
 /** Exact descriptions use the projection's custody and materialization owners in one frame. */
 export function createSessionRowDescriptionReader(owner: {
@@ -120,6 +160,9 @@ export function createSessionRowMaterializer(owner: {
         if (accepted && !databaseFacts) {
           continue;
         }
+        if (!accepted && current?.unresolvedDatabaseFacts === "category") {
+          continue;
+        }
         const row =
           current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
         if (row && isColdArchivedSessionRow(row) && !accepted) {
@@ -173,7 +216,13 @@ export function createSessionRowMaterializer(owner: {
           const row =
             current &&
             owner.acquireEntry(
-              databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
+              databaseFacts
+                ? {
+                    ...current,
+                    hasBoard: databaseFacts.hasBoard,
+                    unresolvedDatabaseFacts: undefined,
+                  }
+                : current,
               databaseFacts?.entry,
             );
           if (owner.revision() !== revision) {

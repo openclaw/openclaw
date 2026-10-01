@@ -22,7 +22,6 @@ export function findLegacyConfigIssues(
   raw: unknown,
   sourceRaw?: unknown,
   extraRules: LegacyConfigRule[] = [],
-  _touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
   return findLegacyConfigRuleIssues(raw, [...LEGACY_CONFIG_RULES, ...extraRules], sourceRaw);
 }

@@ -13,6 +13,7 @@ import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
 import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
+import { skillsWatcherFixtureFiles } from "./non-isolated-runner.skills-watcher-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -433,6 +434,7 @@ it("reloads the redirected mock after a real import", () => {
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
     ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
+    ...skillsWatcherFixtureFiles(repoRoot, fixtureRoot),
   };
 }
 
@@ -460,7 +462,7 @@ async function assertCompletion(
     pid: expected.pid,
     root: expected.root,
     processTimedOut: false,
-    ended: { reason: "failed", unhandledErrors: 0, failedModules: 1, suiteErrors: 1 },
+    ended: { reason: "failed", unhandledErrors: 0, failedModules: 2, suiteErrors: 2 },
   });
   const project = {
     name: "non-isolated-runner",
@@ -478,8 +480,8 @@ async function assertCompletion(
   const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 51,
-    numPassedTests: 50,
+    numTotalTests: 53,
+    numPassedTests: 52,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -487,13 +489,20 @@ async function assertCompletion(
   for (const file of report.testResults) {
     const name = path.basename(file.name);
     const crashed = name === "01-a-crash.test.ts";
+    const leakedWatchers = name === "12-a-skills-watcher-leak.test.ts";
     const skipped = name === "09-f-test-api-skipped.test.ts";
     const lifecycle = ["09-d-test-api-producer.test.ts", "09-e-test-api-observer.test.ts"].includes(
       name,
     );
     const count = crashed ? 0 : lifecycle ? 2 : 1;
-    expect(file.status, name).toBe(crashed ? "failed" : "passed");
-    expect(file.message, name).toBe(crashed ? "synthetic collect failure" : "");
+    expect(file.status, name).toBe(crashed || leakedWatchers ? "failed" : "passed");
+    if (leakedWatchers) {
+      expect(file.message, name).toMatch(
+        /^12-a-skills-watcher-leak\.test\.ts: skills watchers failed\nError: left skills watchers open /u,
+      );
+    } else {
+      expect(file.message, name).toBe(crashed ? "synthetic collect failure" : "");
+    }
     expect(file.assertionResults, name).toHaveLength(count);
     expect(new Set(file.assertionResults.map((test) => test.fullName)).size, name).toBe(count);
     for (const test of file.assertionResults) {
@@ -664,6 +673,16 @@ export default defineConfig({
             { message: "other" },
           ),
       ],
+      [
+        "unattributed skills watcher leak",
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) =>
+              file.name.endsWith("/12-a-skills-watcher-leak.test.ts"),
+            )!,
+            { status: "passed", message: "" },
+          ),
+      ],
       ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
     ];
     for (const patch of [
@@ -681,10 +700,10 @@ export default defineConfig({
       { reason: "interrupted" },
       { reason: "passed" },
       { unhandledErrors: 1 },
-      { failedModules: 0 },
-      { failedModules: 2 },
-      { suiteErrors: 0 },
-      { suiteErrors: 2 },
+      { failedModules: 1 },
+      { failedModules: 3 },
+      { suiteErrors: 1 },
+      { suiteErrors: 3 },
     ]) {
       faults.push([
         `invalid native end: ${JSON.stringify(patch)}`,

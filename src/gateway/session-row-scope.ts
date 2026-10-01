@@ -3,8 +3,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
 import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 
 type SessionRowScopeTarget = {
@@ -237,7 +239,9 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
     // Broad publications can change IDs before the resident index has caught up.
     for (const id of dirty) {
       const row = rows.get(id);
-      if (row && matches(row)) {
+      // Category cannot change an ID; unrelated uncertain categories do not
+      // participate in the structural refresh needed to resolve this lookup.
+      if (row && row.unresolvedDatabaseFacts !== "category" && matches(row)) {
         acquire(row);
       }
     }
@@ -248,6 +252,20 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
   const candidates = keys
     ? [...keys].flatMap((key) => matching({ ...query, key }))
     : matching(query);
+  const pending: records.Lookup[] = [];
+  for (const row of candidates) {
+    if (row?.unresolvedDatabaseFacts === "category" && matches(row)) {
+      pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
+      if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
+        break;
+      }
+    }
+  }
+  // Synchronous selection cannot consume unresolved categories, even when a
+  // metadata-only caller omits dirty rows. Exact preparation remains bounded.
+  if (pending.length > 0) {
+    throw new SessionRowFactsPending(pending);
+  }
   const acquired =
     sessionIdOrKey || dirty.size === 0
       ? candidates
