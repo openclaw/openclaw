@@ -175,7 +175,12 @@ describe("credential prompt dispatch boundary", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await producerCalled.promise;
+        await Promise.race([
+          producerCalled.promise,
+          dispatch.then((outcome) => {
+            throw new Error(`dispatch settled before the producer ran: ${JSON.stringify(outcome)}`);
+          }),
+        ]);
         if (terminal || deny) {
           transport.resolve();
           await callbackFinished.promise;
@@ -183,7 +188,14 @@ describe("credential prompt dispatch boundary", () => {
           expect(mocks.routeReply).not.toHaveBeenCalled();
           answer.resolve({ status: "cancelled" });
         } else {
-          const payload = asNullableRecord(await received.promise);
+          const payload = asNullableRecord(
+            await Promise.race([
+              received.promise,
+              dispatch.then((outcome) => {
+                throw new Error(`dispatch settled before delivery: ${JSON.stringify(outcome)}`);
+              }),
+            ]),
+          );
           expect(route ? mocks.routeReply : deliver).toHaveBeenCalledOnce();
           expect(payload?.channelData).toEqual({ askUser: { questionId } });
           expect(payload).not.toHaveProperty("presentation");
