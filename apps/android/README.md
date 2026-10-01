@@ -23,6 +23,10 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 - Open the folder `apps/android`.
 
+Gradle sync generates the native localization lookup and resources before IDE
+indexing. Use the repository's supported Node.js version on your PATH, as for
+the build commands below; no separate localization generation step is required.
+
 ## Session colors
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
@@ -204,6 +208,17 @@ cd apps/android
 Install the repository's Node.js and pnpm dependencies before building. Gradle
 builds the shared Mermaid renderer automatically and packages its local assets
 with the app; no CDN or Gateway renderer is needed.
+
+Gradle also generates the Kotlin localization lookup and `native_` string
+resources in the ignored `app/build/generated/native-i18n/` directory. Builds,
+tests, and Android Studio sync share the same task; unchanged inputs skip
+generation, and clean builds can restore the outputs from Gradle's build cache.
+Keep manual XML resources in `app/src/main/res`. Native source strings and
+translations remain in `apps/.i18n/native-source.json` and
+`apps/.i18n/native/<locale>.json`; the existing `pnpm native:i18n:baseline` and
+`pnpm native:i18n:sync` workflow owns updates. Never edit or commit the generated
+lookup or `native_` resources. `pnpm android:i18n:check` validates the catalog
+against those canonical inputs.
 
 ```bash
 pnpm install
