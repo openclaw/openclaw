@@ -449,7 +449,7 @@ export function renderChat(props: ChatProps) {
     displayedPendingInputs ?? [],
   );
   const displayQueue = [
-    ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
+    ...buildPendingInputQueueItems(inputDisplay.queuedInputs, pendingInputs?.steeringRunIds),
     ...inputDisplay.queue,
   ];
   const composerProps = { ...props, displayQueue };

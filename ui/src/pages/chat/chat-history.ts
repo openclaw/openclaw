@@ -27,6 +27,8 @@ type LoadChatHistoryOptions = {
   deferBranches?: boolean;
   supersedeInFlight?: boolean;
   startup?: boolean;
+  /** Background custody reconciliation does not own composer recall or action errors. */
+  preserveComposerState?: boolean;
 };
 
 type ChatErrorDetail = Extract<ChatEvent, { state: "error" }>["errorDetail"];
@@ -118,6 +120,7 @@ export async function loadChatHistory(
     if (inFlight.refresh) {
       inFlight.refresh.startup ||= startup;
       inFlight.refresh.deferBranches &&= opts.deferBranches === true;
+      inFlight.refresh.preserveComposerState &&= opts.preserveComposerState === true;
       return inFlight.refresh.promise;
     }
     if (opts.supersedeInFlight !== true && inFlight.key === requestKey) {
@@ -127,6 +130,7 @@ export async function loadChatHistory(
     const refresh = {
       startup: startup || inFlight.startup,
       deferBranches: opts.deferBranches === true,
+      preserveComposerState: opts.preserveComposerState === true,
       promise: Promise.resolve<ObservedChatHistoryResult | undefined>(undefined),
     };
     refresh.promise = inFlight.promise.then(() => {
@@ -158,6 +162,7 @@ export async function loadChatHistory(
     deltaCursor,
     inputRunIds,
     requestKeyPrefix,
+    opts.preserveComposerState === true,
   ).then((result) => {
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.promise === promise) {

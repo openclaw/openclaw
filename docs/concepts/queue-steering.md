@@ -129,6 +129,8 @@ Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.
 
+While the selected session has an active run, **Steer** on a queued message asks that run to accept the original input. This works for both unsent browser messages and messages already accepted into the Gateway queue. Gateway-queued input keeps its original identity, attachments, and permissions; the browser does not cancel and resend it. If the active run cannot accept the input, it stays queued in its existing position and the UI explains the refusal. If the run finishes or the message starts first, the action does not create another copy.
+
 Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 
 ## Canceling a pending steer

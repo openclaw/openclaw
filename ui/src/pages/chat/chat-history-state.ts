@@ -34,6 +34,7 @@ type ChatHistoryLoadState =
         promise: Promise<ObservedChatHistoryResult | undefined>;
         startup: boolean;
         deferBranches: boolean;
+        preserveComposerState: boolean;
       };
     } & ChatHistoryLoadRequest)
   | {
@@ -50,6 +51,7 @@ type ChatHistoryLoadState =
 
 type ChatHistoryPaneRequests = {
   historyVersion: number;
+  chatErrorVersion: number;
   branchVersion: number;
   subscriptionGeneration: number;
   subscriptionReady?: Promise<boolean>;
@@ -77,6 +79,7 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   if (!requests) {
     requests = {
       historyVersion: 0,
+      chatErrorVersion: 0,
       branchVersion: 0,
       subscriptionGeneration: 0,
       pendingSubscriptionReleases: new Set(),
@@ -337,11 +340,14 @@ export function setChatError(
   requestUpdate = false,
 ) {
   const message = error === null ? null : formatUiError(error);
+  // Repeated wording and explicit dismissal are new intent, not the old error.
+  const version = ++chatHistoryRequests(state).chatErrorVersion;
   state.lastError = message;
   state.chatError = message;
   if (requestUpdate) {
     state.requestUpdate?.();
   }
+  return version;
 }
 
 export function chatScopedEventSessionMatches(

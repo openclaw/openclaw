@@ -1,5 +1,9 @@
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueDisplayItem,
+  ChatQueueItem,
+} from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import type { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -28,7 +32,15 @@ type ChatQueueStoreHost = {
 type ChatQueueSessionHost = ChatQueueStoreHost & ChatComposerScope & { sessionKey: string };
 export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 
-export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {
+export function isSteerableQueuedMessage(item: ChatQueueDisplayItem): boolean {
+  if (item.serverQueued) {
+    return (
+      Boolean(item.pendingRunId) &&
+      !item.serverSteerPending &&
+      !item.intent &&
+      !item.localCommandName
+    );
+  }
   return (
     isMovableChatQueueItem(item) &&
     (item.sendState === undefined || item.sendState === "waiting-idle") &&
@@ -36,7 +48,9 @@ export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {
   );
 }
 
-export function steerableQueuedMessage(queue: readonly ChatQueueItem[]): ChatQueueItem | undefined {
+export function steerableQueuedMessage(
+  queue: readonly ChatQueueDisplayItem[],
+): ChatQueueDisplayItem | undefined {
   return queue.toSorted(compareChatQueueOrder).find(isSteerableQueuedMessage);
 }
 

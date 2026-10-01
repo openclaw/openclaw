@@ -398,6 +398,33 @@ describe("renderChatComposer controls", () => {
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
   });
 
+  it("steers the first displayed eligible input without comparing Gateway and browser clocks", () => {
+    const onQueueSteer = vi.fn();
+    const { container } = renderComposer({
+      canAbort: true,
+      onAbort: vi.fn(),
+      onQueueSteer,
+      queue: [{ id: "local", text: "local", createdAt: 10 }],
+      displayQueue: [
+        {
+          id: "pending-input:server",
+          text: "server",
+          createdAt: 200,
+          pendingRunId: "server-run",
+          serverQueued: true,
+        },
+        { id: "local", text: "local", createdAt: 10 },
+      ],
+    });
+    expect(
+      [...container.querySelectorAll("[data-chat-queue-item]")].map((row) =>
+        row.getAttribute("data-chat-queue-item"),
+      ),
+    ).toEqual(["pending-input:server", "local"]);
+    pressComposerEnter(container);
+    expect(onQueueSteer).toHaveBeenCalledExactlyOnceWith("pending-input:server");
+  });
+
   it.each([false, true])("steers empty Enter only on a new press (repeat=%s)", (repeat) => {
     const onQueueSteer = vi.fn();
     const onSend = vi.fn();

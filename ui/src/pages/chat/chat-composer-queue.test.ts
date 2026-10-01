@@ -90,6 +90,85 @@ describe("chat composer steering queue", () => {
     expect(icon?.querySelector("circle")).toBeNull();
   });
 
+  it("offers Steer for Gateway-owned queued input without enabling edit or reorder", () => {
+    const onQueueSteer = vi.fn();
+    const container = renderQueue({
+      canAbort: true,
+      canRemoveServerQueued: true,
+      queue: [],
+      displayQueue: [
+        {
+          id: "pending-input:accepted",
+          text: "Use the compact layout",
+          createdAt: 1,
+          pendingRunId: "accepted-run",
+          serverQueued: true,
+        },
+      ],
+      onQueueSteer,
+      onQueueMove: vi.fn(),
+      onQueueEdit: vi.fn(),
+      onQueueRemove: vi.fn(),
+    });
+
+    const steer = container.querySelector<HTMLButtonElement>(".chat-queue__steer");
+    expect(steer).not.toBeNull();
+    expect(steer?.disabled).toBe(false);
+    steer?.click();
+    expect(onQueueSteer).toHaveBeenCalledExactlyOnceWith("pending-input:accepted");
+    expect(container.querySelector(".chat-queue__badge--steered")).toBeNull();
+    expect(container.querySelector(".chat-queue__grip")).toBeNull();
+    expect(container.querySelector("wa-dropdown")).toBeNull();
+  });
+
+  it("keeps a pending server Steer control visible and inert without moving the row", () => {
+    const onQueueSteer = vi.fn();
+    const container = renderQueue({
+      canAbort: true,
+      queue: [],
+      displayQueue: [
+        {
+          id: "pending-input:accepted",
+          text: "Original input",
+          createdAt: 1,
+          pendingRunId: "accepted-run",
+          serverQueued: true,
+          serverSteerPending: true,
+        },
+      ],
+      onQueueSteer,
+      onQueueRemove: vi.fn(),
+    });
+    const steer = container.querySelector<HTMLButtonElement>(".chat-queue__steer");
+    expect(steer?.disabled).toBe(true);
+    expect(steer?.getAttribute("aria-busy")).toBe("true");
+    steer?.click();
+    expect(onQueueSteer).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-queue__text")?.textContent).toBe("Original input");
+  });
+
+  it.each(["idle", "read-only", "local-pending"])(
+    "does not offer server steering for %s input",
+    (kind) => {
+      const container = renderQueue({
+        canAbort: kind !== "idle",
+        queue: [],
+        displayQueue: [
+          {
+            id: "pending-input:accepted",
+            text: "Original input",
+            createdAt: 1,
+            pendingRunId: "accepted-run",
+            ...(kind === "local-pending" ? {} : { serverQueued: true as const }),
+          },
+        ],
+        onQueueSteer: kind === "read-only" ? undefined : vi.fn(),
+        onQueueRemove: vi.fn(),
+      });
+      expect(container.querySelector(".chat-queue__steer")).toBeNull();
+    },
+  );
+
   it("keeps the steer state badge when no steer action is available", () => {
     const container = renderQueue({
       queue: [

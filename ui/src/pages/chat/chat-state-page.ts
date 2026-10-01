@@ -25,6 +25,7 @@ import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { steerPendingQueuedChatInput } from "./chat-pending-input-steer.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -410,6 +411,9 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.steerQueuedChatMessage = async (id) => {
+    if (await steerPendingQueuedChatInput(state, id)) {
+      return;
+    }
     await steerQueuedChatMessage(state, id);
     renderLifecycle.invalidate();
   };
