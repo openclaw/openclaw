@@ -271,6 +271,11 @@ sidebarTitle: "Advanced"
     `think: "max"` for `/think max`; other models and local servers keep the
     compatible `think: "high"` mapping.
 
+    GLM 5.3 and GLM 5.3 Flash on Ollama Cloud cannot turn thinking off: their
+    `/api/show` thinking values have no `false`, and `think: false` makes them
+    answer with their reasoning inline. For these models, `/think off` and a
+    configured `false` send their lowest level, `think: "low"`, instead.
+
     <Tip>
     For the OpenAI-compatible endpoint instead, see "Legacy OpenAI-compatible mode" above — streaming and tool calling may not work together there.
     </Tip>

@@ -16,7 +16,10 @@ import {
   resolveMoonshotThinkingType,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
-import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
+import {
+  resolveOllamaCloudThinkingFloor,
+  supportsOllamaCloudFullThinkingEffort,
+} from "./model-reasoning.js";
 import { isOllamaCloudKimiModelRef } from "./sanitizers/kimi-inline-reasoning.js";
 
 export type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
@@ -226,9 +229,21 @@ export function createConfiguredOllamaCompatStreamWrapper(
     runtimeThinkValue === false && configuredThinkValue !== undefined
       ? undefined
       : runtimeThinkValue;
-  if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
+  const runtimeThink =
+    ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)
+      ? ollamaThinkValue
+      : undefined;
+  // Without a runtime patch, the configured value stays in the request. A `false` either
+  // way cannot disable thinking on these hosted models; they would answer with their
+  // reasoning inline, so send their lowest advertised level instead.
+  const thinkingFloor =
+    isNativeOllamaTransport && (runtimeThink ?? configuredThinkValue) === false
+      ? resolveOllamaCloudThinkingFloor(model?.id ?? "")
+      : undefined;
+  const patchedThink = thinkingFloor ?? runtimeThink;
+  if (patchedThink !== undefined) {
     streamFn = createLazyPayloadPatchStreamWrapper(streamFn, ({ payload }) => {
-      payload.think = ollamaThinkValue;
+      payload.think = patchedThink;
     });
   }
 
