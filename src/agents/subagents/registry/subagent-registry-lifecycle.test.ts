@@ -4230,7 +4230,7 @@ describe("subagent registry lifecycle hardening", () => {
           expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
         }
         expect(retryTimers.size).toBe(0);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       } finally {
         unlock();
         await completion;

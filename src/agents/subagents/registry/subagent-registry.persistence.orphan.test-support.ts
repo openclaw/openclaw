@@ -51,7 +51,7 @@ export function registerSubagentOrphanTaskCases({
     // rows so the production sweeper observes this test's persisted state.
     await loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
 
-    restartRegistry();
+    await restartRegistry();
     await flushQueuedRegistryWork();
 
     expect(callGateway).not.toHaveBeenCalled();

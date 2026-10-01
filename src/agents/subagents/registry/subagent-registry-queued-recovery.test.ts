@@ -53,6 +53,7 @@ vi.mock("./subagent-session-reconciliation.js", () => ({
     sessionId: fixture.sessionId,
     lifecycleRevision: fixture.lifecycleRevision,
   }),
+  resolveSubagentRunOrphanReason: () => null,
 }));
 
 beforeEach(() => {
