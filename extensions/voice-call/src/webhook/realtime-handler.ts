@@ -36,13 +36,16 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
-import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
+import {
+  rejectWebSocketUpgrade,
+  WebSocket,
+  WebSocketServer,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
-import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
+import type { CallRecord, EndReason, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
-import { WebSocket, WebSocketServer } from "../websocket.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import {
@@ -51,10 +54,6 @@ import {
   TwilioStreamFrameAdapter,
 } from "./stream-frame-adapter.js";
 
-export type ToolHandlerContext = {
-  partialUserTranscript?: string;
-  abortSignal?: AbortSignal;
-};
 type ToolHandlerFn = (
   args: unknown,
   callId: string,

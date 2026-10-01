@@ -47,6 +47,7 @@ export function waitForFile(file) {
   for (const file of [
     ...entries,
     "run-oxlint.mts",
+    "generate-kysely-types.mts",
     "run-stylelint.mts",
     "tsx.mjs",
     "windows-cmd-helpers.mjs",

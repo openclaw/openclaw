@@ -2,17 +2,58 @@ import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import {
-  ensureProfileForEmail,
   linkEmail,
   setAvatar,
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
-} from "../../state/user-profiles.js";
+} from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { usersHandlers } from "./users.js";
+
+it("commits profile display and avatar edits through their Gateway handlers without host SQL", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "users-setters-" });
+  let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
+  try {
+    const person = ensureProfileForEmail("setter@example.test");
+    catalog = await prepareUserProfileCatalog();
+    const refreshConnectedUserProfile = vi.fn();
+    requireNodeSqlite();
+    const calls = observeMainThreadSql();
+    for (const [method, params, expected] of [
+      ["users.setDisplayName", { displayName: "Current name" }, { displayName: "Current name" }],
+      ["users.setAvatar", { mime: "image/png", avatarBase64: "AQI=" }, { hasAvatar: true }],
+    ] as const) {
+      const respond = vi.fn();
+      await usersHandlers[method]!({
+        req: {} as never,
+        params: { profileId: person.id, ...params },
+        respond,
+        context: { getRuntimeConfig: () => ({}), refreshConnectedUserProfile } as never,
+        client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({
+          profile: expect.objectContaining({ id: person.id, ...expected }),
+        }),
+      );
+      expect(refreshConnectedUserProfile).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: person.id, ...expected }),
+      );
+    }
+    calls.expectIdle();
+  } finally {
+    vi.restoreAllMocks();
+    catalog?.release();
+    await state.cleanup();
+  }
+});
 
 it("enumerates protocol profile facts through the real users.list entry without host SQL", async () => {
   const state = await createOpenClawTestState({

@@ -6,15 +6,9 @@ import { parseMusicGenerationModelRef } from "../../media-generation/model-ref.j
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
 import type { MusicGenerationOutputFormat } from "../../music-generation/types.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
-import {
-  ToolInputError,
-  readNumberParam,
-  readToolStringParam,
-  type AnyAgentTool,
-} from "./common.js";
+import { ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 import {
   createDefaultMediaGenerateBackgroundScheduler,
   type MediaGenerationTaskHandle,
@@ -28,8 +22,10 @@ import {
 import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
+  MEDIA_GENERATE_DESCRIPTIONS,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
+  readGenerationDurationSeconds,
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
@@ -47,11 +43,7 @@ const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
 
 const MusicGenerateToolSchema = Type.Object({
-  action: Type.Optional(
-    Type.String({
-      description: '"generate" default, "status" active task, "list" providers/models.',
-    }),
-  ),
+  action: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.action })),
   prompt: Type.Optional(Type.String({ description: "Music prompt: style, genre, mood, purpose." })),
   lyrics: Type.Optional(
     Type.String({
@@ -90,11 +82,7 @@ const MusicGenerateToolSchema = Type.Object({
       description: "Output format: mp3, wav.",
     }),
   ),
-  filename: Type.Optional(
-    Type.String({
-      description: "Output filename hint; basename preserved in managed media dir.",
-    }),
-  ),
+  filename: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.filename })),
 });
 
 function normalizeOutputFormat(raw: string | undefined): MusicGenerationOutputFormat | undefined {
@@ -177,16 +165,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
 
           const lyrics = readToolStringParam(args, "lyrics");
           const instrumental = readBooleanParam(args, "instrumental");
-          const durationSeconds = readNumberParam(args, "durationSeconds", {
-            positiveInteger: true,
-            strict: true,
-          });
-          if (
-            durationSeconds === undefined &&
-            readSnakeCaseParamRaw(args, "durationSeconds") !== undefined
-          ) {
-            throw new ToolInputError("durationSeconds must be a positive integer");
-          }
+          const durationSeconds = readGenerationDurationSeconds(args);
           const format = normalizeOutputFormat(readToolStringParam(args, "format"));
           const filename = readToolStringParam(args, "filename");
           const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);

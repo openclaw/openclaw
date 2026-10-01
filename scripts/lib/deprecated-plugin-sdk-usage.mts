@@ -25,10 +25,8 @@ export function buildDeprecatedPluginSdkModuleSpecifiers(
 }
 
 /**
- * Deprecated facade modules that stay exported for third-party plugins until the
- * documented break train, but must have zero internal importers (src/**,
- * extensions/**) via package specifier or relative path. Table-driven and
- * additive: future facade collapses (e.g. config-schema) append rows here.
+ * Deprecated and retired facades must have zero internal importers (src/**,
+ * extensions/**) via package specifier or relative path.
  * `modulePath` is the extension-less repo path; `allowedImporters` lists the
  * compat re-export chain that keeps the public subpath alive.
  */

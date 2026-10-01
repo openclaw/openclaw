@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
-import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker-contract.js";
+import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,

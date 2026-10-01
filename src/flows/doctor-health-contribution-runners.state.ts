@@ -126,7 +126,7 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
-  await noteBackupDoctorHint(ctx.env ?? process.env);
+  await noteBackupDoctorHint(ctx.env ?? process.env, ctx.cfg);
   const { noteBackupScratchHealth } = await import("../commands/doctor-backup-scratch.js");
   await noteBackupScratchHealth(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }

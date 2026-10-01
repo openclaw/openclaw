@@ -129,18 +129,7 @@ function sanitizePromptModelId(value: unknown): string | undefined {
     return undefined;
   }
   const normalized = truncateUtf16Safe(
-    Array.from(value)
-      .filter((char) => {
-        const codePoint = char.codePointAt(0) ?? 0;
-        return (
-          codePoint > 0x1f &&
-          (codePoint < 0x7f || codePoint > 0x9f) &&
-          codePoint !== 0x2028 &&
-          codePoint !== 0x2029
-        );
-      })
-      .join("")
-      .trim(),
+    value.replace(/[\p{Cc}\u2028\u2029]/gu, "").trim(),
     MAX_PROMPT_MODEL_ID_DISPLAY_CHARS,
   );
   return normalized || undefined;

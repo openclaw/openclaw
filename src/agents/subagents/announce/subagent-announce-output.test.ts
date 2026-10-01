@@ -657,7 +657,7 @@ describe("buildChildCompletionFindings", () => {
       name: "empty",
       terminalReply: { disposition: "empty" } as const,
       resultText: null,
-      expected: undefined,
+      expected: "(no output)",
     },
     {
       name: "announce skip",
@@ -688,6 +688,7 @@ describe("buildChildCompletionFindings", () => {
       } else {
         expect(findings).toContain(expected);
         expect(findings).not.toContain("older captured output");
+        expect(findings).not.toContain("older captured fallback");
       }
     },
   );

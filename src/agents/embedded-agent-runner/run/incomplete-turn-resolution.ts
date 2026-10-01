@@ -226,6 +226,7 @@ interface YieldContinuationAttempt {
   successfulCronAdds?: number;
   acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
   runtimeContinuationStarted?: boolean;
+  yieldMessageWaitRegistered?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
@@ -242,6 +243,7 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
     hasCommittedMessagingToolDeliveryEvidence(attempt) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
+    attempt.yieldMessageWaitRegistered === true ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0
   );

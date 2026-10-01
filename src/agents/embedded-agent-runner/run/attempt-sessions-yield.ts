@@ -1,26 +1,11 @@
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../../../llm/types.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { buildUsageWithNoCost } from "../../stream-message-shared.js";
 import { isRunnerAbortError } from "../abort.js";
-import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
-
-export async function waitForSessionsYieldAbortSettle(params: {
-  settlePromise: Promise<void> | null;
-  runId: string;
-  sessionId: string;
-}): Promise<void> {
-  await waitForEmbeddedAbortSettle({
-    promise: params.settlePromise,
-    runId: params.runId,
-    sessionId: params.sessionId,
-    reason: "sessions_yield",
-  });
-}
 
 // Return a synthetic aborted response so agent runtime unwinds without a real provider call.
 export function createYieldAbortedResponse(model: {
@@ -74,25 +59,6 @@ export function queueSessionsYieldInterruptMessage(activeSession: {
     display: false,
     details: { source: "sessions_yield" },
     timestamp: Date.now(),
-  });
-}
-
-export async function persistSessionsYieldContextMessage(
-  activeSession: {
-    sendCustomMessage: (
-      message: {
-        customType: string;
-        content: string;
-        display: boolean;
-        details?: Record<string, unknown>;
-      },
-      options?: { triggerTurn?: boolean },
-    ) => Promise<void>;
-  },
-  message: string,
-) {
-  await activeSession.sendCustomMessage(buildSessionsYieldContextMessage(message), {
-    triggerTurn: false,
   });
 }
 

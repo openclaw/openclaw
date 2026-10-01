@@ -2995,6 +2995,8 @@ private func waitUntil(
         var ownerlessPrefixed = session
         ownerlessPrefixed.key = "agent:main:legacy"
         ownerlessPrefixed.agentId = nil
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        session.snoozedUntil = now.addingTimeInterval(3600).timeIntervalSince1970 * 1000
         appModel.gatewayDefaultAgentId = "main"
 
         await appModel.storeCachedChatSessions(
@@ -3018,6 +3020,14 @@ private func waitUntil(
             matchingBare,
             expectedPrefixed,
         ])
+        #expect(!appModel.isOperatorGatewayConnected)
+        let roster = try await appModel.loadChatSessionRoster(limit: 200)
+        #expect(roster.isCached)
+        #expect(roster.sessions == cachedSessions)
+        #expect(SessionStatusScope.available(isConnected: appModel.isOperatorGatewayConnected).contains(.snoozed))
+        let snoozed = roster.sessions.filter { SessionStatusScope.snoozed.includes($0, at: now) }
+        #expect(snoozed == [session])
+        #expect(CommandCenterTab.sessionDetail(session, now: now).hasPrefix("Wakes "))
         appModel.selectedAgentId = "work"
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }

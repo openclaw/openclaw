@@ -8,15 +8,17 @@ import {
 } from "./openclaw-state-db.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import {
+  linkEmail,
+  setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "./user-profile-writes.worker.js";
 import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  linkEmail,
-  setDisplayName,
-  setUserProfileRole,
-  syncGitHubIdentity,
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {

@@ -29,7 +29,7 @@ import { resolveGatewayScopedTools } from "../../gateway/tool-resolution.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withAdminIngress } from "./operator-authority.test-support.js";
 
 type Fixture = Parameters<Parameters<typeof withAdminIngress>[0]>[0];

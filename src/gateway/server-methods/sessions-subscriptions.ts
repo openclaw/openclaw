@@ -143,6 +143,8 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         mark?.("retainedReadAdmission");
         sessionMutationAuthorization?.assertCurrent();
         read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
+          // Activity and labels may change while approvals load without revoking access.
+          allowMetadataChanges: true,
           requireMaterialized:
             readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
         });
