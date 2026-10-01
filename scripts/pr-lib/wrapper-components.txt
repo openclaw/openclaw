@@ -261,8 +261,15 @@ src/agents/worktrees/filesystem-refs.native.ts
 src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
+src/agents/worktrees/owner.ts
 src/agents/worktrees/provisioned-file-inspection.ts
+src/agents/worktrees/registry-read.kernel.ts
+src/agents/worktrees/registry-read.ts
+src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
+src/agents/worktrees/run-lease-owner.ts
+src/agents/worktrees/run-lease-store.kernel.ts
+src/agents/worktrees/service-preparation.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
 src/agents/worktrees/snapshot-inventory.ts
