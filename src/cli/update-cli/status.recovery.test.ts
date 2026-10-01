@@ -173,7 +173,10 @@ it.each([true, false])(
       expect(output).toContain("Next action: openclaw update status --json");
     }
     expect(await fs.readFile(first.manifestPath, "utf8")).toBe(first.raw);
-    expect(await fs.readdir(first.directory)).toEqual(["manifest.json", "outcome.json"]);
+    expect((await fs.readdir(first.directory)).toSorted()).toEqual([
+      "manifest.json",
+      "outcome.json",
+    ]);
   },
 );
 it("reports an absent inventory explicitly without creating it", async () => {

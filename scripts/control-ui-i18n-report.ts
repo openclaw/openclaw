@@ -3,34 +3,15 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
+import { CONTROL_UI_LOCALE_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
+import type { RawCopyBaseline, RawCopyBaselineEntry } from "./lib/control-ui-i18n-raw-copy.ts";
+import type { LocaleMeta } from "./lib/control-ui-i18n-sync-plan.ts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const I18N_ASSETS_DIR = path.join(ROOT, "ui/src/i18n/.i18n");
 const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
 const DEFAULT_TOP = 10;
-const LOCALE_LABELS: Record<string, string> = {
-  ar: "Arabic",
-  de: "German",
-  es: "Spanish",
-  fa: "Persian",
-  fr: "French",
-  id: "Indonesian",
-  it: "Italian",
-  "ja-JP": "Japanese",
-  ko: "Korean",
-  hi: "Hindi",
-  nl: "Dutch",
-  pl: "Polish",
-  "pt-BR": "Brazilian Portuguese",
-  ru: "Russian",
-  th: "Thai",
-  tr: "Turkish",
-  uk: "Ukrainian",
-  vi: "Vietnamese",
-  "zh-CN": "Simplified Chinese",
-  "zh-TW": "Traditional Chinese",
-};
-const REPORT_LOCALES = new Set(Object.keys(LOCALE_LABELS));
+const REPORT_LOCALES = new Set(CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale));
 const PATH_LABELS: Record<string, string> = {
   "ui/src/ui/chat/chat-queue.ts": "Chat queue",
   "ui/src/ui/chat/grouped-render.ts": "Chat message groups",
@@ -47,33 +28,6 @@ const PATH_LABELS: Record<string, string> = {
   "ui/src/ui/views/usage-query.ts": "Usage filters",
   "ui/src/ui/views/usage-render-details.ts": "Usage detail view",
   "ui/src/ui/views/usage-render-overview.ts": "Usage overview",
-};
-
-type RawCopyKind = "html-attribute" | "html-text" | "object-property";
-
-export type RawCopyBaselineEntry = {
-  count: number;
-  kind: RawCopyKind;
-  name: string;
-  path: string;
-  text: string;
-};
-
-type RawCopyBaseline = {
-  entries: RawCopyBaselineEntry[];
-  version: number;
-};
-
-type LocaleMeta = {
-  fallbackKeys: string[];
-  generatedAt: string;
-  locale: string;
-  model: string;
-  provider: string;
-  sourceHash: string;
-  totalKeys: number;
-  translatedKeys: number;
-  workflow: number;
 };
 
 type ReportArgs = {
@@ -241,8 +195,7 @@ function formatSurfaceLabel(surface?: string) {
 }
 
 function formatLocaleLabel(locale: string) {
-  const label = LOCALE_LABELS[locale];
-  return label ? `${label} (${locale})` : locale;
+  return REPORT_LOCALES.has(locale) ? `${controlUiLanguageLabel(locale)} (${locale})` : locale;
 }
 
 function formatPathLabel(repoPath: string) {

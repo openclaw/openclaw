@@ -2,7 +2,7 @@ import { asFiniteNumber as readFiniteNumberValue } from "@openclaw/normalization
 import { asOptionalRecord as readRecordValue } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedAgentEvent } from "../../agents/embedded-agent-subscribe.shared-types.js";
-import { inferToolMetaFromArgsCore } from "../../agents/tool-display.js";
+import { inferToolMetaFromArgsCore, isShellToolDisplayName } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 
 /**
@@ -33,11 +33,6 @@ function readNullableNumberValue(value: unknown): number | null | undefined {
   return readFiniteNumberValue(value);
 }
 
-function isCommandToolName(name: string | undefined): boolean {
-  const normalized = name?.trim().toLowerCase();
-  return normalized === "exec" || normalized === "bash" || normalized === "shell";
-}
-
 /** Projects a completed command-tool event into the channel command-output contract. */
 export function buildCommandOutputFromToolResultEvent(
   evt: EmbeddedAgentEvent,
@@ -47,7 +42,7 @@ export function buildCommandOutputFromToolResultEvent(
   }
   const name = evt.data.name;
   const commandBearing = evt.data.commandBearing === true;
-  if (!name || (!commandBearing && !isCommandToolName(name))) {
+  if (!name || (!commandBearing && !isShellToolDisplayName(name))) {
     return undefined;
   }
   const result = readRecordValue(evt.data.result);

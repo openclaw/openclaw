@@ -112,6 +112,7 @@ import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/se
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
+import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   isSkillUploadCommand,
@@ -573,6 +574,9 @@ export function executeSharedStateCommand(
       writeOptions,
       { operationLabel: "config-machine-state.update" },
     );
+  }
+  if (command.type === "sessionUpstream.current" || command.type === "sessionUpstream.settle") {
+    return executeSessionUpstreamCommand(command, writeOptions);
   }
   if (command.type === "sessionState.record" || command.type === "sessionState.prune") {
     return executeSessionStateCommand(command, writeOptions);

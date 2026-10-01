@@ -472,11 +472,7 @@ export async function sendTextMediaPayload(params: {
 
 /** Detect numeric-looking target ids for channels that distinguish ids from handles. */
 export function isNumericTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^\d{3,}$/.test(trimmed);
+  return /^\d{3,}$/.test(raw.trim());
 }
 
 /** Append attachment links to plain text when the channel cannot send media inline. */

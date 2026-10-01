@@ -274,6 +274,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
       }
     },
     continueFromCurrentTranscript: (options?: { includeToolFailureInstruction?: boolean }) => {
+      // Raw model runs load no transcript history; the original prompt is their only task context.
+      if (params.modelRun === true || params.promptMode === "none") {
+        return;
+      }
       const prompt = options?.includeToolFailureInstruction
         ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
         : CONTINUATION_PROMPT;
