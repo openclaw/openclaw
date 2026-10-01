@@ -14,9 +14,13 @@ import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 
 // Preserve source offsets when case folding expands Unicode characters.
 // The pattern is literal and Lit escapes every rendered text segment.
-function highlightMatch(text: string, query: string) {
+function matchQuery(text: string, query: string) {
   const needle = query.trim();
-  const match = needle ? new RegExp(escapeRegExp(needle), "iu").exec(text) : null;
+  return needle ? new RegExp(escapeRegExp(needle), "iu").exec(text) : null;
+}
+
+function highlightMatch(text: string, query: string) {
+  const match = matchQuery(text, query);
   const index = match?.index ?? -1;
   return !match
     ? text
@@ -27,40 +31,70 @@ function highlightMatch(text: string, query: string) {
 // nested links. Parse inline syntax, then let Lit escape all text and emit only
 // the small formatting vocabulary that fits the existing two-line preview.
 const snippetParser = new MarkdownIt({ html: false, linkify: false });
+// These URLs are display text, never navigation targets. Encoding or decoding
+// them would hide matches in Unicode destinations or authored percent escapes.
+snippetParser.normalizeLink = (url) => url;
+snippetParser.normalizeLinkText = (url) => url;
 
 function renderSnippet(text: string, query: string) {
-  function renderTokens(tokens: IterableIterator<Token>): Array<string | TemplateResult> {
+  function destinationSuffix(destination: string, labelMatched: boolean): string {
+    // Preserve the reason a row matched, without adding another navigation target.
+    return destination && matchQuery(destination, query) && !labelMatched
+      ? ` (${destination})`
+      : "";
+  }
+
+  function renderTokens(tokens: IterableIterator<Token>): {
+    parts: Array<string | TemplateResult>;
+    matched: boolean;
+  } {
     const parts: Array<string | TemplateResult> = [];
+    let matched = false;
     for (const token of tokens) {
       if (token.nesting === -1) {
         break;
       }
-      if (token.nesting === 1) {
-        const content = renderTokens(tokens);
+      if (token.nesting === 1 || token.type === "image") {
+        const content = renderTokens(
+          token.type === "image" ? (token.children ?? []).values() : tokens,
+        );
+        matched ||= content.matched;
         switch (token.type) {
           case "strong_open":
-            parts.push(html`<strong>${content}</strong>`);
+            parts.push(html`<strong>${content.parts}</strong>`);
             break;
           case "em_open":
-            parts.push(html`<em>${content}</em>`);
+            parts.push(html`<em>${content.parts}</em>`);
             break;
           case "s_open":
-            parts.push(html`<s>${content}</s>`);
+            parts.push(html`<s>${content.parts}</s>`);
             break;
+          case "image":
+          case "link_open": {
+            const destination = String(
+              token.attrGet(token.type === "image" ? "src" : "href") ?? "",
+            );
+            const suffix = destinationSuffix(destination, content.matched);
+            parts.push(...content.parts, highlightMatch(suffix, query));
+            matched ||= suffix.length > 0;
+            break;
+          }
           default:
-            parts.push(...content);
+            parts.push(...content.parts);
         }
       } else if (token.type === "code_inline") {
         parts.push(html`<code>${highlightMatch(token.content, query)}</code>`);
+        matched ||= matchQuery(token.content, query) !== null;
       } else if (token.type === "softbreak" || token.type === "hardbreak") {
         parts.push(" ");
       } else {
         parts.push(highlightMatch(token.content, query));
+        matched ||= matchQuery(token.content, query) !== null;
       }
     }
-    return parts;
+    return { parts, matched };
   }
-  return renderTokens((snippetParser.parseInline(text, {})[0]?.children ?? []).values());
+  return renderTokens((snippetParser.parseInline(text, {})[0]?.children ?? []).values()).parts;
 }
 
 export function renderCommandPaletteResult(

@@ -51,6 +51,65 @@ it("renders basic Markdown in message snippets without interactive or block cont
   expect(snippet.querySelector("a, img, table, pre, p")).toBeNull();
 });
 
+it.each([
+  {
+    description: "See ![**diagram**](https://example.com/image.png).",
+    query: "diagram",
+    expected: "See diagram.",
+  },
+  {
+    description: "See ![A &amp; B](https://example.com/image.png).",
+    query: "&",
+    expected: "See A & B.",
+  },
+  {
+    description: "See [**ex**ample](https://example.com/docs).",
+    query: "example",
+    expected: "See example (https://example.com/docs).",
+  },
+  {
+    description: "See [guide](https://example.com/café).",
+    query: "café",
+    expected: "See guide (https://example.com/café).",
+  },
+  {
+    description: "See ![diagram](https://例え.テスト/図.png).",
+    query: "テスト",
+    expected: "See diagram (https://例え.テスト/図.png).",
+  },
+  {
+    description: "See <https://example.com/caf%C3%A9>.",
+    query: "%C3%A9",
+    expected: "See https://example.com/caf%C3%A9.",
+  },
+  {
+    description: "See [guide](https://example.com/docs).",
+    query: "EXAMPLE",
+    expected: "See guide (https://example.com/docs).",
+  },
+  {
+    description: "See [**example guide**](https://example.com/docs).",
+    query: "example",
+    expected: "See example guide.",
+  },
+  {
+    description: "See <https://example.com/docs>.",
+    query: "example",
+    expected: "See https://example.com/docs.",
+  },
+  {
+    description: "See ![diagram](https://example.com/image.png).",
+    query: "image.png",
+    expected: "See diagram (https://example.com/image.png).",
+  },
+])("keeps a passive match cue for $description", ({ description, query, expected }) => {
+  render(renderCommandPaletteResult({ ...item, description }, query), container);
+  const snippet = container.querySelector(".cmd-palette__item-desc")!;
+  expect(snippet.textContent).toBe(expected);
+  expect(snippet.querySelector("mark")?.textContent?.toLowerCase()).toBe(query.toLowerCase());
+  expect(snippet.querySelector("a, img")).toBeNull();
+});
+
 it("escapes raw HTML and encoded markup in message snippets", () => {
   render(
     renderCommandPaletteResult(
