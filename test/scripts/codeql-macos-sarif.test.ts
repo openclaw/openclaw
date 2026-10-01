@@ -57,7 +57,7 @@ it("keeps first-party generated Swift findings while removing dependency-only fi
   const filtered = JSON.parse(
     readFileSync(path.join(root, "sarif-results-filtered", "swift.sarif"), "utf8"),
   ) as { runs: { results: { ruleId: string }[] }[] };
-  expect(filtered.runs[0]?.results.map((finding) => finding.ruleId)).toEqual([
+  expect(filtered.runs[0]?.results.map((entry) => entry.ruleId)).toEqual([
     "generated",
     "handwritten",
     "mixed",

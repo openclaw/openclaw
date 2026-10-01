@@ -851,9 +851,7 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/gateway-client": workspacePackage("gateway-client"),
-    "packages/gateway-protocol": workspacePackage("gateway-protocol", [
-      "scripts/native-codegen.ts!",
-    ]),
+    "packages/gateway-protocol": workspacePackage("gateway-protocol"),
     "packages/model-catalog-core": workspacePackage("model-catalog-core"),
     "packages/normalization-core": workspacePackage("normalization-core", [
       // extensions/qa-lab/web/vite.config.ts aliases error-runtime to this private browser implementation.
