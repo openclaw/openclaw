@@ -483,7 +483,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
     }
   };
   const sources: DeferredPluginSessionImport["sources"] = [];
-  for (const source of recorded.sources.filter((source) => !missingIndex || source !== index)) {
+  for (const source of recorded.sources.filter((item) => !missingIndex || item !== index)) {
     sources.push(
       await (async () => {
         let failure: unknown;

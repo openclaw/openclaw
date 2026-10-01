@@ -44,7 +44,7 @@ export async function recoverEmptyRetainedTranscript(params: {
         path: candidate,
         identity: readMigrationArtifactIdentity(candidate),
       }))
-      .sort((a, b) => b.identity.size - a.identity.size || a.path.localeCompare(b.path));
+      .toSorted((a, b) => b.identity.size - a.identity.size || a.path.localeCompare(b.path));
     for (const sessionId of sessionIds) {
       const sessionKey = snapshot.snapshot.sessionKeysBySessionId.get(sessionId);
       if (!sessionKey) {
