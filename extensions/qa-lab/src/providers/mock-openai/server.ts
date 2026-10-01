@@ -868,7 +868,7 @@ async function buildResponsesPayload(
   const terminalCompletionCase = terminalTurn?.caseName;
   const current = terminalTurn?.text ?? "";
   if (terminalCompletionCase && terminalTurn?.kind === "settled") {
-    return buildAssistantEvents("NO_REPLY");
+    return buildAssistantEvents("Completion processed.");
   }
   if (terminalCompletionCase === "private") {
     const nonce = QA_SUBAGENT_PRIVATE_RESULT_RE.exec(current)?.[0];
@@ -891,7 +891,11 @@ async function buildResponsesPayload(
           mode: "run",
         });
       }
-      return buildAssistantEvents("NO_REPLY");
+      return buildAssistantEvents(
+        current.includes(QA_SUBAGENT_PRIVATE_SECOND_RESULT)
+          ? "Private review complete."
+          : "Second worker started.",
+      );
     }
     if (hasCompletedToolOutput) {
       return buildAssistantEvents("Worker started.");
