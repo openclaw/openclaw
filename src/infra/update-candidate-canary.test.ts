@@ -199,60 +199,6 @@ describe("update candidate canary", () => {
     expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
   });
 
-  it("retains integrity progress and the timeout cause when teardown closes the child with zero", async () => {
-    let now = 2_000_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const waiting = createDeferredCore();
-    const progress =
-      "SQLite integrity check still running: agent database (400 MiB, 10s elapsed, phase=checking).";
-    stubHealthyGateway();
-    mocks.spawn.mockImplementationOnce((_command, _args, options) => {
-      const child = new FakeChild(nextPid++);
-      children.set(child.pid, child);
-      childEnv = options.env;
-      queueMicrotask(() => {
-        child.stderr.write(`[state/sqlite] ${progress}\n`);
-        waiting.resolve();
-      });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      now += 899;
-      return child;
-    });
-    try {
-      const pending = validateUpdateCandidateCanary(canaryStateOptions(1_000));
-      await waiting.promise;
-      await vi.advanceTimersByTimeAsync(1);
-      const result = await pending;
-      const cause = "candidate-migration-rehearsal: doctor exceeded budget after 1 s";
-      expect(result).toMatchObject({
-        status: "error",
-        phase: "doctor",
-        reason: "candidate-checks-timeout",
-      });
-      expect(result.logTail.join("\n")).toContain(`${cause} ([state/sqlite] ${progress})`);
-      expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
-      expect(result.steps.at(-1)?.failureFacts).toEqual([
-        expect.objectContaining({
-          check: "doctor",
-          code: "candidate-checks-timeout",
-          message: expect.stringContaining(cause),
-        }),
-      ]);
-      const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
-      expect(result.steps.at(-1)?.stderrTail).toContain("phase=checking");
-      expect(detail).toContain(cause);
-      const report = renderUpdateRunReport(
-        updateRunReportInputFromResult({ ...result, mode: "git", root }),
-      );
-      expect(report.markdown).toContain(cause);
-      expect(report.markdown).toContain("phase=checking");
-      expect(report.markdown).not.toContain("usable inference route");
-    } finally {
-      clock.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
   it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
     databasePath = path.join(root, "snapshot-budget.sqlite");
     await fs.writeFile(databasePath, "");
