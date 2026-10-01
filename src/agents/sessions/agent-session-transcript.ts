@@ -4,7 +4,6 @@ import {
   prepareCodeModeSourceAppend,
   type CodeModeSourceAppend,
 } from "../transcript-code-mode-source.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SessionManager } from "./session-manager.js";
 
 /** Persist completed model messages through their existing custody owner. */
@@ -20,7 +19,8 @@ export async function persistAgentSessionMessage(
     invalidateSerializedPrefixCache: options.invalidateSerializedPrefixCache,
   };
   prepareCodeModeSourceAppend(appendOptions, message, options.sourceAppend);
-  return message.role === "user"
-    ? await withSessionManagerWrite(manager, () => manager.appendMessage(message, appendOptions))
-    : await manager.appendMessageAsync(message, appendOptions);
+  // Route user messages through the async append API so a dirty projection's
+  // canonical turn validation uses the worker-backed read instead of reloading
+  // the transcript synchronously on the Gateway thread.
+  return await manager.appendMessageAsync(message, appendOptions);
 }

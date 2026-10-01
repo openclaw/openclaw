@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
+  appendTranscriptEventSync,
   appendTranscriptMessage,
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -331,4 +332,187 @@ describe("SessionManager user idempotency", () => {
       ).toHaveLength(1);
     },
   );
+
+  // #152511: a side append (e.g. the auto-reply conversation-turn-capture audit
+  // artifact) marks the session projection index dirty, so the anchor read is
+  // refused until deferred reconcile. The keyed-user dedup and adoption paths
+  // must degrade on the missing anchor instead of throwing, letting the caller
+  // re-resolve after the projection heals.
+  it("re-delivering a keyed user after a side append does not throw", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-runtime-user-side-append-dedup",
+      sessionKey: "agent:main:dashboard:sqlite-runtime-user-side-append-dedup",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-side-append-dedup:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "existing-assistant",
+      message: buildAssistantMessage("previous answer"),
+      now: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "ingress-persisted-user",
+      message: userMessage,
+      now: 2,
+      parentId: "existing-assistant",
+    });
+    // The capture path writes a side audit artifact that dirties the projection.
+    const sideResult = appendTranscriptEventSync(
+      { ...scope, sessionId: scope.sessionId, sessionKey: scope.sessionKey },
+      {
+        type: "custom",
+        id: "conversation-turn-reply-side-artifact",
+        customType: "conversation_turn_reply",
+        appendMode: "side",
+        timestamp: 3,
+        data: { turnId: "t1", messageId: "ingress-persisted-user" },
+      },
+    );
+    expect(sideResult.ok).toBe(true);
+
+    const sessionManager = SessionManager.open(scope, dir);
+    expect(() => sessionManager.appendMessage({ ...userMessage, timestamp: 2 })).not.toThrow();
+    expect(sessionManager.appendMessage({ ...userMessage, timestamp: 2 })).toBe(
+      "ingress-persisted-user",
+    );
+  });
+
+  it("adopting a keyed user persisted after a side append does not throw", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-runtime-user-side-append-adopt",
+      sessionKey: "agent:main:dashboard:sqlite-runtime-user-side-append-adopt",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-side-append-adopt:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "existing-assistant",
+      message: buildAssistantMessage("previous answer"),
+      now: 1,
+    });
+    const sessionManager = SessionManager.open(scope, dir);
+    // Side append first, then the keyed user is persisted (the manager loaded
+    // before the ingress row existed, so adoption is required).
+    const sideResult = appendTranscriptEventSync(
+      { ...scope, sessionId: scope.sessionId, sessionKey: scope.sessionKey },
+      {
+        type: "custom",
+        id: "conversation-turn-reply-side-artifact",
+        customType: "conversation_turn_reply",
+        appendMode: "side",
+        timestamp: 2,
+        data: { turnId: "t1", messageId: "m1" },
+      },
+    );
+    expect(sideResult.ok).toBe(true);
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "ingress-persisted-user",
+      message: userMessage,
+      now: 3,
+      parentId: "existing-assistant",
+    });
+
+    expect(() =>
+      sessionManager.appendMessageWithTranscriptAnchor({ ...userMessage, timestamp: 3 }),
+    ).not.toThrow();
+    expect(
+      sessionManager.appendMessageWithTranscriptAnchor({ ...userMessage, timestamp: 3 }).entryId,
+    ).toBe("ingress-persisted-user");
+  });
+
+  // #152511: an absent anchor can mean another writer displaced the cached
+  // keyed user, not only a side append dirtied the projection. The anchor-free
+  // dedup must reload and compare the canonical current turn before reporting
+  // the cached entry as current; a displaced user falls through to adoption,
+  // which rejects the inactive keyed user instead of silently suppressing it.
+  it("rejects a keyed user displaced by a second writer while the projection is dirty", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-runtime-user-displaced-dirty",
+      sessionKey: "agent:main:dashboard:sqlite-runtime-user-displaced-dirty",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const firstUser = {
+      role: "user" as const,
+      content: "first question",
+      idempotencyKey: "runtime-user-displaced-dirty:first",
+      timestamp: 1,
+    };
+    const secondUser = {
+      role: "user" as const,
+      content: "second question",
+      idempotencyKey: "runtime-user-displaced-dirty:second",
+      timestamp: 2,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "existing-assistant",
+      message: buildAssistantMessage("previous answer"),
+      now: 1,
+    });
+    const managerA = SessionManager.open(scope, dir);
+    const firstId = managerA.appendMessage(firstUser);
+    // Another writer replaces the keyed user on the active branch and dirties
+    // the projection with a side audit artifact.
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "displacing-user",
+      message: secondUser,
+      now: 2,
+      parentId: firstId,
+    });
+    const sideResult = appendTranscriptEventSync(
+      { ...scope, sessionId: scope.sessionId, sessionKey: scope.sessionKey },
+      {
+        type: "custom",
+        id: "conversation-turn-reply-side-artifact",
+        customType: "conversation_turn_reply",
+        appendMode: "side",
+        timestamp: 3,
+        data: { turnId: "t1", messageId: "displacing-user" },
+      },
+    );
+    expect(sideResult.ok).toBe(true);
+
+    // Manager A still caches firstUser as its current turn, but the canonical
+    // current turn is now displacing-user. Re-delivering firstUser's key must
+    // not be silently deduped: the reload check falls through to adoption,
+    // which rejects the displaced user.
+    expect(() => managerA.appendMessage({ ...firstUser, timestamp: 2 })).toThrow(
+      "Session transcript keyed user is outside the current turn",
+    );
+  });
 });

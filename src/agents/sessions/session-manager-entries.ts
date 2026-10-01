@@ -358,6 +358,14 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
   > {
     return await withSessionManagerWrite(this, async (admission) => {
       this.assertTranscriptWriteActive();
+      // Keyed user messages reach this async API on the Gateway thread. When the
+      // cached dedup matches but the anchor read is refused by a dirty projection,
+      // validate the canonical current turn through the worker-backed read instead
+      // of reloading the transcript synchronously.
+      const keyedUserDedup = await this.resolveKeyedUserDedupAsync(message, options);
+      if (keyedUserDedup) {
+        return keyedUserDedup;
+      }
       // User custody and process-local incognito storage retain their native owners.
       // The synchronous SDK also permits a transaction-local fresh-message callback.
       if (
@@ -452,27 +460,12 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
     if (message.role === "assistant") {
       applyAssistantDeliveryDirectives(message);
     }
-    if (
-      options?.idempotencyLookup !== "caller-checked" &&
-      message.role === "user" &&
-      "idempotencyKey" in message &&
-      typeof message.idempotencyKey === "string" &&
-      message.idempotencyKey.length > 0
-    ) {
-      const currentTurnId = this.resolveCurrentTurnEntryId();
-      const current = currentTurnId ? this.byId.get(currentTurnId) : undefined;
-      if (
-        current?.type === "message" &&
-        current.message.role === "user" &&
-        "idempotencyKey" in current.message &&
-        current.message.idempotencyKey === message.idempotencyKey
-      ) {
-        const anchor = this.persistenceTarget
-          ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
-          : undefined;
-        if (this.persistenceTarget && !anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${current.id}`);
-        }
+    const current = this.resolveCurrentKeyedUser(message, options);
+    if (current) {
+      const anchor = this.persistenceTarget
+        ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
+        : undefined;
+      if (anchor || !this.persistenceTarget) {
         return {
           entryId: current.id,
           message: current.message,
@@ -480,6 +473,13 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
           appended: false,
         };
       }
+      // A dirty projection (e.g. a side append awaiting reconcile) refuses the
+      // anchor read. That can also mean another writer moved the active branch
+      // while this manager retained the cached keyed user. The storage append
+      // and adoption path re-resolves the canonical current turn and rejects a
+      // displaced keyed user, so fall through instead of reloading the
+      // transcript synchronously on the Gateway thread. The async append path
+      // performs the same fall-through after a worker-backed canonical check.
     }
     const entry: SessionMessageEntry = {
       type: "message",
@@ -501,6 +501,63 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
       lifecycleRevision,
       appended,
     };
+  }
+
+  /**
+   * Resolve the current cached turn when it is a keyed user message matching the
+   * incoming message, or undefined when the dedup guard does not apply.
+   */
+  private resolveCurrentKeyedUser(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options: AppendPersistenceOptions | undefined,
+  ): SessionMessageEntry | undefined {
+    if (
+      options?.idempotencyLookup === "caller-checked" ||
+      message.role !== "user" ||
+      !("idempotencyKey" in message) ||
+      typeof message.idempotencyKey !== "string" ||
+      message.idempotencyKey.length === 0
+    ) {
+      return undefined;
+    }
+    const currentTurnId = this.resolveCurrentTurnEntryId();
+    const current = currentTurnId ? this.byId.get(currentTurnId) : undefined;
+    return current?.type === "message" &&
+      current.message.role === "user" &&
+      "idempotencyKey" in current.message &&
+      current.message.idempotencyKey === message.idempotencyKey
+      ? current
+      : undefined;
+  }
+
+  /**
+   * On the async append API, validate a keyed-user dedup whose anchor read was
+   * refused by a dirty projection through the worker-backed read instead of a
+   * synchronous reload on the Gateway thread. Returns the anchor-free dedup when
+   * the canonical current turn still matches, otherwise undefined to fall through
+   * to the normal append.
+   */
+  private async resolveKeyedUserDedupAsync(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options: AppendPersistenceOptions | undefined,
+  ): Promise<ReturnType<SessionManagerEntries["appendMessageWithTranscriptAnchor"]> | undefined> {
+    const current = this.resolveCurrentKeyedUser(message, options);
+    if (!current || !this.persistenceTarget) {
+      return undefined;
+    }
+    if (readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })) {
+      return undefined;
+    }
+    // A dirty projection refuses the anchor read. Validate the canonical current
+    // turn through the worker-backed read instead of a synchronous reload, so a
+    // displaced keyed user is never reported as current and the Gateway is not
+    // blocked loading a large transcript.
+    await this.reloadPersistedTranscriptAsync();
+    const canonical = this.resolveCurrentKeyedUser(message, options);
+    if (!canonical) {
+      return undefined;
+    }
+    return { entryId: canonical.id, message: canonical.message, appended: false };
   }
 
   appendCompaction(
