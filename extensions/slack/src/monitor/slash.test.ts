@@ -359,22 +359,6 @@ describe("slack slash commands access groups", () => {
     expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
   });
 
-  it("classifies MPIM slash commands as group chat context", async () => {
-    const harness = createPolicyHarness({
-      channelId: "G_MPIM",
-      channelName: "group-dm",
-      resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
-    });
-    await registerAndRunPolicySlash({ harness });
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchArg = firstDispatchArg() as {
-      ctx?: { ChatType?: string; From?: string };
-    };
-    expect(dispatchArg?.ctx?.ChatType).toBe("group");
-    expect(dispatchArg?.ctx?.From).toBe("slack:group:G_MPIM");
-  });
-
   it.each([
     {
       name: "blocks MPIM slash commands from senders outside the configured allowFrom",
@@ -411,6 +395,10 @@ describe("slack slash commands access groups", () => {
     expect(responseTexts(respond)).not.toContain(
       "You are not authorized to use this command here.",
     );
+    expect(firstDispatchArg().ctx).toMatchObject({
+      ChatType: "group",
+      From: "slack:group:G_MPIM",
+    });
   });
 
   it("enforces access-group gating when lookup fails for private channels", async () => {
@@ -523,45 +511,25 @@ describe("slack slash command session metadata", () => {
     }));
     await registerCommands(ctx, harness.account);
 
-    await runSlashHandler({
-      commands: harness.commands,
-      command: {
-        channel_id: harness.channelId,
-        channel_name: harness.channelName,
-      },
-    });
+    const run = () =>
+      runSlashHandler({
+        commands: harness.commands,
+        command: { channel_id: harness.channelId, channel_name: harness.channelName },
+      });
+    await run();
     setRuntimeConfigSnapshot(runtimeCfg, runtimeCfg);
-    await runSlashHandler({
-      commands: harness.commands,
-      command: {
-        channel_id: harness.channelId,
-        channel_name: harness.channelName,
-      },
-    });
+    await run();
 
-    expect(dispatchMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        ctx: expect.objectContaining({ CommandTargetSessionKey: "agent:main:main" }),
-      }),
-    );
-    expect(dispatchMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          CommandTargetSessionKey: "agent:main:slack:direct:U1",
-        }),
-      }),
-    );
+    expect(dispatchMock.mock.calls.map(([turn]) => turn.ctx.CommandTargetSessionKey)).toEqual([
+      "agent:main:main",
+      "agent:main:slack:direct:U1",
+    ]);
     const disabled: OpenClawConfig = {
       ...runtimeCfg,
       channels: { slack: { dmPolicy: "disabled" } },
     };
     setRuntimeConfigSnapshot(disabled, disabled);
-    await runSlashHandler({
-      commands: harness.commands,
-      command: { channel_id: harness.channelId, channel_name: harness.channelName },
-    });
+    await run();
     expect(dispatchMock).toHaveBeenCalledTimes(2);
   });
 
