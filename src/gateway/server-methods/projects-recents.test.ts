@@ -9,7 +9,8 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createSessionRowProjection,

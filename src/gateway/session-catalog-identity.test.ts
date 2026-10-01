@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { linkEmail, syncGitHubIdentity } from "../state/user-profiles.js";
+import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogGitHubLinker,

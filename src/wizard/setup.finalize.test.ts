@@ -12,6 +12,7 @@ import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createRuntimeProbeResult,
   expectNoteContains,
   expectNoteTitleNotCalled,
   withPlatform,
@@ -387,7 +388,7 @@ function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    runExec.mockReset();
+    runExec.mockReset().mockResolvedValue(createRuntimeProbeResult());
     runTui.mockClear();
     setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset().mockReturnValue(setupCleanupExitTimer);
@@ -1363,14 +1364,7 @@ describe("finalizeSetupWizard", () => {
     "reinstalls recorded Bun through $flow with choice=$choice",
     async ({ flow, choice }) => {
       const recordedPath = "/opt/recorded/bin/bun";
-      runExec.mockResolvedValue({
-        stdout: JSON.stringify({
-          bunVersion: "1.4.2",
-          sqliteVersion: "3.53.4",
-          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        }),
-        stderr: "",
-      });
+      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.2"));
       gatewayServiceIsLoaded.mockResolvedValue(true);
       gatewayServiceReadCommand.mockResolvedValue({
         programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],

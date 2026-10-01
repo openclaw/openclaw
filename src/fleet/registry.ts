@@ -11,9 +11,9 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import type {
   FleetCellOperationName,
   FleetCellRecord,
-  FleetRegistryWriteOperations,
   ReserveFleetCellParams,
 } from "./registry.types.js";
+import type { FleetRegistryWriteOperations } from "./registry.worker-contract.js";
 
 export type { FleetCellOperationName, FleetCellRecord } from "./registry.types.js";
 

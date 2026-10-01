@@ -15,7 +15,7 @@ import { hasMultipleSessionSharingIdentities } from "../../state/user-profiles.j
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionSharingRole, resolveSessionSharingTarget } from "../session-sharing.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -138,10 +138,7 @@ export async function resolveSessionCatalogThreadVisibility(params: {
   sourceHomeId?: string;
   threadId: string;
 }): Promise<SessionCatalogThreadVisibility | null> {
-  const projection = getSessionRowProjection(params.context);
-  if (!projection) {
-    throw new Error("Session projection is unavailable before Gateway startup completes");
-  }
+  const projection = requireSessionRowProjection(params.context);
   while (projection.needsMaterialization) {
     await projection.ensureMaterialized();
   }

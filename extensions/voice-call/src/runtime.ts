@@ -35,13 +35,12 @@ import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
-import type { CallRecord } from "./types.js";
+import type { CallRecord, ToolHandlerContext } from "./types.js";
 import {
   isProviderUnreachableWebhookUrl,
   providerRequiresPublicWebhook,
 } from "./webhook-exposure.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
-import type { ToolHandlerContext } from "./webhook/realtime-handler.js";
 import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
 
 export type VoiceCallRuntime = {

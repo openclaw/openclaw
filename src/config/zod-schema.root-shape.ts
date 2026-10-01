@@ -34,6 +34,7 @@ import {
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+import { StorageConfigSchema } from "./zod-schema.storage.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
 export const OpenClawSchemaShape = {
@@ -504,6 +505,7 @@ export const OpenClawSchemaShape = {
   talk: TalkSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
+  storage: StorageConfigSchema,
   desktop: DesktopConfigSchema,
   memory: MemorySchema,
   mcp: McpConfigSchema,

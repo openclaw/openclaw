@@ -70,7 +70,7 @@ describe("sessions_yield tool", () => {
     expect(details.status).toBe("yielded");
     expect(details).not.toHaveProperty("message");
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined);
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined);
   });
 
   it.each([undefined, "Research started; results will follow."])(
@@ -91,7 +91,7 @@ describe("sessions_yield tool", () => {
       });
       expect(JSON.stringify(result)).not.toContain(message);
       expect(onYield).toHaveBeenCalledOnce();
-      expect(onYield).toHaveBeenCalledWith(message, acknowledgment);
+      expect(onYield).toHaveBeenCalledWith(message, acknowledgment, undefined);
     },
   );
 

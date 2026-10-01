@@ -29,6 +29,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
       input.command.type === "acpSessions.list" ||
+      input.command.type === "backup.runs" ||
       (input.command.type === "acpSessions.metadata" &&
         Array.isArray(input.command.entries) &&
         input.command.entries.length <= 64 &&
@@ -272,7 +273,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.input.includeRunId === undefined ||
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
-      (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
+      ((input.command.type === "operatorApprovals.history" ||
+        input.command.type === "operatorApprovals.listCronGrants") &&
+        isRecord(input.command.input)) ||
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "operator.channelPolicy" ||

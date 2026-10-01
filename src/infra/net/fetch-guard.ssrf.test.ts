@@ -11,7 +11,6 @@ import {
   type GuardedFetchOptions,
 } from "./fetch-guard.js";
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
-import { PROXY_ENV_KEYS } from "./proxy-env.js";
 import type { DispatcherAwareRequestInit } from "./runtime-fetch.js";
 import {
   ensureGlobalUndiciStreamTimeouts,
@@ -80,7 +79,14 @@ function installRuntime(fetch = fetchStub()) {
   });
 }
 function clearProxyEnv() {
-  for (const key of PROXY_ENV_KEYS) {
+  for (const key of [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+  ]) {
     vi.stubEnv(key, "");
   }
 }

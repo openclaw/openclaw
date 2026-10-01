@@ -9,7 +9,8 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import type { SessionEntry } from "../config/sessions/types.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createSessionMutationTestClient } from "./server-methods/sessions-mutations.owner.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";

@@ -172,11 +172,11 @@ export type GatewayReloadHandlerParams = {
     changedPaths: readonly string[];
     reloadPluginIds?: ReadonlySet<string>;
     pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
-    /** Fence config consumers before drain; return their publication after successful rollback. */
+    /** Fence execution before drain; retire active facts only when replacement can begin. */
     prepareConfigEffects: (replacement: {
       pluginIds: ReadonlySet<string>;
       channels: ReadonlySet<ChannelKind>;
-    }) => () => Promise<void>;
+    }) => { retire: () => void; rollback: () => Promise<void> };
     commitRuntime: (publication?: GatewayRuntimePublication) => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;

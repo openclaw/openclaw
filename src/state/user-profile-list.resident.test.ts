@@ -24,15 +24,15 @@ import {
   resolveUserProfileReference,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
-import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
-  ensureProfileForEmail,
   linkEmail,
   setAvatar,
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
-} from "./user-profiles.js";
+} from "./user-profile-writes.worker.js";
+import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {

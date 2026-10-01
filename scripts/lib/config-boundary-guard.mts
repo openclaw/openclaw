@@ -12,7 +12,6 @@ const COMPAT_CONFIG_API_FILES = new Set([
   "src/config/io.ts",
   "src/config/mutate.ts",
   "src/memory-host-sdk/runtime-core.ts",
-  "src/plugin-sdk/config-runtime.ts",
   "src/plugin-sdk/memory-core-host-runtime-core.ts",
   "src/plugins/compat/registry.ts",
   "src/plugins/registry.runtime-config.test.ts",

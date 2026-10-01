@@ -177,6 +177,7 @@ export async function prepareCodexAttemptContext(
   const skillsInstructions = renderCodexSkillsInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
+    dynamicTools: toolBridge.availableSpecs,
   });
   // This section uses the existing native thread carrier only when there is no
   // managed parent-local inference route; it is separate from immutable policy.

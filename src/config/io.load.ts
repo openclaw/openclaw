@@ -33,7 +33,7 @@ import {
   warnIfConfigFromFuture,
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
-import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
 import {
@@ -121,10 +121,7 @@ function* loadConfigWithEffects(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const contextBudgetMigration = migrateLegacyContextBudgetConfig(
-      readResolution.resolvedConfigRaw,
-    );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw, {
       env: deps.env,
       homedir: deps.homedir,
     });
@@ -135,11 +132,7 @@ function* loadConfigWithEffects(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
     }
-    for (const diagnostic of [
-      ...contextBudgetMigration.changes.map(({ message }) => message),
-      ...contextBudgetMigration.warnings.map(({ message }) => message),
-      ...rosterMigration.diagnostics,
-    ]) {
+    for (const diagnostic of rosterMigration.diagnostics) {
       deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
     warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);

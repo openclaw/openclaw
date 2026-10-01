@@ -1,7 +1,6 @@
 import fs, { type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
-import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sql } from "kysely";
 import { z } from "zod";
 import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
@@ -26,6 +25,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
+import { databaseFileIdentityKey } from "./sqlite-worker-identity.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 import { quarantineManagedHandoffStore } from "./update-managed-service-handoff-store-repair.js";
@@ -101,13 +101,13 @@ function initializeLeaseSchema(db: HandoffDatabase): void {
 
 export type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 
-function assertPath(stat: Stats | BigIntStats, kind: "directory" | "file") {
+function assertPath(stat: BigIntStats, kind: "directory" | "file") {
   if (
     stat.isSymbolicLink() ||
     !(kind === "directory" ? stat.isDirectory() : stat.isFile()) ||
-    (kind === "file" && BigInt(stat.nlink) !== 1n) ||
-    (typeof process.getuid === "function" && BigInt(stat.uid) !== BigInt(process.getuid())) ||
-    (process.platform !== "win32" && (BigInt(stat.mode) & 0o077n) !== 0n)
+    (kind === "file" && stat.nlink !== 1n) ||
+    (typeof process.getuid === "function" && stat.uid !== BigInt(process.getuid())) ||
+    (process.platform !== "win32" && (stat.mode & 0o077n) !== 0n)
   ) {
     throw new Error("managed handoff lease " + kind + " is unsafe");
   }
@@ -128,34 +128,32 @@ function assertPath(stat: Stats | BigIntStats, kind: "directory" | "file") {
  * thing the directory guarantee would not restore. Ownership, type and link count
  * are likewise not ours to repair; all of those still refuse in assertPath.
  */
-function repairPrivateFileMode(databasePath: string, stat: Stats): Stats {
+function repairPrivateFileMode(databasePath: string, stat: BigIntStats): BigIntStats {
   if (
     process.platform === "win32" ||
-    (stat.mode & 0o077) === 0 ||
-    (stat.mode & 0o022) !== 0 ||
+    (stat.mode & 0o077n) === 0n ||
+    (stat.mode & 0o022n) !== 0n ||
     stat.isSymbolicLink() ||
     !stat.isFile() ||
-    stat.nlink !== 1 ||
-    (typeof process.getuid === "function" && stat.uid !== process.getuid())
+    stat.nlink !== 1n ||
+    (typeof process.getuid === "function" && stat.uid !== BigInt(process.getuid()))
   ) {
     return stat;
   }
   fs.chmodSync(databasePath, 0o600);
-  return fs.lstatSync(databasePath);
+  return fs.lstatSync(databasePath, { bigint: true });
 }
 
 function assertSamePath(
-  stat: Stats | BigIntStats,
-  expected: Stats | BigIntStats,
+  stat: BigIntStats,
+  expected: BigIntStats,
   kind: "directory" | "file",
 ): void {
   assertPath(stat, kind);
   if (
     (process.platform === "win32" &&
-      [stat.dev, stat.ino, expected.dev, expected.ino].some(
-        (value) => value === 0 || value === 0n,
-      )) ||
-    !sameFileIdentity(stat, expected)
+      [stat.dev, stat.ino, expected.dev, expected.ino].includes(0n)) ||
+    databaseFileIdentityKey(stat) !== databaseFileIdentityKey(expected)
   ) {
     throw new Error("managed handoff lease " + kind + " changed during initialization");
   }
@@ -198,12 +196,9 @@ function createMissingDatabaseFile(
     // Windows file IDs can exceed Number's exact integer range.
     const identity =
       descriptor === undefined
-        ? repairPrivateFileMode(databasePath, fs.lstatSync(databasePath))
+        ? repairPrivateFileMode(databasePath, fs.lstatSync(databasePath, { bigint: true }))
         : fs.fstatSync(descriptor, { bigint: true });
-    const currentIdentity =
-      descriptor === undefined
-        ? fs.lstatSync(databasePath)
-        : fs.lstatSync(databasePath, { bigint: true });
+    const currentIdentity = fs.lstatSync(databasePath, { bigint: true });
     assertSamePath(currentIdentity, identity, "file");
     assertSamePath(
       fs.lstatSync(parentReceipt.path, { bigint: true }),
@@ -239,30 +234,38 @@ function isUnadoptableStore(stat: Stats): boolean {
 /** Capture only an already-admitted database, never provision one during recovery. */
 export function captureManagedUpdateLeaseDatabaseIdentity(
   databasePath: string,
+  previous?: ManagedUpdateLeaseDatabaseIdentity,
+  legacyNumeric = false,
 ): ManagedUpdateLeaseDatabaseIdentity {
   const canonical = fs.realpathSync(databasePath);
   const file = fs.lstatSync(canonical, { bigint: true });
   const parent = fs.lstatSync(path.dirname(canonical), { bigint: true });
   assertPath(file, "file");
   assertPath(parent, "directory");
+  // Accepted <=9.6 one-hop tradeoff: Number serialization can hide an inode collision.
+  // Admit its shipped spelling once, then pin bigint identities for every later check.
+  const matches = (stat: BigIntStats, expected: string) =>
+    expected === databaseFileIdentityKey(stat) ||
+    (legacyNumeric && expected === `${Number(stat.dev)}:${Number(stat.ino)}`);
+  if (
+    previous &&
+    (canonical !== previous.databasePath ||
+      !matches(file, previous.databaseIdentity) ||
+      !matches(parent, previous.parentIdentity))
+  ) {
+    throw new Error("managed handoff lease database identity changed");
+  }
   return Object.freeze({
     databasePath: canonical,
-    databaseIdentity: `${file.dev}:${file.ino}`,
-    parentIdentity: `${parent.dev}:${parent.ino}`,
+    databaseIdentity: databaseFileIdentityKey(file),
+    parentIdentity: databaseFileIdentityKey(parent),
   });
 }
 
 export function assertManagedUpdateLeaseDatabaseIdentity(
   binding: ManagedUpdateLeaseDatabaseIdentity,
 ): void {
-  const actual = captureManagedUpdateLeaseDatabaseIdentity(binding.databasePath);
-  if (
-    actual.databasePath !== binding.databasePath ||
-    actual.databaseIdentity !== binding.databaseIdentity ||
-    actual.parentIdentity !== binding.parentIdentity
-  ) {
-    throw new Error("managed handoff lease database identity changed");
-  }
+  captureManagedUpdateLeaseDatabaseIdentity(binding.databasePath, binding);
 }
 
 /** Existing managed-update lease storage; extraction does not change its schema. */
@@ -396,7 +399,10 @@ export function createManagedHandoffLeaseDatabase(
         identity: directoryIdentity,
       });
     }
-    const databaseIdentity = repairPrivateFileMode(databasePath, fs.lstatSync(databasePath));
+    const databaseIdentity = repairPrivateFileMode(
+      databasePath,
+      fs.lstatSync(databasePath, { bigint: true }),
+    );
     assertPath(databaseIdentity, "file");
     const db = openNodeSqliteDatabase(
       write ? resolveExistingSqliteFileUri(databasePath) : databasePath,
@@ -404,7 +410,7 @@ export function createManagedHandoffLeaseDatabase(
     );
     try {
       assertSamePath(fs.lstatSync(dir, { bigint: true }), directoryIdentity, "directory");
-      assertSamePath(fs.lstatSync(databasePath), databaseIdentity, "file");
+      assertSamePath(fs.lstatSync(databasePath, { bigint: true }), databaseIdentity, "file");
       setSqliteBusyTimeout(db, 5000);
       if (write) {
         initializeLeaseSchema(db);

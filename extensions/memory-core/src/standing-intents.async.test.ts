@@ -14,10 +14,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteAdmission,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -85,6 +85,10 @@ async function holdWriter(beforeRelease?: () => void, beforeLock?: () => Promise
     sessionKey: "agent:main:standing-intent-writer",
     storePath: resolveStorePath(undefined, { agentId: "main" }),
   };
+  const database = {
+    agentId: target.agentId,
+    path: resolveOpenClawAgentSqlitePath({ agentId: target.agentId }),
+  };
   await upsertSessionEntry({
     ...target,
     entry: { sessionId: target.sessionId, updatedAt: Date.now() },
@@ -94,13 +98,13 @@ async function holdWriter(beforeRelease?: () => void, beforeLock?: () => Promise
   const finish = deferred();
   releases.push(finish.resolve);
   const done = keep(
-    withSessionTranscriptWriteLock(target, async () => {
+    runOpenClawAgentWriteAdmission(database, async () => {
       entered.resolve();
       await finish.promise;
       beforeRelease?.();
     }),
   );
-  const drain = () => withSessionTranscriptWriteLock(target, () => undefined);
+  const drain = () => runOpenClawAgentWriteAdmission(database, () => undefined);
   writerDrains.push(drain);
   await Promise.race([entered.promise, done]);
   return { entered: entered.promise, release: finish.resolve, done, drain };
@@ -463,8 +467,9 @@ describe("standing-intent admitted operations", () => {
   it("preserves a queued live caller after an expired hook and a cold database reopen", async () => {
     const existing = await seed();
     const { runner } = await registerHooks();
-    // Retire the seeded worker before holding its queue; the callback still cold-closes
-    // the host handle and rejects callers that capture that handle before admission.
+    // Hold only agent admission: transcript preparation would reopen a history worker
+    // after drainage and race its async close against the live caller. The callback
+    // still cold-closes any host handle captured before admission.
     const held = await holdWriter(closeOpenClawAgentDatabasesForTest, () =>
       closeOpenClawAgentDatabasesAsync(stateDir),
     );
