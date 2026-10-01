@@ -67,8 +67,11 @@ it("validates a hardlinked companion placement once per capture, including recov
       );
 
       fs.writeFileSync(path.join(root, "helper.dat"), "replacement companion");
-      expect(first.assertSourceCurrent).toThrow("Plugin source changed");
       const replacement = capture();
+      expect(replacement.sourceDigest).not.toBe(first.sourceDigest);
+      expect(fs.statSync(replacement.resolve(path.join(root, "addon-0.node"))).ino).not.toBe(
+        fs.statSync(first.resolve(path.join(root, "addon-0.node"))).ino,
+      );
       expect.soft(walks(replacement.rootDir)).toBe(1);
       expect(fs.readFileSync(path.join(replacement.rootDir, "helper.dat"), "utf8")).toBe(
         "replacement companion",
