@@ -771,11 +771,12 @@ describe("dispatchCronDelivery", () => {
       },
     ]),
   )(
-    "fails an accepted spawn-only handoff when $name (delivery requested: $deliveryRequested)",
+    "fails an accepted spawn-only handoff and keeps its transcript when $name (delivery requested: $deliveryRequested)",
     async ({ deliveryRequested, activeDescendants, error }) => {
       vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(activeDescendants > 0);
       const params = emptyParams(true);
       params.deliveryRequested = deliveryRequested;
+      params.job.deleteAfterRun = true;
 
       const state = await dispatchCronDelivery(params);
 
@@ -785,6 +786,9 @@ describe("dispatchCronDelivery", () => {
         deliveryAttempted: true,
       });
       expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
     },
   );
 
@@ -794,6 +798,7 @@ describe("dispatchCronDelivery", () => {
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(childReply);
     const params = emptyParams(true);
     params.deliveryRequested = false;
+    params.job.deleteAfterRun = true;
 
     const state = await dispatchCronDelivery(params);
 
@@ -805,6 +810,7 @@ describe("dispatchCronDelivery", () => {
     });
     expect(state.disposition).toBeUndefined();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expectSessionDeleted();
   });
 
   it("preserves abort precedence when an accepted child handoff is interrupted", async () => {

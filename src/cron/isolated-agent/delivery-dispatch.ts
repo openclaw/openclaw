@@ -112,7 +112,7 @@ export async function dispatchCronDelivery(
     // Quiet/best-effort successes retire with their jobs; failed executions retain evidence.
     if (
       deliveryState.status === "delivered" ||
-      deliveryState.status === "not-requested" ||
+      (deliveryState.status === "not-requested" && disposition?.kind !== "error") ||
       completion === "succeeded"
     ) {
       await cleanupDirectCronSessionIfNeeded();
