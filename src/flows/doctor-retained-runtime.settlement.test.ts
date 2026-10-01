@@ -26,6 +26,7 @@ const custody = vi.hoisted(() => ({
   census: vi.fn(),
   retireBroker: vi.fn<() => Promise<boolean>>(),
   activeNativeWork: false,
+  actualNativeSource: false,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
@@ -37,17 +38,28 @@ vi.mock("../infra/openclaw-process-census.js", () => ({
 }));
 vi.mock("../infra/worker-native-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-native-lifecycle.js")>();
+  type NativeSource = ReturnType<typeof actual.captureRetainedNativeWorkerSource>;
+  const sources = new WeakMap<NativeSource, NativeSource>();
   return {
     ...actual,
     captureRetainedNativeWorkerSource: (
       ...args: Parameters<typeof actual.captureRetainedNativeWorkerSource>
-    ) => ({
-      ...actual.captureRetainedNativeWorkerSource(...args),
-      retireIdleBroker: custody.retireBroker,
-      get hasActiveWorkers() {
-        return custody.activeNativeWork;
-      },
-    }),
+    ) => {
+      const source = actual.captureRetainedNativeWorkerSource(...args);
+      let captured = sources.get(source);
+      if (!captured) {
+        captured = {
+          ...source,
+          retireIdleBroker: () =>
+            custody.actualNativeSource ? source.retireIdleBroker() : custody.retireBroker(),
+          get hasActiveWorkers() {
+            return custody.actualNativeSource ? source.hasActiveWorkers : custody.activeNativeWork;
+          },
+        };
+        sources.set(source, captured);
+      }
+      return captured;
+    },
   };
 });
 
@@ -58,10 +70,12 @@ afterEach(() => {
   custody.census.mockReset();
   custody.retireBroker.mockReset();
   custody.activeNativeWork = false;
+  custody.actualNativeSource = false;
 });
 
 it.each([
   "idle",
+  "idle-read-pool",
   "independent-owner",
   "independent-thread",
   "late-independent-thread",
@@ -70,6 +84,7 @@ it.each([
   "reclaims retained runtimes only after Doctor-owned readers settle (%s broker)",
   async (broker) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      custody.actualNativeSource = broker === "idle-read-pool";
       materializeSharedStateDatabase(state.env);
       const root = fs.realpathSync(state.root);
       const packageRoot = path.join(root, "checkout");
@@ -99,6 +114,9 @@ it.each([
       let ownerIdentity: Buffer | undefined;
       let doctorReaders: SqliteReadOnlyWorkerScope | undefined;
       let brokerLive = false;
+      let readSource:
+        | import("../infra/worker-native-lifecycle.js").RetainedNativeWorkerSource
+        | undefined;
       let checksFinished = false;
       const assertMaintenanceHeld = () => {
         const competingOwner = tryAcquireGatewayStateOwner(database);
@@ -128,7 +146,11 @@ it.each([
         maintenance!.assertAdmission();
         custody.activeNativeWork = broker === "late-independent-thread";
         return {
-          pids: [...(doctorReaders?.active ? [42421] : []), ...(brokerLive ? [42422] : [])],
+          pids: readSource
+            ? readSource.hasActiveWorkers
+              ? [42423]
+              : []
+            : [...(doctorReaders?.active ? [42421] : []), ...(brokerLive ? [42422] : [])],
         };
       });
       mocks.runContributions.mockImplementation(async (ctx) => {
@@ -136,6 +158,18 @@ it.each([
         doctorReaders = readOnlyWorkerScope.getStore();
         expect(doctorReaders?.active).toBe(true);
         brokerLive = broker !== "independent-thread";
+        if (broker === "idle-read-pool") {
+          const { executeExistingOpenClawStateRead } =
+            await import("../state/openclaw-state-db-readonly.js");
+          const { captureRetainedNativeWorkerSource } =
+            await import("../infra/worker-native-lifecycle.js");
+          await executeExistingOpenClawStateRead(
+            { path: database, env: state.env },
+            { type: "fleet.list" },
+          );
+          readSource = captureRetainedNativeWorkerSource();
+          expect(readSource.hasActiveWorkers).toBe(true);
+        }
         await runRetainedUpdateRuntimesHealth(ctx);
         expect(fs.existsSync(artifact)).toBe(true);
         checksFinished = true;
@@ -152,7 +186,7 @@ it.each([
       await completed;
       const output = custody.note.mock.calls.map(([message]) => String(message)).join("\n");
       expect(custody.census).toHaveBeenCalledOnce();
-      expect(fs.existsSync(artifact)).toBe(broker !== "idle");
+      expect(fs.existsSync(artifact)).toBe(broker !== "idle" && broker !== "idle-read-pool");
       if (broker === "independent-owner") {
         expect(brokerLive).toBe(true);
         expect(output).toContain("PIDs: 42422");

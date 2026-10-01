@@ -212,6 +212,8 @@ export function createDoctorMaintenanceState(options: {
     async cleanupRetainedRuntimes() {
       const { captureRetainedNativeWorkerSource } =
         await import("../infra/worker-native-lifecycle.js");
+      const { retireIdleOpenClawStateReadWorkers } =
+        await import("../state/openclaw-state-read-worker.js");
       const { prepareRetainedUpdateRuntimeCleanup } = await import("./doctor-retained-runtime.js");
       options.assertCurrent?.();
       owner!.assertCurrent();
@@ -220,6 +222,7 @@ export function createDoctorMaintenanceState(options: {
       // This phase runs after the tracked Doctor callback has settled.
       await closeResources();
       try {
+        const readersRetired = await retireIdleOpenClawStateReadWorkers(nativeSource);
         const brokerRetired = await nativeSource.retireIdleBroker();
         await owner!.run(() =>
           cleanup(true, {
@@ -230,7 +233,7 @@ export function createDoctorMaintenanceState(options: {
             },
             assertResourcesSettled() {
               // Worker threads share this PID and are invisible to the process census.
-              if (!brokerRetired || nativeSource.hasActiveWorkers) {
+              if (!readersRetired || !brokerRetired || nativeSource.hasActiveWorkers) {
                 throw new Error(
                   `independent native work in this process (PID: ${process.pid}); let these holders finish, then rerun openclaw doctor --fix`,
                 );
