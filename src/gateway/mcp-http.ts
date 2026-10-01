@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
@@ -273,9 +272,7 @@ async function startMcpLoopbackServer(
           () =>
             toolCache.resolve({
               context: requestContext,
-              sessionControlAuthority: readAdmittedRunOperatorAuthority(
-                boundClientGrant?.admittedRunContext,
-              ),
+              admittedRunContext: boundClientGrant?.admittedRunContext,
               rootedExecution: boundClientGrant?.rootedExecution,
               messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
               cfg,
@@ -411,6 +408,9 @@ async function startMcpLoopbackServer(
                   turnSourceThreadId: requestContext.currentThreadTs,
                 })
               : undefined;
+            if (callerIdentity && boundClientGrant?.personalToolParticipants) {
+              callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
+            }
             response = await withGatewayToolCallerIdentity(callerIdentity, () =>
               runWithTrackedCancellation(requestAbort.signal, handleRequest),
             );

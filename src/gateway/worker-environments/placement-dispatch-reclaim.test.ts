@@ -661,7 +661,7 @@ describe("worker placement dispatch reclaim", () => {
     await placementStore.releaseTurn(claim);
 
     const basePack = Buffer.from("retirement workspace base pack");
-    placementStore.beginWorkspaceReconciliation(
+    await placementStore.beginWorkspaceReconciliation(
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,
@@ -698,7 +698,7 @@ describe("worker placement dispatch reclaim", () => {
       to: "reclaimed",
       expectedGeneration: reconciling.generation,
     });
-    expect(placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
     expect(placementStore.get(active.sessionId)?.workspaceResultConflict).toBeDefined();
 
     placementStore.retireSessionPlacement({
@@ -708,7 +708,7 @@ describe("worker placement dispatch reclaim", () => {
     });
 
     expect(placementStore.get(active.sessionId)).toBeUndefined();
-    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
     await placementStore.claimTurn({
       ...REQUEST,
       owner: { kind: "local" },

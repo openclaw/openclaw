@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
   MemoryImportProviderOutcome,
@@ -10,12 +11,7 @@ import type {
 } from "../wizard/setup.memory-import.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 
-type SetupSharedModule = typeof import("../wizard/setup.shared.js");
-let setupSharedPromise: Promise<SetupSharedModule> | undefined;
-
-function loadSetupShared(): Promise<SetupSharedModule> {
-  return (setupSharedPromise ??= import("../wizard/setup.shared.js"));
-}
+const loadSetupShared = createLazyRuntimeModule(() => import("../wizard/setup.shared.js"));
 
 export const GATEWAY_WRITE_POLICY = {
   mode: "none",
@@ -188,12 +184,7 @@ export async function runHostedGatewaySetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const [
-    { resolveGatewayPort },
-    { configureGatewayForSetup },
-    { resolveQuickstartGatewayDefaults },
-  ] = await Promise.all([
-    import("../config/config.js"),
+  const [{ configureGatewayForSetup }, { resolveQuickstartGatewayDefaults }] = await Promise.all([
     import("../wizard/setup.gateway-config.js"),
     loadSetupShared(),
   ]);
@@ -202,16 +193,14 @@ export async function runHostedGatewaySetup(
     runtime,
     beforePersistentApply,
     afterWrite: GATEWAY_WRITE_POLICY,
-    run: async ({ baseConfig, runtime: setupRuntime }) => {
+    run: async ({ baseConfig }) => {
       requireLocalGateway(baseConfig);
       const result = await configureGatewayForSetup({
         flow: "advanced",
         baseConfig,
         nextConfig: baseConfig,
-        localPort: resolveGatewayPort(baseConfig),
         quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
         prompter,
-        runtime: setupRuntime,
       });
       return { nextConfig: result.nextConfig };
     },

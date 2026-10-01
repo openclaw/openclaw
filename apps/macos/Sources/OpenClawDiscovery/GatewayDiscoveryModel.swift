@@ -79,7 +79,7 @@ public final class GatewayDiscoveryModel {
     @ObservationIgnored private var localIdentityTask: Task<Void, Never>?
     private let filterLocalGateways: Bool
     private var resolvedServiceByID: [String: ResolvedGatewayService] = [:]
-    private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
+    private var pendingServiceResolvers: [String: BonjourServiceResolver<ResolvedGatewayService>] = [:]
     private var wideAreaFallbackTask: Task<Void, Never>?
     private var wideAreaFallback: (domain: String, beacons: [WideAreaGatewayBeacon])?
     private var tailscaleServeFallbackTask: Task<Void, Never>?
@@ -176,16 +176,8 @@ public final class GatewayDiscoveryModel {
 
     private var wideAreaFallbackGateways: [DiscoveredGateway] {
         guard let fallback = self.wideAreaFallback else { return [] }
-        return self.mapWideAreaBeacons(fallback.beacons, domain: fallback.domain)
-    }
-
-    private var tailscaleServeFallbackGateways: [DiscoveredGateway] {
-        self.mapTailscaleServeBeacons(self.tailscaleServeFallbackBeacons)
-    }
-
-    private func mapWideAreaBeacons(_ beacons: [WideAreaGatewayBeacon], domain: String) -> [DiscoveredGateway] {
-        beacons.map { beacon in
-            let stableID = "wide-area|\(domain)|\(beacon.instanceName)"
+        return fallback.beacons.map { beacon in
+            let stableID = "wide-area|\(fallback.domain)|\(beacon.instanceName)"
             let isLocal = Self.isLocalGateway(
                 lanHost: beacon.lanHost,
                 tailnetDns: beacon.tailnetDns,
@@ -209,10 +201,8 @@ public final class GatewayDiscoveryModel {
         }
     }
 
-    private func mapTailscaleServeBeacons(
-        _ beacons: [TailscaleServeGatewayBeacon]) -> [DiscoveredGateway]
-    {
-        beacons.map { beacon in
+    private var tailscaleServeFallbackGateways: [DiscoveredGateway] {
+        self.tailscaleServeFallbackBeacons.map { beacon in
             let stableID = "tailscale-serve|\(beacon.tailnetDns.lowercased())"
             let isLocal = Self.isLocalGateway(
                 lanHost: nil,
@@ -483,7 +473,7 @@ public final class GatewayDiscoveryModel {
             cliPath: GatewayDiscoveryText.txtValue(txt, key: "cliPath"))
     }
 
-    public static func buildSSHTarget(user: String, host: String, port: Int) -> String {
+    public nonisolated static func buildSSHTarget(user: String, host: String, port: Int) -> String {
         var target = "\(user)@\(host)"
         if port != 22 {
             target += ":\(port)"
@@ -501,25 +491,35 @@ public final class GatewayDiscoveryModel {
         guard self.pendingServiceResolvers[stableID] == nil else { return }
         let generation = self.generation
 
-        let resolver = GatewayServiceResolver(
+        let resolver = BonjourServiceResolver(
             name: serviceName,
             type: type,
             domain: domain,
-            logger: self.logger)
-        { [weak self] result in
-            Task { @MainActor in
-                guard let self, self.generation == generation else { return }
-                self.pendingServiceResolvers[stableID] = nil
-                switch result {
-                case let .success(resolved):
+            resolve: { [logger] service in
+                let txt = service.txtRecordData().map {
+                    NetService.dictionary(fromTXTRecord: $0).compactMapValues { String(data: $0, encoding: .utf8) }
+                } ?? [:]
+                let host = BonjourServiceResolverSupport.normalizeHost(service.hostName)
+                let port = service.port > 0 ? service.port : nil
+                if !txt.isEmpty {
+                    let payload = txt.sorted(by: { $0.key < $1.key })
+                        .map { "\($0.key)=\($0.value)" }
+                        .joined(separator: " ")
+                    logger.debug(
+                        "discovery: resolved TXT for \(service.name, privacy: .public): \(payload, privacy: .public)")
+                }
+                return ResolvedGatewayService(txt: txt, host: host, port: port)
+            },
+            completion: { [weak self] resolved in
+                Task { @MainActor in
+                    guard let self, self.generation == generation else { return }
+                    self.pendingServiceResolvers[stableID] = nil
+                    guard let resolved else { return }
                     self.resolvedServiceByID[stableID] = resolved
                     self.updateGatewaysForAllDomains()
                     self.recomputeGateways()
-                case .failure:
-                    break
                 }
-            }
-        }
+            })
 
         self.pendingServiceResolvers[stableID] = resolver
         resolver.start()
@@ -646,74 +646,4 @@ struct ResolvedGatewayService: Equatable {
     var txt: [String: String]
     var host: String?
     var port: Int?
-}
-
-final class GatewayServiceResolver: NSObject, NetServiceDelegate {
-    private let service: NetService
-    private let completion: (Result<ResolvedGatewayService, Error>) -> Void
-    private let logger: Logger
-    private var didFinish = false
-
-    init(
-        name: String,
-        type: String,
-        domain: String,
-        logger: Logger,
-        completion: @escaping (Result<ResolvedGatewayService, Error>) -> Void)
-    {
-        self.service = NetService(domain: domain, type: type, name: name)
-        self.completion = completion
-        self.logger = logger
-        super.init()
-        self.service.delegate = self
-    }
-
-    func start(timeout: TimeInterval = 2.0) {
-        BonjourServiceResolverSupport.start(self.service, timeout: timeout)
-    }
-
-    func cancel() {
-        self.finish(result: .failure(GatewayServiceResolverError.cancelled))
-    }
-
-    func netServiceDidResolveAddress(_ sender: NetService) {
-        let txt = Self.decodeTXT(sender.txtRecordData())
-        let host = BonjourServiceResolverSupport.normalizeHost(sender.hostName)
-        let port = sender.port > 0 ? sender.port : nil
-        if !txt.isEmpty {
-            let payload = self.formatTXT(txt)
-            self.logger.debug(
-                "discovery: resolved TXT for \(sender.name, privacy: .public): \(payload, privacy: .public)")
-        }
-        let resolved = ResolvedGatewayService(txt: txt, host: host, port: port)
-        self.finish(result: .success(resolved))
-    }
-
-    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-        self.finish(result: .failure(GatewayServiceResolverError.resolveFailed(errorDict)))
-    }
-
-    private func finish(result: Result<ResolvedGatewayService, Error>) {
-        guard !self.didFinish else { return }
-        self.didFinish = true
-        self.service.stop()
-        self.service.remove(from: .main, forMode: .common)
-        self.completion(result)
-    }
-
-    private static func decodeTXT(_ data: Data?) -> [String: String] {
-        guard let data else { return [:] }
-        return NetService.dictionary(fromTXTRecord: data).compactMapValues { String(data: $0, encoding: .utf8) }
-    }
-
-    private func formatTXT(_ txt: [String: String]) -> String {
-        txt.sorted(by: { $0.key < $1.key })
-            .map { "\($0.key)=\($0.value)" }
-            .joined(separator: " ")
-    }
-}
-
-enum GatewayServiceResolverError: Error {
-    case cancelled
-    case resolveFailed([String: NSNumber])
 }

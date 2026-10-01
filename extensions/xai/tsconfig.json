@@ -77,9 +77,6 @@
       "openclaw/plugin-sdk/secure-random-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/secure-random-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/system-event-runtime": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/system-event-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/transport-ready-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/transport-ready-runtime.d.ts"
       ],

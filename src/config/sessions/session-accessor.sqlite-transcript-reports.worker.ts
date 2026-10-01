@@ -13,6 +13,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import {
   advanceCliHistoryBoundaryRangeInTransaction,
   type CliHistoryWriterFacts,
@@ -39,11 +40,14 @@ import {
 } from "./session-accessor.sqlite-transcript-reports.kernel.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { requestSessionEntryCurrentAdmission } from "./session-entry-current-admission.worker.js";
+import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
 
 export type TranscriptReportWorkerTarget = {
   resolved: Omit<ResolvedTranscriptScope, "env">;
   cliWriter?: CliHistoryWriterFacts;
+  sessionEntryCurrentSource?: SessionEntryCurrentSource;
   fence: Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">;
 };
 type PreparedReport = ReturnType<typeof prepareTranscriptReportSelection>;
@@ -85,7 +89,10 @@ export function bindSqliteWorkerBackend(
   context: {
     database: DatabaseSync;
     databasePath: string;
-    admit(stage: "transaction" | "commit"): void;
+    admit(
+      stage: "transaction" | "commit",
+      requestAdmission?: AgentDatabaseAdmissionRestriction,
+    ): void;
   },
 ): SqliteWorkerBackend<TranscriptReportWorkerOperations> {
   const { fence } = target;
@@ -103,6 +110,15 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== context.database || database.path !== context.databasePath) {
     throw new Error("Transcript report lost its canonical database owner");
   }
+  const admit = (stage: "transaction" | "commit") =>
+    context.admit(stage, (request, dispatch) =>
+      requestSessionEntryCurrentAdmission(
+        target.sessionEntryCurrentSource,
+        request,
+        { database },
+        dispatch,
+      ),
+    );
   let closed = false;
   const assertOpen = () => {
     if (closed || !database.db.isOpen) {
@@ -110,14 +126,12 @@ export function bindSqliteWorkerBackend(
     }
     assertTransactionUsable(database.db);
   };
-  const readRefusal = () => {
-    const refusal = resolveTranscriptAppendRefusal(
+  const readRefusal = () =>
+    resolveTranscriptAppendRefusal(
       readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
       resolved,
       { ...resolved, ...fence },
     );
-    return refusal;
-  };
   let prepared:
     | {
         facts: PreparedReport;
@@ -149,10 +163,10 @@ export function bindSqliteWorkerBackend(
           if (current.db !== database.db) {
             throw new Error("Transcript report lost its canonical database owner");
           }
-          context.admit("transaction");
+          admit("transaction");
           const refusal = readRefusal();
           if (refusal) {
-            context.admit("commit");
+            admit("commit");
             return err(refusal);
           }
           const firstSeq = target.cliWriter
@@ -201,7 +215,7 @@ export function bindSqliteWorkerBackend(
               resolved.sessionId,
             );
             if (!isDeepStrictEqual(currentVersion, plan.version)) {
-              context.admit("commit");
+              admit("commit");
               return ok({ committed: false, projectionNeedsReconcile: false });
             }
             appendSelectedTranscriptReportInTransaction(
@@ -215,7 +229,7 @@ export function bindSqliteWorkerBackend(
           let commitGranted = false;
           const authorizeCommit = () => {
             if (!commitGranted) {
-              context.admit("commit");
+              admit("commit");
               commitGranted = true;
             }
           };

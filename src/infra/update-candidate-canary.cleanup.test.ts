@@ -4,6 +4,10 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
@@ -22,14 +26,20 @@ const mocks = vi.hoisted(() => ({
   signal: vi.fn(),
   port: vi.fn(),
 }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: mocks.spawn,
-}));
-vi.mock("../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../process/exec.js")>()),
-  runCommandBuffered: mocks.snapshot,
-}));
+vi.mock("node:child_process", async (importOriginal) =>
+  (await import("./update-candidate-canary-mocks.test-support.js")).mockCanaryChildProcesses(
+    await importOriginal<typeof import("node:child_process")>(),
+    mocks.spawn,
+  ),
+);
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const { mockCanarySnapshotCommands } =
+    await import("./update-candidate-canary-mocks.test-support.js");
+  return mockCanarySnapshotCommands(
+    await importOriginal<typeof import("../process/exec.js")>(),
+    mocks.snapshot,
+  );
+});
 vi.mock("../process/kill-tree.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/kill-tree.js")>()),
   signalProcessTree: mocks.signal,
@@ -96,6 +106,137 @@ describe("canary teardown evidence", () => {
     stubHealthyGateway();
   });
 
+  it.each(["before-deadline", "after-deadline"] as const)(
+    "retains uncertain cleanup progress after custody succeeds (%s)",
+    async (timing) => {
+      const directory = path.join(root, "owned-cleanup-copy");
+      await fs.mkdir(directory);
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const entered = createDeferredCore();
+      const receipt = createDeferredCore();
+      const uncertain = new CommandProcessCleanupError();
+      const remove = vi.spyOn(fs, "rm");
+      const onWarning = vi.fn();
+      const pending = cleanupUpdateTemporaryDirectory({
+        root,
+        directory,
+        name: "candidate-state-cleanup",
+        canRemove: async () => true,
+        onProgress: (step) => {
+          if (step.detail?.includes("waiting for filesystem removal")) {
+            entered.resolve();
+            return receipt.promise;
+          }
+          return undefined;
+        },
+        onWarning,
+      });
+      const rejected = expect(pending).rejects.toBe(uncertain);
+      try {
+        await entered.promise;
+        if (timing === "after-deadline") {
+          await vi.advanceTimersByTimeAsync(300_000);
+        }
+        expect(remove).not.toHaveBeenCalled();
+        expect(onWarning).not.toHaveBeenCalled();
+        receipt.reject(uncertain);
+        await rejected;
+        expect(remove).not.toHaveBeenCalled();
+        expect(onWarning).not.toHaveBeenCalled();
+        await expect(fs.access(directory)).resolves.toBeUndefined();
+      } finally {
+        receipt.resolve();
+        await pending.catch(() => undefined);
+        await rejected.catch(() => undefined);
+        remove.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves uncertain startup when recording its stop warning also fails", async () => {
+    const response = createDeferredCore<Response>();
+    const fetching = createDeferredCore();
+    const uncertain = new CommandProcessCleanupError();
+    const cleanupFailure = new Error("cleanup warning ledger unavailable");
+    let gateway: FakeChild | undefined;
+    let retained: string | undefined;
+    const spawnNormally = mocks.spawn.getMockImplementation()!;
+    const signalNormally = mocks.signal.getMockImplementation()!;
+    mocks.spawn.mockImplementation(
+      (command, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+        const child = spawnNormally(command, args, options);
+        if (args.includes("--update-canary")) {
+          gateway = child;
+          retained = options.env.OPENCLAW_STATE_DIR;
+        }
+        return child;
+      },
+    );
+    mocks.signal.mockImplementation((pid, signal, options) => {
+      if (!gateway || pid !== gateway.pid) {
+        signalNormally(pid, signal, options);
+        return;
+      }
+      gateway.emit("exit", 0);
+      options.onComplete?.();
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, options: RequestInit) => {
+        options.signal?.addEventListener("abort", () => response.reject(options.signal?.reason));
+        fetching.resolve();
+        return response.promise;
+      }),
+    );
+    const onStep = vi.fn((step: { name: string }) => {
+      if (step.name === "candidate-recovery") {
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      }
+      if (step.name === "candidate-gateway-startup-cleanup") {
+        throw cleanupFailure;
+      }
+    });
+    const pending = validateUpdateCandidateCanary({
+      ...canaryStateOptions(1_000),
+      onStep,
+      onProgress: async (step) => {
+        if (step.step === "warning:candidate-gateway-startup") {
+          throw uncertain;
+        }
+      },
+    });
+    const outcome = pending.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await fetching.promise;
+      await vi.advanceTimersByTimeAsync(300);
+      gateway!.stderr.write("openclaw-update-canary-progress: config.snapshot\n");
+      await vi.advanceTimersByTimeAsync(2_600);
+      const failure = await outcome;
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure).toMatchObject({ cause: cleanupFailure, errors: [uncertain, cleanupFailure] });
+      expect(hasCommandProcessCleanupError(failure)).toBe(true);
+      expect(onStep).toHaveBeenLastCalledWith(
+        expect.objectContaining({ name: "candidate-gateway-startup-cleanup" }),
+      );
+      if (!retained) {
+        throw new Error("Gateway did not capture its rehearsal state directory");
+      }
+      await expect(fs.access(path.join(retained, "openclaw.json"))).resolves.toBeUndefined();
+    } finally {
+      response.resolve(Response.json({ status: "started", ready: true }));
+      gateway?.emit("close", 0);
+      await outcome;
+      vi.useRealTimers();
+      if (retained) {
+        await fs.rm(retained, { recursive: true, force: true });
+      }
+    }
+  });
+
   it.each(["timer", "elapsed"] as const)(
     "does not start removal when custody resolves after the cleanup budget (%s)",
     async (expiry) => {
@@ -153,7 +294,6 @@ describe("canary teardown evidence", () => {
   it.each(["completed", "deadline"] as const)(
     "records the disposable-copy wait after a passed canary (%s)",
     async (outcome) => {
-      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const removalStarted = createDeferredCore<string>();
       const removal = createDeferredCore();
       const remove = fs.rm.bind(fs);
@@ -168,7 +308,12 @@ describe("canary teardown evidence", () => {
         return remove(target, options);
       });
       const onProgress = vi.fn();
-      const onStep = vi.fn();
+      const onStep = vi.fn((step: { name: string }) => {
+        if (step.name === "candidate-gateway-startup") {
+          // Snapshot subprocess settlement must finish before virtualizing the cleanup clock.
+          vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+        }
+      });
       const pending = validateUpdateCandidateCanary({
         ...canaryStateOptions(3_000),
         onProgress,

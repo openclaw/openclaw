@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveInternalSessionKey } from "./sessions-helpers.js";
 
-type ResolvedStatusSessionEntry = {
+export type ResolvedStatusSessionEntry = {
   entry: SessionEntry;
   key: string;
   persisted: boolean;

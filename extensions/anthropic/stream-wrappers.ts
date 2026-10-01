@@ -286,7 +286,7 @@ export function resolveAnthropicFastMode(
     typeof raw === "function"
       ? normalizeFastMode((raw as () => unknown)() as string | boolean | null | undefined)
       : normalizeFastMode(raw as string | boolean | null | undefined);
-  return fastMode === "auto" ? undefined : fastMode;
+  return fastMode === "auto" ? undefined : fastMode === "ultrafast" ? true : fastMode;
 }
 
 export function resolveAnthropicServiceTier(

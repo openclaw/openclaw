@@ -32,6 +32,38 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 17      | Prepared worker lifecycle facts and one-use node workspace bindings                                                                                                                                                                                                                                                             | Unreleased          |
 | 18      | Original requesting authority retained with shared GitHub publication receipts                                                                                                                                                                                                                                                  | Unreleased          |
 | 19      | Durable original channel-owner authorization and revocation continuity                                                                                                                                                                                                                                                          | Unreleased          |
+| 20      | Cron receipt delivery-attempt fence prevents replay of ambiguous one-shot completions                                                                                                                                                                                                                                           | Unreleased          |
+
+### State schema 20
+
+Schema 20 adds `delivery_attempt_state` to `cron_run_receipts`. New receipt claims
+record `not-started`; the receipt owner commits `started` before completion
+handoff or durable outbound custody. The fact is monotonic and means delivery
+may have occurred, not that the recipient acknowledged it. The existing receipt
+retention and exact run identity remain unchanged; there is no additional table
+or index.
+
+Startup may recover an interrupted one-shot only when its exact receipt proves
+`not-started`. A `started` or legacy `unknown` occurrence remains disabled with
+Unknown delivery status for inspection. Receiptless legacy running markers are
+also unknown. Queued-only runs, distinct operator replacements, recurring
+schedules, and exact finalized history keep their existing recovery rules.
+A crash between the fence commit and handoff can leave Unknown without sending;
+manual retry requires checking the recipient first.
+
+Migration adds the column with default `unknown` without inferring non-delivery
+from absent historical evidence. Startup and Doctor commit the column and schema
+metadata together. Older schema-19 schedulers cannot enforce this fence, so the
+content version advances even though the physical addition is compatible SQL.
+The existing [older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+and its legacy updater grace remain unchanged. Schema-19 admission rejects newer
+content; the documented legacy grace delays downgrade protection until its owner
+exits or its window expires.
+
+Create a verified, WAL-aware backup before upgrading. Binary rollback cannot
+remove this delivery fence: older runtimes must refuse migrated state. Restoring
+a pre-upgrade backup loses later receipt facts and does not undo external sends;
+reconcile those effects before retrying an automation.
 
 ### State schema 19
 

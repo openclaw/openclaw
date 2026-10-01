@@ -14,6 +14,108 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    try {
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+
+      await composer.fill("日本語");
+      const confirmationConsumed = await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      expect(confirmationConsumed).toBe(false);
+      expect(await composer.inputValue()).toBe("日本語");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+
+      // Software keyboards can commit text through input events without keydown.
+      await composer.evaluate((textarea: HTMLTextAreaElement) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        textarea.dispatchEvent(
+          new CompositionEvent("compositionend", { bubbles: true, data: "中文" }),
+        );
+        textarea.dispatchEvent(
+          new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "中文" }),
+        );
+        textarea.value = "中文";
+        textarea.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "insertText", data: "中文" }),
+        );
+      });
+      expect(await composer.inputValue()).toBe("中文");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keydown", {
+        key: "Enter",
+        keyCode: 229,
+        isComposing: false,
+      });
+      expect(await composer.inputValue()).toBe("中文");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+      await composer.press("Shift+Enter");
+      expect(await composer.inputValue()).toContain("\n");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await composer.fill("default enter send");
+      await composer.press("Enter");
+      const defaultRequest = await gateway.waitForRequest("chat.send");
+      const defaultParams = requireRecord(defaultRequest.params);
+      expect(defaultParams.message).toBe("default enter send");
+      await gateway.emitChatFinal({
+        runId: requireString(defaultParams.idempotencyKey, "default send idempotency key"),
+        text: "Default shortcut received.",
+      });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Default shortcut received.")
+        .waitFor({ timeout: 10_000 });
+
+      // The send shortcut moved to the Settings appearance page; picking it
+      // there must apply to the chat composer after navigating back.
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      const shortcutSelect = page.locator("[data-settings-send-shortcut]");
+      await shortcutSelect.selectOption("modifier-enter");
+      expect(await shortcutSelect.inputValue()).toBe("modifier-enter");
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await composer.getAttribute("aria-keyshortcuts")).toBe("Control+Enter Meta+Enter");
+
+      await composer.fill("plain enter stays in the draft");
+      await composer.press("Enter");
+      expect(await composer.inputValue()).toContain("\n");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await composer.fill("composition must not send");
+      await composer.dispatchEvent("compositionstart");
+      await composer.press("Control+Enter");
+      await composer.dispatchEvent("compositionend");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await composer.fill("modifier send");
+      await composer.press("Meta+Enter");
+      const modifierRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(modifierRequest.params).message).toBe("modifier send");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("restores a quoted draft after reload and keeps cancellation cleared", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     try {
@@ -224,11 +326,10 @@ suite.define(() => {
           }),
         );
       }, composingDraft);
-      // A ready follow-up proves the composing input rerendered; Stop stays separate.
+      // Stop becoming a follow-up action proves the composing input rerendered the pane.
       await primary.waitFor({ state: "visible" });
       expect(await primary.isEnabled()).toBe(true);
-      await stop.waitFor({ state: "visible" });
-      expect(await stop.isEnabled()).toBe(true);
+      await stop.waitFor({ state: "detached" });
       expect(await composer.inputValue()).toBe(composingDraft);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       await page.keyboard.press("Escape");

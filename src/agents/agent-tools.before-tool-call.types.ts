@@ -33,6 +33,8 @@ export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
+  /** Selected tool registration owner; independent of the hook requesting approval. */
+  toolOwnerPluginId?: string;
   /** Tool execution cwd for host-derived path facts. */
   cwd?: string;
   /** Host workspace used to resolve relative tool params for diagnostics only. */

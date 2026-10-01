@@ -573,22 +573,6 @@ function shouldUseWrapperPayload(params: {
   );
 }
 
-function applyWrapperPayloadPersistenceBoundary(params: {
-  wrapper: CommandStepWithSegment;
-  groups: ExecAuthorizationGroup[];
-}): ExecAuthorizationGroup[] {
-  if (!isUnresolvedPathScopedExecutable(params.wrapper.segment)) {
-    return params.groups;
-  }
-  return params.groups.map((group) => ({
-    ...group,
-    candidates: group.candidates.map((candidate) => ({
-      ...candidate,
-      allowAlways: false,
-    })),
-  }));
-}
-
 function wrapperPayloadPlan(params: {
   context: PlanningContext;
   allowNestedPayload: boolean;
@@ -645,7 +629,7 @@ function wrapperPayloadPlan(params: {
     transport,
     risks: params.risks,
   });
-  return groups.length > 0 ? applyWrapperPayloadPersistenceBoundary({ wrapper, groups }) : null;
+  return groups.length > 0 ? groups : null;
 }
 
 function dialectForArgv(argv: readonly string[]): ExecAuthorizationDialect {

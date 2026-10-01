@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlite-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -18,6 +21,7 @@ import {
   prepareSessionControlTarget,
   readSessionControlAuthority,
 } from "./sessions-control-authority.js";
+import { createSessionsTool } from "./sessions-tool.js";
 
 function issueAuthority(profileId: string, scopes: readonly string[] = ["operator.write"]) {
   const controller = new AbortController();
@@ -110,7 +114,7 @@ describe("prepared session control target", () => {
       ...patch,
     };
     replaceSessionEntrySync(scope, entry);
-    return { scope, entry, request: { cfg, ...scope } };
+    return { scope, entry, request: { cfg, ...scope, operation: "stop" as const } };
   }
 
   function assign(
@@ -198,6 +202,33 @@ describe("prepared session control target", () => {
     await expect(prepareSessionControlTarget({ ...request, authority })).rejects.toThrow(
       "session control source revoked",
     );
+  });
+
+  it("rejects an assignee's self-archive before reporting it as scheduled", async () => {
+    const { scope, entry } = seedTarget("assignee-self-archive");
+    assign(scope, "human", callerId);
+    const { authority } = issueAuthority(callerId);
+    const admission = await beginSessionWorkAdmission({
+      scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
+      identities: [scope.sessionKey, entry.sessionId],
+      assertAllowed: () => {},
+    });
+    const tool = createSessionsTool({
+      agentSessionKey: scope.sessionKey,
+      agentSessionId: entry.sessionId,
+      senderIsOwner: false,
+      sessionControlAuthority: authority,
+      config: cfg,
+    });
+    try {
+      await expect(
+        withGatewayToolCallerIdentity({ ...scope, operatorAuthority: authority }, () =>
+          tool.execute("archive-assigned", { action: "patch", archived: true }),
+        ),
+      ).rejects.toThrow(/session creator/i);
+    } finally {
+      admission.release();
+    }
   });
 
   it("fences a prepared action after reassignment, profile revocation, or source revocation", async () => {

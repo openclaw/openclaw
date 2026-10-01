@@ -1,4 +1,3 @@
-// Defines secret reference and resolution configuration types.
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -34,16 +33,7 @@ export type SecretInputStringResolution =
   | { status: "available"; value: string; ref: null }
   | { status: "configured_unavailable"; value: undefined; ref: SecretRef }
   | { status: "missing"; value: undefined; ref: null };
-type SecretDefaults = {
-  /** Default provider alias for env SecretRefs. */
-  env?: string;
-  /** Default provider alias for file SecretRefs. */
-  file?: string;
-  /** Default provider alias for exec SecretRefs. */
-  exec?: string;
-  /** Default provider alias for shared-store SecretRefs. */
-  store?: string;
-};
+type SecretDefaults = SecretsConfig["defaults"];
 
 function isLegacySecretRefWithoutProvider(
   value: unknown,
@@ -174,11 +164,7 @@ export function assertSecretInputResolved(params: {
   defaults?: SecretDefaults;
   path: string;
 }): void {
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    refValue: params.refValue,
-    defaults: params.defaults,
-  });
+  const { ref } = resolveSecretInputRef(params);
   if (!ref) {
     return;
   }
@@ -193,11 +179,7 @@ export function resolveSecretInputString(params: {
   path: string;
   mode?: SecretInputStringResolutionMode;
 }): SecretInputStringResolution {
-  const { explicitRef, ref } = resolveSecretInputRef({
-    value: params.value,
-    refValue: params.refValue,
-    defaults: params.defaults,
-  });
+  const { explicitRef, ref } = resolveSecretInputRef(params);
   const normalized = normalizeSecretInputString(params.value);
   if (normalized && !explicitRef) {
     return {

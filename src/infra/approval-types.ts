@@ -52,7 +52,9 @@ function isExecApprovalRequest(request: ApprovalRequestInput): request is ExecAp
   return deriveApprovalRequestKind(request) === "exec";
 }
 
-function isPluginApprovalRequest(request: ApprovalRequestInput): request is PluginApprovalRequest {
+export function isPluginApprovalRequest(request: {
+  request: object;
+}): request is PluginApprovalRequest {
   return deriveApprovalRequestKind(request) === "plugin";
 }
 

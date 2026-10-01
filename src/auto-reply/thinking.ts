@@ -133,7 +133,6 @@ function resolveThinkingCatalogEntry(
 function resolveThinkingPolicyContext(params: ThinkingProfileParams) {
   const providerRaw = normalizeOptionalString(params.provider);
   const modelId = normalizeOptionalString(params.model) ?? "";
-  const modelKey = normalizeOptionalLowercaseString(params.model) ?? "";
   const candidate = resolveThinkingCatalogEntry(params);
   const thinkingPolicyProvider = normalizeOptionalString(candidate?.thinkingPolicyProvider);
   // Prepared catalogs keep the logical model identity but record the concrete
@@ -145,8 +144,8 @@ function resolveThinkingPolicyContext(params: ThinkingProfileParams) {
     catalogEntry: candidate,
     normalizedProvider,
     modelId,
-    modelKey,
     api: candidate?.api,
+    baseUrl: candidate?.baseUrl,
     reasoning: params.configuredReasoning ?? candidate?.configuredReasoning ?? candidate?.reasoning,
     thinkingLevelMap: candidate?.thinkingLevelMap,
     ...(candidate?.params ? { params: candidate.params } : {}),
@@ -259,6 +258,7 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     modelId: context.modelId,
     agentRuntime: params.agentRuntime,
     api: context.api,
+    baseUrl: context.baseUrl,
     reasoning: context.reasoning,
     thinkingLevelMap: context.thinkingLevelMap,
     ...(context.params ? { params: context.params } : {}),

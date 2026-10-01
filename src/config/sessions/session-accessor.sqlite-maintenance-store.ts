@@ -33,9 +33,10 @@ import {
   readSessionMaintenanceKeyProjection,
 } from "./session-accessor.sqlite-maintenance-candidates.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
-import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
 import {
   resolveSessionMaintenancePreserveKeys,
@@ -116,7 +117,12 @@ export function applySessionEntryMaintenanceInDatabase(
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
 ): SessionEntryMaintenancePlan {
-  return prepareSessionEntryMaintenanceInDatabase(database, params, readPreservation)(database);
+  let preservation: SessionMaintenancePreservationSnapshot | undefined;
+  return prepareSessionEntryMaintenanceInDatabase(
+    database,
+    params,
+    () => (preservation ??= readPreservation()),
+  )(database);
 }
 
 /** Prepare outside write admission; compare only selected rows and protection dependencies inside it. */
@@ -234,6 +240,37 @@ export function prepareSessionEntryMaintenanceInDatabase(
       );
     }
     const selectedEntries = readSessionEntryStore(database, { sessionKeys: selectedKeys });
+    if (selectedKeys.length > 0) {
+      // Admission refreshes live protection after planning. Reread only its active
+      // ancestry under the writer lock; unrelated activity cannot invalidate victims.
+      const currentBaseKeys = new Set(baseKeys);
+      let pending = uniqueStrings([
+        params.activeSessionKey ?? "",
+        ...(params.activeSessionKeys ?? []),
+      ]);
+      while (pending.length > 0) {
+        pending = pending
+          .map(normalizeStoreSessionKey)
+          .filter((key) => key && !currentBaseKeys.has(key));
+        if (pending.length === 0) {
+          break;
+        }
+        pending.forEach((key) => currentBaseKeys.add(key));
+        pending = Object.values(readSessionMaintenanceKeyProjection(database, pending)).flatMap(
+          (entry) => (entry.parentSessionKey ? [entry.parentSessionKey] : []),
+        );
+      }
+      const currentPreserveKeys = resolveSessionMaintenancePreserveKeys({
+        snapshot: readPreservation(),
+        store: selectedEntries,
+        baseKeys: currentBaseKeys,
+      });
+      if (selectedKeys.some((key) => currentPreserveKeys.has(normalizeStoreSessionKey(key)))) {
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite maintenance candidates became protected before commit",
+        );
+      }
+    }
     const archivedSessionKeys: string[] = [];
     const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
     for (const key of archivedKeys) {
@@ -252,7 +289,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       archivedSessionKeys.push(key);
       if (entry.worktree) {
         archivedWorktrees.push({
-          entry: cloneSessionEntry(entry),
+          entry: structuredClone(entry),
           sessionKey: key,
           storePath: params.storePath,
         });

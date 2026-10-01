@@ -23,6 +23,7 @@ import {
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 async function fileHashes(root: string): Promise<Record<string, string>> {
   const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
@@ -99,10 +100,12 @@ describe("workspace state during an update rehearsal", () => {
     await fs.writeFile(record.target.skillFile, content);
     await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
     const before = await fileHashes(historical);
+    const candidateRoot = state.path("candidate");
+    await materializeUpdateCandidateStateWorker(candidateRoot);
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
       stateDir: state.stateDir,
-      candidateRoot: process.cwd(),
+      candidateRoot,
       env: state.env,
     });
     try {

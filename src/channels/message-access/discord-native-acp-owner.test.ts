@@ -13,7 +13,7 @@ import {
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { resolveConfiguredBinding } from "../plugins/configured-binding-registry.js";
 import { withDiscordNativeAdminFixture } from "./discord-native-owner.test-support.js";
 

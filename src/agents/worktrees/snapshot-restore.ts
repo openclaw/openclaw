@@ -32,7 +32,11 @@ import {
   claimWorktreeRemoval,
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
-import { resolveRepository, type ResolvedRepository } from "./service-preparation.js";
+import {
+  removeFailedWorktree,
+  resolveRepository,
+  type ResolvedRepository,
+} from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
   type ExactStateRetirement,
@@ -452,22 +456,13 @@ async function restoreSnapshot(
     requireSpace(record.path, repository);
     restoredProvisionedPaths = provisionedState.map((state) => state.path);
   } catch (error) {
-    const rollbackOptions = { beforeRun: params.rollbackGuard, killProcessTree: true };
-    const removed = await runGit(
+    const failure = await removeFailedWorktree(
       record.repoRoot,
-      ["worktree", "remove", "--force", record.path],
-      rollbackOptions,
+      record.path,
+      record.branch,
+      params.rollbackGuard,
     );
-    const branchDeleted = await runGit(
-      record.repoRoot,
-      ["branch", "-D", record.branch],
-      rollbackOptions,
-    );
-    if (removed.code !== 0 || branchDeleted.code !== 0) {
-      const failure =
-        removed.code === 0
-          ? commandError("git branch -D", branchDeleted)
-          : commandError("git worktree remove", removed);
+    if (failure) {
       throw new Error(`${String(error)}\nrestore cleanup failed: ${failure.message}`, {
         cause: error,
       });

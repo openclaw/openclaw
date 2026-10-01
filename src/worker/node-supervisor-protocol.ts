@@ -51,6 +51,9 @@ const LaunchInput = workerProtocolObject({
     error: "INVALID_REQUEST: node worker environment lifetime support required",
   }),
   sessionKey: identifier("sessionKey", 1_024).optional(),
+  idleRetention: z
+    .literal(true, { error: "INVALID_REQUEST: idleRetention must be true" })
+    .optional(),
   launchId: IdentityShape.launchId,
   gatewayNamespace: WorkerGatewayNamespace,
   expectedBundleHash: z.custom<string>(isPlanHash, {
@@ -174,7 +177,12 @@ export function parseNodeWorkerEnvironmentStopInput(
 export function nodeWorkerPlanHash(
   input: Pick<
     NodeWorkerLaunchInput,
-    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration" | "sessionKey"
+    | "descriptor"
+    | "expectedBundleHash"
+    | "gatewayNamespace"
+    | "placementGeneration"
+    | "sessionKey"
+    | "idleRetention"
   >,
 ): string {
   return createHash("sha256")
@@ -185,6 +193,7 @@ export function nodeWorkerPlanHash(
         gatewayNamespace: input.gatewayNamespace,
         placementGeneration: input.placementGeneration,
         ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
+        ...(input.idleRetention ? { idleRetention: true } : {}),
       }),
     )
     .digest("hex");

@@ -46,14 +46,11 @@ export type ReplyToolAuthorityInput = {
     Pick<
       FollowupRun["run"],
       | "config"
-      | "sessionId"
       | "sessionKey"
       | "runtimePolicySessionKey"
       | "agentId"
       | "agentDir"
       | "agentAccountId"
-      | "provider"
-      | "model"
       | "messageProvider"
       | "chatType"
       | "conversationToolPolicy"
@@ -67,13 +64,11 @@ export type ReplyToolAuthorityInput = {
       | "senderUsername"
       | "senderE164"
       | "senderIsOwner"
-      | "workspaceDir"
       | "cwd"
       | "inputProvenance"
       | "trustedInternalHandoff"
       | "scheduledToolPolicy"
       | "runtimePluginToolGrant"
-      | "sessionFile"
       | "permissionMode"
       | "toolOverrides"
       | "execOverrides"
@@ -140,6 +135,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
 }
 
 function snapshotFollowupRunToolAuthority(run: ReplyToolAuthorityInput): ReplyToolAuthorityInput {
+  const handoff = run.run.trustedInternalHandoff;
   const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
   const intersection = run.toolsAllow
     ? readToolAllowlistIntersection(run.toolsAllow)?.map((restriction) => restriction.slice())
@@ -159,7 +155,20 @@ function snapshotFollowupRunToolAuthority(run: ReplyToolAuthorityInput): ReplyTo
       inputProvenance: structuredClone(run.run.inputProvenance),
       scheduledToolPolicy: structuredClone(run.run.scheduledToolPolicy),
       runtimePluginToolGrant: structuredClone(run.run.runtimePluginToolGrant),
-      trustedInternalHandoff: structuredClone(run.run.trustedInternalHandoff),
+      // Copy policy facts while retaining the settle owner's live revocation check.
+      trustedInternalHandoff: handoff
+        ? {
+            ...handoff,
+            ...(handoff.settleBatch
+              ? {
+                  settleBatch: {
+                    ...handoff.settleBatch,
+                    sourceSessionKeys: [...handoff.settleBatch.sourceSessionKeys],
+                  },
+                }
+              : {}),
+          }
+        : undefined,
       toolOverrides: structuredClone(run.run.toolOverrides),
       execOverrides: structuredClone(run.run.execOverrides),
       bashElevated: structuredClone(run.run.bashElevated),
@@ -233,18 +242,15 @@ function resolveReplyToolAuthorityContext(
     sessionKey: execution.sessionKey,
     sandboxSessionKey: policySessionKey,
     agentId: execution.agentId,
-    agentDir: execution.agentDir,
     agentAccountId: execution.agentAccountId,
     modelProvider: provider,
     modelId: model,
     messageProvider: execution.messageProvider,
     messageChannel: snapshot.originatingChannel,
-    chatType: execution.chatType,
     conversationToolPolicy: execution.conversationToolPolicy,
     groupId: execution.groupId,
     groupChannel: execution.groupChannel,
     groupSpace: execution.groupSpace,
-    memberRoleIds: execution.memberRoleIds,
     spawnedBy: execution.spawnedBy,
     senderId: execution.senderId,
     senderName: execution.senderName,

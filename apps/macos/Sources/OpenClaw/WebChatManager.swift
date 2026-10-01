@@ -544,20 +544,14 @@ final class WebChatManager {
                 if visible {
                     let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
                     _ = try await connection.request(
-                        method: subscribe.method,
-                        params: subscribe.params,
-                        timeoutMs: subscribe.timeoutMs,
-                        ifCurrentServerLease: lease)
+                        subscribe, ifCurrentServerLease: lease)
                 }
                 guard !Task.isCancelled,
                       self.sessionObserverOwners.isVisible(connection: connectionID) == visible
                 else { return }
                 let request = OpenClawChatGatewayRequests.setSessionObserverVisibility(visible)
                 _ = try await connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentServerLease: lease)
+                    request, ifCurrentServerLease: lease)
                 guard !Task.isCancelled else { return }
                 if visible {
                     self.sessionObserverDeclarations[connectionID] = (lease: lease, visible: true)
@@ -604,7 +598,7 @@ final class WebChatManager {
     {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
         if let local { popup.addItem(withTitle: local.name) }
-        popup.addItems(withTitles: profiles.map(Self.profilePickerTitle))
+        popup.addItems(withTitles: profiles.map { "\($0.name) — \($0.url.absoluteString)" })
         let offset = local == nil ? 0 : 1
         popup.selectItem(at: profiles.isEmpty || (preferredID == "local" && local != nil) ? 0
             : Self.preferredProfileIndex(profiles: profiles, preferredID: preferredID) + offset)
@@ -631,10 +625,6 @@ final class WebChatManager {
 
     nonisolated static func preferredProfileIndex(profiles: [MacGatewayProfile], preferredID: String?) -> Int {
         profiles.firstIndex { $0.id == preferredID } ?? 0
-    }
-
-    private static func profilePickerTitle(_ profile: MacGatewayProfile) -> String {
-        "\(profile.name) — \(profile.url.absoluteString)"
     }
 
     private static func showProfileError(_ error: Error, message: String) {

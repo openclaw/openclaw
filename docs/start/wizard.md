@@ -24,7 +24,9 @@ and AI chat. Detected connections and supported providers share the same picker;
 failure or cancellation never automatically selects another provider. In local
 onboarding, **Skip for now** prepares the named agent's workspace and local Gateway
 configuration, then exits without starting either. Interrupted baseline setup
-resumes on the next run.
+resumes on the next run. The **Local setup** summary confirms workspace and Gateway
+configuration, not a working AI connection; **Inference ready** appears only after
+the selected connection passes verification.
 
 The classic wizard remains available for remote Gateway setup, channel pairing,
 daemon controls, skills, and imports. Run it explicitly

@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
@@ -133,10 +136,7 @@ async function saveSessionMemoryNow(
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
-    const contextWorkspaceDir =
-      typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
-        ? context.workspaceDir
-        : undefined;
+    const contextWorkspaceDir = readNonBlankString(context.workspaceDir);
     const workspaceDir =
       contextWorkspaceDir ||
       (cfg
@@ -163,10 +163,7 @@ async function saveSessionMemoryNow(
         ? context.previousSessionEntry || context.sessionEntry || {}
         : context.sessionEntry || {}
     ) as Record<string, unknown>;
-    const currentSessionId =
-      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
-        ? sessionEntry.sessionId.trim()
-        : undefined;
+    const currentSessionId = normalizeOptionalString(sessionEntry.sessionId);
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
@@ -262,7 +259,6 @@ async function saveSessionMemoryNow(
     });
     log.debug("Memory file written successfully");
 
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = shortenHomePath(memoryFilePath);
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
@@ -314,9 +310,8 @@ const saveSessionToMemory: HookHandler = (event) => {
             sessionId: sessionEntry.sessionId,
             sessionKey: event.sessionKey,
             storePath:
-              typeof context.storePath === "string" && context.storePath.trim()
-                ? context.storePath.trim()
-                : resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+              normalizeOptionalString(context.storePath) ??
+              resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
           },
           cfg,
         )

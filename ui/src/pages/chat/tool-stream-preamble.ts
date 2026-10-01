@@ -58,12 +58,11 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
   if (progress.text) {
     reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
-  const existingIndex = progress.itemId
-    ? host.chatStreamSegments.findIndex(
+  const existing = progress.itemId
+    ? host.chatStreamSegments.find(
         (segment) => segment.itemId === progress.itemId && segment.runId === payload.runId,
       )
-    : -1;
-  const existing = host.chatStreamSegments[existingIndex];
+    : undefined;
   const handoff =
     progress.itemId && progress.text
       ? retireCommentaryStream(host, {

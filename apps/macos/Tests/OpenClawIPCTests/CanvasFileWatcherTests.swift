@@ -15,7 +15,8 @@ import Testing
         let watcher = CanvasFileWatcher(url: dir) {
             fired.open()
         }
-        watcher.start()
+        watcher.startEventStream()
+        watcher.setPollingEnabled(true)
         defer { watcher.stop() }
 
         // Modify the file in-place (no rename). Directory vnode watching missed this.
@@ -44,10 +45,9 @@ import Testing
                 stopped.open()
             }
             if eventsEnabled {
-                watcher?.start()
-            } else {
-                watcher?.setPollingEnabled(true)
+                watcher?.startEventStream()
             }
+            watcher?.setPollingEnabled(true)
         }
         defer {
             let watcher = owner.withLock { current in
@@ -86,7 +86,8 @@ import Testing
                 completed.open()
             }
         }
-        watcher.start()
+        watcher.startEventStream()
+        watcher.setPollingEnabled(true)
         defer { watcher.stop() }
 
         try "changed".write(to: dir.appendingPathComponent("index.html"), atomically: false, encoding: .utf8)

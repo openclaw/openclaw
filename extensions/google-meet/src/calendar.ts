@@ -125,19 +125,11 @@ function extractGoogleMeetUriFromCalendarEvent(event: GoogleMeetCalendarEvent): 
     return hangoutLink;
   }
   const entryPoints = event.conferenceData?.entryPoints ?? [];
-  const videoEntryUri = findFirstGoogleMeetCalendarUri(
-    entryPoints,
-    (entry) => entry.entryPointType === "video",
-  );
-  if (videoEntryUri) {
-    return videoEntryUri;
-  }
-  const meetEntryUri = findFirstGoogleMeetCalendarUri(entryPoints);
-  if (meetEntryUri) {
-    return meetEntryUri;
-  }
   return (
-    extractGoogleMeetUriFromText(event.location) ?? extractGoogleMeetUriFromText(event.description)
+    findFirstGoogleMeetCalendarUri(entryPoints, (entry) => entry.entryPointType === "video") ??
+    findFirstGoogleMeetCalendarUri(entryPoints) ??
+    extractGoogleMeetUriFromText(event.location) ??
+    extractGoogleMeetUriFromText(event.description)
   );
 }
 

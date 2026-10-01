@@ -1,9 +1,9 @@
-// QA Lab Slack Codex approval scenario orchestration.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveLiveQaApprovalDecision } from "../shared/live-approval-request.js";
 import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.js";
-import { waitForSlackApprovalMessage, resolveApprovalDecision } from "./slack-live.approvals.js";
+import { waitForSlackApprovalMessage } from "./slack-live.approvals.js";
 import {
   assertCodexApprovalOperationSucceeded,
   assertPendingCodexPluginApproval,
@@ -13,12 +13,13 @@ import {
   quiesceCodexApprovalAgentRun,
   resolveCodexFileApprovalTargetPath,
 } from "./slack-live.codex-approval.js";
-import type {
-  SlackQaCodexApprovalScenarioRun,
-  SlackQaScenarioContext,
-  SlackQaScenarioMetadata,
-  SlackObservedMessage,
-  SlackApprovalArtifact,
+import {
+  SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
+  type SlackQaCodexApprovalScenarioRun,
+  type SlackQaScenarioContext,
+  type SlackQaScenarioMetadata,
+  type SlackObservedMessage,
+  type SlackApprovalArtifact,
 } from "./slack-live.contracts.js";
 
 export async function runSlackCodexApprovalScenario(params: {
@@ -155,11 +156,12 @@ async function runSlackCodexApprovalScenarioInner(params: {
     observedAt: pending.observedAt,
     state: "pending",
   });
-  await resolveApprovalDecision({
+  await resolveLiveQaApprovalDecision({
     approvalId,
-    context: params.context,
+    gateway: params.context.gateway,
     decision: params.run.decision,
     kind: params.run.approvalKind,
+    timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
   });
   const finalCodexTurnStatus = await waitForCodexApprovalAgentRun({
     context: params.context,

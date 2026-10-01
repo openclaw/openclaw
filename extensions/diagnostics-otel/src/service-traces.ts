@@ -322,20 +322,14 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     const spanContext = span.spanContext();
     const retainedKeys: Array<{ spanId: string; owner?: TrustedSpanAliasOwner }> = [{ spanId }];
-    const retainedAliasKeys: string[] = [];
     for (const [aliasKey, alias] of activeTrustedSpanAliases) {
       if (alias.span === span) {
         retainedKeys.push({ spanId: alias.spanId, owner: alias.owner });
-        retainedAliasKeys.push(aliasKey);
+        activeTrustedSpanAliases.delete(aliasKey);
       }
     }
     if (activeTrustedSpans.get(spanId) === span) {
       activeTrustedSpans.delete(spanId);
-    }
-    for (const aliasKey of retainedAliasKeys) {
-      if (activeTrustedSpanAliases.get(aliasKey)?.span === span) {
-        activeTrustedSpanAliases.delete(aliasKey);
-      }
     }
     span.end(endTimeMs);
     for (const retainedKey of retainedKeys) {

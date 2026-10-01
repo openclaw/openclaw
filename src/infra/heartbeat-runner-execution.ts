@@ -462,7 +462,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       heartbeat,
       preflight,
       canRelayToUser,
-      startedAt,
       scheduledTasks,
       heartbeatScratchContent: preflight.heartbeatScratchContent,
       useHeartbeatResponseTool,

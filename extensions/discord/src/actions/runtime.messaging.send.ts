@@ -43,23 +43,6 @@ function readDiscordThreadArchiveTimestamp(thread: unknown): string | undefined 
     : undefined;
 }
 
-type DiscordThreadListActionResult = {
-  ok: true;
-  threads: unknown;
-  complete: boolean;
-  hasMore: boolean;
-  returnedCount: number;
-  source: "discord.threadList.archived" | "discord.threadList.active";
-  query: {
-    guildId: string;
-    channelId?: string;
-    includeArchived: boolean;
-    before?: string;
-    limit?: number;
-  };
-  nextBefore?: string;
-};
-
 function normalizeDiscordThreadListActionResult(params: {
   value: unknown;
   includeArchived: boolean;
@@ -67,7 +50,7 @@ function normalizeDiscordThreadListActionResult(params: {
   guildId: string;
   limit?: number;
   before?: string;
-}): DiscordThreadListActionResult {
+}) {
   const record = asOptionalRecord(params.value);
   const threadItems = Array.isArray(record?.threads) ? record.threads : [];
   const hasMore = record?.has_more === true;

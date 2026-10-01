@@ -377,46 +377,37 @@ function readMetadata(
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   // SAFETY: insertCard serializes WorkboardMetadata.stale unchanged.
   const stale = parseJson(row.stale_json) as WorkboardMetadata["stale"] | undefined;
-  const lifecycleStatusSourceUpdatedAt = numberValue(row, "lifecycle_status_source_updated_at");
-  return optional({
-    ...(attempts.length > 0 ? { attempts } : {}),
-    ...(comments.length > 0 ? { comments } : {}),
-    ...(links.length > 0 ? { links } : {}),
-    ...(proof.length > 0 ? { proof } : {}),
-    ...(artifacts.length > 0 ? { artifacts } : {}),
-    ...(attachments.length > 0 ? { attachments } : {}),
-    ...(workerLogs.length > 0 ? { workerLogs } : {}),
-    ...(protocol
-      ? {
-          workerProtocol: {
+  return optional(
+    definedFields({
+      attempts: attempts.length > 0 ? attempts : undefined,
+      comments: comments.length > 0 ? comments : undefined,
+      links: links.length > 0 ? links : undefined,
+      proof: proof.length > 0 ? proof : undefined,
+      artifacts: artifacts.length > 0 ? artifacts : undefined,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      workerLogs: workerLogs.length > 0 ? workerLogs : undefined,
+      workerProtocol: protocol
+        ? definedFields({
             // SAFETY: Protocol rows preserve WorkboardMetadata.workerProtocol.state.
             state: requiredString(protocol, "state") as NonNullable<
               WorkboardMetadata["workerProtocol"]
             >["state"],
             updatedAt: requiredNumber(protocol, "updated_at"),
-            ...(stringValue(protocol, "detail") ? { detail: stringValue(protocol, "detail") } : {}),
-          },
-        }
-      : {}),
-    ...(automation ? { automation } : {}),
-    ...(claim ? { claim } : {}),
-    ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    ...(notifications.length > 0 ? { notifications } : {}),
-    ...(stringValue(row, "template_id")
-      ? {
-          // SAFETY: insertCard persists the WorkboardMetadata template identifier.
-          templateId: stringValue(row, "template_id") as WorkboardMetadata["templateId"],
-        }
-      : {}),
-    ...(numberValue(row, "archived_at") !== undefined
-      ? { archivedAt: numberValue(row, "archived_at") }
-      : {}),
-    ...(stale ? { stale } : {}),
-    ...(lifecycleStatusSourceUpdatedAt !== undefined ? { lifecycleStatusSourceUpdatedAt } : {}),
-    ...(numberValue(row, "failure_count") !== undefined
-      ? { failureCount: numberValue(row, "failure_count") }
-      : {}),
-  });
+            detail: stringValue(protocol, "detail"),
+          })
+        : undefined,
+      automation: automation || undefined,
+      claim: claim || undefined,
+      diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
+      notifications: notifications.length > 0 ? notifications : undefined,
+      // SAFETY: insertCard persists the WorkboardMetadata template identifier.
+      templateId: stringValue(row, "template_id") as WorkboardMetadata["templateId"],
+      archivedAt: numberValue(row, "archived_at"),
+      stale: stale || undefined,
+      lifecycleStatusSourceUpdatedAt: numberValue(row, "lifecycle_status_source_updated_at"),
+      failureCount: numberValue(row, "failure_count"),
+    }),
+  );
 }
 
 export function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows): WorkboardCard {

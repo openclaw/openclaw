@@ -1,4 +1,3 @@
-// Oxlint Config tests cover oxlint config script behavior.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -228,6 +227,7 @@ describe("oxlint config", () => {
     writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const fixtures = {
+      "test/types/vitest-codex-attempt-runtime.d.ts": "export {};\n",
       "src/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
       "src/unrelated.ts": "export const unrelated = 1;",
       "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",
@@ -668,7 +668,9 @@ describe("oxlint config", () => {
         .relative(path.dirname(file), contract)
         .replaceAll("\\", "/")
         .replace(/\.ts$/, ".js");
-      if (!imported.startsWith(".")) imported = "./" + imported;
+      if (!imported.startsWith(".")) {
+        imported = "./" + imported;
+      }
       write(
         file,
         `import ${JSON.stringify(imported)}; declare module ${JSON.stringify(imported)} { interface Contract { action${index}(): Promise<void>; } }`,
@@ -691,7 +693,9 @@ describe("oxlint config", () => {
         .relative(path.dirname(file), contract)
         .replaceAll("\\", "/")
         .replace(/\.ts$/, ".js");
-      if (!imported.startsWith(".")) imported = "./" + imported;
+      if (!imported.startsWith(".")) {
+        imported = "./" + imported;
+      }
       write(
         file,
         [
@@ -751,15 +755,18 @@ describe("oxlint config", () => {
       );
     const narrowed = lint();
     // Recreate the single broad owner with the same ambient contract.
-    for (const owner of sourceProjectOwners)
+    for (const owner of sourceProjectOwners) {
       fs.unlinkSync(path.join(root, "src", owner, "tsconfig.json"));
+    }
     const broad = JSON5.parse(configs.get("src/tsconfig.json")!) as { exclude: string[] };
     broad.exclude = broad.exclude.filter(
       (entry) => !sourceProjectOwners.some((owner) => entry === owner + "/**"),
     );
     write("src/tsconfig.json", JSON.stringify(broad));
     const baseline = lint();
-    for (const [file, content] of configs) write(file, content);
+    for (const [file, content] of configs) {
+      write(file, content);
+    }
     const reports = [baseline, narrowed].map((result) => {
       expect(result.error).toBeUndefined();
       expect(result.status, result.stdout + result.stderr).toBe(1);
@@ -841,8 +848,9 @@ describe("oxlint config", () => {
       "tsconfig.json",
       "ui/src/css.d.ts",
       ...packageOwners.map((owner) => `packages/${owner}/tsconfig.json`),
-    ])
+    ]) {
       copy(file);
+    }
     write("package.json", '{"type":"module"}');
     writeSourceProjectFixture(root);
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
@@ -879,7 +887,9 @@ describe("oxlint config", () => {
         .relative(path.dirname(file), contract)
         .replaceAll("\\", "/")
         .replace(/\.ts$/, ".js");
-      if (!imported.startsWith(".")) imported = "./" + imported;
+      if (!imported.startsWith(".")) {
+        imported = "./" + imported;
+      }
       write(
         file,
         [
@@ -893,13 +903,17 @@ describe("oxlint config", () => {
     const configured = packageOwners
       .filter((owner) => owner !== "plugin-sdk")
       .map((owner) => `packages/${owner}/src/owner.ts`);
-    for (const file of configured) write(file, "Promise.resolve();");
+    for (const file of configured) {
+      write(file, "Promise.resolve();");
+    }
     const inferred = [
       "packages/example/frame.js",
       "packages/example/probe.test-support.mjs",
       "packages/example/other.test-support.mjs",
     ];
-    for (const file of inferred) write(file, "Promise.resolve();");
+    for (const file of inferred) {
+      write(file, "Promise.resolve();");
+    }
     write(
       "packages/example/ambient-contract.ts",
       [
@@ -977,10 +991,11 @@ describe("oxlint config", () => {
           `Got tsconfig for file ${path.join(root, file).replaceAll("\\", "/")}: ${path.join(root, project).replaceAll("\\", "/")}`,
         );
       }
-      for (const file of inferred)
+      for (const file of inferred) {
         expect(result.stderr.replaceAll("\\", "/")).toContain(
           `Unmatched file: ${path.join(root, file).replaceAll("\\", "/")}`,
         );
+      }
     }
     const expanded = spawnSync(
       resolveRepoToolBinPath("tsgo"),
@@ -1147,8 +1162,9 @@ describe("oxlint config", () => {
     );
     expect(roots).not.toContain(path.resolve(root, owner, "unrelated.test-compat.d.ts"));
     expect(roots).not.toContain(path.resolve(root, "src/sibling.ts"));
-    for (const file of [...selected.slice(0, 3), ...augmenters, ...declarations])
+    for (const file of [...selected.slice(0, 3), ...augmenters, ...declarations]) {
       expect(roots, file).toContain(path.resolve(root, file));
+    }
     const libraryCheck = spawnSync(
       resolveRepoToolBinPath("tsgo"),
       ["-p", owner + "/tsconfig.json", "--noEmit", "--pretty", "false"],
@@ -1362,8 +1378,10 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps native cap scopes and correctness while making only CI limits advisory", () => {
+  it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
+    // Keep transient-config ownership inside this synthetic checkout.
+    fs.mkdirSync(path.join(root, ".git"));
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     fs.writeFileSync(
       path.join(root, ".oxlintrc.json"),
@@ -1400,13 +1418,61 @@ describe("oxlint config", () => {
     }
     fs.writeFileSync(path.join(root, "src/correctness.ts"), "export var legacy = 1;\n");
     fs.writeFileSync(path.join(root, "src/globals.js"), "window.console.log(configuredGlobal);\n");
-    for (const { github, correctness, evidence } of [
-      { github: false, correctness: false, evidence: false },
-      { github: true, correctness: false, evidence: false },
-      { github: true, correctness: true, evidence: false },
-      { github: true, correctness: true, evidence: true },
-    ]) {
-      const summary = path.join(root, `summary-${github}-${correctness}.md`);
+    const ownConfig = readJson(path.join(root, ".oxlintrc.json")) as OxlintConfig;
+    fs.writeFileSync(path.join(root, "base.json"), "{}");
+    const scenarios: {
+      github: boolean;
+      correctness: boolean;
+      evidence?: boolean;
+      inherited?: boolean;
+      changedPaths?: string[];
+      severity: "error" | "warning";
+    }[] = [
+      { github: false, correctness: false, severity: "error" },
+      { github: true, correctness: false, severity: "warning" },
+      { github: true, correctness: true, severity: "warning" },
+      { github: true, correctness: true, evidence: true, severity: "warning" },
+      {
+        github: false,
+        correctness: false,
+        evidence: true,
+        inherited: true,
+        changedPaths: ["src/globals.js"],
+        severity: "error",
+      },
+      ...[false, true].flatMap((evidence) =>
+        [false, true].map((correctness) => ({
+          github: false,
+          correctness,
+          evidence,
+          changedPaths: ["src/globals.js"],
+          severity: "warning" as const,
+        })),
+      ),
+      ...[
+        [],
+        ["src/oversized.ts"],
+        [".oxlintrc.json"],
+        ["src/.oxlintrc.json"],
+        ["package.json"],
+        ["pnpm-lock.yaml"],
+        ["pnpm-workspace.yaml"],
+        ["patches/oxlint.patch"],
+        ["scripts/run-oxlint.mts"],
+      ].map((changedPaths) => ({
+        github: false,
+        correctness: false,
+        changedPaths,
+        severity: "error" as const,
+      })),
+    ];
+    for (const [index, scenario] of scenarios.entries()) {
+      const { github, correctness, evidence, inherited, changedPaths, severity } = scenario;
+      fs.writeFileSync(
+        path.join(root, ".oxlintrc.json"),
+        JSON.stringify(inherited ? { ...ownConfig, extends: ["./base.json"] } : ownConfig),
+      );
+      const summary = path.join(root, `summary-${index}.md`);
       const result = spawnSync(
         process.execPath,
         [
@@ -1427,13 +1493,17 @@ describe("oxlint config", () => {
             CI: "true",
             GITHUB_ACTIONS: github ? "true" : "false",
             GITHUB_STEP_SUMMARY: summary,
+            OPENCLAW_OXLINT_CHANGED_PATHS: changedPaths && JSON.stringify(changedPaths),
             OPENCLAW_CI_STATIC_EVIDENCE: evidence ? "1" : "0",
             OPENCLAW_CI_STATIC_EVIDENCE_ID: "limits:0",
           },
         },
       );
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stdout + result.stderr).toBe(github && !correctness ? 0 : 1);
+      const expectedStatus = severity === "warning" && !correctness ? 0 : 1;
+      expect(result.status, JSON.stringify(changedPaths) + result.stdout + result.stderr).toBe(
+        expectedStatus,
+      );
       const marker = "\n[ci-static:oxlint:leaf] ";
       const [output, receipt] = result.stdout.split(marker);
       assert.ok(output !== undefined, "Missing lint diagnostic output");
@@ -1446,7 +1516,7 @@ describe("oxlint config", () => {
           version: 1,
           id: "limits:0",
           config: ".oxlintrc.json",
-          exitCode: 1,
+          exitCode: expectedStatus,
           stdout: output,
           stderr: "",
         });
@@ -1460,7 +1530,7 @@ describe("oxlint config", () => {
       expect(
         report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(max-lines)"),
       ).toMatchObject({
-        severity: github ? "warning" : "error",
+        severity,
         help: "Maximum allowed is 700.",
       });
       if (github) {
@@ -1475,8 +1545,81 @@ describe("oxlint config", () => {
     }
   });
 
+  it("matches changed paths literally and keeps inherited config limits strict", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-changed-paths-"));
+    fs.mkdirSync(path.join(root, ".git"));
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    fs.writeFileSync(path.join(root, ".oxlintrc.json"), JSON.stringify(config));
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const sources = [
+      "!root.ts",
+      "src/!root.ts",
+      "src/special[ab]{x,y}!file.ts",
+      "src/specialax!file.ts",
+      "src/wild-star.ts",
+      "src/wild-question.ts",
+    ];
+    for (const file of sources) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), "export const values = [\n  0,\n  1,\n];\n");
+    }
+    const changedPaths = [
+      "!root.ts",
+      "src/special[ab]{x,y}!file.ts",
+      "src/wild*.ts",
+      "src/wild-questio?.ts",
+    ];
+    for (const inherited of [false, true]) {
+      if (inherited) {
+        fs.writeFileSync(path.join(root, "base.json"), JSON.stringify(config));
+        fs.writeFileSync(
+          path.join(root, ".oxlintrc.json"),
+          JSON.stringify({ extends: ["./base.json"] }),
+        );
+      }
+      const result = spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/run-oxlint.mts"),
+          "--openclaw-focused-config",
+          "--threads=1",
+          "--format",
+          "json",
+          ...sources,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_ACTIONS: "false",
+            OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(changedPaths),
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      const report = JSON.parse(result.stdout) as {
+        diagnostics: Array<{ code: string; severity: string; filename: string }>;
+      };
+      expect(report.diagnostics).toHaveLength(sources.length);
+      for (const file of sources) {
+        expect(
+          report.diagnostics.find(
+            (diagnostic) => diagnostic.filename.replaceAll("\\", "/") === file,
+          ),
+          file,
+        ).toMatchObject({
+          code: "eslint(max-lines)",
+          severity: inherited || changedPaths.includes(file) ? "error" : "warning",
+        });
+      }
+    }
+  });
+
   it("preserves native config validation locally and in Actions", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-invalid-limit-"));
+    fs.mkdirSync(path.join(root, ".git"));
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     fs.writeFileSync(path.join(root, "fixture.ts"), "console.log(1);\n");
     const invalidConfigs = [
@@ -1490,7 +1633,11 @@ describe("oxlint config", () => {
     ];
     for (const config of invalidConfigs) {
       fs.writeFileSync(path.join(root, ".oxlintrc.json"), config);
-      for (const github of [false, true]) {
+      for (const { github, changedPaths } of [
+        { github: false, changedPaths: undefined },
+        { github: true, changedPaths: undefined },
+        { github: false, changedPaths: ["src/changed.ts"] },
+      ]) {
         const result = spawnSync(
           process.execPath,
           [path.resolve("scripts/run-oxlint.mts"), "--openclaw-focused-config", "fixture.ts"],
@@ -1500,6 +1647,7 @@ describe("oxlint config", () => {
             env: {
               ...process.env,
               GITHUB_ACTIONS: github ? "true" : "false",
+              OPENCLAW_OXLINT_CHANGED_PATHS: changedPaths && JSON.stringify(changedPaths),
               OPENCLAW_CI_STATIC_EVIDENCE: "1",
               OPENCLAW_CI_STATIC_EVIDENCE_ID: "invalid:0",
             },

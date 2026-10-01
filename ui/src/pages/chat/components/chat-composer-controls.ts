@@ -23,21 +23,20 @@ import {
   voiceStatusLabel,
 } from "./chat-voice-activity.ts";
 
-export type ChatRunControlsProps = {
+export type ChatRunControlsProps = Omit<
+  ComposerVoiceButtonProps,
+  "idleLabel" | "onDirectDictationStart"
+> & {
   canAbort: boolean;
   canSend: boolean;
-  submitDisabledReason?: string | null;
   submitPending?: boolean;
-  connected: boolean;
   draft: string;
   hasAttachments?: boolean;
   preparingAttachments?: boolean;
-  isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
   alternateFollowUpMode?: ChatFollowUpMode;
   suggestionComposer?: boolean;
   submissionLabel?: string;
-  sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
   voiceDetail?: string | null;
@@ -45,14 +44,10 @@ export type ChatRunControlsProps = {
   voiceVideoCapable?: boolean;
   voiceVideoEnabled?: boolean;
   voiceVideoPending?: boolean;
-  dictation?: ComposerDictationController;
-  onDictationPointerDown?: (event: PointerEvent) => void;
   onPrimaryActionPointerDown?: (event: PointerEvent) => void;
   onAbort?: () => void;
   onSend: (submissionAction?: Event) => void;
-  onToggleVoice?: () => void;
   onToggleCamera?: () => void;
-  microphonePicker?: TemplateResult | typeof nothing;
 };
 
 type MicrophonePickerProps = {
@@ -94,6 +89,12 @@ function releaseMicrophonePickerFocus(dropdown: EventTarget | null, item: HTMLEl
       trigger.blur();
     }
   });
+}
+
+function renderMicrophoneNotice(className: string, message: string, role?: "status" | "alert") {
+  return html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
+    <div class=${className} role=${role ?? nothing}>${message}</div>
+  </wa-dropdown-item>`;
 }
 
 export function renderMicrophonePicker(props: MicrophonePickerProps) {
@@ -173,16 +174,11 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
       <div class="chat-talk-input-picker__heading">${label}</div>
       ${
         unavailable
-          ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-              <div
-                class="chat-talk-input-picker__empty${
-                  unavailableIsFault ? " chat-talk-input-picker__empty--fault" : ""
-                }"
-                role="status"
-              >
-                ${realtimeTalkDeviceIssueMessage(unavailable, "audioinput")}
-              </div>
-            </wa-dropdown-item>`
+          ? renderMicrophoneNotice(
+              `chat-talk-input-picker__empty${unavailableIsFault ? " chat-talk-input-picker__empty--fault" : ""}`,
+              realtimeTalkDeviceIssueMessage(unavailable, "audioinput"),
+              "status",
+            )
           : html`
               ${options.map((option) => {
                 const selected = option.deviceId === props.selectedDeviceId;
@@ -211,29 +207,28 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
               })}
               ${
                 props.loading
-                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-                      <div class="chat-talk-input-picker__note" role="status">
-                        ${t("common.loading")}
-                      </div>
-                    </wa-dropdown-item>`
+                  ? renderMicrophoneNotice(
+                      "chat-talk-input-picker__note",
+                      t("common.loading"),
+                      "status",
+                    )
                   : nothing
               }
               ${
                 props.issue
-                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-                      <div class="chat-talk-input-picker__warning" role="alert">
-                        ${realtimeTalkDeviceIssueMessage(props.issue, "audioinput")}
-                      </div>
-                    </wa-dropdown-item>`
+                  ? renderMicrophoneNotice(
+                      "chat-talk-input-picker__warning",
+                      realtimeTalkDeviceIssueMessage(props.issue, "audioinput"),
+                      "alert",
+                    )
                   : nothing
               }
               ${
                 props.voiceActive
-                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-                      <div class="chat-talk-input-picker__hint">
-                        ${t("chat.composer.microphoneAppliesNextSession")}
-                      </div>
-                    </wa-dropdown-item>`
+                  ? renderMicrophoneNotice(
+                      "chat-talk-input-picker__hint",
+                      t("chat.composer.microphoneAppliesNextSession"),
+                    )
                   : nothing
               }
             `
@@ -588,6 +583,8 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         : t("chat.composer.emptyHint"));
   const hasSendableContent =
     hasComposedContent && props.canSend && !props.sending && !sendDisabledReason;
+  // A held draft must not replace Stop with a disabled Send. Only an available
+  // follow-up action takes that slot during an abortable run.
   const sendAction = html`
     <openclaw-tooltip
       .content=${props.preparingAttachments ? t("chat.composer.preparingAttachments") : (sendStatus ?? activeRunActionTooltip)}
@@ -614,22 +611,22 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
           props.onPrimaryActionPointerDown,
         )
       : sendAction;
-  const desktopPrimaryAction = props.dictation?.active ? dictationSendAction : sendAction;
+  const desktopPrimaryAction = props.dictation?.active
+    ? dictationSendAction
+    : props.canAbort && !hasSendableContent
+      ? abortAction
+      : sendAction;
   const mobilePrimaryAction = props.dictation?.active
     ? dictationSendAction
-    : hasComposedContent
-      ? sendAction
-      : props.onToggleVoice
-        ? mobileTalkAction
-        : sendAction;
-  // Stop keeps the trailing edge and its DOM identity throughout an active run.
-  // A ready follow-up appears before it without replacing the cancellation target.
-  const primaryActions = props.canAbort
-    ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action">
-        ${props.dictation?.active ? dictationSendAction : hasSendableContent ? sendAction : nothing}
-        ${abortAction}
-      </span>`
-    : mobilePrimaryAction === desktopPrimaryAction
+    : props.canAbort && !hasSendableContent
+      ? abortAction
+      : hasComposedContent
+        ? sendAction
+        : props.onToggleVoice
+          ? mobileTalkAction
+          : sendAction;
+  const primaryActions =
+    mobilePrimaryAction === desktopPrimaryAction
       ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action"
           >${desktopPrimaryAction}</span
         >`

@@ -2,7 +2,6 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
-import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { installSessionPlacementAdmissionProvider } from "../../../src/agents/session-placement-admission.js";
 import { SessionManager } from "../../../src/agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../../src/agents/test-helpers/agent-message-fixtures.js";
@@ -26,6 +25,7 @@ import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
   measureLaunchTurn,
+  readLaunchToolNames,
   OWNER_EPOCH,
   unusedEnvironments,
 } from "../../../src/gateway/worker-environments/worker-turn-launcher.test-support.js";
@@ -162,6 +162,7 @@ suite.define(() => {
             timeoutMs: 5000,
           }),
         measureLaunchTurn,
+        readLaunchToolNames,
         launchTurn: async (request) => {
           request.onDispatchReady?.();
           launched.push(request.turnClaim.runId);
@@ -197,7 +198,7 @@ suite.define(() => {
           if (request.source.kind !== "local") {
             throw new Error("expected local fixture source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
@@ -224,7 +225,6 @@ suite.define(() => {
                   protocolFeatures: [
                     ...environment.bootstrapReceipt!.protocolFeatures,
                     SKILL_RESOURCE_PROTOCOL_FEATURE,
-                    WORKER_SKILL_WORKSHOP_FEATURE,
                   ],
                 },
               };

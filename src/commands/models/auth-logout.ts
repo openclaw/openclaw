@@ -1,4 +1,3 @@
-/** Command for removing one saved model auth profile. */
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -327,7 +326,6 @@ export async function removeModelAuthCredentials(params: {
   return undefined;
 }
 
-/** Removes a saved auth profile from the agent auth store and from config. */
 export async function modelsAuthLogoutCommand(
   opts: { profileId: string; agent?: string; yes?: boolean },
   runtime: RuntimeEnv,

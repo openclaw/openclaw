@@ -1,4 +1,3 @@
-// Media store persists loaded media files and metadata for later references.
 import crypto from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -130,7 +129,6 @@ export function extractOriginalFilename(filePath: string): string {
   return basename;
 }
 
-/** Returns the configured absolute media-store root without creating it. */
 export function getMediaDir() {
   return path.join(resolveConfigDir(), "media");
 }
@@ -152,12 +150,6 @@ function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | 
   return findErrorWithCode(err.cause, code);
 }
 
-function hasRecoverableMissingMediaDirCause(err: unknown): boolean {
-  // Recursive mkdir repairs only the ENOENT race where cleanup pruned the directory.
-  // Structural ENOTDIR and generic fs-safe absence remain terminal diagnostics.
-  return findErrorWithCode(err, "ENOENT") !== undefined;
-}
-
 async function retryAfterRecreatingDir<T>(
   dir: string,
   run: () => Promise<T>,
@@ -175,7 +167,8 @@ async function retryAfterRecreatingDir<T>(
       attempts: 2,
       minDelayMs: 0,
       maxDelayMs: 0,
-      shouldRetry: (err) => canRetry() && hasRecoverableMissingMediaDirCause(err),
+      // Only ENOENT from cleanup pruning the directory is repairable by mkdir.
+      shouldRetry: (err) => canRetry() && findErrorWithCode(err, "ENOENT") !== undefined,
       onRetry: async () => {
         // Cleanup can prune the directory between mkdir and file open. Recreate
         // it once; further failures remain terminal instead of looping.
@@ -699,13 +692,15 @@ export async function readMediaBuffer(
     throw new Error(`readMediaBuffer: media ID does not resolve to a file: ${JSON.stringify(id)}`);
   }
   if (opened.stat.size > maxBytes) {
-    throw new Error(
+    throw new FsSafeError(
+      "too-large",
       `readMediaBuffer: media ID ${JSON.stringify(id)} is ${opened.stat.size} bytes; maximum is ${maxBytes} bytes`,
     );
   }
   const buffer = await opened.handle.readFile();
   if (buffer.byteLength > maxBytes) {
-    throw new Error(
+    throw new FsSafeError(
+      "too-large",
       `readMediaBuffer: media ID ${JSON.stringify(id)} read ${buffer.byteLength} bytes; maximum is ${maxBytes} bytes`,
     );
   }

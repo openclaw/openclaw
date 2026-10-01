@@ -16,13 +16,13 @@ const FIELD_ENTRY_KEYS = new Set(["ref", "type", "value"]);
 type BrowserFormFieldValue = NonNullable<BrowserFormField["value"]>;
 
 /** Normalize a form field value to the types accepted by fill actions. */
-export function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
+function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
     ? value
     : undefined;
 }
 
-export function normalizeBrowserFormField(
+function normalizeBrowserFormField(
   record: Record<string, unknown>,
   index: number,
 ): BrowserFormField {

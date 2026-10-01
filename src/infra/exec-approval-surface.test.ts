@@ -232,6 +232,16 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
   });
 
   it("uses generic approval availability for plugin initiating surfaces", () => {
+    const request = {
+      id: "plugin:calendar",
+      request: {
+        title: "Review",
+        description: "Calendar tool",
+        policySubject: { pluginKey: "calendar" },
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1,
+    };
     const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "enabled" as const }));
     const getActionAvailabilityState = vi.fn(
       ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) =>
@@ -252,6 +262,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         accountId: "default",
         cfg: {} as never,
         approvalKind: "plugin",
+        request,
       }),
     ).toEqual({
       kind: "disabled",
@@ -265,7 +276,24 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       accountId: "default",
       action: "approve",
       approvalKind: "plugin",
+      request,
     });
+  });
+
+  it("reports no plugin approval route when the channel cannot enforce scoped reviewers", () => {
+    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "Slack" },
+      approvalCapability: { getActionAvailabilityState },
+    });
+    const cfg = {
+      approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+    } as never;
+
+    expect(
+      resolveApprovalInitiatingSurfaceState({ channel: "slack", cfg, approvalKind: "plugin" }),
+    ).toMatchObject({ kind: "disabled", channel: "slack" });
+    expect(getActionAvailabilityState).not.toHaveBeenCalled();
   });
 
   it("loads config lazily when cfg is omitted and marks unsupported channels", () => {

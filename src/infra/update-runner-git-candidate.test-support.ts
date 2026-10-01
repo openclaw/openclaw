@@ -22,6 +22,25 @@ export async function runFixtureGit(root: string, ...args: string[]) {
   return result.stdout.trim();
 }
 
+export async function advanceFixtureRemote(remote: string) {
+  await fs.writeFile(path.join(remote, "candidate.txt"), "candidate\n");
+  await runFixtureGit(remote, "add", ".");
+  await runFixtureGit(remote, "commit", "-m", "candidate");
+  return runFixtureGit(remote, "rev-parse", "HEAD");
+}
+
+export async function prepareDeletedTrackedRuntimeAsset(remote: string, root: string) {
+  const asset = "dist/tracked-runtime.txt";
+  await fs.mkdir(path.join(remote, "dist"));
+  await fs.writeFile(path.join(remote, asset), "original tracked runtime\n");
+  await runFixtureGit(remote, "add", "-f", asset);
+  await runFixtureGit(remote, "commit", "-m", "tracked runtime");
+  await runFixtureGit(root, "pull", "--ff-only");
+  const beforeSha = await runFixtureGit(root, "rev-parse", "HEAD");
+  await runFixtureGit(remote, "rm", asset);
+  return { beforeSha, asset: path.join(root, asset) };
+}
+
 export async function resolveCandidateNodeRuntimeForTest(): Promise<{
   path: string;
   version: string;
@@ -231,7 +250,7 @@ export async function writeRuntime(directory: string, sha: string, store: string
   ]);
 }
 
-export async function expectRuntime(root: string, sha: string) {
+export async function expectRuntime(root: string, sha: string, trackedAsset?: string) {
   const child = await processExec.runCommandWithTimeout(
     [process.execPath, path.join(root, "dist", "entry.js")],
     {
@@ -240,6 +259,10 @@ export async function expectRuntime(root: string, sha: string) {
   );
   expect(child.code, child.stderr).toBe(0);
   expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => sha));
+  if (trackedAsset) {
+    expect(await fs.readFile(trackedAsset, "utf8")).toBe("original tracked runtime\n");
+    expect(await runFixtureGit(root, "diff", "--name-only", "HEAD")).toBe("");
+  }
 }
 
 export function registerGitRuntimeStagingTests(

@@ -18,6 +18,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, describe, expect, vi, type TestContext } from "vitest";
 import { parse } from "yaml";
 import {
+  createPublicationObservations,
   normalizePublicationIntent,
   publicationIntentInputs,
   publicationSourceContract,
@@ -27,6 +28,7 @@ import {
   validatePublicationSourceBinding,
   type PublicationSourceFact,
 } from "../../scripts/full-release-publication-contract.mjs";
+import type { ClawHubPublicationState } from "../../scripts/lib/clawhub-publication-state.mjs";
 import { resolveReleaseContextIdentity } from "../../scripts/lib/release-context.mjs";
 import { getProcessStartTime, isPidDefinitelyDead } from "../../src/shared/pid-alive.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
@@ -69,6 +71,7 @@ const toolingPaths = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -109,6 +112,7 @@ const toolingPaths = [
   "scripts/full-release-candidate-contract.mjs",
   "scripts/full-release-validation-state.mjs",
   "scripts/full-release-validation-policy.mjs",
+  "scripts/full-release-flake-classification.mjs",
   "scripts/release-ci-summary.mjs",
   "scripts/lib/full-release-candidate-reuse.mjs",
   "scripts/lib/full-release-child-request.mjs",
@@ -118,6 +122,7 @@ const toolingPaths = [
   "scripts/lib/release-publish-inputs.mjs",
   "scripts/npm-preflight-tooling-identity.mjs",
   "scripts/npm-prepared-bundle.mjs",
+  "scripts/lib/npm-core-release-packages.mjs",
   "scripts/plugin-sdk-api-release-evidence.mjs",
   "scripts/lib/plain-gh.mjs",
   "scripts/lib/release-context.mjs",
@@ -132,6 +137,7 @@ const toolingPaths = [
   "scripts/lib/local-check-runtime.mts",
   "scripts/full-release-publication-observations.mts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/lib/clawhub-publication-state.mjs",
   "scripts/clawhub-prepared-artifact.mjs",
   "scripts/clawhub-parent-authorization.mjs",
   "scripts/plugin-publication-artifact.mjs",
@@ -296,6 +302,7 @@ describe("publication dispatch transport", () => {
           "scripts/lib/bounded-response.mjs",
           "scripts/lib/record-shared.mjs",
           "scripts/lib/canonical-json.mjs",
+          "scripts/lib/clawhub-publication-state.mjs",
           "scripts/lib/npm-core-release-packages.json",
           "scripts/lib/npm-publish-plan.mjs",
           "scripts/lib/release-version.mjs",
@@ -465,6 +472,7 @@ async function fixture(
       | "abort-peer";
     rerunGroup?: string;
     pluginCount?: number;
+    clawhubPublication?: Record<string, ClawHubPublicationState>;
     pluginVersion?: string;
     npmOnlyPlugin?: boolean;
     absentNpmPackage?: "openclaw" | "@openclaw/demo-plugin" | "@openclaw/gateway-client";
@@ -776,6 +784,11 @@ globalThis.fetch = async (input, init = {}) => {
     return response({ versions, "dist-tags": { latest: url.pathname === "/demo-runtime" ? "1.2.4" : "2026.9.3" } });
   }
   if (${JSON.stringify(options.registry)} === "clawhub-absent") return response("", 404);
+  if (url.pathname.endsWith("/publication")) {
+    const name = decodeURIComponent(url.pathname.split("/")[4]);
+    const publication = ${JSON.stringify(options.clawhubPublication ?? {})}[name];
+    if (publication) return response({ name, version: ${JSON.stringify(version)}, ...publication });
+  }
   if (url.pathname.includes("/versions/")) return response("", 404);
   if (url.pathname.endsWith("/trusted-publisher")) {
     return response({ trustedPublisher: ${JSON.stringify(options.registry)} === "missing-trust" ? null : {
@@ -1480,7 +1493,7 @@ describe("FRV required registry admission", () => {
               },
             ]),
           );
-          check(actualRequests).toHaveLength(5);
+          check(actualRequests).toHaveLength(6);
           check(result.observations).toMatchObject({
             sourceDigest: result.fact?.digest,
             pendingAuthority: [],
@@ -1493,6 +1506,84 @@ describe("FRV required registry admission", () => {
 });
 
 describe("FRV observation worker boundary", () => {
+  publicationIt.concurrent(
+    "retains publication states through isolated observation, planning, and artifact admission",
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const publications: Record<string, ClawHubPublicationState> = {
+          "@openclaw/demo-plugin": { state: "absent" },
+          "@openclaw/demo-1": { state: "published" },
+          "@openclaw/demo-2": { state: "pending", stage: "staging" },
+          "@openclaw/demo-3": { state: "pending", stage: "checks", attemptId: "attempt_checks" },
+          "@openclaw/demo-4": {
+            state: "pending",
+            stage: "finalization",
+            attemptId: "attempt_final",
+          },
+          "@openclaw/demo-5": { state: "failed", recoverable: true, attemptId: "attempt_recover" },
+          "@openclaw/demo-6": { state: "failed", recoverable: false },
+        };
+        const result = await fixture(processFixture, check, {
+          registry: "healthy",
+          pluginCount: 7,
+          clawhubPublication: publications,
+        });
+        check(result.status, result.stderr).toBe(0);
+        const { observations } = result;
+        check(observations.plans.clawhub).toMatchObject({
+          candidates: ["@openclaw/demo-plugin"],
+          skippedPublished: ["@openclaw/demo-1"],
+          pendingPublication: ["@openclaw/demo-2", "@openclaw/demo-3", "@openclaw/demo-4"],
+          failedPublication: ["@openclaw/demo-5", "@openclaw/demo-6"],
+        });
+        for (const [name, publication] of Object.entries(publications)) {
+          const entry = { name, publication, alreadyPublished: publication.state === "published" };
+          check(observations.clawhub).toContainEqual(
+            expect.objectContaining({
+              name,
+              state: expect.objectContaining({
+                publication,
+                alreadyPublished: entry.alreadyPublished,
+              }),
+            }),
+          );
+          check(observations.plans.clawhub.all).toContainEqual(expect.objectContaining(entry));
+        }
+        const source = expectDefined(result.fact, "publication source");
+        const shells = structuredClone(observations);
+        for (const row of shells.clawhub) {
+          if (["pending", "failed"].includes(row.state.publication.state)) {
+            row.state.hasTrustedPublisher = false;
+            row.state.trustedPublisher = null;
+          }
+        }
+        check(createPublicationObservations(source, shells)).toEqual(shells);
+        const malformed = structuredClone(observations);
+        delete malformed.clawhub[0].state.publication;
+        check(() => createPublicationObservations(source, malformed)).toThrow("outcome mismatch");
+        const missingBucket = structuredClone(observations);
+        delete missingBucket.plans.clawhub.pendingPublication;
+        check(() => createPublicationObservations(source, missingBucket)).toThrow("incomplete");
+        const republish = structuredClone(observations);
+        republish.plans.clawhub.candidates.push("@openclaw/demo-2");
+        check(() => createPublicationObservations(source, republish)).toThrow("outcome mismatch");
+        const legacy = structuredClone(observations);
+        for (const row of legacy.clawhub) {
+          delete row.state.publication;
+        }
+        for (const row of legacy.plans.clawhub.all) {
+          delete row.publication;
+        }
+        delete legacy.plans.clawhub.pendingPublication;
+        delete legacy.plans.clawhub.failedPublication;
+        legacy.plans.clawhub.candidates = legacy.plans.clawhub.all
+          .filter((row: { alreadyPublished: boolean }) => !row.alreadyPublished)
+          .map((row: { name: string }) => row.name);
+        const originalBytes = JSON.stringify(legacy);
+        check(createPublicationObservations(source, legacy)).toEqual(legacy);
+        check(JSON.stringify(legacy)).toBe(originalBytes);
+      }),
+  );
   publicationIt.concurrent.for([
     [
       "beta plugin",
@@ -1801,7 +1892,7 @@ describe("FRV observation worker boundary", () => {
         });
         check(result.status, result.stderr).toBe(0);
         const reads = result.registryCalls.filter((entry) => entry.kind === "request");
-        check(reads).toHaveLength(4 * count + 2);
+        check(reads).toHaveLength(5 * count + 2);
         check(reads.filter((entry) => entry.path === "/demo-runtime")).toHaveLength(1);
         const settlement = result.registryCalls.find(
           (entry) => entry.kind === "settled" && entry.worker,
@@ -1893,7 +1984,7 @@ describe("FRV observation worker boundary", () => {
         const result = await fixture(processFixture, check, { registry: "healthy", sameSha: true });
         check(result.status, result.stderr).toBe(0);
         check(result.targetSha).toBe(result.toolingSha);
-        check(result.registryCalls.filter((entry) => entry.kind === "request")).toHaveLength(5);
+        check(result.registryCalls.filter((entry) => entry.kind === "request")).toHaveLength(6);
         check(result.registryCalls).toContainEqual({
           kind: "runtime",
           worker: true,

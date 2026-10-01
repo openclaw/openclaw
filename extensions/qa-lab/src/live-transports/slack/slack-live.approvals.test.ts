@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { waitForSlackApprovalMessage } from "./slack-live.approvals.js";
+import { runSlackApprovalScenario, waitForSlackApprovalMessage } from "./slack-live.approvals.js";
 import type {
   SlackMessage,
   SlackObservedMessage,
@@ -56,6 +56,7 @@ function observation(pages: SlackMessage[][]) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -114,4 +115,39 @@ it("waits for the original approval message to lose its native actions after res
     { ts: "100.1", matchedScenario: false, actionValues: [actionValue] },
     { ts: "100.1", matchedScenario: true, actionValues: [] },
   ]);
+});
+
+it("allows live approval decision RPCs to take longer than the generic gateway probe timeout", async () => {
+  const call = vi.fn(async (method: string) =>
+    method === "plugin.approval.request"
+      ? { id: "plugin:owned", status: "accepted" }
+      : { decision: "allow-once" },
+  );
+  const params = observation([
+    [message()],
+    [message({ text: "Plugin approval: Allowed once marker", blocks: [] })],
+  ]);
+  vi.stubEnv("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR", "");
+  await runSlackApprovalScenario({
+    channelId: params.channelId,
+    context: {
+      gateway: { call },
+      sutIdentity: params.sutIdentity,
+      sutReadClient: params.client,
+    },
+    observedMessages: params.observedMessages,
+    run: { kind: "approval", approvalKind: "plugin", decision: "allow-once", token: "marker" },
+    scenario: { id: "slack-approval", title: "Slack approval", timeoutMs: 1_000 },
+    sutAccountId: "sut",
+  });
+  expect(call).toHaveBeenCalledWith(
+    "plugin.approval.resolve",
+    { decision: "allow-once", id: "plugin:owned" },
+    { expectFinal: false, timeoutMs: 35_000 },
+  );
+  expect(call).toHaveBeenCalledWith(
+    "plugin.approval.waitDecision",
+    { id: "plugin:owned" },
+    { expectFinal: true, timeoutMs: 35_000 },
+  );
 });

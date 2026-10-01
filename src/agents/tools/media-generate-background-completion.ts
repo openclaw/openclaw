@@ -230,9 +230,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       }),
     },
   ];
-  const triggerMessage =
-    formatAgentInternalEventsForPrompt(internalEvents) ||
-    `A ${params.completionLabel} generation task finished. Process the completion update now.`;
+  const triggerMessage = formatAgentInternalEventsForPrompt(internalEvents);
   const delivery = await deliverSubagentAnnouncement({
     isSourceSessionAdmissionAllowed: isSourceCurrent,
     isSourceSessionEffectsAllowed: isSourceCurrent,

@@ -11,7 +11,6 @@ import {
 } from "../agents/agent-run-result.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import { describeFailoverError } from "../agents/failover-error.js";
 import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { SessionManager } from "../agents/sessions/index.js";
@@ -38,8 +37,8 @@ import {
   type ActivateSetupInferenceDeps,
   type BoundVerifySetupInferenceResult,
   type CompleteSetupInferenceResult,
+  describeSetupInferenceError,
   invalidSetupConfigError,
-  mapFailoverReasonToSetupStatus,
   parseInferenceRef,
   redactSetupInferenceError,
   resolveSetupInferenceWinnerError,
@@ -178,6 +177,7 @@ export async function runSetupInferenceTurn(params: {
         ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
         authProfileStateMode: "read-only",
         allowAuthProfileFallback: false,
+        retryConnectionErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
@@ -230,8 +230,8 @@ export async function runSetupInferenceTurn(params: {
       auth: successfulAuth ?? (route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
   } catch (error) {
-    const described = describeFailoverError(error);
-    return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
+    const described = describeSetupInferenceError(error, route);
+    return failed(described.status, described.error);
   } finally {
     preparedRunAdmission.close();
     clearAgentRunContext(runId);

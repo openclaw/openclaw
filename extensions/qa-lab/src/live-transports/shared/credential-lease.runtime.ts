@@ -391,18 +391,8 @@ function computeAcquireBackoffMs(params: {
 }
 
 function assertConvexOk(payload: unknown, actionLabel: string) {
-  if (payload === undefined) {
+  if (payload === undefined || convexOkSchema.safeParse(payload).success) {
     return;
-  }
-  if (convexOkSchema.safeParse(payload).success) {
-    return;
-  }
-  const brokerError = toBrokerError({
-    payload,
-    fallback: `Convex credential ${actionLabel} failed.`,
-  });
-  if (brokerError) {
-    throw brokerError;
   }
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }

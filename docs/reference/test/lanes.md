@@ -30,6 +30,14 @@ read_when:
 
 ### Real-Gateway Control UI fixture lifetimes
 
+Use `pairControlUiPage` from `ui/src/test-helpers/control-ui-browser-pairing.ts`
+with the isolated Gateway's CLI runner to authenticate each new page. It obtains
+and consumes a fresh `dashboard --json` browser handoff and waits for the Gateway
+handshake. Dashboard pairing links are single-use; do not reuse a captured URL
+for another tab or browser context. Pass this operation as `preparePage` to
+`withControlUiRunInspector` so collection authenticates its own page while leaving
+the caller's Chat and draft in place. Reload uses the browser's paired credential.
+
 Use `createControlUiE2eSuite` from
 `ui/src/e2e/control-ui-e2e-suite.test-support.ts` for real-Gateway browser fixtures.
 `suite.define(...)` owns the native hooks. Each native `it` passes its test context

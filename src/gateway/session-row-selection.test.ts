@@ -1,13 +1,24 @@
+import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as sessionKeys from "../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import {
+  resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { listSessionFixture } from "./session-list.test-support.js";
@@ -15,6 +26,7 @@ import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import * as childOwners from "./session-utils-core.js";
 import {
   filterAndSortSessionEntries,
   listProjectedSessions,
@@ -203,6 +215,7 @@ it.each([false, true])(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {}, ops: {} } } };
       const projection = createSessionRowProjectionFixture({ cfg, store: {} });
+      const parent = "agent:main:parent";
       const samples = [
         ["shadow-global", "global", "main", "fallback"],
         ["ordinary", "agent:main:ordinary", "main", "primary"],
@@ -215,7 +228,13 @@ it.each([false, true])(
         ["retired", "agent:retired:ordinary", "retired", "primary"],
       ] as const;
       const rows = samples.map(([sessionId, key, agentId, storePath]) => {
-        const entry = { sessionId, updatedAt: 1 };
+        const entry = {
+          sessionId,
+          updatedAt: 1,
+          ...(["ordinary", "shadow-global", "unknown-shadow"].includes(sessionId)
+            ? { spawnedBy: parent, status: "running" as const }
+            : {}),
+        };
         return {
           ...createSessionRow(
             {
@@ -228,7 +247,10 @@ it.each([false, true])(
           entry,
         };
       });
-      projection.selectEntries = () => rows;
+      projection.selectEntries = (query) =>
+        query?.parentSessionKey
+          ? rows.filter((row) => row.entry.spawnedBy === query.parentSessionKey)
+          : rows;
       projection.state.scope = () => ({
         paths: new Map([
           ["primary", 0],
@@ -272,6 +294,10 @@ it.each([false, true])(
         expect(scoped.map(([, entry]) => entry.sessionId)).toEqual(
           activeOnly ? ["main-global", "ops-global", "unknown-winner"] : ["main-global"],
         );
+        const children = filterAndSortSessionEntries(
+          prepareSessionRowSelection(projection, { ...prepared.opts, spawnedBy: parent }),
+        );
+        expect(children.map(([, entry]) => entry.sessionId)).toEqual(["ordinary"]);
       } finally {
         projection.dispose();
       }
@@ -285,13 +311,18 @@ it("rejects duplicate ordinary keys introduced after store admission before filt
     const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const secondary = state.statePath("secondary.sqlite");
     const key = "agent:main:original";
+    const parent = "agent:main:parent";
     for (const [storePath, sessionKey] of [
       [primary, key],
       [secondary, "agent:main:other"],
     ] as const) {
       replaceSessionEntrySync(
         { agentId: "main", storePath, sessionKey },
-        { sessionId: sessionKey, updatedAt: Date.now() },
+        {
+          sessionId: sessionKey,
+          updatedAt: Date.now(),
+          ...(sessionKey === key ? { parentSessionKey: parent } : {}),
+        },
       );
       registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
     }
@@ -303,6 +334,9 @@ it("rejects duplicate ordinary keys introduced after store admission before filt
       replaceSessionEntrySync(duplicate, { sessionId: "duplicate", updatedAt: Date.now() + 1 });
       await expect(
         listProjectedSessions({ projection, opts: { ...opts, limit: 1, offset: 1 } }),
+      ).rejects.toThrow("duplicate rows resolve to canonical session key");
+      await expect(
+        listProjectedSessions({ projection, opts: { ...opts, spawnedBy: parent } }),
       ).rejects.toThrow("duplicate rows resolve to canonical session key");
       await deleteSessionEntryLifecycle({
         agentId: "main",
@@ -345,3 +379,154 @@ it.each([undefined, "Research"])(
     expect(result).toMatchObject({ totalCount: 2, nextOffset: 1, hasMore: true });
   },
 );
+
+it("lists indexed children without inspecting unrelated resident ownership", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const cfg = { agents: { entries: { main: {}, other: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const now = 1_790_000_000_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const parent = "agent:main:parent";
+      const other = "agent:main:other";
+      const key = (name: string) => `agent:main:${name}`;
+      const benchmark = process.env.OPENCLAW_SESSION_PARENT_INDEX_BENCH === "1";
+      const unrelated = benchmark ? 5_000 : 96;
+      const entries = new Map<string, SessionEntry>(
+        Array.from({ length: unrelated }, (_, index) => [
+          key(`unrelated-${index}`),
+          {
+            sessionId: `unrelated-${index}`,
+            updatedAt: now,
+            archivedAt: 1,
+            parentSessionKey: key(`unrelated-parent-${index}`),
+          },
+        ]),
+      );
+      for (const [name, fields] of [
+        ["spawned", { spawnedBy: parent }],
+        ["dashboard:persistent", { parentSessionKey: parent, status: "done", endedAt: 1 }],
+        ["expired", { spawnedBy: parent, status: "done", endedAt: 1 }],
+        ["moved", { spawnedBy: parent }],
+        ["runtime", {}],
+      ] as const) {
+        entries.set(key(name), { sessionId: name, updatedAt: now, ...fields });
+      }
+      const seed = (agentId: string, rows: Iterable<[string, SessionEntry]>) =>
+        runOpenClawAgentWriteTransaction(
+          (database) => {
+            for (const [sessionKey, entry] of rows) {
+              writeSessionEntry(database, sessionKey, entry, {
+                canonicalPreviousEntry: null,
+                previousEntry: null,
+              });
+            }
+          },
+          { agentId },
+        );
+      seed("main", entries);
+      const crossAgent = "agent:other:child";
+      seed("other", [
+        [crossAgent, { sessionId: "cross-agent", updatedAt: now, spawnedBy: parent }],
+      ]);
+      const run = (name: string, controller: string): SubagentRunRecord => ({
+        runId: name,
+        childSessionKey: key(name),
+        requesterSessionKey: controller === parent ? other : parent,
+        controllerSessionKey: controller,
+        requesterDisplayKey: "synthetic",
+        task: "Synthetic child selection",
+        cleanup: "keep",
+        createdAt: now - 2_000,
+        execution: { status: "terminal", startedAt: now - 1_500, endedAt: now - 1_000 },
+        completion: { required: false },
+        delivery: { status: "not_required" },
+      });
+      const runtime = run("runtime", parent);
+      const runs = new Map([runtime, run("moved", other)].map((row) => [row.runId, row]));
+      saveSubagentRegistryToSqlite(runs);
+      const release = retainSessionListForegroundWork();
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const ownership = vi.spyOn(childOwners, "resolveSessionChildOwners");
+      try {
+        const opts = { spawnedBy: parent, archived: "all" as const, limit: 2 };
+        const list = () => listProjectedSessions({ projection, opts });
+        const first = await list();
+        expect(first.sessions.map((row) => row.key)).toEqual([
+          key("dashboard:persistent"),
+          key("runtime"),
+        ]);
+        expect(first).toMatchObject({ totalCount: 4, nextOffset: 2, hasMore: true });
+        const second = await listProjectedSessions({ projection, opts: { ...opts, offset: 2 } });
+        expect(second.sessions.map((row) => row.key)).toEqual([key("spawned"), crossAgent]);
+        expect(second).toMatchObject({ totalCount: 4, nextOffset: null, hasMore: false });
+        ownership.mockClear();
+        expect(await list()).toEqual(first);
+        const visited = new Set(ownership.mock.calls.map(([params]) => params.key));
+        const ownershipCalls = ownership.mock.calls.length;
+        ownership.mockRestore();
+        const elapsed: number[] = [];
+        const samples = benchmark ? 30 : 0;
+        for (let sample = 0; sample < samples; sample++) {
+          const started = performance.now();
+          const result = await list();
+          elapsed.push(performance.now() - started);
+          expect(result).toEqual(first);
+        }
+        if (benchmark) {
+          const sorted = elapsed.toSorted((a, b) => a - b);
+          const sentinelElapsed: number[] = [];
+          for (let sample = 0; sample < samples; sample++) {
+            const started = performance.now();
+            const result = await listProjectedSessions({
+              projection,
+              opts: { ...opts, spawnedBy: "global" },
+            });
+            sentinelElapsed.push(performance.now() - started);
+            expect(result.sessions).toEqual([]);
+          }
+          const sentinels = sentinelElapsed.toSorted((a, b) => a - b);
+          console.log(
+            JSON.stringify({
+              unrelated,
+              samples,
+              visited: visited.size,
+              ownershipCalls,
+              p50Ms: sorted[Math.floor(samples / 2)],
+              p95Ms: sorted[Math.floor(samples * 0.95)],
+              sentinelP50Ms: sentinels[Math.floor(samples / 2)],
+              sentinelP95Ms: sentinels[Math.floor(samples * 0.95)],
+              checksum: createHash("sha256")
+                .update(JSON.stringify({ ...first, path: "<fixture>" }))
+                .digest("hex"),
+            }),
+          );
+        }
+        expect([...visited].filter((sessionKey) => sessionKey.includes("unrelated-")).length).toBe(
+          0,
+        );
+        runs.set(runtime.runId, { ...runtime, controllerSessionKey: other });
+        persistSubagentRunsToDiskOrThrow(runs, [runtime.runId]);
+        const moved = await list();
+        expect(moved.sessions.map((row) => row.key)).toEqual([
+          key("dashboard:persistent"),
+          key("spawned"),
+        ]);
+        expect(moved.totalCount).toBe(3);
+        runs.set(runtime.runId, {
+          ...runtime,
+          controllerSessionKey: undefined,
+          requesterSessionKey: parent,
+        });
+        persistSubagentRunsToDiskOrThrow(runs, [runtime.runId]);
+        expect((await list()).totalCount).toBe(4);
+      } finally {
+        ownership.mockRestore();
+        projection.dispose();
+        release();
+        clock.mockRestore();
+      }
+    },
+  );
+});

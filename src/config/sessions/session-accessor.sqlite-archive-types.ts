@@ -99,14 +99,12 @@ export type TranscriptArchivePageOptions = {
   projectionSources?: Pick<PreparedSessionHistoryReadTarget, "stateDatabase" | "sourceDatabases">;
 };
 
-export type TranscriptArchivePagePlan = Omit<TranscriptArchiveReadPlan, "expectedIdentity"> & {
-  limit: number;
-  maxBytes: number;
-  cursor?: string;
-  verifyBinding?: TranscriptArchivePageBinding;
-  contextMaxMessages?: number;
-  projectionSources?: Pick<PreparedSessionHistoryReadTarget, "stateDatabase" | "sourceDatabases">;
-};
+export type TranscriptArchivePagePlan = Omit<TranscriptArchiveReadPlan, "expectedIdentity"> &
+  TranscriptArchivePageOptions & {
+    limit: number;
+    maxBytes: number;
+    verifyBinding?: TranscriptArchivePageBinding;
+  };
 
 export type TranscriptArchivePageResult = {
   entries: Array<{ event: TranscriptEvent; seq: number; coordinationHidden?: true }>;

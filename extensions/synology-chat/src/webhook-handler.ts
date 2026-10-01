@@ -4,20 +4,17 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
+  createFixedWindowRateLimiter,
   createWebhookInFlightLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   resolveRequestClientIp,
   requestBodyErrorToText,
+  type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import * as synologyClient from "./client.js";
-import {
-  validateToken,
-  authorizeUserForDmWithIngress,
-  sanitizeInput,
-  RateLimiter,
-} from "./security.js";
+import { validateToken, authorizeUserForDmWithIngress, sanitizeInput } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 import {
   SynologyIngressPermanentError,
@@ -27,8 +24,7 @@ import {
   type SynologyWebhookRawEvent,
 } from "./webhook-ingress.js";
 
-// One rate limiter per account, created lazily
-const rateLimiters = new Map<string, RateLimiter>();
+const rateLimiters = new Map<string, { limit: number; limiter: FixedWindowRateLimiter }>();
 const invalidTokenRateLimiters = new Map<string, InvalidTokenRateLimiter>();
 const webhookInFlightLimiter = createWebhookInFlightLimiter();
 const PREAUTH_MAX_BODY_BYTES = 64 * 1024;
@@ -102,14 +98,21 @@ class InvalidTokenRateLimiter {
   }
 }
 
-function getRateLimiter(account: ResolvedSynologyChatAccount): RateLimiter {
-  let rl = rateLimiters.get(account.accountId);
-  if (!rl || rl.maxRequests() !== account.rateLimitPerMinute) {
-    rl?.clear();
-    rl = new RateLimiter(account.rateLimitPerMinute);
-    rateLimiters.set(account.accountId, rl);
+function getRateLimiter(account: ResolvedSynologyChatAccount): FixedWindowRateLimiter {
+  let entry = rateLimiters.get(account.accountId);
+  if (!entry || entry.limit !== account.rateLimitPerMinute) {
+    entry?.limiter.clear();
+    entry = {
+      limit: account.rateLimitPerMinute,
+      limiter: createFixedWindowRateLimiter({
+        windowMs: 60_000,
+        maxRequests: Math.max(1, Math.floor(account.rateLimitPerMinute)),
+        maxTrackedKeys: 5_000,
+      }),
+    };
+    rateLimiters.set(account.accountId, entry);
   }
-  return rl;
+  return entry.limiter;
 }
 
 function getInvalidTokenRateLimiter(account: ResolvedSynologyChatAccount): InvalidTokenRateLimiter {
@@ -340,7 +343,7 @@ async function authorizeSynologyWebhook(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
   invalidTokenRateLimiter: InvalidTokenRateLimiter;
-  rateLimiter: RateLimiter;
+  rateLimiter: FixedWindowRateLimiter;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   log?: WebhookHandlerDeps["log"];
@@ -390,7 +393,7 @@ async function authorizeSynologyWebhook(params: {
     return { ok: false, statusCode: 403, error: "User not authorized" };
   }
 
-  if (!params.rateLimiter.check(params.payload.user_id)) {
+  if (params.rateLimiter.isRateLimited(params.payload.user_id)) {
     // Keep a separate post-auth budget so authenticated users are still throttled per sender.
     params.log?.warn(`Rate limit exceeded for user: ${params.payload.user_id}`);
     return { ok: false, statusCode: 429, error: "Rate limit exceeded" };

@@ -1,6 +1,9 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionNodePayloadSelect,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withSessionCompactionPersistence } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -62,7 +65,7 @@ describe("persistCompactionBoundaryWithSessionEntrySync", () => {
             toDatabaseOptions(resolveSqliteTranscriptScope(scope)),
           );
           const reads = trackSqliteStatementExecutions(database.db, ["entry"], (sql) =>
-            sql.startsWith('select * from "session_nodes" where "session_key" = ?')
+            isSessionNodePayloadSelect(sql) && sql.includes('where "session_key" = ?')
               ? "entry"
               : null,
           );

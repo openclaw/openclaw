@@ -9,6 +9,7 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Link hover previews" });
@@ -215,7 +216,10 @@ suite.define(() => {
 
   it("keeps title hints when the optional hover runtime cannot load", async () => {
     await suite.withPage({}, async ({ page }) => {
-      await page.route("**/link-reader-hovercard-*.js", (route) => route.abort());
+      const hovercardModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/components/link-reader-hovercard.ts",
+      );
+      await page.route(hovercardModule, (route) => route.abort());
       const gateway = await installMockGateway(page, {
         automaticallyFetchFavicons: true,
         historyMessages: [
@@ -230,9 +234,7 @@ suite.define(() => {
       const link = page.getByRole("link", { name: "Field guide", exact: true });
       // A missing hashed chunk reloads the page; wait before hovering the new document.
       await Promise.all([
-        page.waitForEvent("requestfailed", (request) =>
-          request.url().includes("link-reader-hovercard-"),
-        ),
+        page.waitForEvent("requestfailed", (request) => hovercardModule.test(request.url())),
         page.waitForEvent("domcontentloaded"),
         link.hover(),
       ]);

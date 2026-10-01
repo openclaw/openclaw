@@ -72,7 +72,8 @@ function readWindowsBrowserVersion(executablePath: string): string | null {
   // Read the inspected executable's authoritative PE metadata. Pass the path as
   // environment data so a configured path (often containing spaces) can never
   // become part of the PowerShell program; Windows PowerShell appends any extra
-  // -Command argument to the script text, which fails as a ParserError.
+  // -Command argument to the script text, which fails as a ParserError. The
+  // leaf PowerShell child reuses the documented browser-executable name.
   const configuredSystemRoot = normalizeOptionalString(process.env.SystemRoot);
   const systemRoot =
     configuredSystemRoot && path.win32.isAbsolute(configuredSystemRoot)
@@ -91,11 +92,11 @@ function readWindowsBrowserVersion(executablePath: string): string | null {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:OPENCLAW_BROWSER_VERSION_PROBE_PATH).ProductVersion",
+      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:OPENCLAW_BROWSER_EXECUTABLE_PATH).ProductVersion",
     ],
     WINDOWS_FILE_METADATA_TIMEOUT_MS,
     undefined,
-    { OPENCLAW_BROWSER_VERSION_PROBE_PATH: executablePath },
+    { OPENCLAW_BROWSER_EXECUTABLE_PATH: executablePath },
   );
   if (metadataVersion) {
     return metadataVersion.replace(/\s+/g, " ").trim();

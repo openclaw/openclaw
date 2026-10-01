@@ -50,7 +50,7 @@ import {
 import { containsConfigIncludeDirective, hashConfigRaw } from "./io.read-helpers.js";
 import { resolveManagedRuntimeEnvBaseline } from "./io.runtime-env.js";
 import { configWriteCommittedSnapshot } from "./io.types.js";
-import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
+import { recoverConfigWriteFailure } from "./io.write-errors.js";
 import {
   injectExplicitlySetPaths,
   prepareConfigWriteValues,
@@ -795,34 +795,20 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
               persistedSourceConfig: runtimeConfigToWrite,
             };
           } catch (error) {
-            let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
-            try {
-              const rolledBack = await rollbackJsonFileWriteIfUnchanged({
-                target: includeTarget,
-                previousRaw: previousIncludeRaw,
-                committedRaw: committedIncludeRaw,
-                pathProof,
-              });
-              rollbackStatus = rolledBack ? "restored" : "not-restored";
-              if (rolledBack) {
+            return await recoverConfigWriteFailure({
+              configPath: includeTarget.absolutePath,
+              cause: error,
+              restoreFile: () =>
+                rollbackJsonFileWriteIfUnchanged({
+                  target: includeTarget,
+                  previousRaw: previousIncludeRaw,
+                  committedRaw: committedIncludeRaw,
+                  pathProof,
+                }),
+              restoreEffects: () => {
                 assertScopedOwner();
                 restorePostWriteEnv?.();
-              }
-            } catch (rollbackError) {
-              throw new ConfigWritePostCommitError({
-                configPath: includeTarget.absolutePath,
-                rollbackStatus,
-                cause: new AggregateError(
-                  [error, rollbackError],
-                  `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
-                  { cause: rollbackError },
-                ),
-              });
-            }
-            throw new ConfigWritePostCommitError({
-              configPath: includeTarget.absolutePath,
-              rollbackStatus,
-              cause: error,
+              },
             });
           }
         },

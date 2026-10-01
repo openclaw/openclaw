@@ -45,17 +45,34 @@ export type ModelCallObservationState = {
 
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
-function jsonLength(value: unknown, utf8: boolean): number | undefined {
+type PromptStringLengths = WeakMap<object, Map<string, { text: string; chars: number }>>;
+type PromptStringLengthPass = { previous: PromptStringLengths; current: PromptStringLengths };
+
+function jsonLength(
+  value: unknown,
+  utf8: boolean,
+  promptStringLengths?: PromptStringLengthPass,
+): number | undefined {
   try {
     let stringLengths = 0;
-    const serialized = JSON.stringify(value, (_key, part: unknown) => {
+    const serialized = JSON.stringify(value, function (this: object, key, part: unknown) {
       if (typeof part !== "string" || part.length < 4096) {
         return part;
       }
+      const cached = !utf8 ? promptStringLengths?.previous.get(this)?.get(key) : undefined;
       // Keep large strings out of the combined JSON allocation. Native encoding
       // still owns escaping, surrogate handling, toJSON, and container semantics.
-      const encoded = JSON.stringify(part);
-      stringLengths += (utf8 ? Buffer.byteLength(encoded, "utf8") : encoded.length) - 2;
+      let chars = cached?.text === part ? cached.chars : undefined;
+      if (chars === undefined) {
+        const encoded = JSON.stringify(part);
+        chars = (utf8 ? Buffer.byteLength(encoded, "utf8") : encoded.length) - 2;
+      }
+      if (!utf8 && promptStringLengths) {
+        const fields = promptStringLengths.current.get(this) ?? new Map();
+        fields.set(key, { text: part, chars });
+        promptStringLengths.current.set(this, fields);
+      }
+      stringLengths += chars;
       return "";
     });
     return serialized === undefined
@@ -70,8 +87,11 @@ function utf8JsonByteLength(value: unknown): number | undefined {
   return jsonLength(value, true);
 }
 
-function jsonCharLength(value: unknown): number | undefined {
-  return jsonLength(value, false);
+function jsonCharLength(
+  value: unknown,
+  promptStringLengths?: PromptStringLengthPass,
+): number | undefined {
+  return jsonLength(value, false, promptStringLengths);
 }
 
 function responseStreamChunkByteLength(chunk: unknown): number | undefined {
@@ -119,7 +139,23 @@ function streamContextModelContentFields(
   return Object.keys(content).length > 0 ? content : undefined;
 }
 
-function streamContextModelPromptStats(streamContext: unknown): ModelCallPromptStats | undefined {
+export function createModelPromptStats() {
+  // The attempt owns this cache; each field's exact text is its revision. Keep
+  // walking containers so compaction and in-place hook edits retain JSON semantics.
+  let previous: PromptStringLengths = new WeakMap();
+  return (streamContext: unknown) => {
+    const current: PromptStringLengths = new WeakMap();
+    const stats = streamContextModelPromptStats(streamContext, { previous, current });
+    // Drop deleted fields and compacted history even if their holders remain alive.
+    previous = current;
+    return stats;
+  };
+}
+
+function streamContextModelPromptStats(
+  streamContext: unknown,
+  promptStringLengths?: PromptStringLengthPass,
+): ModelCallPromptStats | undefined {
   if (!isRecord(streamContext)) {
     return undefined;
   }
@@ -127,8 +163,8 @@ function streamContextModelPromptStats(streamContext: unknown): ModelCallPromptS
   const tools = Array.isArray(streamContext.tools) ? streamContext.tools : undefined;
   const systemPrompt =
     typeof streamContext.systemPrompt === "string" ? streamContext.systemPrompt : undefined;
-  const inputMessagesChars = messages ? jsonCharLength(messages) : undefined;
-  const toolDefinitionsChars = tools ? jsonCharLength(tools) : undefined;
+  const inputMessagesChars = messages ? jsonCharLength(messages, promptStringLengths) : undefined;
+  const toolDefinitionsChars = tools ? jsonCharLength(tools, promptStringLengths) : undefined;
   const systemPromptChars = systemPrompt?.length;
   if (messages === undefined && tools === undefined && systemPrompt === undefined) {
     return undefined;
@@ -322,10 +358,11 @@ export function createModelObserver(params: {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;
+  measurePromptStats?: ReturnType<typeof createModelPromptStats>;
 }) {
   const modelContent = streamContextModelContentFields(params.contentCapture, params.streamContext);
   const promptStats = params.capturePromptStats
-    ? streamContextModelPromptStats(params.streamContext)
+    ? (params.measurePromptStats ?? streamContextModelPromptStats)(params.streamContext)
     : undefined;
   const state: ModelCallObservationState = {
     responseStreamBytes: 0,

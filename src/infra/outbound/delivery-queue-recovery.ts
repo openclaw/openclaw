@@ -289,11 +289,10 @@ async function settleQueuedFailure(
     const spoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(entry), params.stateDir);
     const leaseId =
       spoolPaths.length > 0
-        ? createDeliveryQueueMediaRetention(
+        ? await createDeliveryQueueMediaRetention(
             spoolPaths,
             "outbound-media-recovery-lease",
             params.stateDir,
-            undefined,
             stateContext,
           )
         : undefined;
@@ -338,7 +337,7 @@ async function settleQueuedFailure(
       }
       await releaseSpoolArtifacts(spoolPaths, params.stateDir);
     } finally {
-      cancelDeliveryQueueMediaRetention(leaseId, params.stateDir, stateContext);
+      await cancelDeliveryQueueMediaRetention(leaseId, params.stateDir, stateContext);
     }
   } catch (error) {
     params.log.warn(
@@ -784,11 +783,10 @@ async function drainQueuedEntry(
     // acks may then remove replay intent without exposing active media to GC.
     mediaRecoveryLeaseId =
       recoverySpoolPaths.length > 0
-        ? createDeliveryQueueMediaRetention(
+        ? await createDeliveryQueueMediaRetention(
             recoverySpoolPaths,
             "outbound-media-recovery-lease",
             opts.stateDir,
-            undefined,
             stateContext,
           )
         : undefined;
@@ -1025,7 +1023,7 @@ async function drainQueuedEntry(
     // Early fallback acks make the row non-replayable before the adapter has
     // necessarily finished reading every payload. Release only after the whole
     // recovered attempt settles, and only if no pending row still owns it.
-    cancelDeliveryQueueMediaRetention(mediaRecoveryLeaseId, opts.stateDir, stateContext);
+    await cancelDeliveryQueueMediaRetention(mediaRecoveryLeaseId, opts.stateDir, stateContext);
     const pending = await loadUnfinishedDelivery(entry.id, opts.stateDir, stateContext).catch(
       () => entry,
     );

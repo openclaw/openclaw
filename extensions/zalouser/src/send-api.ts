@@ -2,10 +2,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchMediaWithZaloSendContext } from "./send-context.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
@@ -18,19 +15,8 @@ function extractSendMessageId(result: Awaited<ReturnType<API["sendMessage"]>>): 
   if (!result || typeof result !== "object") {
     return undefined;
   }
-  const direct = result.msgId;
-  if (direct !== undefined && direct !== null) {
-    return String(direct);
-  }
-  const primary = result.message?.msgId;
-  if (primary !== undefined && primary !== null) {
-    return String(primary);
-  }
-  const attachmentId = result.attachment?.[0]?.msgId;
-  if (attachmentId !== undefined && attachmentId !== null) {
-    return String(attachmentId);
-  }
-  return undefined;
+  const messageId = result.msgId ?? result.message?.msgId ?? result.attachment?.[0]?.msgId;
+  return messageId == null ? undefined : String(messageId);
 }
 
 function resolveMediaFileName(params: {
@@ -71,13 +57,12 @@ function hasAttachmentExtension(fileName: string): fileName is `${string}.${stri
   return fileName.includes(".");
 }
 
-function resolveUploadedVoiceAsset(
+function resolveUploadedVoiceUrl(
   uploaded: Array<{
     fileType?: string;
     fileUrl?: string;
-    fileName?: string;
   }>,
-): { fileUrl: string; fileName?: string } | undefined {
+): string | undefined {
   for (const item of uploaded) {
     if (!item || typeof item !== "object") {
       continue;
@@ -88,7 +73,7 @@ function resolveUploadedVoiceAsset(
       continue;
     }
     if (fileType === "others" || fileType === "video") {
-      return { fileUrl, fileName: normalizeOptionalString(item.fileName) };
+      return fileUrl;
     }
   }
   return undefined;
@@ -120,6 +105,16 @@ export async function sendZaloTextWithApi(
       });
       const payloadText = truncateUtf16Safe(text || options.caption || "", 2000);
       const textStyles = sliceTextStyles(options.textStyles, 0, payloadText.length);
+      const attachmentFileName: `${string}.${string}` = hasAttachmentExtension(fileName)
+        ? fileName
+        : `${fileName}.bin`;
+      const attachments = [
+        {
+          data: media.buffer,
+          filename: attachmentFileName,
+          metadata: { totalSize: media.buffer.length },
+        },
+      ];
 
       if (media.kind === "audio") {
         if (payloadText) {
@@ -140,28 +135,12 @@ export async function sendZaloTextWithApi(
           });
         }
 
-        const attachmentFileName: `${string}.${string}` = hasAttachmentExtension(fileName)
-          ? fileName
-          : `${fileName}.bin`;
-        const uploaded = await api.uploadAttachment(
-          [
-            {
-              data: media.buffer,
-              filename: attachmentFileName,
-              metadata: {
-                totalSize: media.buffer.length,
-              },
-            },
-          ],
-          trimmedThreadId,
-          type,
-        );
-        const voiceAsset = resolveUploadedVoiceAsset(uploaded);
-        if (!voiceAsset) {
+        const uploaded = await api.uploadAttachment(attachments, trimmedThreadId, type);
+        const voiceUrl = resolveUploadedVoiceUrl(uploaded);
+        if (!voiceUrl) {
           throw new Error("Failed to resolve uploaded audio URL for voice message");
         }
         // zca-js expects the uploaded URL itself, without an appended filename.
-        const voiceUrl = voiceAsset.fileUrl.trim();
         const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
         const voiceMessageId = extractSendMessageId(response);
         return {
@@ -179,15 +158,7 @@ export async function sendZaloTextWithApi(
         {
           msg: payloadText,
           ...(textStyles ? { styles: textStyles } : {}),
-          attachments: [
-            {
-              data: media.buffer,
-              filename: hasAttachmentExtension(fileName) ? fileName : `${fileName}.bin`,
-              metadata: {
-                totalSize: media.buffer.length,
-              },
-            },
-          ],
+          attachments,
         },
         trimmedThreadId,
         type,

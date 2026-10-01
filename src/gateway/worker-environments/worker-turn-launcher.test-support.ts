@@ -4,6 +4,7 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -32,6 +33,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import type {
@@ -66,6 +68,9 @@ const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 
+export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
+  WORKER_TOOL_NAMES;
+
 export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (plan, claim) =>
   measureNodeWorkerLaunchBytes("fixture-node", {
     environmentSession: 1,
@@ -89,6 +94,7 @@ export function createWorkerTurnTunnel<
       resume: vi.fn(async () => {}),
     })),
     measureLaunchTurn,
+    readLaunchToolNames,
     syncWorkspace: vi.fn(async () => {
       throw new Error("unexpected workspace sync");
     }),
@@ -102,7 +108,7 @@ export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcile
     if (request.source.kind !== "local") {
       throw new Error("expected a local workspace source");
     }
-    request.source.journal.commit(MANIFEST_REF);
+    await request.source.journal.commit(MANIFEST_REF);
     return {
       manifestRef: MANIFEST_REF,
       changed: false,
@@ -200,6 +206,49 @@ export async function cleanupWorkerTurnLauncherTest(
 
 export function setWorkerTurnAdmissionCleanup(cleanup: () => void): void {
   cleanupAdmissionSink = cleanup;
+}
+
+export function abortWorkerTurnClaimWaitOnSignal(signal: AbortSignal) {
+  const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+  vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) =>
+    waitForClaim(sessionId, {
+      ...options,
+      signal: options.signal ? AbortSignal.any([options.signal, signal]) : signal,
+    }),
+  );
+}
+
+export function createWorkerTurnSessionRuntimeLoader() {
+  const entry = {
+    sessionId: SESSION_ID,
+    updatedAt: 1,
+    worktree: { id: "workspace", branch: "fixture", repoRoot: root },
+  };
+  return async () => ({
+    managedWorktrees: {
+      findLiveByOwner: () => ({
+        id: "workspace",
+        name: "fixture",
+        repoFingerprint: "fixture",
+        repoRoot: root,
+        path: root,
+        branch: "fixture",
+        baseRef: "main",
+        ownerKind: "session" as const,
+        ownerId: SESSION_KEY,
+        createdAt: 1,
+        lastActiveAt: 1,
+      }),
+    },
+    resolveGatewaySessionStoreTargetWithStore: () => ({
+      storePath: sessionTarget.storePath,
+      canonicalKey: SESSION_KEY,
+      storeKeys: [SESSION_KEY],
+      agentId: "main",
+      store: { [SESSION_KEY]: entry },
+    }),
+    resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+  });
 }
 
 export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof sessionTarget {
@@ -354,6 +403,7 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
       protocolFeatures: [
         WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
         WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
       ],
       installKind: "bundle",
     },

@@ -66,13 +66,7 @@ export async function readDescendantSubagentFallbackReply(params: {
     }
     replies.push(reply);
   }
-  if (replies.length === 0) {
-    return undefined;
-  }
-  if (replies.length === 1) {
-    return replies[0];
-  }
-  return replies.join("\n\n");
+  return replies.length ? replies.join("\n\n") : undefined;
 }
 
 /**
@@ -201,12 +195,7 @@ export async function waitForDescendantSubagentSummary(params: {
     }
 
     // Final read after grace period expires.
-    const latest = await resolveUsableLatestReply();
-    if (latest) {
-      return latest;
-    }
-
-    return undefined;
+    return await resolveUsableLatestReply();
   } catch (error) {
     if (params.abortSignal?.aborted || Date.now() >= deadline) {
       return undefined;

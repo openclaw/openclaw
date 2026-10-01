@@ -44,16 +44,7 @@ import {
   SLACK_STATIC_SELECT_OPTIONS_MAX,
 } from "./presentation.js";
 import { encodeSlackQuestionAction } from "./question-actions.js";
-import {
-  SLACK_APPROVAL_BUTTON_ACTION_ID,
-  SLACK_APPROVAL_SELECT_ACTION_ID,
-  SLACK_CALLBACK_BUTTON_ACTION_ID,
-  SLACK_CALLBACK_SELECT_ACTION_ID,
-  SLACK_REPLY_BUTTON_ACTION_ID,
-  SLACK_REPLY_LINK_ACTION_ID,
-  SLACK_REPLY_SELECT_ACTION_ID,
-  SLACK_QUESTION_BUTTON_ACTION_ID,
-} from "./reply-action-ids.js";
+import { SLACK_BUTTON_ACTION_IDS, SLACK_SELECT_ACTION_IDS } from "./reply-action-ids.js";
 import { truncateSlackText } from "./truncate.js";
 
 const SLACK_BUTTON_URL_MAX = 3000;
@@ -67,20 +58,6 @@ export type SlackBlockRenderOptions = {
   questionOptionIndices?: AskUserQuestionOptionIndices;
   selectIndexOffset?: number;
 };
-
-const SLACK_BUTTON_ACTION_IDS = {
-  approval: SLACK_APPROVAL_BUTTON_ACTION_ID,
-  callback: SLACK_CALLBACK_BUTTON_ACTION_ID,
-  link: SLACK_REPLY_LINK_ACTION_ID,
-  question: SLACK_QUESTION_BUTTON_ACTION_ID,
-  reply: SLACK_REPLY_BUTTON_ACTION_ID,
-} as const;
-
-const SLACK_SELECT_ACTION_IDS = {
-  approval: SLACK_APPROVAL_SELECT_ACTION_ID,
-  callback: SLACK_CALLBACK_SELECT_ACTION_ID,
-  reply: SLACK_REPLY_SELECT_ACTION_ID,
-} as const;
 
 function resolveSlackButtonStyle(
   style: "primary" | "secondary" | "success" | "danger" | undefined,

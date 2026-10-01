@@ -3,7 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveLiveManagedGatewayDistFence } from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import * as gatewayService from "./service.js";
+import * as launchdRuntime from "./launchd-runtime.js";
 
 vi.mock("./systemd-loaded-unit-inventory.js", () => ({ listLoadedSystemdUnits: async () => [] }));
 vi.mock("../process/exec.js", async (importOriginal) => {
@@ -78,12 +78,9 @@ it("admits an unrelated unreadable launchd plist and still fences a live Gateway
   try {
     await withTestDir({ prefix: "openclaw-launchd-fence-" }, async (home) => {
       const checkout = path.join(home, "openclaw");
-      const other = path.join(home, "other");
-      for (const root of [checkout, other]) {
-        await fs.mkdir(path.join(root, "dist"), { recursive: true });
-        await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}\n');
-        await fs.writeFile(path.join(root, "dist", "index.js"), "gateway\n");
-      }
+      await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
+      await fs.writeFile(path.join(checkout, "package.json"), '{"name":"openclaw"}\n');
+      await fs.writeFile(path.join(checkout, "dist", "index.js"), "gateway\n");
       const agents = path.join(home, "Library", "LaunchAgents");
       await fs.mkdir(path.join(agents, "org.example.custom-worker.plist"), { recursive: true });
       const readdir = fs.readdir;
@@ -96,31 +93,35 @@ it("admits an unrelated unreadable launchd plist and still fences a live Gateway
             : Promise.resolve([]);
         });
       const label = "ai.openclaw.gateway.dev";
+      const target = `gui/501/${label}`;
+      const sourcePath = path.join(agents, `${label}.plist`);
+      const programArguments = [
+        process.execPath,
+        path.join(checkout, "dist", "index.js"),
+        "gateway",
+      ];
       const readState = vi
-        .spyOn(gatewayService, "readGatewayServiceState")
-        .mockImplementation(async (_service, input) => {
-          const live = input?.env?.OPENCLAW_LAUNCHD_LABEL === label;
+        .spyOn(launchdRuntime, "readLoadedLaunchAgentState")
+        .mockImplementation(async (env) => {
+          const live = env.OPENCLAW_LAUNCHD_LABEL === label;
           return {
             installed: live,
             loadState: { status: live ? "loaded" : "not-loaded" },
             running: live,
-            env: {},
-            command: live
-              ? {
-                  programArguments: [
-                    process.execPath,
-                    path.join(checkout, "dist", "index.js"),
-                    "gateway",
-                  ],
-                }
-              : {
-                  programArguments: [
-                    process.execPath,
-                    path.join(other, "dist", "index.js"),
-                    "gateway",
-                  ],
-                },
+            env,
+            command: live ? { programArguments, sourcePath } : null,
             runtime: { status: live ? "running" : "stopped" },
+            ...(live
+              ? {
+                  launchAgent: {
+                    target,
+                    sourcePath,
+                    program: process.execPath,
+                    programArguments,
+                    environment: {},
+                  },
+                }
+              : {}),
           };
         });
       try {
@@ -130,14 +131,16 @@ it("admits an unrelated unreadable launchd plist and still fences a live Gateway
         ).resolves.toEqual({ refuse: false });
 
         await fs.writeFile(
-          path.join(agents, `${label}.plist`),
+          sourcePath,
           `<plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>${process.execPath}</string><string>${path.join(checkout, "dist", "index.js")}</string><string>gateway</string></array></dict></plist>`,
         );
         await expect(
           resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
         ).resolves.toMatchObject({
           refuse: true,
-          message: expect.stringContaining("profile gateway.dev"),
+          message: expect.stringContaining(
+            `launchd job ${JSON.stringify(target)} loaded from ${JSON.stringify(sourcePath)}`,
+          ),
         });
       } finally {
         readState.mockRestore();

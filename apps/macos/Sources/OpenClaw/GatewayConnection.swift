@@ -44,6 +44,7 @@ actor GatewayConnection: Observable {
         OpenClawGatewayClientCapability.agentKind,
         OpenClawGatewayClientCapability.inlineWidgets,
         OpenClawGatewayClientCapability.modelSelectionPolicy,
+        OpenClawGatewayClientCapability.ultrafast,
         OpenClawGatewayClientCapability.usageRefreshing,
     ]
 
@@ -79,7 +80,7 @@ actor GatewayConnection: Observable {
 
     struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
-        fileprivate let authority: UInt64?
+        let authority: UInt64?
         let url: URL
         fileprivate let token: String?
         fileprivate let password: String?
@@ -210,7 +211,7 @@ actor GatewayConnection: Observable {
     private nonisolated let endpointObservation = ObservationRegistrar()
     private let supportsSharedEndpointRecovery: Bool
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
-    private let includeDeviceIdentity: Bool
+    let includeDeviceIdentity: Bool
     private let sessionProvider: SessionProvider
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
@@ -686,6 +687,17 @@ extension GatewayConnection {
             timeoutMs: request.timeoutMs,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
+    }
+
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        ifCurrentServerLease lease: ServerLease) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentServerLease: lease)
     }
 
     func requestDecoded<T: Decodable>(
@@ -1245,6 +1257,14 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
+    func controlUiAuthBinding(ifCurrentServerLease lease: ServerLease) async throws -> GatewayAuthBinding {
+        guard await self.isCurrentServerLease(lease),
+              let binding = await lease.client.authBinding(ifCurrentConnectionGeneration: lease.socketGeneration),
+              await self.isCurrentServerLease(lease)
+        else { throw CancellationError() }
+        return binding
+    }
+
     func sourceResourceBearer(ifCurrentServerLease lease: ServerLease) async throws -> String? {
         guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
         let bearer = await lease.client.httpResourceBearer(ifCurrentConnectionGeneration: lease.socketGeneration)
@@ -1611,21 +1631,19 @@ extension GatewayConnection {
         if let maxChars {
             params["maxChars"] = AnyCodable(maxChars)
         }
-        let timeout = timeoutMs.map { Double($0) }
         return try await self.requestDecoded(
             method: .sessionsPreview,
             params: params,
-            timeoutMs: timeout)
+            timeoutMs: timeoutMs.map { Double($0) })
     }
 
     // MARK: - Chat
 
     func agentIdentity(sessionKey: String, timeoutMs: Double = 10000) async throws -> AgentIdentityResult {
         // Identity and chat.send must resolve aliases to the same canonical session target.
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        return try await self.requestDecoded(
+        try await self.requestDecoded(
             method: .agentIdentityGet,
-            params: ["sessionKey": AnyCodable(resolvedKey)],
+            params: ["sessionKey": AnyCodable(self.canonicalizeSessionKey(sessionKey))],
             timeoutMs: timeoutMs)
     }
 
@@ -1637,20 +1655,17 @@ extension GatewayConnection {
         timeoutMs: Int? = nil,
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
     {
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         let request = OpenClawChatGatewayRequests.history(
-            sessionKey: resolvedKey,
+            sessionKey: self.canonicalizeSessionKey(sessionKey),
             agentID: agentID,
             limit: limit,
             maxChars: maxChars,
             timeoutMs: timeoutMs)
-        if let route {
-            let data = try await self.request(
-                request,
-                ifCurrentRoute: route)
-            return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
+        let data = if let route {
+            try await self.request(request, ifCurrentRoute: route)
+        } else {
+            try await self.request(request)
         }
-        let data = try await self.request(request)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
     }
 
@@ -1688,9 +1703,8 @@ extension GatewayConnection {
         guard expectedSessionSettings == nil || supportsSettingsCAS else {
             throw OpenClawChatTransportSendError.notDispatched
         }
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         let request = OpenClawChatGatewayRequests.sendMessage(
-            sessionKey: resolvedKey,
+            sessionKey: self.canonicalizeSessionKey(sessionKey),
             agentID: agentID,
             expectedSessionRoutingContract: expectedSessionRoutingContract,
             expectedSessionSettings: expectedSessionSettings,
@@ -1702,14 +1716,14 @@ extension GatewayConnection {
             runTimeoutMs: runTimeoutMs,
             requestTimeoutMs: requestTimeoutMs)
 
-        if let route {
-            let data = try await self.request(
+        let data = if let route {
+            try await self.request(
                 request,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
-            return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
+        } else {
+            try await self.request(request)
         }
-        let data = try await self.request(request)
         return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
     }
 }

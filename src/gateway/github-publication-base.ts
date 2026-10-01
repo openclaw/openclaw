@@ -45,6 +45,17 @@ export function githubPublicationBaseLineageArgs(ancestor: string, descendant: s
   return ["git", "merge-base", "--is-ancestor", ancestor, descendant];
 }
 
+const worktreeConfigArgs: readonly string[] = [
+  "git",
+  "config",
+  "--local",
+  "--includes",
+  "--bool",
+  "--default=false",
+  "--get",
+  "extensions.worktreeConfig",
+];
+
 export function githubPublicationUnsafeConfigArgs(scope: "--local" | "--worktree"): string[] {
   return [
     "git",
@@ -58,10 +69,11 @@ export function githubPublicationUnsafeConfigArgs(scope: "--local" | "--worktree
 
 // Shared by node-executed capture and restore. Even intent-to-add can run clean
 // conversion while Git rewrites racily clean entries elsewhere in the index.
-export const GITHUB_PUBLICATION_CONFIG_GUARD_JS = String.raw`
+export const GITHUB_PUBLICATION_CONFIG_GUARD = {
+  worktreeConfigArgs,
+  script: String.raw`
 const scopes = ["--local"];
-const worktreeConfig = spawnSync("git", ["config", "--local", "--includes", "--bool",
-  "--default=false", "--get", "extensions.worktreeConfig"], { cwd, env, timeout: 60000, maxBuffer: 128 * 1024 });
+const worktreeConfig = spawnSync("git", ${JSON.stringify(worktreeConfigArgs.slice(1))}, { cwd, env, timeout: 60000, maxBuffer: 128 * 1024 });
 if (worktreeConfig.error || worktreeConfig.status !== 0) {
   throw Error("Publication workspace has unsupported Git transport configuration");
 }
@@ -76,7 +88,8 @@ for (const scope of scopes) {
     throw Error("Publication workspace has unsupported Git transport configuration");
   }
 }
-`;
+`,
+};
 
 export function parseGitHubPublicationBaseBranch(baseRef: string, defaultBranch: string): string {
   const trimmed = baseRef.trim();

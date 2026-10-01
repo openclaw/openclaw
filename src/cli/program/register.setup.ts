@@ -20,7 +20,7 @@ const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap",
 
 type SetupRoute = "onboarding" | "system-agent";
 
-export function resolveSetupCommandRoute(input: {
+function resolveSetupCommandRoute(input: {
   hasOnboardingFlag: boolean;
   hasSystemAgentRequest: boolean;
   configured: boolean;

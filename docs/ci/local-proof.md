@@ -8,6 +8,11 @@ read_when:
 
 ## Local equivalents
 
+The complete channels test lane prepares its native worker artifacts before
+starting the test process. Cold compilation therefore does not consume the
+test-output watchdog's deadline. Focused channel selections retain lazy
+preparation; the watchdog and compiler cleanup rules remain unchanged.
+
 The lint wrapper owns Go resource limits for current CI. It applies them on
 hosts with fewer than eight available CPUs or less than 24 GiB of memory,
 without applying lint defaults to declaration preparation. Explicit Go settings
@@ -189,8 +194,13 @@ Docker proof wrappers carry the signal and relay their summaries to the runner.
 
 Oxlint keeps configured line caps and exclusions: 700 counted lines for ordinary
 TypeScript, 800 for JavaScript modules, and 1,000 for tests, with the existing
-explicit overrides. Local lint reports errors. CI uses a temporary configuration
-that changes only enabled size-rule severity to warning. SwiftLint likewise
+explicit overrides. Standalone local lint reports errors. In `check:changed`,
+lint reports `max-lines` errors for selected changed files and warnings for
+untouched files included by a broader lint lane. The broad scan still reports
+semantic errors everywhere it runs. Empty or oversized change scopes, changes to
+lint configuration or dependencies, and configurations with inherited limits
+keep strict local enforcement. CI uses a temporary configuration that changes
+only enabled size-rule severity to warning. SwiftLint likewise
 reports native length, nesting, complexity, and count limits as CI warnings;
 semantic lint errors remain blocking.
 
@@ -219,9 +229,10 @@ the added cost. Do not trim coverage, disable rules, or raise thresholds just
 to silence a warning.
 
 Correctness checks stay blocking, including types, semantic lint, blanket lint
-disables, assertion safety, missing or malformed evidence, failed commands,
-forbidden eager imports, and exactly-once ownership. Public SDK inventories and
-generated configuration-schema baselines remain contract guards. Runner matrix
+disables, assertion safety, the test timeout race ratchet, missing or malformed
+evidence, failed commands, forbidden eager imports, and exactly-once ownership.
+Public SDK inventories and generated configuration-schema baselines remain
+contract guards. Runner matrix
 caps protect shared runner-registration capacity and remain blocking. Explicit
 benchmark qualification verdicts retain their requested acceptance criteria.
 
@@ -279,9 +290,9 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.67.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.69.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.67.0 release
+Testboxes alive. Missing or older binaries use a verified managed 0.69.0 release
 before provider discovery or lease work. The original binary stays untouched.
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.

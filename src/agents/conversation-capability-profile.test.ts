@@ -55,7 +55,6 @@ describe("resolveConversationCapabilityProfile", () => {
   it("intersects a prepared direct policy with existing tool policy", () => {
     const profile = resolveConversationCapabilityProfile({
       config: { tools: { deny: ["write"] } },
-      chatType: "direct",
       conversationToolPolicy: { allow: ["read", "write", "exec"], deny: ["exec"] },
     });
 
@@ -74,7 +73,7 @@ describe("resolveConversationCapabilityProfile", () => {
   });
 
   it("does not add a requester restriction without a conversation policy", () => {
-    const profile = resolveConversationCapabilityProfile({ chatType: "direct" });
+    const profile = resolveConversationCapabilityProfile({});
 
     expect(profile.policy.groupPolicy).toBeUndefined();
     expect(
@@ -100,34 +99,23 @@ describe("resolveConversationCapabilityProfile", () => {
       sessionKey: "agent:main:discord:dm:guest",
       agentId: "main",
       messageProvider: "discord",
-      chatType: "direct",
       senderId: "guest",
       modelProvider: "openai",
       modelId: "gpt-5.5",
-      modelApi: "responses",
       workspaceDir: "/tmp/openclaw-direct-profile",
       cwd: "/tmp/openclaw-direct-profile/task",
-      agentDir: "/tmp/openclaw-agent-direct-profile",
-      skillsSnapshot: {
-        prompt: "",
-        skills: [{ name: "ops" }],
-      },
     });
 
-    expect(profile.conversation.scope).toBe("direct");
     expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
     expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
     expect(profile.model).toMatchObject({
       provider: "openai",
       id: "gpt-5.5",
-      api: "responses",
     });
     expect(profile.workspace).toMatchObject({
       workspaceRoot: "/tmp/openclaw-direct-profile",
       runtimeRoot: "/tmp/openclaw-direct-profile/task",
-      instructionRoot: "/tmp/openclaw-agent-direct-profile",
     });
-    expect(profile.skills.snapshot?.skills).toEqual([{ name: "ops" }]);
   });
 
   it.each([
@@ -155,7 +143,6 @@ describe("resolveConversationCapabilityProfile", () => {
     const deny = ["exec", "process"];
     const profile = resolveConversationCapabilityProfile({
       config: { tools: { toolsBySender: { "*": { deny } } } },
-      chatType: "direct",
       ...params,
     });
 
@@ -186,7 +173,6 @@ describe("resolveConversationCapabilityProfile", () => {
       sessionKey: "agent:main:whatsapp:group:team",
       agentId: "main",
       messageProvider: "whatsapp",
-      chatType: "group",
       groupId: "team",
       senderId: "alice",
       modelProvider: "openai",
@@ -194,7 +180,6 @@ describe("resolveConversationCapabilityProfile", () => {
       workspaceDir: "/tmp/openclaw-shared-profile",
     });
 
-    expect(profile.conversation.scope).toBe("shared");
     expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
     expect(profile.policy.groupPolicy).toEqual({ allow: ["read", "exec"] });
     expect(profile.policy.explicitToolAllowlist).toEqual(["read", "exec"]);
@@ -353,10 +338,7 @@ describe("resolveConversationCapabilityProfile", () => {
     );
   });
 
-  it("does not classify the conversation as shared from a dropped caller group id", () => {
-    // Non-group session key cannot vouch for the caller-supplied group facts:
-    // the trust check drops them, so scope must stay unknown instead of
-    // reflecting untrusted input that the profile itself publishes as null.
+  it("drops caller group facts that the session key cannot vouch for", () => {
     const profile = resolveConversationCapabilityProfile({
       sessionKey: "agent:main:discord:dm:guest",
       agentId: "main",
@@ -371,31 +353,9 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.conversation.groupId).toBeNull();
     expect(profile.conversation.groupChannel).toBeNull();
     expect(profile.conversation.groupSpace).toBeNull();
-    expect(profile.conversation.scope).toBe("unknown");
   });
 
-  it("classifies group-scoped session keys as shared without a live chat type", () => {
-    const profile = resolveConversationCapabilityProfile({
-      sessionKey: "agent:main:whatsapp:group:team",
-      agentId: "main",
-      messageProvider: "whatsapp",
-    });
-
-    expect(profile.conversation.scope).toBe("shared");
-  });
-
-  it("classifies shared scope from the live run session key behind a sandbox policy key", () => {
-    const profile = resolveConversationCapabilityProfile({
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:telegram:group:ops",
-      agentId: "main",
-      messageProvider: "telegram",
-    });
-
-    expect(profile.conversation.scope).toBe("shared");
-  });
-
-  it("keeps trusted caller group facts shared when the session key vouches for them", () => {
+  it("keeps trusted caller group facts when the session key vouches for them", () => {
     const profile = resolveConversationCapabilityProfile({
       sessionKey: "agent:main:whatsapp:group:team",
       agentId: "main",
@@ -404,7 +364,6 @@ describe("resolveConversationCapabilityProfile", () => {
     });
 
     expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
-    expect(profile.conversation.scope).toBe("shared");
   });
 });
 

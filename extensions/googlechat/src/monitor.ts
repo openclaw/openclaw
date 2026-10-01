@@ -29,6 +29,7 @@ import {
   deliverGoogleChatReply,
   type GoogleChatTypingMessage,
 } from "./monitor-reply-delivery.js";
+import { normalizeGoogleChatReplyTarget } from "./monitor-reply-target.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -298,7 +299,7 @@ async function processGoogleChatEvent(
     typingIndicator = "message";
   }
   let typingMessage: GoogleChatTypingMessage | undefined;
-  const typingMessageThreadName =
+  const effectiveReplyThreadName =
     account.config.replyToMode && account.config.replyToMode !== "off"
       ? replyThreadName
       : undefined;
@@ -314,12 +315,12 @@ async function processGoogleChatEvent(
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: typingMessageThreadName,
+        thread: effectiveReplyThreadName,
       });
       if (result?.messageName) {
         typingMessage = createGoogleChatTypingMessage({
           messageName: result.messageName,
-          requestedThreadName: typingMessageThreadName,
+          requestedThreadName: effectiveReplyThreadName,
           deliveredThreadName: result.threadName,
         });
       }
@@ -351,14 +352,22 @@ async function processGoogleChatEvent(
         delivery: {
           durable: (payload, info) =>
             resolveGoogleChatDurableReplyOptions({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              }),
               infoKind: info.kind,
               spaceId,
               hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              }),
               account,
               spaceId,
               runtime,
@@ -416,11 +425,7 @@ export async function startGoogleChatMonitor(
   options: GoogleChatMonitorOptions,
 ): Promise<() => Promise<void>> {
   const core = getGoogleChatRuntime();
-  const webhookPath = resolveWebhookPath({
-    webhookPath: options.webhookPath,
-    webhookUrl: options.webhookUrl,
-    defaultPath: "/googlechat",
-  });
+  const webhookPath = resolveGoogleChatWebhookPath(options);
   if (!webhookPath) {
     options.runtime.error?.(`[${options.account.accountId}] invalid webhook path`);
     return async () => {};
@@ -487,15 +492,14 @@ export async function startGoogleChatMonitor(
   };
 }
 
-// Null keeps the same meaning it has in startGoogleChatMonitor above: the
-// configured webhookUrl does not parse, so no route is ever bound. Falling back
-// to the default path here would report a route the monitor never registers.
-export function resolveGoogleChatWebhookPath(params: {
-  account: ResolvedGoogleChatAccount;
-}): string | null {
+// Invalid webhook URLs stay null so status never advertises an unbound default route.
+export function resolveGoogleChatWebhookPath({
+  webhookPath,
+  webhookUrl,
+}: Pick<GoogleChatMonitorOptions, "webhookPath" | "webhookUrl">): string | null {
   return resolveWebhookPath({
-    webhookPath: params.account.config.webhookPath,
-    webhookUrl: params.account.config.webhookUrl,
+    webhookPath,
+    webhookUrl,
     defaultPath: "/googlechat",
   });
 }

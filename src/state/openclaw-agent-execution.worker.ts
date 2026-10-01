@@ -16,6 +16,7 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
+  normalizeDatabasePath,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
 import {
@@ -23,6 +24,7 @@ import {
   takeSqliteWorkerOperationAdmissionAttachment,
   deferSqliteWorkerCommitReceipt,
   SqliteWorkerOpenRefusedError,
+  type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import type {
@@ -48,7 +50,11 @@ import type {
   AgentDatabaseExecutionOpen,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
-import { createAgentDatabaseDomainOwner } from "./openclaw-agent-execution-domain.js";
+import {
+  createAgentDatabaseDomainOwner,
+  requestRestrictedAgentDatabaseAdmission,
+  type AgentDatabaseAdmissionRestriction,
+} from "./openclaw-agent-execution-domain.js";
 import {
   requireOpenClawStateDatabaseIdentity,
   retainOpenClawStateDatabase,
@@ -79,24 +85,15 @@ export function createSqliteWorkerBackend(
 }
 
 /** The broker supplies a private admission channel before invoking this native factory. */
-export function openExistingSqliteWorkerBackend(
+export const openExistingSqliteWorkerBackend: (
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string; existingIdentity?: string },
-): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
-  return openAgentDatabaseBackend(input, opening);
-}
-
-type AgentDatabaseNativeBackend = Omit<
-  SqliteWorkerPreparedBackend<AgentDatabaseOperations>,
-  "close"
-> & {
-  close(): void;
-};
+) => SqliteWorkerPreparedBackend<AgentDatabaseOperations> = openAgentDatabaseBackend;
 
 function openAgentDatabaseBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string; existingIdentity?: string },
-): AgentDatabaseNativeBackend {
+): Omit<SqliteWorkerPreparedBackend<AgentDatabaseOperations>, "close"> & { close(): void } {
   if (opening.databasePath !== input.databasePath) {
     throw new Error("Agent database open does not match its captured execution owner");
   }
@@ -109,11 +106,10 @@ function openAgentDatabaseBackend(
   };
   admitOpen();
   const options = { agentId: input.agentId, path: input.databasePath, env: input.environment };
-  const preparedFileIdentity =
+  let admittedFileIdentity =
     input.creatingIdentity?.key ??
     opening.existingIdentity ??
     readDatabasePathIdentitySync(input.databasePath).key;
-  let admittedFileIdentity = preparedFileIdentity;
   let admittedFileBirthtime = input.creatingIdentity?.birthtime;
   const assertFileIdentity = () => {
     if (input.expectedIdentity) {
@@ -297,16 +293,21 @@ function openAgentDatabaseBackend(
     });
     return database;
   };
-  const admit = (stage: "transaction" | "commit", publication?: unknown) => {
+  const admit = (
+    stage: "transaction" | "commit",
+    publication?: unknown,
+    requestAdmission?: AgentDatabaseAdmissionRestriction,
+  ) => {
     assertFileIdentity();
-    requestSqliteWorkerOperationAdmission({
+    const request: SqliteWorkerAdmissionRequest = {
       stage,
       facts: {
         identity,
         ...(startupJournalRequested ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
         ...(publication ? { publication } : {}),
       },
-    });
+    };
+    requestRestrictedAgentDatabaseAdmission(request, requestAdmission);
     if (stage === "commit") {
       ensureOpenClawAgentDatabasePermissions(input.databasePath, options);
     }
@@ -332,6 +333,7 @@ function openAgentDatabaseBackend(
   let providerReview:
     | typeof import("../config/sessions/provider-review-store.worker.js")
     | undefined;
+  let reactions: typeof import("../config/sessions/session-reaction-store.kernel.js") | undefined;
   let entryReader:
     | typeof import("../config/sessions/session-accessor.sqlite-entry-read.js")
     | undefined;
@@ -368,14 +370,14 @@ function openAgentDatabaseBackend(
         !database ||
         !identity ||
         !database.db.isOpen ||
-        database.db.location() !== identity.nativeLocation ||
+        normalizeDatabasePath(database.db.location() ?? "") !== identity.nativeLocation ||
         getOpenClawAgentDatabaseIfOpen(options) !== database
       ) {
         throw new Error("Agent cleanup lost its retained native database");
       }
       assertFileIdentity();
     },
-    admit,
+    admit: (stage, requestAdmission) => admit(stage, undefined, requestAdmission),
   });
   let closed = false;
   let closeReceipt: SqliteWorkerCloseReceipt | undefined;
@@ -511,6 +513,14 @@ function openAgentDatabaseBackend(
         admit,
       );
     }
+    if (command.type === "session.reaction.set" && reactions) {
+      const setReaction = reactions.setSessionReactionInDatabase;
+      return writeTransaction("session.reaction.set", "Reaction write", (current) => {
+        const result = setReaction(current, command.input.sessionKey, command.input.params);
+        admit("commit");
+        return result;
+      });
+    }
     if (command.type === "session.pendingInputs.withdraw" && pendingInputWithdrawal) {
       return pendingInputWithdrawal.discardSessionPendingInputInWorker(
         openWriter(),
@@ -546,42 +556,6 @@ function openAgentDatabaseBackend(
   };
   return {
     prepare(command) {
-      if (command.type === "session.entry.acp") {
-        return import("../acp/runtime/session-meta-entry.worker.js").then((module) => {
-          acpEntry = module;
-        });
-      }
-      if (command.type === "session.entry.read") {
-        return import("../config/sessions/session-accessor.sqlite-entry-read.js").then((module) => {
-          entryReader = module;
-        });
-      }
-      if (command.type === "trajectory.events.append") {
-        return import("../trajectory/runtime-store.sqlite.js").then((module) => {
-          trajectory = module;
-        });
-      }
-      if (
-        command.type === "session.archives.preparePublication" ||
-        command.type === "session.archives.recordPublication"
-      ) {
-        return import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js").then(
-          (module) => {
-            archives = module;
-          },
-        );
-      }
-      if (
-        command.type === "session.archivePruning.deletePublished" ||
-        command.type === "session.archivePruning.removeLegacy" ||
-        command.type === "session.archivePruning.reclaimPages"
-      ) {
-        return import("../config/sessions/session-history-archive-pruning.worker.js").then(
-          (module) => {
-            archivePruning = module;
-          },
-        );
-      }
       if (
         command.type === "session.transcript.initialize" ||
         (command.type === "session.entries.replace" && command.input.initializeTranscript)
@@ -600,32 +574,64 @@ function openAgentDatabaseBackend(
           };
         });
       }
-      if (command.type === "session.entries.replace") {
-        return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
-          (module) => {
-            replacements = module;
-          },
-        );
-      }
-      if (command.type === "session.providerReview.compare") {
-        return import("../config/sessions/provider-review-store.worker.js").then((module) => {
-          providerReview = module;
-        });
-      }
-      if (command.type === "session.pendingInputs.withdraw") {
-        return import("../config/sessions/session-pending-input-withdrawal.worker.js").then(
-          (module) => {
-            pendingInputWithdrawal = module;
-          },
-        );
-      }
-      if (
-        command.type === "database.domain.bind" ||
-        command.type === "database.domain.publish" ||
-        command.type === "database.domain.execute" ||
-        command.type === "database.domain.close"
-      ) {
-        return domain.prepare(command);
+      switch (command.type) {
+        case "session.entry.acp":
+          return import("../acp/runtime/session-meta-entry.worker.js").then((module) => {
+            acpEntry = module;
+          });
+        case "session.entry.read":
+          return import("../config/sessions/session-accessor.sqlite-entry-read.js").then(
+            (module) => {
+              entryReader = module;
+            },
+          );
+        case "trajectory.events.append":
+          return import("../trajectory/runtime-store.sqlite.js").then((module) => {
+            trajectory = module;
+          });
+        case "session.archives.preparePublication":
+        case "session.archives.recordPublication":
+          return import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js").then(
+            (module) => {
+              archives = module;
+            },
+          );
+        case "session.archivePruning.deletePublished":
+        case "session.archivePruning.removeLegacy":
+        case "session.archivePruning.reclaimPages":
+          return import("../config/sessions/session-history-archive-pruning.worker.js").then(
+            (module) => {
+              archivePruning = module;
+            },
+          );
+        case "session.entries.replace":
+          return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
+            (module) => {
+              replacements = module;
+            },
+          );
+        case "session.providerReview.compare":
+          return import("../config/sessions/provider-review-store.worker.js").then((module) => {
+            providerReview = module;
+          });
+        case "session.reaction.set":
+          return import("../config/sessions/session-reaction-store.kernel.js").then((module) => {
+            reactions = module;
+          });
+        case "session.pendingInputs.withdraw":
+          return import("../config/sessions/session-pending-input-withdrawal.worker.js").then(
+            (module) => {
+              pendingInputWithdrawal = module;
+            },
+          );
+        case "database.domain.bind":
+        case "database.domain.publish":
+        case "database.domain.execute":
+        case "database.domain.close":
+          return domain.prepare(command);
+        case "database.prepareWrite":
+        case "database.walMaintenance":
+          return undefined;
       }
       return undefined;
     },

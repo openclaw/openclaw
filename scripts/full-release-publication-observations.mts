@@ -148,6 +148,7 @@ async function collectObservations(params: {
     permitted.add(base);
     permitted.add(`${base}/trusted-publisher`);
     permitted.add(`${base}/versions/${encodeURIComponent(entry.version)}`);
+    permitted.add(`${base}/versions/${encodeURIComponent(entry.version)}/publication`);
   }
   // The two required registries share one task pool. Each task's retries/body
   // finish before its slot is released; advisory-only tasks start afterward.
@@ -392,6 +393,8 @@ async function collectObservations(params: {
           bootstrapCandidates: [],
           missingTrustedPublisher: [],
           skippedPublished: [],
+          pendingPublication: [],
+          failedPublication: [],
           warnings: [],
         };
     assertActive();
@@ -422,11 +425,20 @@ async function collectObservations(params: {
           warnings: npmPlan.warnings,
         },
         clawhub: {
-          all: entries(clawhubPlan.all),
+          all: clawhubPlan.all.map(
+            ({ packageName: name, version, alreadyPublished, publication }) => ({
+              name,
+              version,
+              alreadyPublished,
+              publication,
+            }),
+          ),
           candidates: names(clawhubPlan.candidates),
           bootstrapCandidates: names(clawhubPlan.bootstrapCandidates),
           missingTrustedPublisher: names(clawhubPlan.missingTrustedPublisher),
           skippedPublished: names(clawhubPlan.skippedPublished),
+          pendingPublication: names(clawhubPlan.pendingPublication),
+          failedPublication: names(clawhubPlan.failedPublication),
           warnings: clawhubPlan.warnings,
         },
       },

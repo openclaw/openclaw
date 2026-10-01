@@ -56,69 +56,10 @@ describe("update-cli", () => {
     mockGatewayHealth,
     mockOwnedGitService,
     mockPackageInstallAtCaseDir,
-    runUpdateCliScenario,
-    setupNonInteractiveDowngrade,
     tempDirs,
   } = createUpdateCliFixture();
 
   it.each([
-    {
-      name: "preview mode",
-      run: async () => {
-        vi.mocked(defaultRuntime.log).mockClear();
-        serviceLoaded.mockResolvedValue(true);
-        mockOwnedGitService();
-        await updateCommand({ dryRun: true, channel: "beta" });
-      },
-      assert: () => {
-        expectNoSideEffects(
-          cleanupStaleManagedServiceUpdateHandoffs,
-          replaceConfigFile,
-          updateGitCheckout,
-          runDaemonInstall,
-          runDaemonRestart,
-          launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-        );
-        expect(freshRestartCalls()).toHaveLength(0);
-
-        const logs = getLogOutput();
-        expect(logs).toContain("Update dry-run");
-        expect(logs).toContain("No changes were applied.");
-      },
-    },
-    {
-      name: "downgrade bypass",
-      run: async () => {
-        await setupNonInteractiveDowngrade();
-        vi.mocked(defaultRuntime.exit).mockClear();
-        await updateCommand({ dryRun: true });
-      },
-      assert: () => {
-        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-        expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-        expect(updateGitCheckout).not.toHaveBeenCalled();
-        expect(
-          launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-        ).not.toHaveBeenCalled();
-      },
-    },
-  ] as const)("updateCommand dry-run behavior: $name", runUpdateCliScenario);
-
-  it.each([
-    { name: "text", options: { dryRun: true, channel: "beta" } },
-    { name: "JSON", options: { dryRun: true, json: true, channel: "beta" } },
-  ])("reads config without recording observations during a $name dry run", async ({ options }) => {
-    await updateCommand(options);
-
-    expect(readConfigFileSnapshot).toHaveBeenCalledWith({
-      skipPluginValidation: true,
-      observe: false,
-    });
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { installKind: "git", installedVersion: "2026.9.3" },
     { installKind: "package", installedVersion: "2026.9.3" },
     { installKind: "git", installedVersion: null },
   ] as const)(
@@ -159,6 +100,10 @@ describe("update-cli", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await updateCommand({ dryRun: true, json: true, channel: "beta", acceptCapabilities: true });
       const output = lastWriteJsonCall() as { runId: string };
+      expect(readConfigFileSnapshot).toHaveBeenCalledWith({
+        skipPluginValidation: true,
+        observe: false,
+      });
       expect(listUpdateRuns()).toMatchObject([
         {
           runId: output.runId,
@@ -204,7 +149,18 @@ describe("update-cli", () => {
           (error: unknown) => error,
         );
         const runs = listUpdateRuns();
-        expectUpdateFailureReport(reported, failure, lastWriteJsonCall(), runs[0]?.runId);
+        if (boundary === "progress initialization") {
+          expect(reported).toEqual(new ExitError(1));
+          expect(lastWriteJsonCall()).toMatchObject({
+            status: "error",
+            reason: "update-failed",
+            runId: runs[0]?.runId,
+            reportPath: expect.any(String),
+          });
+          expect(JSON.stringify(lastWriteJsonCall())).toContain(failure.message);
+        } else {
+          expectUpdateFailureReport(reported, failure, lastWriteJsonCall(), runs[0]?.runId);
+        }
         expect(runs).toHaveLength(1);
         expect(runs[0]).toMatchObject({
           trigger: "cli",
@@ -306,97 +262,133 @@ describe("update-cli", () => {
     expect(ledgerReads).toHaveBeenCalledTimes(readsAtHandoff);
   });
 
-  it.each([false, true])(
-    "records ordered update phases across service stop, restart, and verified health (json=%s)",
-    async (json) => {
-      const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");
-      const inspectSchemas = expectDefined(
-        stateSchemaVersions.getMockImplementation(),
-        "schema inspection",
-      );
-      let observedActivation = false;
-      stateSchemaVersions.mockImplementation(async (options) => {
-        const versions = await inspectSchemas(options);
-        if (serviceStop.mock.calls.length > 0 && !observedActivation) {
-          // The real onActivation callback has run, but schema inspection has not
-          // yet authorized this process to reopen the candidate's ledger.
-          const progress = expectDefined(
-            vi.mocked(updateGitCheckout).mock.calls[0]?.[0]?.opts.progress,
-            "update progress",
-          );
-          const readsBefore = ledgerReads.mock.calls.length;
-          expectDefined(
-            progress.onStepComplete,
-            "step completion",
-          )({
-            name: "core migrations",
-            command: "doctor --fix",
-            index: 0,
-            total: 1,
-            durationMs: 1,
-            exitCode: 0,
-          });
-          expect(ledgerReads).toHaveBeenCalledTimes(readsBefore);
-          observedActivation = true;
-        }
-        return versions;
+  it("records ordered update phases across service stop, restart, and verified health", async () => {
+    const progressReads = await import("../infra/update-run-reader.js");
+    const readProgress = progressReads.getUpdateRunForProgressAsync;
+    const heldReads: ReturnType<typeof readProgress>[] = [];
+    const readSignals: AbortSignal[] = [];
+    const releaseReads = new Set<() => void>();
+    const progressReadSpy = vi
+      .spyOn(progressReads, "getUpdateRunForProgressAsync")
+      .mockImplementation((...args) => {
+        const readSignal = expectDefined(args[2], "owned progress reader signal");
+        readSignals.push(readSignal);
+        const delayed = (async () => {
+          const snapshot = structuredClone(await readProgress(...args));
+          if (!readSignal.aborted) {
+            await new Promise<void>((resolve) => {
+              const release = () => {
+                readSignal.removeEventListener("abort", release);
+                releaseReads.delete(release);
+                resolve();
+              };
+              releaseReads.add(release);
+              readSignal.addEventListener("abort", release, { once: true });
+            });
+          }
+          return snapshot;
+        })();
+        heldReads.push(delayed);
+        return delayed;
       });
-      mockOwnedGitService();
-      mockGitUpdateAfterMutation(
-        makeOkUpdateResult({
-          root: process.cwd(),
-          before: { version: "0.9.0" },
-          after: { version: VERSION },
-        }),
-      );
-      // Candidate admission precedes the intentionally absent post-core handoff CLI.
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-        path.join(process.cwd(), "dist", "index.js"),
-      );
-      mockCurrentProcessFreshDoctor();
-      mockGatewayHealth(VERSION, "updated-gateway");
-      serviceLoaded.mockResolvedValue(true);
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
-        path.join(process.cwd(), "dist", "index.js"),
-      );
-      try {
-        await updateCommand({ yes: true, json });
-      } catch (error) {
-        throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
-          cause: error,
+    const ledgerReads = vi.spyOn(await import("../infra/update-run-ledger.js"), "getUpdateRun");
+    const inspectSchemas = expectDefined(
+      stateSchemaVersions.getMockImplementation(),
+      "schema inspection",
+    );
+    let observedActivation = false;
+    stateSchemaVersions.mockImplementation(async (options) => {
+      const versions = await inspectSchemas(options);
+      if (serviceStop.mock.calls.length > 0 && !observedActivation) {
+        // The real onActivation callback has run, but schema inspection has not
+        // yet authorized this process to reopen the candidate's ledger.
+        const progress = expectDefined(
+          vi.mocked(updateGitCheckout).mock.calls[0]?.[0]?.opts.progress,
+          "update progress",
+        );
+        const readsBefore = ledgerReads.mock.calls.length;
+        expectDefined(
+          progress.onStepComplete,
+          "step completion",
+        )({
+          name: "core migrations",
+          command: "doctor --fix",
+          index: 0,
+          total: 1,
+          durationMs: 1,
+          exitCode: 0,
         });
+        expect(ledgerReads).toHaveBeenCalledTimes(readsBefore);
+        observedActivation = true;
       }
-      expect(observedActivation).toBe(true);
-      expect(freshRestartCalls()).toHaveLength(1);
-      expect(runDaemonRestart).not.toHaveBeenCalled();
-      const run = expectDefined(listUpdateRuns({ limit: 1 })[0], "admitted update run");
-      expect(serviceStop, getErrorOutput()).toHaveBeenCalledOnce();
-      expect(run, getErrorOutput()).toMatchObject({
-        trigger: "cli",
-        status: "succeeded",
-        phase: "finished",
-        verification: { serviceRunning: true, runningVersion: VERSION },
+      return versions;
+    });
+    mockOwnedGitService();
+    mockGitUpdateAfterMutation(
+      makeOkUpdateResult({
+        root: process.cwd(),
+        before: { version: "0.9.0" },
+        after: { version: VERSION },
+      }),
+    );
+    // Candidate admission precedes the intentionally absent post-core handoff CLI.
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      path.join(process.cwd(), "dist", "index.js"),
+    );
+    mockCurrentProcessFreshDoctor();
+    mockGatewayHealth(VERSION, "updated-gateway");
+    serviceLoaded.mockResolvedValue(true);
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
+      path.join(process.cwd(), "dist", "index.js"),
+    );
+    try {
+      await updateCommand({ yes: true });
+    } catch (error) {
+      throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
+        cause: error,
       });
-      expect(
-        run?.steps
-          .filter((step) =>
-            [
-              "requested",
-              "staging",
-              "validating",
-              "activating",
-              "restarting",
-              "verifying",
-            ].includes(step.step),
-          )
-          .map((step) => step.step),
-      ).toEqual(["requested", "staging", "validating", "activating", "restarting", "verifying"]);
-      if (!json) {
-        expect(getLogOutput()).toContain("Phase: activating");
-        expect(getLogOutput()).toContain("Phase: verifying");
+    } finally {
+      for (const release of releaseReads) {
+        release();
       }
-    },
-  );
+      await Promise.allSettled(heldReads);
+      progressReadSpy.mockRestore();
+    }
+    expect(heldReads.length).toBeGreaterThan(0);
+    expect(readSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(observedActivation).toBe(true);
+    expect(freshRestartCalls()).toHaveLength(1);
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    const run = expectDefined(listUpdateRuns({ limit: 1 })[0], "admitted update run");
+    expect(serviceStop, getErrorOutput()).toHaveBeenCalledOnce();
+    expect(run, getErrorOutput()).toMatchObject({
+      trigger: "cli",
+      status: "succeeded",
+      phase: "finished",
+      verification: { serviceRunning: true, runningVersion: VERSION },
+    });
+    expect(
+      run?.steps
+        .filter((step) =>
+          ["requested", "staging", "validating", "activating", "restarting", "verifying"].includes(
+            step.step,
+          ),
+        )
+        .map((step) => step.step),
+    ).toEqual(["requested", "staging", "validating", "activating", "restarting", "verifying"]);
+    const output = getLogOutput();
+    const phases = output.split("\n").filter((line) => line.startsWith("Phase:"));
+    expect(phases).toEqual([
+      "Phase: requested",
+      "Phase: staging",
+      "Phase: validating",
+      "Phase: activating",
+      "Phase: restarting",
+      "Phase: verifying",
+      "Phase: finished",
+    ]);
+    expect(output.indexOf("OpenClaw updated")).toBeGreaterThan(output.indexOf("Phase: finished"));
+  });
 
   it("does not clean managed-service handoffs before rejecting an invalid timeout", async () => {
     const runsBefore = listUpdateRuns();

@@ -203,34 +203,28 @@ export class DurableChatComposerPersistence {
     this.restoredScopeKey = "";
   }
 
-  persist(snapshot: DurableChatComposerSnapshot) {
-    const run = async () => {
-      const { result, payloadUnavailable } = await writeDurableComposerSnapshot(snapshot);
-      if (payloadUnavailable) {
-        reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
-      }
-      if (result.status === "storage-failed" || result.status === "payload-too-large") {
-        reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
-      } else if (result.status === "conflict") {
-        this.resetRestoreScope();
-        this.onConflict();
-      }
-    };
+  async persist(snapshot: DurableChatComposerSnapshot) {
     // Start every CAS write before page teardown. IndexedDB readwrite ordering and
     // draft revisions serialize snapshots without delaying attachment writes behind text.
-    void run();
+    const { result, payloadUnavailable } = await writeDurableComposerSnapshot(snapshot);
+    if (payloadUnavailable) {
+      reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
+    }
+    if (result.status === "storage-failed" || result.status === "payload-too-large") {
+      reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
+    } else if (result.status === "conflict") {
+      this.resetRestoreScope();
+      this.onConflict();
+    }
   }
 
-  retire(scope: DurableComposerDraftScope, minimumRevision: number) {
+  async retire(scope: DurableComposerDraftScope, minimumRevision: number) {
     this.resetRestoreScope();
-    const run = async () => {
-      const { retireDurableComposerDraft } = await durableComposerStore;
-      const result = await retireDurableComposerDraft(scope, minimumRevision);
-      if (result.status === "storage-failed") {
-        reportDurableComposerStorageError(scope, this.onStorageError);
-      }
-    };
-    void run();
+    const { retireDurableComposerDraft } = await durableComposerStore;
+    const result = await retireDurableComposerDraft(scope, minimumRevision);
+    if (result.status === "storage-failed") {
+      reportDurableComposerStorageError(scope, this.onStorageError);
+    }
   }
 
   restore(
@@ -279,10 +273,11 @@ export class DurableChatComposerPersistence {
       }
       return;
     }
+    const draft = result.status === "found" ? result.draft : undefined;
     let attachments: ChatAttachment[] = [];
-    if (result.status === "found") {
+    if (draft) {
       try {
-        attachments = await hydrateDurableComposerAttachments(result.draft.attachments);
+        attachments = await hydrateDurableComposerAttachments(draft.attachments);
       } catch {
         reportDurableComposerStorageError(baseline.scope, this.onStorageError);
         return;
@@ -293,16 +288,10 @@ export class DurableChatComposerPersistence {
     }
     apply({
       revision,
-      text: result.status === "found" ? result.draft.text : "",
-      ...(result.status === "found" && result.draft.mentions
-        ? { mentions: result.draft.mentions }
-        : {}),
-      ...(result.status === "found" && result.draft.goalMode
-        ? { goalMode: result.draft.goalMode }
-        : {}),
-      ...(result.status === "found" && result.draft.replyTarget
-        ? { replyTarget: result.draft.replyTarget }
-        : {}),
+      text: draft ? draft.text : "",
+      ...(draft?.mentions ? { mentions: draft.mentions } : {}),
+      ...(draft?.goalMode ? { goalMode: draft.goalMode } : {}),
+      ...(draft?.replyTarget ? { replyTarget: draft.replyTarget } : {}),
       attachments,
     });
   }

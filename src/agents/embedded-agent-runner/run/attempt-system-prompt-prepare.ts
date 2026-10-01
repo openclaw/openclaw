@@ -4,6 +4,7 @@ import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -166,7 +167,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     cwd: params.setup.effectiveCwd,
     moduleUrl: import.meta.url,
   });
-  const promptContributionContext = {
+  const buildProviderPromptContext = () => ({
     config: attempt.config,
     agentDir: attempt.agentDir,
     workspaceDir: params.setup.effectiveWorkspace,
@@ -176,8 +177,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeChannel,
     runtimeCapabilities,
     agentId: params.setup.sessionAgentId,
-    trigger: attempt.trigger,
-  };
+  });
+  const promptContributionContext = { ...buildProviderPromptContext(), trigger: attempt.trigger };
   const promptContribution =
     attempt.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
     resolveProviderSystemPromptContribution({
@@ -232,14 +233,11 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const projectMemoryWriteInstruction = buildProjectMemoryWriteInstruction(
     attempt.preparedModelRuntime?.projectKey,
   );
-  const extraSystemPrompt =
-    [
-      attempt.extraSystemPrompt,
-      projectMemoryWriteInstruction,
-      buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
-    ]
-      .filter((value): value is string => Boolean(value))
-      .join("\n\n") || undefined;
+  const extraSystemPrompt = joinPresentTextSegments([
+    attempt.extraSystemPrompt,
+    projectMemoryWriteInstruction,
+    buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
+  ]);
 
   const promptInputs: Parameters<typeof buildAttemptSystemPrompt>[0] = {
     isRawModelRun: params.isRawModelRun,
@@ -303,17 +301,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       provider: attempt.provider,
       config: attempt.config,
       workspaceDir: params.setup.effectiveWorkspace,
-      context: {
-        config: attempt.config,
-        agentDir: attempt.agentDir,
-        workspaceDir: params.setup.effectiveWorkspace,
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-        promptMode: effectivePromptMode,
-        runtimeChannel,
-        runtimeCapabilities,
-        agentId: params.setup.sessionAgentId,
-      },
+      context: buildProviderPromptContext(),
     },
   };
   const attemptSystemPrompt = buildAttemptSystemPrompt(promptInputs);

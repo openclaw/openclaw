@@ -521,6 +521,8 @@ describe("local-check-runtime", () => {
     "keeps prep and oxlint resource policies separate with $name",
     ({ goEnv, prepGoEnv, lintGoEnv }) => {
       const cwd = createTempDir("openclaw-oxlint-go-limit-");
+      // Keep artifact ownership inside this fixture when its temp directory has a checkout ancestor.
+      fs.mkdirSync(path.join(cwd, ".git"));
       const binDir = path.join(cwd, "node_modules", ".bin");
       const scriptsDir = path.join(cwd, "scripts");
       const capturePath = path.join(cwd, "children.jsonl");

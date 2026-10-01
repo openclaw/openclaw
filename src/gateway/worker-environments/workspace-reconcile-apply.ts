@@ -6,7 +6,7 @@ import {
   stagedInputDirectoriesFromEntries,
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
-import { isAcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   activeWorkspaceHashContext,
   withWorkspaceHashContext,
@@ -83,7 +83,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
   ): Promise<WorkerWorkspaceApplyResult> => {
     await verify();
     params.assertCurrent?.();
-    params.journal.commit(params.currentManifestRef);
+    await params.journal.commit(params.currentManifestRef);
     return {
       manifest: params.current,
       manifestRef: params.currentManifestRef,
@@ -174,7 +174,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     params.assertCurrent?.();
     await reconcile.publish?.({ ...actual, conflictPaths });
     params.assertCurrent?.();
-    params.journal.commit(actual.manifestRef);
+    await params.journal.commit(actual.manifestRef);
     return createApplyResult(actual, conflictPaths);
   };
   if (changed.size === 0) {
@@ -256,7 +256,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     basePack: snapshot.basePack,
   };
   params.assertCurrent?.();
-  params.journal.begin(journal);
+  await params.journal.begin(journal);
   try {
     await prepareNonDirectoryTargets(root, appliedEntries, undefined, params.assertCurrent);
     await applyWorkspacePatch({ root, patch: snapshot.patch, assertCurrent: params.assertCurrent });
@@ -275,7 +275,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
   } catch (error) {
     // Transport or settlement timeouts are observation evidence, never authority
     // for an inverse operation; recovery owns restoring both sides.
-    if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
+    if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
       throw error;
     }
     // A revoked owner cannot authorize an inverse mutation or consume the journal.
@@ -287,7 +287,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
         assertCurrent: params.assertCurrent,
       });
       params.assertCurrent?.();
-      params.journal.abort();
+      await params.journal.abort();
     } catch (rollbackError) {
       const recoveryError = new Error("Cloud reconciliation failed and rollback needs recovery", {
         cause: error,

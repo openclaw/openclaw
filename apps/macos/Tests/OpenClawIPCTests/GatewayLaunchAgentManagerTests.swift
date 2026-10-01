@@ -188,11 +188,9 @@ struct GatewayLaunchAgentManagerTests {
             let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
             let installError = await GatewayLaunchAgentManager.set(
                 enabled: true,
-                bundlePath: "/Applications/OpenClaw.app",
                 port: 18789)
             let uninstallError = await GatewayLaunchAgentManager.set(
                 enabled: false,
-                bundlePath: "/Applications/OpenClaw.app",
                 port: 18789)
             let kickstartError = await GatewayLaunchAgentManager.kickstart()
 
@@ -477,7 +475,6 @@ struct GatewayLaunchAgentManagerTests {
             ]
             let installError = await GatewayLaunchAgentManager.set(
                 enabled: true,
-                bundlePath: "/Applications/OpenClaw.app",
                 port: 51845,
                 allowUnconfigured: true)
             #expect(installError == nil)

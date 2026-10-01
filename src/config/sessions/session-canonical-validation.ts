@@ -125,7 +125,7 @@ export function readPendingCanonicalSessionValidationBatch(
     const rows = keys.length
       ? executeSqliteQuerySync(
           database.db,
-          canonicalSessionValidationQuery(database, { fullEntries: true }).where(
+          canonicalSessionValidationQuery(database).where(
             "session_nodes.session_key",
             "in",
             sqliteStringSet(keys),
@@ -198,7 +198,7 @@ export function compareAndCertifyCanonicalSessionValidationBatch(
   const current = new Map(
     executeSqliteQuerySync(
       database.db,
-      canonicalSessionValidationQuery(database, { fullEntries: true }).where(
+      canonicalSessionValidationQuery(database).where(
         "session_nodes.session_key",
         "in",
         sqliteStringSet(keys),

@@ -1,3 +1,4 @@
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
@@ -18,6 +19,24 @@ export const MAX_LOG_CHARS = 8000;
 
 // A run shares its heartbeat callback across steps; weak keys do not retain completed runs.
 const warnedHeartbeats = new WeakSet<() => void>();
+
+function selectCommandFailureMessage(stdout: string, stderr: string): string {
+  const lines = stripAnsi(stderr).split(/[\r\n\u2028\u2029]/u);
+  if (
+    !lines
+      .find((line) => line.trim())
+      ?.trimStart()
+      .startsWith("$ ")
+  ) {
+    return stderr;
+  }
+  // Package-manager banners can hide the child Error from the one-line fact formatter.
+  return (
+    [...lines, ...stripAnsi(stdout).split(/[\r\n\u2028\u2029]/u)].find((line) =>
+      /^\s*\w*Error(?: \[[A-Z][A-Z0-9_]*\])?:\s/u.test(line),
+    ) ?? stderr
+  );
+}
 
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   const { runCommand, name, argv, cwd, timeoutMs, env, progress, stepIndex, totalSteps } = opts;
@@ -50,6 +69,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
       cwd,
       timeoutMs,
       env,
+      ...(opts.input !== undefined ? { input: opts.input } : {}),
     });
   } catch (error) {
     commandError = { cause: error };
@@ -86,7 +106,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
               (result.termination && result.termination !== "exit"
                 ? result.termination
                 : "command-failed"),
-            message: result.stderr,
+            message: selectCommandFailureMessage(result.stdout, result.stderr),
           },
           env,
         ),

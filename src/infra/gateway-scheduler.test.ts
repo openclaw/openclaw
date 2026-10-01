@@ -14,6 +14,90 @@ function fixture() {
 }
 
 describe("Gateway timed work", () => {
+  it("preserves equal-deadline dispatch order when replacing a waiting registration", async () => {
+    const { time, scheduler } = fixture();
+    const seen: string[] = [];
+    const record = (value: string) => () => {
+      seen.push(value);
+    };
+    scheduler.schedule({ id: "first", delayMs: 100, run: record("retired") });
+    scheduler.schedule({ id: "second", delayMs: 100, run: record("second") });
+    scheduler.schedule({ id: "first", delayMs: 100, run: record("replacement") });
+    await time.advanceBy(100);
+    expect(seen).toEqual(["replacement", "second"]);
+    await scheduler.stop();
+  });
+
+  it("closes one scope without canceling a sibling's replacement registration", async () => {
+    const { time, scheduler } = fixture();
+    const retired = scheduler.scope();
+    const active = scheduler.scope();
+    const run = vi.fn();
+    retired.schedule({ id: "maintenance", delayMs: 100, run });
+    active.schedule({ id: "maintenance", delayMs: 200, run });
+    await retired.stop();
+    retired.schedule({ id: "maintenance", delayMs: 0, run: () => run("retired") });
+    expect(retired.signal.aborted).toBe(true);
+    expect(active.signal.aborted).toBe(false);
+    expect(scheduler.nextWakeAtMs).toBe(1_200);
+    await time.advanceTo(1_200);
+    expect(run).toHaveBeenCalledExactlyOnceWith();
+    await scheduler.stop();
+    expect(active.signal.aborted).toBe(true);
+  });
+
+  it("joins replaced callbacks and tracked descendants after one-shot dispatch", async () => {
+    const { time, scheduler } = fixture();
+    const scope = scheduler.scope();
+    const first = createDeferredCore();
+    const second = createDeferredCore();
+    const run = vi.fn();
+    scope.schedule({
+      id: "maintenance",
+      delayMs: 0,
+      everyMs: 100,
+      run: () => {
+        void trackAsyncWork(() => first.promise);
+      },
+    });
+    const firstWake = time.wake();
+    scope.schedule({
+      id: "maintenance",
+      delayMs: 0,
+      run: async () => {
+        await second.promise;
+        scope.schedule({ id: "late", delayMs: 0, run });
+      },
+    });
+    const secondWake = time.wake();
+    scope.schedule({ id: "waiting", delayMs: 100, run });
+    const stopped = vi.fn();
+    const stop = scope.stop().then(stopped);
+    expect(scope.signal.aborted).toBe(true);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    second.resolve();
+    await secondWake;
+    expect(stopped).not.toHaveBeenCalled();
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    first.resolve();
+    await Promise.all([firstWake, stop, scope.stop()]);
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(run).not.toHaveBeenCalled();
+    await scheduler.stop();
+  });
+
+  it("fences scoped jobs when a due sibling closes their owner", async () => {
+    const { time, scheduler } = fixture();
+    const scope = scheduler.scope();
+    const run = vi.fn();
+    scheduler.schedule({ id: "retire-owner", delayMs: 0, run: scope.beginClose });
+    scope.schedule({ id: "retired", delayMs: 0, run });
+    await time.wake();
+    expect(run).not.toHaveBeenCalled();
+    await scope.stop();
+    await scheduler.stop();
+  });
+
   it("arms only the earliest wake and fences canceled host wakes and replaced registrations", async () => {
     const { time, scheduler } = fixture();
     const run = vi.fn();

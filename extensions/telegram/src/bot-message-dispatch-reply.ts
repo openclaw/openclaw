@@ -591,37 +591,11 @@ async function deliverReplyWithNormalization(
     return toTelegramReplyDeliveryResult(turn, blockDelivered, finalization, finalDeliveryResult);
   }
 
-  if (split.suppressedReasoningOnly) {
-    let deliveryResult: LivePreviewDeliveryResult = { visibleReplySent: false };
-    if (info.kind === "final") {
-      await stopTelegramReplyLanesAndFlushBufferedFinal(turn);
-    }
-    if (reply.hasMedia) {
-      const payloadWithoutReasoning =
-        typeof effectivePayload.text === "string"
-          ? applyTextToPayload(effectivePayload, "")
-          : effectivePayload;
-      deliveryResult = await sendPayload(turn, payloadWithoutReasoning, {
-        durable: info.kind === "final",
-        onPlatformSendDispatch: info.onPlatformSendDispatch,
-        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
-        bindPendingFinalDelivery: info.bindPendingFinalDelivery,
-        onMediaAccepted,
-      });
-    }
-    if (info.kind === "final" && reply.hasMedia) {
-      await observeFinalDelivery(turn, deliveryResult, effectivePayload.isError === true);
-    }
-    return toTelegramReplyDeliveryResult(
-      turn,
-      deliveryResult.visibleReplySent,
-      undefined,
-      deliveryResult,
-    );
-  }
-
   if (info.kind === "final") {
     await stopTelegramReplyLanesAndFlushBufferedFinal(turn);
+  }
+  if (split.suppressedReasoningOnly && !reply.hasMedia) {
+    return toTelegramReplyDeliveryResult(turn, false, undefined, { visibleReplySent: false });
   }
   if (!reply.hasMedia && reply.text.length === 0) {
     if (info.kind === "final") {
@@ -629,7 +603,11 @@ async function deliverReplyWithNormalization(
     }
     return toTelegramReplyDeliveryResult(turn, false);
   }
-  const deliveryResult = await sendPayload(turn, effectivePayload, {
+  const deliveryPayload =
+    split.suppressedReasoningOnly && typeof effectivePayload.text === "string"
+      ? applyTextToPayload(effectivePayload, "")
+      : effectivePayload;
+  const deliveryResult = await sendPayload(turn, deliveryPayload, {
     durable: info.kind === "final",
     onPlatformSendDispatch: info.onPlatformSendDispatch,
     assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,

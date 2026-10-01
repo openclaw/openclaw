@@ -41,7 +41,7 @@ import {
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { textResult, type AnyAgentTool } from "./tools/common.js";
+import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
   clearToolSearchCatalog,
@@ -345,8 +345,17 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
-        const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
+        const catalog = resolveCatalog(ctx);
+        const call = readToolSearchCallArgs(args, catalog);
         try {
+          if (
+            ctx.catalogRef?.directOnlyToolNames?.has(call.id) &&
+            !catalog.entries.some((entry) => entry.id === call.id || entry.name === call.id)
+          ) {
+            throw new ToolInputError(
+              "This tool is already available directly, not through the tool catalog. Call it directly by its declared name with its declared parameters.",
+            );
+          }
           const callResult = await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,
             signal,

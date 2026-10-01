@@ -60,7 +60,7 @@ export function createMessageActionDiscoveryContext(
     params.channel ?? params.currentChannelProvider,
   );
   return {
-    cfg: params.cfg ?? ({} as OpenClawConfig),
+    cfg: params.cfg ?? {},
     ...(params.chatType ? { chatType: params.chatType } : {}),
     currentChannelId: params.currentChannelId,
     currentChannelProvider,
@@ -170,9 +170,7 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
     return { pluginId: prepared.id, actions: prepared.actions };
   }
   if (!catalog) {
-    const loadedPlugin = getLoadedChannelPlugin(
-      channelId as Parameters<typeof getChannelPlugin>[0],
-    );
+    const loadedPlugin = getLoadedChannelPlugin(channelId);
     if (loadedPlugin?.actions) {
       return {
         pluginId: loadedPlugin.id,
@@ -189,9 +187,7 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
       actions: bundledActions,
     };
   }
-  const plugin = catalog
-    ? undefined
-    : getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
+  const plugin = catalog ? undefined : getChannelPlugin(channelId);
   return plugin?.actions ? { pluginId: plugin.id, actions: plugin.actions } : null;
 }
 
@@ -272,9 +268,6 @@ export function listCrossChannelSchemaSupportedMessageActions(
     const actions = contribution.actions;
     if (!Array.isArray(actions)) {
       return [];
-    }
-    if (actions.length === 0) {
-      continue;
     }
     for (const action of actions) {
       schemaBlockedActions.add(action);

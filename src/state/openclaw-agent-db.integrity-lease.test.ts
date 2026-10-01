@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
@@ -21,6 +22,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
+import * as schema from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -197,6 +199,9 @@ it.each(["forced cleanup", "stale admission"])(
       sharedStatePath: state.path,
       sharedStateIdentity: readDatabasePathIdentitySync(state.path).key,
     };
+    const writing = once(child, "message");
+    child.send("begin-write");
+    expect(await writing).toEqual(["writing", undefined]);
     const exited = once(child, "exit");
     child.kill("SIGKILL");
     await exited;
@@ -216,7 +221,25 @@ it.each(["forced cleanup", "stale admission"])(
       closeOpenClawAgentDatabaseByPath(owner.database.path);
       expect(owner.record()?.clean_close).toBe(0);
     }
-    openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env });
+    const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
+    let diagnostics: SqliteIntegrityDiagnostics | undefined;
+    vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
+      ...args
+    ) {
+      const result = yield* gate(...args);
+      diagnostics = args[3];
+      return result;
+    });
+    const reopened = openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env });
+    expect(diagnostics?.integrityGateOutcome).toBe("healthy");
+    if (recovery === "stale admission") {
+      expect(diagnostics?.integrityGateReason).toBe("stale-lease");
+    }
+    expect(
+      reopened.db
+        .prepare("SELECT state_key FROM auth_profile_state WHERE state_key='killed-write'")
+        .get(),
+    ).toBeUndefined();
     expect(owner.record()?.clean_close).toBe(0);
     expect(
       state.db

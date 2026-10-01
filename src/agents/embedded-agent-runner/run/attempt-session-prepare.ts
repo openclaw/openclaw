@@ -199,17 +199,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
   };
-  const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
+  const { session: activeSession } = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
     beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
       ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
       : undefined,
   });
-  const activeSession = createdSession.session;
-  if (!activeSession) {
-    throw new Error("Embedded agent session missing");
-  }
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
   // the session if tool activation or terminal-hook installation fails.
   input.onSessionCreated(activeSession);
@@ -373,7 +369,6 @@ type SessionBoundaryAttempt = Pick<
   | "prompt"
   | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
-  | "trigger"
   | "userTurnTranscriptRecorder"
 >;
 
@@ -414,7 +409,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         preserveLeaf:
           attempt.skipPreparedUserTurnMessage === true ||
           isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
-        trigger: attempt.trigger,
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
   // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.
@@ -540,7 +534,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
   sessionAgentId: string;
-  transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }) {
   const { attempt } = input;
@@ -614,7 +607,8 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
     allowedToolNames: input.replayAllowedToolNames,
     trigger: attempt.trigger,
-    suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
+    suppressNextUserMessagePersistence:
+      prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: attempt.assistantErrorTranscript,
     skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",

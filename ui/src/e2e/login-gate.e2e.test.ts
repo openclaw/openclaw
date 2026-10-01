@@ -26,6 +26,76 @@ beforeEach(() => {
 });
 
 suite.define(() => {
+  it("counts down and automatically enters a reachable Gateway after refused upgrades", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
+    const gateway = await installMockGateway(page, { awaitInitialRoster: false });
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 200, json: { ok: true, status: "live" } }),
+    );
+    await page.addInitScript(() => {
+      class RefusedWebSocket extends EventTarget {
+        readyState: WebSocket["readyState"] = WebSocket.CONNECTING;
+
+        send() {
+          throw new Error("Upgrade failed before WebSocket open");
+        }
+
+        close() {
+          this.readyState = WebSocket.CLOSED;
+        }
+      }
+      let refused = 0;
+      window.WebSocket = new Proxy(window.WebSocket, {
+        construct(target, args) {
+          if (refused++ >= 2) {
+            return Reflect.construct(target, args);
+          }
+          const socket = new RefusedWebSocket();
+          queueMicrotask(() => {
+            socket.readyState = WebSocket.CLOSED;
+            socket.dispatchEvent(new Event("error"));
+            socket.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+          });
+          return socket;
+        },
+      });
+    });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await page.clock.runFor(1);
+      const failure = page.locator('.login-gate__failure[data-kind="busy"]');
+      await failure.waitFor();
+      expect((await failure.locator(".login-gate__failure-title").textContent())?.trim()).toBe(
+        "Gateway busy, retrying…",
+      );
+      expect(await gateway.getRequests("connect")).toHaveLength(0);
+
+      const retryHealthResponse = page.waitForResponse("**/healthz");
+      await page.clock.runFor(1_000);
+      // The first probe's busy state can survive while the retry probe is still in flight.
+      // Finish its real response before advancing the virtual one-second abort deadline.
+      expect(await (await retryHealthResponse).finished()).toBeNull();
+      const countdown = failure.locator(".login-gate__retry");
+      await countdown.filter({ hasText: "Retrying in 2s…" }).waitFor();
+      await page.clock.runFor(1_000);
+      expect((await countdown.textContent())?.trim()).toBe("Retrying in 1s…");
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+
+      await page.clock.runFor(1_000);
+      await gateway.waitForRequest("connect");
+      await page.clock.runFor(1);
+      await page.locator("openclaw-app-shell").waitFor();
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("shows a bare protocol mismatch as compatibility guidance without reconnecting", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
@@ -326,7 +396,10 @@ suite.define(() => {
     const viewport = { height: 900, width: 1280 };
     const context = await suite.browser.newContext({
       viewport,
-      recordVideo: { dir: RECOVERY_ARTIFACT_DIR, size: viewport },
+      recordVideo:
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? { dir: RECOVERY_ARTIFACT_DIR, size: viewport }
+          : undefined,
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {

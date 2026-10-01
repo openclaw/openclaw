@@ -48,7 +48,7 @@ export function backfillSessionEntryProvenance(db: DatabaseSync, previousVersion
        INNER JOIN sessions AS s
          ON s.session_id = se.session_id AND s.session_key = se.session_key;`,
     )
-    .all() as Array<{ entry_json?: unknown; session_id?: unknown }>;
+    .all();
   const update = db.prepare(`
     UPDATE sessions
     SET session_entry_provenance = 1, acp_owned = ?, plugin_owner_id = ?,

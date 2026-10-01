@@ -13,7 +13,7 @@ import {
   createGatewayPluginUpgradeHandler,
   createGatewayPluginRequestHandler,
   isPluginAuthenticatedRoutePath,
-  isRegisteredPluginHttpRoutePath,
+  findRegisteredPluginHttpRoute,
   shouldEnforceGatewayAuthForPluginPath,
 } from "./plugins-http.js";
 
@@ -635,19 +635,19 @@ describe("plugin HTTP route auth checks", () => {
     const registry = createGatewayTestRegistry({
       httpRoutes: [createRoute({ path: "/demo" })],
     });
-    expect(isRegisteredPluginHttpRoutePath(registry, "/demo")).toBe(true);
-    expect(isRegisteredPluginHttpRoutePath(registry, "/missing")).toBe(false);
+    expect(findRegisteredPluginHttpRoute(registry, "/demo")).toBeDefined();
+    expect(findRegisteredPluginHttpRoute(registry, "/missing")).toBeUndefined();
   });
 
   it("matches canonicalized variants of registered route paths", () => {
     const route = createRoute({ path: "/api/demo" });
     const registry = createGatewayTestRegistry({ httpRoutes: [route] });
-    expect(isRegisteredPluginHttpRoutePath(registry, "/api//demo")).toBe(true);
-    expect(isRegisteredPluginHttpRoutePath(registry, "/API/demo")).toBe(true);
-    expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(true);
+    expect(findRegisteredPluginHttpRoute(registry, "/api//demo")).toBe(route);
+    expect(findRegisteredPluginHttpRoute(registry, "/API/demo")).toBe(route);
+    expect(findRegisteredPluginHttpRoute(registry, "/api/%2564emo")).toBe(route);
     route.path = "/api/other";
-    expect(isRegisteredPluginHttpRoutePath(registry, "/api/demo")).toBe(false);
-    expect(isRegisteredPluginHttpRoutePath(registry, "/api/%256fther")).toBe(true);
+    expect(findRegisteredPluginHttpRoute(registry, "/api/demo")).toBeUndefined();
+    expect(findRegisteredPluginHttpRoute(registry, "/api/%256fther")).toBe(route);
   });
 
   it("enforces auth for protected and gateway-auth routes", () => {

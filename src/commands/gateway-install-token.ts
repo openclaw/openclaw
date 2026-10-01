@@ -1,4 +1,3 @@
-/** Validates Gateway install auth and persists a missing token when requested. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";

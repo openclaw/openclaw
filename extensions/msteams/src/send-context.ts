@@ -39,7 +39,6 @@ type MSTeamsProactiveReplyTarget =
   | { replyStyle: "top-level"; threadActivityId?: never };
 
 export type MSTeamsProactiveContext = {
-  appId: string;
   conversationId: string;
   ref: StoredConversationReference;
   app: MSTeamsApp;
@@ -257,7 +256,6 @@ export async function resolveMSTeamsSendContext(params: {
   });
 
   return {
-    appId: creds.appId,
     conversationId,
     ref: safeRef,
     app,

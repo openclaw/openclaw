@@ -1,7 +1,10 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
@@ -51,9 +54,9 @@ type CachedScopedTools = {
 };
 
 type McpLoopbackScopeParams = {
+  admittedRunContext?: AdmittedRunContext;
   context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
-  sessionControlAuthority?: AdmittedRunOperatorAuthority;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
@@ -218,7 +221,7 @@ function resolveMcpLoopbackTools(
     agentDir: params.authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
     surface: "loopback",
-    sessionControlAuthority: params.sessionControlAuthority,
+    admittedRunContext: params.admittedRunContext,
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
@@ -307,7 +310,6 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       clientCaps: [...new Set(context.clientCaps ?? [])].toSorted(),
       // Missing allows all; an empty list denies all.
       toolsAllow: context.toolsAllow ? [...new Set(context.toolsAllow)].toSorted() : undefined,
-      modelHasVision: context.modelHasVision,
       pinnedWidgetAuthoring: context.pinnedWidgetAuthoring === true,
       currentInboundAudio: context.currentInboundAudio === true,
       sourceReplyOnly: context.sourceReplyOnly === true,
@@ -316,7 +318,10 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       delegationCapability:
         context.delegationCapability === "report_only" ? "report_only" : undefined,
     },
-    sessionControlsAllowed: hasSessionControlAuthority(params.sessionControlAuthority),
+    admittedRunInstance: params.admittedRunContext?.operationalRunInstance,
+    sessionControlsAllowed: hasSessionControlAuthority(
+      readAdmittedRunOperatorAuthority(params.admittedRunContext),
+    ),
     authProfileStoreAgentDir: params.authProfileStoreAgentDir,
     yieldContextCacheKey: params.yieldContextCacheKey,
     nodeExecAvailability: params.nodeExecAvailability?.cacheKey,

@@ -1,4 +1,3 @@
-/** Implementation of `openclaw models status`. */
 import path from "node:path";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
@@ -76,6 +75,7 @@ import type { ProviderSyntheticAuthResult } from "../../plugins/provider-externa
 import { prepareProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import {
@@ -247,7 +247,6 @@ function finishModelsStatusOutput(
   requestExitAfterOneShotOutput(runtime);
 }
 
-/** Prints model default, auth, provider, and optional probe status. */
 export async function modelsStatusCommand(
   opts: {
     json?: boolean;
@@ -802,14 +801,13 @@ export async function modelsStatusCommand(
             authEvidenceMap,
           }),
         )
-        .filter((entry) => {
-          const hasAny =
+        .filter(
+          (entry) =>
             entry.profiles.count > 0 ||
             Boolean(entry.env) ||
             Boolean(entry.modelsJson) ||
-            Boolean(entry.syntheticAuth);
-          return hasAny;
-        });
+            Boolean(entry.syntheticAuth),
+        );
       const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
       const missingProviderAuthEffective: ProviderAuthOverview["effective"] = {
         kind: "missing",
@@ -1016,15 +1014,9 @@ export async function modelsStatusCommand(
       // Utility (or duplicate fallback) refs can repeat a configured model;
       // identical diagnostics collapse while genuinely different evaluations
       // for the same model (e.g. codex-fallback vs plain route) stay separate.
-      const seenRouteIssues = new Set<string>();
-      const dedupedModelRouteIssues = modelRouteIssues.filter((issue) => {
-        const key = JSON.stringify(issue);
-        if (seenRouteIssues.has(key)) {
-          return false;
-        }
-        seenRouteIssues.add(key);
-        return true;
-      });
+      const dedupedModelRouteIssues = dedupeByKey(modelRouteIssues, (issue) =>
+        JSON.stringify(issue),
+      );
       const missingProvidersInUse = Array.from(
         new Set(
           providerUses
@@ -1076,17 +1068,7 @@ export async function modelsStatusCommand(
         ...configuredAllowRefs,
       ].filter(Boolean);
       const resolvedCandidates = rawCandidates
-        .map(
-          (raw) =>
-            resolveModelRefFromString({
-              cfg,
-              agentId,
-              raw: raw ?? "",
-              defaultProvider: DEFAULT_PROVIDER,
-              aliasIndex,
-              ...DISPLAY_MODEL_PARSE_OPTIONS,
-            })?.ref,
-        )
+        .map(resolveStatusModelRef)
         .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
       const modelCandidates = resolvedCandidates.map((ref) => `${ref.provider}/${ref.model}`);
 

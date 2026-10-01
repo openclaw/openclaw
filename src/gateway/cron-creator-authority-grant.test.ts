@@ -191,12 +191,66 @@ describe("cron creator authority grants", () => {
     const grant = mintCronCreatorAuthorityGrant(scope, undefined, runtimeAuthority);
 
     expect(grant).toEqual({ runId: "run-authority", token: expect.any(String) });
-    expect(consumeCronCreatorAuthorityGrant(grant)).toEqual(runtimeAuthority);
+    expect(consumeCronCreatorAuthorityGrant(grant).authority).toEqual(runtimeAuthority);
     expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
       "Configured MCP cron authority is no longer active",
     );
     revokeCronCreatorAuthorityRunScope(scope);
   });
+
+  it.each([
+    "issuer",
+    "scope",
+    "scope abort",
+    "run settlement",
+    "operation",
+    "channel owner",
+  ] as const)(
+    "rejects retained creator authority when its original %s is revoked after consumption",
+    async (revoked) => {
+      let issuerCurrent = true;
+      let scopeCurrent = true;
+      let channelOwnerCurrent = true;
+      const scope = createCronCreatorAuthorityRunScope(
+        "retained-creator",
+        { kind: "local" },
+        { source: "channel-owner", isCurrent: () => channelOwnerCurrent },
+        () => scopeCurrent,
+      );
+      const operation = new AbortController();
+      const grant = mintCronCreatorAuthorityGrant(
+        scope,
+        operation.signal,
+        undefined,
+        undefined,
+        "runtime",
+        () => issuerCurrent,
+      );
+      try {
+        const consumed = consumeCronCreatorAuthorityGrant(grant);
+        expect(consumed.authority).toBeUndefined();
+        expect(consumed.assertCurrent).not.toThrow();
+        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
+        await Promise.resolve();
+        if (revoked === "issuer") {
+          issuerCurrent = false;
+        } else if (revoked === "scope") {
+          scopeCurrent = false;
+        } else if (revoked === "scope abort") {
+          scope.abort();
+        } else if (revoked === "run settlement") {
+          revokeCronCreatorAuthorityRunScope(scope);
+        } else if (revoked === "operation") {
+          operation.abort();
+        } else {
+          channelOwnerCurrent = false;
+        }
+        expect(consumed.assertCurrent).toThrow("no longer active");
+      } finally {
+        revokeCronCreatorAuthorityRunScope(scope);
+      }
+    },
+  );
 });
 
 describe("cron management authority grants", () => {

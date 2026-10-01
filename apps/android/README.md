@@ -23,9 +23,19 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 - Open the folder `apps/android`.
 
+Gradle sync generates the native localization lookup and resources before IDE
+indexing. Use the repository's supported Node.js version on your PATH, as for
+the build commands below; no separate localization generation step is required.
+
 ## Session colors
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
+
+## Session snooze
+
+Long-press an eligible session on **Threads** and choose **Snooze**, then **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), or **Next week** (next Monday at 09:00 local). Next week is omitted on Sundays because it matches Tomorrow. Archived, child, and protected sessions cannot be snoozed.
+
+Snoozed sessions leave **Recent**, **Current**, and sidebar recents. Open the **Snoozed** pill to see their **Wakes** times, or long-press and choose **Wake session** to bring one back early. The Gateway saves the wake time across clients. A session wakes at its deadline, when a real message arrives, or when a run completes; pinning or archiving also clears its snooze. Snooze never stops a run, blocks messages, or disables an automation.
 
 ## Camera attachments
 
@@ -199,6 +209,17 @@ Install the repository's Node.js and pnpm dependencies before building. Gradle
 builds the shared Mermaid renderer automatically and packages its local assets
 with the app; no CDN or Gateway renderer is needed.
 
+Gradle also generates the Kotlin localization lookup and `native_` string
+resources in the ignored `app/build/generated/native-i18n/` directory. Builds,
+tests, and Android Studio sync share the same task; unchanged inputs skip
+generation, and clean builds can restore the outputs from Gradle's build cache.
+Keep manual XML resources in `app/src/main/res`. Native source strings and
+translations remain in `apps/.i18n/native-source.json` and
+`apps/.i18n/native/<locale>.json`; the existing `pnpm native:i18n:baseline` and
+`pnpm native:i18n:sync` workflow owns updates. Never edit or commit the generated
+lookup or `native_` resources. `pnpm android:i18n:check` validates the catalog
+against those canonical inputs.
+
 ```bash
 pnpm install
 cd apps/android
@@ -239,13 +260,27 @@ tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
 Android release archives use the pinned version in `apps/android/version.json`.
-Run **Android Store Release** from `main` without input parameters, or run
+Run **Android Store Release** from `main` with the default `release` operation, or run
 `pnpm android:release:upload` from a clean local `main` matching `origin/main`.
 The pipeline selects unused phone and Wear build numbers from Google Play and
 generates OpenAI release notes from changes since each form factor's public
 release. It saves the plan and notes as release artifacts and uploads the selected
 clean source commit. Tracked version defaults and notes stay unchanged; the flow
 creates no preparation commits or follow-up PRs.
+
+For daily Google Play Internal testing builds, the same workflow runs at
+**7:00 AM Pacific** using the `America/Los_Angeles` time zone, including daylight
+saving changes. Scheduled runs require the repository variable
+`ANDROID_INTERNAL_ENABLED=true` and use the `android-internal` environment.
+They upload the phone and Wear builds and generated notes to `internal` and
+`wear:internal`, without capturing screenshots or changing the store listing.
+Production promotion remains manual.
+
+To run this distribution manually, choose `operation=internal` from `main`, or
+run `pnpm android:release:upload -- --destination internal` from a clean local
+`main` matching `origin/main`. Manual runs work while the schedule is disabled.
+See [daily Internal testing setup](VERSIONING.md#daily-internal-testing) for the
+environment, credentials, and enablement steps.
 
 For local preparation or inspection:
 
@@ -290,6 +325,8 @@ Start a fresh app process before choosing a scene; restarting only the Activity
 reuses the process runtime. Same-scene re-entry retains the selected branch.
 
 For sidebar attention proof, use `openclaw.screenshotScene=attention`. The native drawer contains inactive sessions with multiple questions and execution, plugin, and Gateway-settings approvals. Tap or keyboard-focus an attention icon to inspect the oldest request. The `attention-expiry` scene uses successive short deadlines to exercise live removal without another Gateway event. These fixtures use the normal request parsers and lifecycle owners with synthetic in-memory responses; start a fresh app process between scenes.
+
+For session snooze proof, run `pnpm android:screenshots --snooze-proof before` before adding the feature, then `pnpm android:screenshots --snooze-proof after`. The synthetic `snooze` scene supplies one active and one snoozed session through the production list parser. The capture steps open Threads and both row menus, saving PNGs under `.artifacts/android-snooze-proof/before/` and `after/`. This mode requires no existing ADB devices, starts and stops its own phone emulator, and leaves store screenshots unchanged.
 
 For completed-work proof, use `openclaw.screenshotScene=completed-work`,
 `active-work`, or `work-boundaries`. These scenes use the same Chat screen with

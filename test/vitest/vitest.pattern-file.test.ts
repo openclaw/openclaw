@@ -86,6 +86,7 @@ describe("native CLI selection", () => {
       .replaceAll("\\", "/");
     vi.resetModules();
     vi.doMock("node:path", () => ({ default: windowsPath }));
+    vi.stubGlobal("process", { ...process, platform: "win32" });
     try {
       const selector = await import("./vitest.pattern-file.ts");
       const include = ["src/infra/**/*.test.ts"];
@@ -99,6 +100,7 @@ describe("native CLI selection", () => {
       expect(matches(include, [...args, "--exclude", infraFile])).toBe(false);
       expect(matches(["extensions/qa-lab/**/*.test.ts"])).toBe(false);
     } finally {
+      vi.unstubAllGlobals();
       vi.doUnmock("node:path");
       vi.resetModules();
     }

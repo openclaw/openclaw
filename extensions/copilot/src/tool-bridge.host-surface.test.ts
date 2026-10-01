@@ -54,6 +54,7 @@ describe("Copilot host-owned tool construction", () => {
     expect(bindToolSurface).not.toHaveBeenCalled();
     expect(bridge.sourceTools).toContain(reader);
     const sdkReader = bridge.promptToolPolicy.apply().tools.find((tool) => tool.name === "read");
+    expect(sdkReader).toMatchObject({ skipPermission: true, overridesBuiltInTool: true });
     expect(sdkReader?.handler).toBeTypeOf("function");
     const invocation = makeInvocation({ toolName: "read", toolCallId: "read-1", arguments: {} });
     const result = await sdkReader!.handler!({}, invocation);

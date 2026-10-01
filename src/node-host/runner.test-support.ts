@@ -65,7 +65,7 @@ const mocks = vi.hoisted(() => ({
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => {}),
     tryPauseForUpdate: vi.fn(async () => true),
     resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),

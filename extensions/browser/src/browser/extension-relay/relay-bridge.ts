@@ -791,22 +791,30 @@ export class ExtensionRelayBridge {
     return retiring;
   }
 
-  private respond(client: CdpClientState, request: CdpRequest, result: unknown): void {
+  private sendResponse(
+    client: CdpClientState,
+    request: CdpRequest,
+    payload: { result: unknown } | { error: { code: number; message: string } },
+  ): void {
     if (!this.clients.has(client)) {
       return;
     }
     const logical = request.sessionId ? client.sessions.get(request.sessionId) : undefined;
     if (logical) {
-      this.sessions.emit(logical, { id: request.id, result: result ?? {} });
+      this.sessions.emit(logical, { id: request.id, ...payload });
       return;
     }
     client.socket.send(
       JSON.stringify({
         id: request.id,
         ...(request.sessionId ? { sessionId: request.sessionId } : {}),
-        result: result ?? {},
+        ...payload,
       }),
     );
+  }
+
+  private respond(client: CdpClientState, request: CdpRequest, result: unknown): void {
+    this.sendResponse(client, request, { result: result ?? {} });
   }
 
   private respondError(
@@ -815,14 +823,7 @@ export class ExtensionRelayBridge {
     message: string,
     code = -32000,
   ): void {
-    if (this.clients.has(client)) {
-      const logical = request.sessionId ? client.sessions.get(request.sessionId) : undefined;
-      if (logical) {
-        this.sessions.emit(logical, { id: request.id, error: { code, message } });
-      } else {
-        client.socket.send(toErrorPayload(request.id, request.sessionId, message, code));
-      }
-    }
+    this.sendResponse(client, request, { error: { code, message } });
   }
 
   private tabByTargetId(targetId: string): { tabId: number; tab: TabState } | null {

@@ -11,6 +11,7 @@ import {
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
+import { collectLegacyToolsBySenderIssues } from "../commands/doctor/shared/legacy-tools-by-sender.js";
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -169,9 +170,6 @@ function validateIdentityAvatar(
   env?: NodeJS.ProcessEnv,
 ): ConfigValidationIssue[] {
   const agents = listAgentEntriesWithSource(config);
-  if (agents.length === 0) {
-    return [];
-  }
   const issues: ConfigValidationIssue[] = [];
   for (const { entry, source } of agents) {
     const avatarRaw = entry.identity?.avatar;
@@ -423,6 +421,10 @@ export function validateConfigObjectRaw(
   const mcpServerNameIssues = collectMcpServerNameIssues(opts?.sourceRaw).filter(
     (issue) => !normalizedMcpServerNameIssueKeys.has(JSON.stringify([issue.path, issue.message])),
   );
+  const senderPolicyIssues = collectLegacyToolsBySenderIssues(normalizedRaw);
+  if (senderPolicyIssues.length > 0) {
+    return { ok: false, issues: senderPolicyIssues };
+  }
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success || mcpServerNameIssues.length > 0) {
@@ -471,21 +473,16 @@ export function validateConfigObjectRaw(
       issues: [{ path: "agents.entries", message: formatDuplicateAgentDirError(duplicates) }],
     };
   }
-  const avatarIssues = validateIdentityAvatar(validatedConfig, opts?.env);
-  if (avatarIssues.length > 0) {
-    return { ok: false, issues: avatarIssues };
-  }
-  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
-  if (gatewayTailscaleBindIssues.length > 0) {
-    return { ok: false, issues: gatewayTailscaleBindIssues };
-  }
-  const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
-  if (gatewayTailscaleAuthIssues.length > 0) {
-    return { ok: false, issues: gatewayTailscaleAuthIssues };
-  }
-  const modelPolicyAllowIssues = collectModelPolicyAllowIssues(validatedConfig);
-  if (modelPolicyAllowIssues.length > 0) {
-    return { ok: false, issues: modelPolicyAllowIssues };
+  for (const validate of [
+    () => validateIdentityAvatar(validatedConfig, opts?.env),
+    () => validateGatewayTailscaleBind(validatedConfig),
+    () => validateGatewayTailscaleAuth(validatedConfig),
+    () => collectModelPolicyAllowIssues(validatedConfig),
+  ]) {
+    const issues = validate();
+    if (issues.length > 0) {
+      return { ok: false, issues };
+    }
   }
   return { ok: true, config: validatedConfig };
 }

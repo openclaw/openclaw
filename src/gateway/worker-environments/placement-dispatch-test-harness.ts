@@ -32,6 +32,7 @@ import {
   type WorkerTurnTunnelHandle,
   type WorkerWorkspaceReconcileRequest,
 } from "./tunnel-contract.js";
+import { readLaunchToolNames } from "./worker-turn-launcher.test-support.js";
 import {
   projectWorkspaceResultConflict,
   type WorkspaceResultConflictLookup,
@@ -212,6 +213,7 @@ export function createHarness(
     environmentId: ready.environmentId,
     ownerEpoch,
     measureLaunchTurn: vi.fn(),
+    readLaunchToolNames,
     launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
@@ -247,7 +249,7 @@ export function createHarness(
         throw new Error("workspace conflict");
       }
       if (options.reconcileCommitsManifest !== false) {
-        journal.commit(reconciledManifestRef);
+        await journal.commit(reconciledManifestRef);
       }
       if (options.terminalizeReclaimOnTunnelDrop) {
         const owned = placementStore.get(REQUEST.sessionId);
@@ -278,7 +280,7 @@ export function createHarness(
         throw options.terminalizedReclaimError ?? new WorkerTunnelOwnerDisconnectedError();
       }
       if (options.reconcileConflictPaths?.length && stagedResult) {
-        stagedResult.record(stagedResult.ref);
+        await stagedResult.record(stagedResult.ref);
       }
       await options.afterReconcile?.();
       const verifyLocalStable = async () => {
@@ -316,7 +318,7 @@ export function createHarness(
           ? {
               applyPreparedStagedResult: async () => {
                 log.push("workspace:apply-prepared");
-                journal.commit(reconciledManifestRef);
+                await journal.commit(reconciledManifestRef);
               },
             }
           : {}),
@@ -577,8 +579,7 @@ export function createHarness(
       seedProvisioning: (executionMode?: "worker-turn" | "remote-exec") =>
         seedProvisioningPlacement(placementStore, environmentId, executionMode),
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
-      seedActive: (ownerEpoch: number, executionMode?: "worker-turn" | "remote-exec") =>
-        seedActive(ownerEpoch, executionMode),
+      seedActive,
       seedDraining: async (ownerEpoch: number) => {
         const active = await seedActive(ownerEpoch);
         if (active.state !== "active") {
@@ -620,9 +621,8 @@ export function createHarness(
     markEnvironmentNodeDeviceId: (nodeDeviceId: string) => {
       setEnvironment({ ...attached, providerId: "device", nodeDeviceId, sshEndpoint: null });
     },
-    markEnvironmentAttachments: (attachedSessionIds: string[]) => {
-      setEnvironment({ ...attached, attachedSessionIds });
-    },
+    markEnvironmentAttachments: (attachedSessionIds: string[]) =>
+      setEnvironment({ ...attached, attachedSessionIds }),
     markEnvironmentProtocolFeatures: (protocolFeatures: string[]) => {
       if (!currentEnvironment?.bootstrapReceipt) {
         throw new Error("worker environment fixture has no bootstrap receipt");

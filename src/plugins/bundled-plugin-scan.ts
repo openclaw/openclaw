@@ -24,11 +24,7 @@ const RUNTIME_SIDECAR_ARTIFACTS = new Set([
 ]);
 
 export { normalizeOptionalString as trimBundledPluginString };
-
-/** Normalizes string-list manifest fields found while scanning bundled plugin files. */
-export function normalizeBundledPluginStringList(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
-}
+export { normalizeTrimmedStringList as normalizeBundledPluginStringList };
 
 /** Converts a source entry path to its built JavaScript artifact path. */
 export function rewriteBundledPluginEntryToBuiltPath(

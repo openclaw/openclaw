@@ -1,4 +1,3 @@
-// Gateway assistant-avatar projection binds the selected value to effective metadata.
 import {
   prepareLocalAgentAvatarFile,
   type PreparedLocalAgentAvatarFile,

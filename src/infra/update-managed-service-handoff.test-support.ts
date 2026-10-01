@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Writable } from "node:stream";
-import { expect, it, vi, type Mock } from "vitest";
+import { beforeAll, expect, it, vi, type Mock } from "vitest";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
@@ -15,6 +15,11 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
   makeTempDir: (prefix: string) => string;
   setCoordinator: (directory: string) => void;
 }): void {
+  let handoff: typeof import("./update-managed-service-handoff.js");
+  beforeAll(async () => {
+    // Compile the child runtime before the case deadline starts.
+    handoff = await import("./update-managed-service-handoff.js");
+  });
   it.runIf(process.platform !== "win32")(
     "keeps the prepared coordinator authoritative across replacement admission",
     async () => {
@@ -27,7 +32,6 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
         await import("./update-managed-service-handoff-process.test-support.js");
       const { createManagedHandoffLeaseStore } =
         await import("./update-managed-service-handoff-lease.js");
-      const handoff = await import("./update-managed-service-handoff.js");
       const helpers: Array<{ child: ChildProcess; closed: Promise<void> }> = [];
       params.spawnMock.mockImplementation((...args: Parameters<typeof spawn>) => {
         const child = spawn(...args);
@@ -127,7 +131,7 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
 
         await fs.promises.rename(coordinator, displaced);
         moved = true;
-        expect(originalStore.read(root)).toEqual({ kind: "unreadable" });
+        expect(originalStore.read(root)).toEqual({ kind: "unreadable", error: expect.any(Error) });
         await expect(
           start().then((result) => {
             latest = result;

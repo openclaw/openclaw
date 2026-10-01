@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { EOL, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeAll, expect, vi } from "vitest";
@@ -9,6 +9,7 @@ import { parse } from "yaml";
 import { createCommandTest } from "../helpers/command-fixture.js";
 import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
+import { runDependencyFreePreflight } from "./ci-preflight-dependencies.test-support.js";
 
 // Each case owns its checkout and process trees. Overlap their real timeout and
 // drain waits, but keep subprocess pressure bounded on the four-core CI runner.
@@ -570,6 +571,69 @@ releasePolicyIt("returns 124 when the release ancestry total budget is exhausted
   });
   expect(report.code, report.output).toBe(124);
   expect(report.commands).toEqual([]);
+});
+
+it("materializes an executable preflight manifest from the workflow revision", async ({
+  command,
+}) => {
+  const root = command.createTempDir("ci-preflight-harness-");
+  const origin = join(root, "origin");
+  const workspace = join(root, "checkout");
+  mkdirSync(origin);
+  mkdirSync(workspace);
+  fixtureGit(origin, ["init", "--quiet"]);
+  for (const file of [
+    ".github/actions/setup-node-env/action.yml",
+    ".github/actions/git-owner/test-prerequisites.mjs",
+    ".github/actions/git-owner/test-prerequisites.json",
+    "scripts/ci-build-manifest.mjs",
+    "scripts/lib/ci-ios-smoke-plan.mjs",
+    "scripts/lib/release-context.mjs",
+    "scripts/lib/release-version.mjs",
+  ]) {
+    const destination = join(origin, file);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, readFileSync(file));
+  }
+  fixtureGit(origin, ["add", "."]);
+  const tree = fixtureGit(origin, ["write-tree"]);
+  const revision = fixtureCommit(join(origin, ".git"), tree, undefined, "workflow fixture");
+  fixtureGit(origin, ["update-ref", "HEAD", revision]);
+  const gitConfig = join(root, "gitconfig");
+  writeFileSync(gitConfig, "");
+  const checkout = await command.run(
+    process.platform === "win32" ? "python" : "python3",
+    ["-I", "-S", gitOwnerPath],
+    {
+      cwd: workspace,
+      env: {
+        ...process.env,
+        CHECKOUT_KIND: "preflight",
+        CHECKOUT_REPO: "fixture/preflight",
+        CHECKOUT_TOKEN: "",
+        CHECKOUT_REF: revision,
+        CHECKOUT_FALLBACK_REF: revision,
+        WORKFLOW_SHA: revision,
+        GITHUB_WORKSPACE: workspace,
+        GITHUB_EVENT_NAME: "pull_request",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: gitConfig,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: `url.${pathToFileURL(origin).href}.insteadOf`,
+        GIT_CONFIG_VALUE_0: "https://github.com/fixture/preflight.git",
+      },
+    },
+  );
+  expect(checkout.status, `${checkout.stdout}\n${checkout.stderr}`).toBe(0);
+  // Consume the exported trusted entrypoint against the real target planners.
+  const { result, manifest } = runDependencyFreePreflight(
+    pathToFileURL(join(workspace, ".ci-harness/scripts/ci-build-manifest.mjs")),
+    root,
+    process.execPath,
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(manifest).toContain("run_windows=true\n");
+  expect(fixtureGit(workspace, ["status", "--porcelain"])).toBe("");
 });
 
 // Ask Bash to decode the source independently of the generator and fixture codec.

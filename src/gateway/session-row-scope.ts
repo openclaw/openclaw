@@ -182,23 +182,34 @@ export function selectSessionRowEntries(
   const parent = query.parentSessionKey;
   const owner = parent && parseAgentSessionKey(parent)?.agentId;
   const agents = owner ? [owner] : query.agentId ? [query.agentId] : byAgent.keys();
-  const children = new Set<string>();
+  const childKeys = new Set<string>();
   if (parent) {
-    for (const ref of [
-      ...[...agents].map((agentId) =>
-        records.parentReference(cfg, parent, agentId, undefined, params.referenced),
-      ),
-      ...matching({ ...query, key: parent }).map((row) =>
-        records.physical(row.storeTarget.storePath, parent),
-      ),
-    ]) {
+    const sentinel = parent === "global" || parent === "unknown";
+    const references = sentinel
+      ? byParent.keys()
+      : [
+          ...[...agents].map((agentId) =>
+            records.parentReference(cfg, parent, agentId, undefined, params.referenced),
+          ),
+          ...matching({ ...query, key: parent }).map((row) =>
+            records.physical(row.storeTarget.storePath, parent),
+          ),
+        ];
+    for (const ref of references) {
+      // Sentinels retain physical and cross-agent alias links even without a parent row.
+      if (sentinel && ref.slice(ref.indexOf("\0") + 1) !== parent) {
+        continue;
+      }
       for (const id of byParent.get(ref) ?? []) {
-        children.add(id);
+        const row = rows.get(id);
+        if (row) {
+          childKeys.add(row.key);
+        }
       }
     }
   }
   const sessionIdOrKey = query.sessionIdOrKey;
-  let keys: Set<string> | undefined;
+  let keys: Set<string> | undefined = parent ? childKeys : undefined;
   if (sessionIdOrKey) {
     // Broad publications can change IDs before the resident index has caught up.
     for (const id of dirty) {
@@ -210,12 +221,10 @@ export function selectSessionRowEntries(
     const indexed = { ...query, key: sessionIdOrKey };
     keys = new Set([...matching(indexed, "id"), ...matching(indexed)].map((row) => row.key));
   }
-  // Keep every physical competitor; federation precedes ID and visibility filtering.
+  // Keep every physical competitor; federation precedes ID, parent, and visibility filtering.
   const candidates = keys
     ? [...keys].flatMap((key) => matching({ ...query, key }))
-    : parent
-      ? [...children].map((id) => rows.get(id))
-      : matching(query);
+    : matching(query);
   const acquired =
     sessionIdOrKey || dirty.size === 0
       ? candidates

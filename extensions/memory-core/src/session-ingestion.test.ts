@@ -25,6 +25,22 @@ afterEach(async () => {
 });
 
 describe("session ingestion", () => {
+  it.each(["cron", "subagent", "heartbeat", "unknown"] as const)(
+    "excludes %s sessions from memory ingestion",
+    (sessionKind) => {
+      expect(
+        sessionIngestionSourceFromCorpus({
+          agentId: "main",
+          artifactKind: "active-session",
+          transcriptSource: "sqlite",
+          sessionFile: "synthetic-session",
+          sessionId: "synthetic-session",
+          sessionKind,
+        }),
+      ).toBeNull();
+    },
+  );
+
   it.each(["email", "gmail"] as const)(
     "applies exact %s admission policy using the corpus session store",
     async (hookExternalContentSource) => {
@@ -62,7 +78,7 @@ describe("session ingestion", () => {
           excludeSessions: { hookExternalContentSources: [hookExternalContentSource] },
         },
       });
-      expect(sessionExclusionReason(source, policy)).toBe(
+      expect(sessionExclusionReason(source, policy, new Set<string>())).toBe(
         `hookExternalContentSource:${hookExternalContentSource}`,
       );
     },

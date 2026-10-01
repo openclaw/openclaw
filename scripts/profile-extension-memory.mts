@@ -140,21 +140,19 @@ export function parseArgs(argv: string[]): {
         break;
       }
       case "--concurrency":
-        options.concurrency = parsePositiveInt(args[index + 1] ?? "", arg);
-        index += 1;
-        break;
       case "--timeout-ms":
-        options.timeoutMs = parsePositiveInt(args[index + 1] ?? "", arg);
-        index += 1;
-        break;
       case "--combined-timeout-ms":
-        options.combinedTimeoutMs = parsePositiveInt(args[index + 1] ?? "", arg);
+      case "--top": {
+        const key = {
+          "--concurrency": "concurrency",
+          "--timeout-ms": "timeoutMs",
+          "--combined-timeout-ms": "combinedTimeoutMs",
+          "--top": "top",
+        } as const;
+        options[key[arg]] = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
-      case "--top":
-        options.top = parsePositiveInt(args[index + 1] ?? "", arg);
-        index += 1;
-        break;
+      }
       case "--json": {
         const next = args[index + 1];
         if (!next || next.startsWith("-")) {
@@ -525,8 +523,8 @@ function trackActiveCase(owner: ActiveCase): void {
 
 function untrackActiveCase(owner: ActiveCase): void {
   activeCases.delete(owner);
-  if (activeCases.size === 0) {
-    removeParentSignalHandlers();
+  if (activeCases.size === 0 && !parentSignalShutdownStarted) {
+    removeInstalledParentSignalHandlers();
   }
 }
 
@@ -540,13 +538,6 @@ function installParentSignalHandlers(): void {
     parentSignalHandlers.set(signal, handler);
     process.on(signal, handler);
   }
-}
-
-function removeParentSignalHandlers(): void {
-  if (!parentSignalHandlersInstalled || parentSignalShutdownStarted) {
-    return;
-  }
-  removeInstalledParentSignalHandlers();
 }
 
 function removeInstalledParentSignalHandlers(): void {
@@ -680,10 +671,7 @@ async function main(): Promise<void> {
           hookPath,
           name: "combined",
           completionKind: "imports",
-          body: buildImportBody(
-            selectedEntries.map((entry) => entry.file),
-            "IMPORTED_ALL",
-          ),
+          body: buildImportBody(entryFiles, "IMPORTED_ALL"),
           timeoutMs: options.combinedTimeoutMs,
         });
 
@@ -841,26 +829,19 @@ async function main(): Promise<void> {
     };
 
     const failures = [];
-    if (report.baseline.status !== "ok") {
-      failures.push(`baseline import ${report.baseline.status}: ${report.baseline.error}`);
-    }
-    if (report.baseline.maxRssMb === null) {
-      failures.push("baseline import did not report RSS");
-    }
-    if (report.combined !== null) {
-      if (report.combined.status !== "ok") {
-        failures.push(`combined import ${report.combined.status}: ${report.combined.error}`);
+    for (const [name, result] of [
+      ["baseline", report.baseline],
+      ["combined", report.combined],
+      ...report.results.map((entry) => [entry.dir, entry] as const),
+    ] as const) {
+      if (result === null) {
+        continue;
       }
-      if (report.combined.maxRssMb === null) {
-        failures.push("combined import did not report RSS");
-      }
-    }
-    for (const result of report.results) {
       if (result.status !== "ok") {
-        failures.push(`${result.dir} import ${result.status}: ${result.error}`);
+        failures.push(`${name} import ${result.status}: ${result.error}`);
       }
       if (result.maxRssMb === null) {
-        failures.push(`${result.dir} import did not report RSS`);
+        failures.push(`${name} import did not report RSS`);
       }
     }
     if (failures.length > 0) {

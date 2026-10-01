@@ -25,12 +25,16 @@ type ChatSendTimingPhase =
 
 type ChatSendTimingHost = SessionScopeHost & {
   sessionKey: string;
-  chatStream: string | null;
   chatQueue: ChatQueueItem[];
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
   eventLogBuffer?: unknown[];
   renderLifecycle?: RenderLifecycle;
 };
+
+type ChatSendTimingItem = Pick<
+  ChatQueueItem,
+  "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
+>;
 
 const CHAT_SEND_SERVER_TIMING_PHASES = [
   "dispatch-started",
@@ -45,10 +49,7 @@ const CHAT_SEND_SLOW_FIRST_ASSISTANT_MS = 1_500;
 
 export function recordChatSendTiming(
   host: ChatSendTimingHost,
-  item: Pick<
-    ChatQueueItem,
-    "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
-  >,
+  item: ChatSendTimingItem,
   phase: ChatSendTimingPhase,
   startedAtMs = item.sendSubmittedAtMs,
   extra: Record<string, unknown> = {},
@@ -130,10 +131,7 @@ export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: un
 
 export function registerChatSendTiming(
   host: ChatSendTimingHost,
-  item: Pick<
-    ChatQueueItem,
-    "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
-  >,
+  item: ChatSendTimingItem,
   runId: string,
   requestStartedAtMs: number,
 ) {
@@ -152,10 +150,7 @@ export function updateChatSendAckTiming(
   host: ChatSendTimingHost,
   requestedRunId: string,
   ack: ChatSendAck,
-  item: Pick<
-    ChatQueueItem,
-    "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
-  >,
+  item: ChatSendTimingItem,
   requestStartedAtMs: number,
 ) {
   const entries = (host.chatSendTimingsByRun ??= new Map());

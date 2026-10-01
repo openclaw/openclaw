@@ -10,6 +10,8 @@ import type { OpenClawPackageManifest } from "./manifest.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
+export { resolveBundledPluginGeneratedPath as resolveBundledChannelGeneratedPath };
+
 type BundledMetadataScope =
   | { kind: "default" }
   | { kind: "empty" }
@@ -97,14 +99,4 @@ export function listBundledChannelPluginMetadata(params?: {
   return resolvePluginMetadataSnapshot({
     env: scope.kind === "env" ? scope.env : undefined,
   }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
-}
-
-/** Resolves a generated runtime path for a bundled channel entry. */
-export function resolveBundledChannelGeneratedPath(
-  rootDir: string,
-  entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"],
-  pluginDirName?: string,
-  scanDir?: string,
-): string | null {
-  return resolveBundledPluginGeneratedPath(rootDir, entry, pluginDirName, scanDir);
 }

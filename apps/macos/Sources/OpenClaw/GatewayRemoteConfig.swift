@@ -79,14 +79,7 @@ enum GatewayRemoteConfig {
             return nil
         }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch trimmed {
-        case AppState.RemoteTransport.direct.rawValue:
-            return .direct
-        case AppState.RemoteTransport.ssh.rawValue:
-            return .ssh
-        default:
-            return .ssh
-        }
+        return AppState.RemoteTransport(rawValue: trimmed) ?? .ssh
     }
 
     static func resolveUrlString(root: [String: Any]) -> String? {

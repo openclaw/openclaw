@@ -5,6 +5,7 @@ import type { RepositoryGitHubPublicationRow } from "../state/github-publication
 import { decodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { exactClaimForPlacement } from "./github-publication-coordinator-methods.js";
 import { createGitHubPublicationExecutionIdentity } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
@@ -73,6 +74,8 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
         "GitHub publication's recorded effects lack the facts needed for recovery; inspect the original target before requesting another publication.",
       );
     }
+    const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id);
+    assertCustody();
     const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
       row,
       validateAuthority: () => {
@@ -80,7 +83,7 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
         return execution.ownsExecution();
       },
       assertWorkspace: () => {
-        assertReceiptOwner(row);
+        assertReceiptOwner(row, preparedOwner);
       },
     });
     let url: string | undefined;
@@ -239,9 +242,23 @@ export function createRepositoryGitHubPublicationRecovery(params: {
               }
               // The execution holds this same exclusion until its awaited effect
               // observation is recorded. Only then may recovery retire its authority.
-              const owner = resolveReceiptOwner(row);
+              const workspaceId = row.workspace_id;
+              const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
+              assertCurrent();
+              row = requireRepositoryGitHubPublication(row.request_id);
+              if (terminalRepositoryGitHubPublication(row)) {
+                return;
+              }
+              if (row.workspace_id !== workspaceId) {
+                throw new GitHubPublicationRecoveryPendingError(
+                  "GitHub publication repository source changed during recovery.",
+                );
+              }
+              const owner = resolveReceiptOwner(row, preparedOwner);
               if (!owner) {
-                failStaleRepositoryGitHubPublication(row, () => Boolean(resolveReceiptOwner(row)));
+                failStaleRepositoryGitHubPublication(row, () =>
+                  Boolean(resolveReceiptOwner(row, preparedOwner)),
+                );
                 return;
               }
               await params.execute(row, assertCurrent);

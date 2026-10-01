@@ -7,6 +7,7 @@ import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-c
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
 import {
   isOpenAICompatibleAzureResponsesBaseUrl,
@@ -91,10 +92,7 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   SimpleStreamOptions
 > = (model: Model<"azure-openai-responses">, context: Context, options?: SimpleStreamOptions) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
   const authProfileId = (options as (SimpleStreamOptions & { authProfileId?: string }) | undefined)

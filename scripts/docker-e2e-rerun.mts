@@ -43,24 +43,13 @@ function parseArgs(argv: string[]) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
+    const key = (["repo", "dir", "workflow", "ref"] as const).find(
+      (option) => arg === `--${option}` || arg?.startsWith(`--${option}=`),
+    );
     if (arg === "--help" || arg === "-h") {
       options.help = true;
-    } else if (arg === "--repo") {
-      options.repo = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--repo=")) {
-      options.repo = arg.slice("--repo=".length);
-    } else if (arg === "--dir") {
-      options.dir = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--dir=")) {
-      options.dir = arg.slice("--dir=".length);
-    } else if (arg === "--workflow") {
-      options.workflow = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--workflow=")) {
-      options.workflow = arg.slice("--workflow=".length);
-    } else if (arg === "--ref") {
-      options.ref = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--ref=")) {
-      options.ref = arg.slice("--ref=".length);
+    } else if (key) {
+      options[key] = arg === `--${key}` ? (argv[(index += 1)] ?? "") : arg.slice(key.length + 3);
     } else if (!options.input) {
       options.input = arg;
     } else {

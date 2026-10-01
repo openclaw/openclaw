@@ -1,7 +1,7 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { captureDirectEmbeddedMessageInjectionTarget } from "../../agents/embedded-agent-runner/message-injection-target.js";
+import { chatRunBelongsToAgent } from "../../gateway/chat-run-owner.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
@@ -9,6 +9,7 @@ import {
 } from "../../infra/agent-events.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-scope.js";
+import { agentSessionKeysMatchByRequestKey } from "../../routing/session-key.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -45,6 +46,42 @@ type ReplyRunAdmissionSettlement = {
   settled: boolean;
   sources?: ReplyRunAdmissionSource[];
 };
+
+type ReplyOperationSessionTarget = {
+  sessionKeys: readonly string[];
+  sessionId?: string;
+  agentId: string;
+  defaultAgentId?: string;
+};
+
+export function isReplyOperationForSession(
+  params: ReplyOperationSessionTarget,
+  operation: ReplyOperation | undefined,
+): operation is ReplyOperation {
+  return (
+    operation !== undefined &&
+    (!params.sessionId || operation.sessionId === params.sessionId) &&
+    params.sessionKeys.some((key) => agentSessionKeysMatchByRequestKey(operation.key, key)) &&
+    chatRunBelongsToAgent(
+      {
+        agentId: operation.agentId,
+        sessionKey: operation.key,
+        defaultAgentId: params.defaultAgentId,
+      },
+      params.agentId,
+    )
+  );
+}
+
+export function resolveReplyOperationsForSession(params: ReplyOperationSessionTarget) {
+  const candidates = [
+    ...params.sessionKeys.map((key) => replyRunRegistry.get(key)),
+    ...(params.sessionId ? [resolveReplyRunForCurrentSessionId(params.sessionId)] : []),
+  ];
+  return [...new Set(candidates)].filter((operation) =>
+    isReplyOperationForSession(params, operation),
+  );
+}
 
 export async function waitForReplyOperationOwnerSettlement(
   operation: ReplyOperation,
@@ -107,9 +144,7 @@ function allowsDirectMessageInjectionOwner(sessionKey: string): boolean {
 }
 
 export const replyRunRegistry: ReplyRunRegistry = {
-  begin(params) {
-    return createReplyOperation(params);
-  },
+  begin: createReplyOperation,
   get(sessionKey) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey) {
@@ -181,11 +216,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return operation ? { [replyRunInterruptTargetOperation]: operation } : undefined;
   },
   abort(sessionKey) {
-    const operation = this.get(sessionKey);
-    if (!operation) {
-      return false;
-    }
-    return operation.abortByUser();
+    return this.get(sessionKey)?.abortByUser() ?? false;
   },
   waitForIdle(sessionKey, timeoutMs, opts) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -291,18 +322,10 @@ export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
 }
 
 export function abortReplyRunBySessionId(sessionId: string): boolean {
-  const operation = resolveReplyRunForCurrentSessionId(sessionId);
-  if (!operation) {
-    return false;
-  }
-  return operation.abortByUser();
+  return resolveReplyRunForCurrentSessionId(sessionId)?.abortByUser() ?? false;
 }
 
-export function resolveActiveReplyOperationForSessionId(
-  sessionId: string,
-): ReplyOperation | undefined {
-  return resolveReplyRunForCurrentSessionId(sessionId);
-}
+export { resolveReplyRunForCurrentSessionId as resolveActiveReplyOperationForSessionId };
 
 export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
@@ -330,10 +353,7 @@ export function waitForReplyRunEndBySessionId(
   timeoutMs?: number | null,
 ): Promise<boolean> {
   const waitKey = resolveReplyRunWaitKey(sessionId);
-  if (!waitKey) {
-    return Promise.resolve(true);
-  }
-  return replyRunRegistry.waitForIdle(waitKey, timeoutMs);
+  return waitKey ? replyRunRegistry.waitForIdle(waitKey, timeoutMs) : Promise.resolve(true);
 }
 
 async function waitForReplyRunAdmissionBarrier(params: {
@@ -516,36 +536,28 @@ function evictPriorLifecycleReplyRuns(): void {
     if (evict) {
       try {
         evict();
+        continue;
       } catch (error) {
         errors.push(error);
-        try {
-          clearReplyRunState({
-            sessionKey: operation.key,
-            sessionId: operation.sessionId,
-            operation,
-          });
-        } catch (clearError) {
-          errors.push(clearError);
+      }
+    } else {
+      // Pre-generation hot-loaded operations have no retained callback, but their
+      // public method still closes over the module instance that owns the backend.
+      try {
+        if (!operation.abortForRestart()) {
+          errors.push(new Error(`Stale reply operation was not abortable: ${operation.key}`));
         }
+      } catch (error) {
+        errors.push(error);
       }
-      continue;
-    }
-    // Pre-generation hot-loaded operations have no retained callback, but their
-    // public method still closes over the module instance that owns the backend.
-    try {
-      if (!operation.abortForRestart()) {
-        errors.push(new Error(`Stale reply operation was not abortable: ${operation.key}`));
+      // Admission stays occupied until the old closure clears it. If abort
+      // synchronously clears and replaces the slot, its captured stateCleared
+      // makes this completion idempotent instead of erasing the replacement.
+      try {
+        operation.complete();
+      } catch (error) {
+        errors.push(error);
       }
-    } catch (error) {
-      errors.push(error);
-    }
-    // Admission stays occupied until the old closure clears it. If abort
-    // synchronously clears and replaces the slot, its captured stateCleared
-    // makes this completion idempotent instead of erasing the replacement.
-    try {
-      operation.complete();
-    } catch (error) {
-      errors.push(error);
     }
     try {
       clearReplyRunState({

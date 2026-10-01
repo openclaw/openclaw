@@ -14,6 +14,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  createCallerModeExecutionFixture,
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
   expectPlanReceiptDescriptorsToMatch,
@@ -77,26 +78,7 @@ function snapshotSqliteArtifacts(databasePath: string): Record<string, string | 
 
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-execution-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "state");
-  const configPath = path.join(root, "openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.symlinkSync(
-    path.resolve("extensions"),
-    path.join(root, "extensions"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  fs.writeFileSync(configPath, "{}\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  };
-  return { root, homeDir, stateDir, configPath, env };
+  return createCallerModeExecutionFixture(root);
 }
 
 function writeAliasedSessionStore(params: {

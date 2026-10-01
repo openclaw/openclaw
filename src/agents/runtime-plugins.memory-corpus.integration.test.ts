@@ -82,7 +82,7 @@ it.each(["configured", "auto-enabled bundled"])(
     const workspaceDir = makePluginLoaderTempDir();
     const rootConfig = applyPluginAutoEnable({ config, env: process.env }).config;
     expect(rootConfig.plugins?.entries?.[pluginId]?.enabled).toBe(true);
-    const root = loadAndActivateRootPluginRegistry({
+    const root = await loadAndActivateRootPluginRegistry({
       cache: false,
       config: rootConfig,
       onlyPluginIds: [pluginId],

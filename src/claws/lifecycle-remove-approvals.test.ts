@@ -16,7 +16,8 @@ import {
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withTempHomeConfig, writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
@@ -39,9 +40,9 @@ import {
 import { agentDatabaseHeldRuntimeEntrypoint } from "../state/openclaw-state-lease-runtime.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
+import { digestClawValue } from "./digest.js";
 import {
   withClawAgentConfigRemoval,
-  digestClawAgentConfig,
   digestClawAgentRemovalSurface,
 } from "./lifecycle-config-removal.js";
 import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
@@ -430,7 +431,7 @@ describe("Claw exec approvals removal", () => {
         withClawAgentConfigRemoval(
           {
             agentId: "worker",
-            expectedDigest: digestClawAgentConfig(agent),
+            expectedDigest: digestClawValue(agent),
             expectedRemovalSurfaceDigest: digestClawAgentRemovalSurface(config, "worker"),
             expectedState: "present",
             fallbackWorkspace: agent.workspace!,
@@ -662,7 +663,7 @@ describe("Claw exec approvals removal", () => {
       withClawAgentConfigRemoval(
         {
           agentId: "worker",
-          expectedDigest: digestClawAgentConfig({ id: "worker", workspace }),
+          expectedDigest: digestClawValue({ id: "worker", workspace }),
           expectedRemovalSurfaceDigest: digestClawAgentRemovalSurface(initialConfig, "worker"),
           expectedState: "present",
           fallbackWorkspace: workspace,

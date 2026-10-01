@@ -18,7 +18,10 @@ import {
 } from "../agents/bash-process-registry.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { NodeWorkerJournalWorker } from "../node-host/node-worker-journal-worker.js";
-import type { NodeWorkerLaunchReceipt } from "../node-host/node-worker-launch-store.js";
+import {
+  NodeWorkerLaunchStore,
+  type NodeWorkerLaunchReceipt,
+} from "../node-host/node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -31,7 +34,7 @@ import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
-import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import { parseWorkerProcessMessage, type WorkerProcessResult } from "./worker-process-protocol.js";
 import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
 
 const workerProcessUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.worker);
@@ -179,10 +182,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
           capacity = next;
         },
       });
+      const launches = new NodeWorkerLaunchStore(
+        new NodeWorkerJournalWorker({ env: supervisorOptions.env }),
+      );
       let command: NodeWorkerProcessIdentity | undefined;
       let runtime: NodeWorkerProcessIdentity | undefined;
       let runtimeStopped = false;
       let pendingCleanupObserved = false;
+      let nativeAnchorLoss = false;
       let nodeHost: ChildProcess | undefined;
       let caseFailure: { error: unknown } | undefined;
       try {
@@ -286,6 +293,8 @@ export function registerWorkerBackgroundExecLifecycleTests({
             runtimeStopped = true;
           }
           process.kill(crashed === "anchor" ? worker.pid : runtime!.pid, "SIGKILL");
+          nativeAnchorLoss =
+            crashed === "anchor" && running.workerCleanupMode === "linux-subreaper";
         }
         await waitForFast(
           async () => {
@@ -304,9 +313,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
               }
             }
             expect({ available: capacity.available, pendingCleanupObserved }).toEqual({
-              available: 1,
+              available: nativeAnchorLoss ? 0 : 1,
               pendingCleanupObserved: crashed === "anchor",
             });
+            if (nativeAnchorLoss) {
+              // Known PID death is not the lost wait owner's descendant-extinction certificate.
+              expect(inspectNodeWorkerProcessIdentity(runtime!)).toBe("dead");
+              expect(inspectNodeWorkerProcessIdentity(command!)).toBe("dead");
+            }
           },
           { timeout: 10_000 },
         );
@@ -315,6 +329,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
           runtime: inspectNodeWorkerProcessIdentity(runtime!),
           command: inspectNodeWorkerProcessIdentity(command!),
         }).toEqual({ worker: "dead", runtime: "dead", command: "dead" });
+        if (nativeAnchorLoss) {
+          await expect(launches.get(input.launchId)).resolves.toMatchObject({
+            state: "running",
+            workerCleanupMode: "linux-subreaper",
+            workerDescendantsReaped: false,
+          });
+          await expect(launches.nonterminalCount()).resolves.toBe(1);
+        }
       } catch (error) {
         caseFailure = { error };
       } finally {
@@ -336,19 +358,27 @@ export function registerWorkerBackgroundExecLifecycleTests({
               expect(inspectNodeWorkerProcessIdentity(command!)).toBe("dead"),
             );
           }
+          const stopEnvironment = () =>
+            supervisor.stopEnvironment({
+              gatewayNamespace: input.gatewayNamespace,
+              environmentId: plan.admission.environmentId,
+              sessionId: plan.admission.sessionId,
+              ownerEpoch: plan.admission.ownerEpoch,
+            });
           try {
-            await waitForFast(
-              async () =>
-                await supervisor.stopEnvironment({
-                  gatewayNamespace: input.gatewayNamespace,
-                  environmentId: plan.admission.environmentId,
-                  sessionId: plan.admission.sessionId,
-                  ownerEpoch: plan.admission.ownerEpoch,
-                }),
-              { timeout: 10_000 },
-            );
+            if (nativeAnchorLoss) {
+              await expect(stopEnvironment()).rejects.toThrow("cleanup remains unconfirmed");
+            } else {
+              await waitForFast(stopEnvironment, { timeout: 10_000 });
+            }
           } finally {
-            await supervisor.close();
+            if (nativeAnchorLoss) {
+              await expect(supervisor.close()).rejects.toThrow("cleanup remains unconfirmed");
+              expect(capacity.available).toBe(0);
+              await expect(launches.nonterminalCount()).resolves.toBe(1);
+            } else {
+              await supervisor.close();
+            }
           }
         } catch (cleanupError) {
           caseFailure = {
@@ -374,8 +404,8 @@ export function registerWorkerBackgroundExecLifecycleTests({
     const output = new PassThrough();
     const result = createDeferred<WorkerProcessResult>();
     output.on("data", (chunk: Buffer) => {
-      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-      if (parsed) {
+      const parsed = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+      if (parsed?.type === "result") {
         result.resolve(parsed);
       }
     });

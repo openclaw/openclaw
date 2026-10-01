@@ -450,7 +450,7 @@ public actor GatewayChannelActor {
         let options = self.connectOptions ?? GatewayConnectOptions(
             role: "operator",
             scopes: Self.defaultOperatorConnectScopes,
-            caps: [],
+            caps: [OpenClawGatewayClientCapability.ultrafast],
             commands: [],
             permissions: [:],
             clientId: "openclaw-macos",

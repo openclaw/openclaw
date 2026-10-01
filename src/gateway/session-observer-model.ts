@@ -158,26 +158,23 @@ export function rememberSessionObserverDormantRun(
   runs.delete(run.runId);
   runs.set(run.runId, run);
   while (runs.size > MAX_DORMANT_RUNS) {
-    const oldest = runs.keys().next().value;
-    if (oldest === undefined) {
+    const oldest = runs.entries().next();
+    if (oldest.done) {
       break;
     }
-    const evicted = runs.get(oldest);
-    runs.delete(oldest);
-    if (evicted) {
-      // Evicted dormant runs keep revision continuity through the bounded floor
-      // map so a later resume cannot restart below an already broadcast revision.
-      rememberSessionObserverRevisionFloor(
-        floors,
-        resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
-        {
-          sessionId: evicted.sessionId,
-          lifecycleRevision: evicted.lifecycleRevision,
-          revision: evicted.revision,
-          previousDigest: evicted.previousDigest,
-        },
-      );
-    }
+    const [runId, evicted] = oldest.value;
+    runs.delete(runId);
+    // Retain revision continuity so a later resume cannot restart below a broadcast revision.
+    rememberSessionObserverRevisionFloor(
+      floors,
+      resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
+      {
+        sessionId: evicted.sessionId,
+        lifecycleRevision: evicted.lifecycleRevision,
+        revision: evicted.revision,
+        previousDigest: evicted.previousDigest,
+      },
+    );
   }
 }
 
@@ -273,20 +270,18 @@ export const SESSION_OBSERVER_SYSTEM_PROMPT = [
   'Return one raw JSON object only, without Markdown fences or surrounding text, for example: {"headline":"Checking the fix","assessment":"Tests are passing.","health":"on-track","planProgress":{"completed":2,"total":3}}. Omit optional fields instead of setting them to null.',
 ].join(" ");
 
-const ModelDigestSchema = z
-  .strictObject({
-    headline: z.string().min(1),
-    assessment: z.string().min(1).optional(),
-    health: z.enum(SESSION_OBSERVER_HEALTH_VALUES),
-    planProgress: z
-      .strictObject({
-        completed: z.number().int().nonnegative(),
-        total: z.number().int().nonnegative(),
-      })
-      .refine((value) => value.completed <= value.total)
-      .optional(),
-  })
-  .strict();
+const ModelDigestSchema = z.strictObject({
+  headline: z.string().min(1),
+  assessment: z.string().min(1).optional(),
+  health: z.enum(SESSION_OBSERVER_HEALTH_VALUES),
+  planProgress: z
+    .strictObject({
+      completed: z.number().int().nonnegative(),
+      total: z.number().int().nonnegative(),
+    })
+    .refine((value) => value.completed <= value.total)
+    .optional(),
+});
 
 function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();

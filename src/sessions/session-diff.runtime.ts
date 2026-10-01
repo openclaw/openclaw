@@ -289,13 +289,7 @@ async function collectTrackedFiles(
       files.push(file);
       continue;
     }
-    const taken = takePatch(chunk, budget);
-    if (taken.patch !== undefined) {
-      file.patch = taken.patch;
-    }
-    if (taken.truncated) {
-      file.truncated = true;
-    }
+    Object.assign(file, takePatch(chunk, budget));
     files.push(file);
   }
   return { files, truncated };

@@ -12,6 +12,15 @@ import {
   normalizePluginProviderBaseUrl,
 } from "./plugin-metadata-provider-facts.js";
 
+export function hasConfiguredModelProvider(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): boolean {
+  return (
+    findNormalizedProviderValue(params.config?.models?.providers, params.provider) !== undefined
+  );
+}
+
 /** Limits implicit catalogs to endpoints declared by their provider owner. */
 export function isProviderCatalogSourceAllowed(params: {
   provider: string;
@@ -93,17 +102,6 @@ export function resolveProviderConfigApiOwnerHint(params: {
   return api;
 }
 
-function providerConfigDeclaresModel(
-  providerConfig: { models?: readonly { id?: string }[] } | undefined,
-  model: string,
-): boolean {
-  const trimmedModel = model.trim();
-  return Boolean(
-    trimmedModel &&
-    providerConfig?.models?.some((candidate) => candidate.id?.trim() === trimmedModel),
-  );
-}
-
 /** Resolves provider/model refs used to scope model catalog discovery. */
 export function resolveModelCatalogScope(params: {
   cfg?: OpenClawConfig;
@@ -113,9 +111,11 @@ export function resolveModelCatalogScope(params: {
   const provider = params.provider.trim();
   const model = params.model.trim();
   const providerConfig = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
-  const modelRefs = providerConfigDeclaresModel(providerConfig, model)
-    ? [provider && model ? `${provider}/${model}` : model]
-    : [provider && model ? `${provider}/${model}` : model, model];
+  const qualifiedModel = provider && model ? `${provider}/${model}` : model;
+  const modelRefs =
+    model && providerConfig?.models?.some((candidate) => candidate.id?.trim() === model)
+      ? [qualifiedModel]
+      : [qualifiedModel, model];
   // Scope ordering feeds deterministic discovery and prompt/cache inputs.
   return {
     providerRefs: normalizeUniqueSingleOrTrimmedStringList([provider, providerConfig?.api]),

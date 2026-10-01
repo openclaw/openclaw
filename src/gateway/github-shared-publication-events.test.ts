@@ -182,8 +182,8 @@ describe("shared publication committed notifications", () => {
     }
   });
 
-  it("publishes every repository receipt/effect transition after its committed write", () => {
-    const workspace = sharedRepositoryWorkspace();
+  it("publishes every repository receipt/effect transition after its committed write", async () => {
+    const workspace = await sharedRepositoryWorkspace();
     const db = openOpenClawStateDatabase().db;
     const observations: Array<{ inTransaction: boolean; status?: string; effect?: string | null }> =
       [];
@@ -197,7 +197,7 @@ describe("shared publication committed notifications", () => {
     });
     const stop = onSessionLifecycleEvent(observer);
     try {
-      const unbound = repositoryReceipt(workspace.workspaceId, {
+      const unbound = repositoryReceipt(workspace, {
         checkpoint_ref: null,
         checkpoint_digest: null,
         source_head_commit: null,
@@ -254,13 +254,13 @@ describe("shared publication committed notifications", () => {
     }
   });
 
-  it("never emits private repository receipt notifications, including claims, effects, interruption, and stale retirement", () => {
-    const workspace = sharedRepositoryWorkspace();
+  it("never emits private repository receipt notifications, including claims, effects, interruption, and stale retirement", async () => {
+    const workspace = await sharedRepositoryWorkspace();
     const observer = vi.fn();
     const stop = onSessionLifecycleEvent(observer);
     try {
       const row = insertRepositoryGitHubPublication(
-        repositoryReceipt(workspace.workspaceId, {
+        repositoryReceipt(workspace, {
           owner_profile_id: "private-person",
           connection_generation: "private-generation",
           identity_source: "personal",
@@ -285,12 +285,9 @@ describe("shared publication committed notifications", () => {
     }
   });
 
-  it("does not emit repository writes rolled back after claim/effect recording", () => {
-    const workspace = sharedRepositoryWorkspace();
-    const row = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId),
-      () => {},
-    );
+  it("does not emit repository writes rolled back after claim/effect recording", async () => {
+    const workspace = await sharedRepositoryWorkspace();
+    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
     const observer = vi.fn();
     const stop = onSessionLifecycleEvent(observer);
     try {
@@ -325,21 +322,21 @@ describe("shared publication committed notifications", () => {
     }
   });
 
-  it("notifies committed preparation failure, stale retirement, and deferred shared claims", () => {
-    const workspace = sharedRepositoryWorkspace();
+  it("notifies committed preparation failure, stale retirement, and deferred shared claims", async () => {
+    const workspace = await sharedRepositoryWorkspace();
     const first = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId, { checkpoint_ref: null, checkpoint_digest: null }),
+      repositoryReceipt(workspace, { checkpoint_ref: null, checkpoint_digest: null }),
       () => {},
     );
     const second = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId, {
+      repositoryReceipt(workspace, {
         request_id: "retired",
         idempotency_key: "retired",
       }),
       () => {},
     );
     const third = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId, {
+      repositoryReceipt(workspace, {
         request_id: "deferred",
         idempotency_key: "deferred",
         claim_id: "claim",

@@ -1,4 +1,3 @@
-// Resolves and packages install sources for plugin installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
@@ -160,7 +159,7 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
   return entries.at(-1);
 }
 
-function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
+export function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
   // npm output varies by version, selector, and field projection. Multi-version
   // arrays follow publication order; selection above handles ranges and literal tags.
   const entry = selectNpmViewMetadataEntry(value, spec);

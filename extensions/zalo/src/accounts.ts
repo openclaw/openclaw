@@ -1,4 +1,3 @@
-// Zalo plugin module implements accounts behavior.
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

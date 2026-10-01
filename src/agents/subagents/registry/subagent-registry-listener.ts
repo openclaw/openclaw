@@ -18,6 +18,7 @@ export function createSubagentRegistryListener(config: {
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   persist: (...runIds: string[]) => void;
+  resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
   refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
@@ -129,6 +130,9 @@ export function createSubagentRegistryListener(config: {
             ) {
               persist(entry.runId);
             }
+            if (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake?.pauseNotice) {
+              config.resumeRequesterSettleWake(entry.runId, entry);
+            }
             return;
           }
           // A collector result is read by an explicit wait and never delivered by
@@ -148,6 +152,7 @@ export function createSubagentRegistryListener(config: {
           return;
         }
         const classification = classifySubagentTerminalOutcome(terminalOutcome);
+        const pendingTerminal = { runId: evt.runId, endedAt, startedAt, terminalReply };
         if (
           classification === "cancellation" &&
           evt.data?.aborted === true &&
@@ -155,29 +160,16 @@ export function createSubagentRegistryListener(config: {
           evt.data.status === undefined &&
           evt.data.timeoutPhase === undefined
         ) {
-          pendingLifecycle.scheduleCancellation({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
-          });
+          pendingLifecycle.scheduleCancellation(pendingTerminal);
           return;
         }
         if (classification === "timeout") {
-          pendingLifecycle.scheduleTimeout({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
-          });
+          pendingLifecycle.scheduleTimeout(pendingTerminal);
           return;
         }
         if (phase === "error" && classification === "failure") {
           pendingLifecycle.scheduleError({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
+            ...pendingTerminal,
             error: terminalOutcome.error,
           });
           return;

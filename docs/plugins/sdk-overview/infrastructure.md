@@ -49,6 +49,30 @@ forward directory-scan errors through the same error event. Use the result in
 the watcher lifecycle owner to stop native retries and select an existing
 refresh path.
 
+### Filesystem observation and worker notifications
+
+`resolveFsObservationMode(env?)` and `resolveFsObservationIntervalMs(env?)` from
+`openclaw/plugin-sdk/file-access-runtime` share the host's preserved
+[`CHOKIDAR_*` environment contract](/help/environment#filesystem-observation).
+Use `admitObservationRoot`, `watch`, and their types from the same SDK entrypoint,
+including `ObservationRoot`, `WatchOptions`, and `WatchSubscription`. These
+operations share the host's fs-safe instance; a plugin's separate dependency
+copy cannot observe those Roots.
+Pass the resolved mode and `pollIntervalMs` to `watch` so
+automatic fallback preserves the polling interval. Keep parsing, settling,
+retries, and indexing in the consumer. With fs-safe, classify native watch capacity through
+`health.failure.operation === "watch"` and `health.failure.code === "watch-limit"`;
+`getFileWatchCapacityCode` retains its existing Node watch-error contract.
+
+For same-version observation workers, `createFileWatchNotifier(output, onFailure)`
+from the same SDK entrypoint sends JSON lines through a borrowed writable stream.
+Call `send("change" | "unavailable" | "available")` for invalidation and
+availability updates. It coalesces pending notifications, keeps one write in
+flight, and calls `onFailure` when output fails or closes unexpectedly. Await
+`close()` to stop accepting notifications and join accepted writes before
+retiring the worker; the stream remains caller-owned. This carries current
+observation state, not a complete history of filesystem events.
+
 ### Streaming file verification
 
 `sha256File(pathOrHandle, { maxBytes, signal })` from
@@ -59,6 +83,25 @@ offset; the caller owns admission and close. Path inputs reject final symlinks
 and close their owned handle. Cancellation settles pending work before rejecting.
 The optional native helper hashes off the JavaScript event loop; the fallback
 uses bounded buffers. Neither route provides a snapshot of concurrent writes.
+
+### Browser lifecycle cleanup
+
+`closeTrackedBrowserTabsForSessions` from `openclaw/plugin-sdk/browser-maintenance`
+accepts an optional `prepareCurrent(): Promise<boolean>` check after plugin
+activation and before each new cleanup claim. Returning `false` skips new claims;
+the existing `isCurrent()` callback remains a synchronous owner check after awaited
+preparation. A host-supplied `sessionEntryCurrent` check restricts native claim and
+pre-claim state writes using current session facts; it does not grant store access.
+Supplying `sessionEntryCurrent` also requires `prepareCurrent`, which checks
+process-local tabs before they acquire a cleanup reservation. Unpaired checks are
+refused with a warning before tab cleanup begins.
+Official plugins share the `SessionEntryCurrentPreparation` and
+`SessionEntryCurrentCheck` types through `openclaw/plugin-sdk/plugin-state-runtime`.
+Once a tab is claimed, closing and retiring that tab finish under its captured
+Browser authority even if the cleanup caller subsequently changes.
+Artifacts advertise this contract with `supportsSessionEntryCurrent: true`.
+Guarded cleanup against an older artifact leaves tabs untouched and reports an
+update warning; callers using only the existing synchronous guard remain supported.
 
 ### SQLite write admission
 
@@ -267,20 +310,25 @@ cleanup. Body byte limits and read timeouts remain separate from transport clean
 For a custom error representation after a response-first body read, await
 `sendHttpRequestRejection(req, res, statusCode, body, contentType?)` instead of
 calling `res.end()` and destroying the request. It preserves security headers,
-frames the complete error, then on Node closes the write side while keeping application
+frames the complete error, then on Node and Node-compatible Bun HTTP transports closes the write side while keeping application
 body readers paused. Node's request backpressure bounds residual input buffering;
 cleanup allows at most one second, not another body-read timeout. A disconnected peer, malformed HTTP, or an
 exhausted cleanup budget can prevent delivery. Committed responses are closed
 without appending a replacement error or completing a partial successful body.
 
-On Node, transport-owned rejections emit response `close` without `finish`.
+On these transports, rejections emit response `close` without `finish`.
 Use `close` for terminal cleanup or selected-error diagnostics; it does not prove
 delivery. Keep successful-response activity on `finish`, with the caller's
 success-status check, so an aborted request cannot report healthy activity.
 
-Bun uses its native HTTP response completion because its raw socket operations
-do not flush the HTTP response. Bun can still report client connection resets
-during large outstanding uploads, even after delivering the complete error.
+Older Bun HTTP transports use native response completion because their raw socket
+operations do not flush the HTTP response. OpenClaw detects the native HTTP
+`destroySoon` implementation introduced by Bun's Node compatibility rework rather
+than relying on version labels shared by different canary builds. Queued HEAD
+rejections on newer Bun wait for response socket assignment, including builds
+without HTTP response-finish diagnostics. Older Bun can still report client
+connection resets during large outstanding uploads, even after delivering the
+complete error.
 
 Gateway HTTP requests run in order on each connection, including their response
 lifetimes. A closing connection cannot admit later requests or upgrades. Queued

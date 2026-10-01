@@ -123,6 +123,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   projectPluginMetadataSnapshot: (snapshot: PluginMetadataSnapshot) => snapshot,
   loadPluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync: async () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({

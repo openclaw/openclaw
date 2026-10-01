@@ -3,7 +3,7 @@
 import { appendFile } from "node:fs/promises";
 import { reviewDependencyChanges } from "./dependency-guard.mjs";
 import {
-  SupersededReviewError,
+  ObsoleteReviewError,
   assertGuardUnchanged,
   findMaintainerApproval,
   readGuardReview,
@@ -163,7 +163,7 @@ async function main() {
             ((error instanceof GitHubStatusPublicationError ||
               error instanceof GitHubReadTimeoutError ||
               error instanceof GitHubDiffDataError ||
-              error instanceof SupersededReviewError) &&
+              error instanceof ObsoleteReviewError) &&
               errors.length === 0)
           ) {
             throw error;
@@ -234,7 +234,7 @@ async function main() {
       error instanceof GitHubRateLimitError ||
       error instanceof GitHubStatusPublicationError ||
       error instanceof GitHubReadTimeoutError ||
-      error instanceof SupersededReviewError
+      error instanceof ObsoleteReviewError
     ) {
       throw error;
     }
@@ -270,7 +270,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     },
   }).catch(
     /** @param {unknown} error */ (error) => {
-      if (error instanceof SupersededReviewError) {
+      if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
       }

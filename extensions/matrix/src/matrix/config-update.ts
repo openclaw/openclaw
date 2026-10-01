@@ -86,10 +86,7 @@ function applyNullableSecretInputField(
   target[key] = ref;
 }
 
-function cloneMatrixDmConfig(dm: MatrixConfig["dm"]): MatrixConfig["dm"] {
-  if (!dm) {
-    return dm;
-  }
+function cloneMatrixDmConfig(dm: NonNullable<MatrixConfig["dm"]>): MatrixConfig["dm"] {
   return {
     ...dm,
     ...(dm.allowFrom ? { allowFrom: [...dm.allowFrom] } : {}),

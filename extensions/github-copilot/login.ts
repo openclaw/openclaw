@@ -1,4 +1,3 @@
-// Github Copilot plugin module implements login behavior.
 import {
   resolveExpiresAtMsFromDurationMs,
   nonNegativeSecondsToSafeMilliseconds,
@@ -45,26 +44,6 @@ type DeviceTokenResponse =
       error_uri?: string;
       interval?: unknown;
     };
-
-const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
-const GITHUB_DEVICE_EXPIRED = Symbol("github-device-expired");
-
-class GitHubDeviceFlowError extends Error {
-  readonly kind: symbol;
-  constructor(kind: symbol, message: string) {
-    super(message);
-    this.kind = kind;
-    this.name = "GitHubDeviceFlowError";
-  }
-}
-
-function isGitHubDeviceAccessDeniedError(err: unknown): boolean {
-  return err instanceof GitHubDeviceFlowError && err.kind === GITHUB_DEVICE_ACCESS_DENIED;
-}
-
-function isGitHubDeviceExpiredError(err: unknown): boolean {
-  return err instanceof GitHubDeviceFlowError && err.kind === GITHUB_DEVICE_EXPIRED;
-}
 
 function parseJsonResponse(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") {
@@ -181,7 +160,7 @@ async function pollForAccessToken(params: {
   domain: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
-}): Promise<string> {
+}): Promise<GitHubCopilotDeviceFlowResult> {
   const bodyBase = new URLSearchParams({
     client_id: CLIENT_ID,
     device_code: params.deviceCode,
@@ -207,7 +186,7 @@ async function pollForAccessToken(params: {
     params.assertCurrent?.();
     if ("access_token" in json) {
       if (typeof json.access_token === "string") {
-        return json.access_token;
+        return { status: "authorized", accessToken: json.access_token };
       }
       throw new Error("GitHub device flow returned an invalid access token");
     }
@@ -225,21 +204,15 @@ async function pollForAccessToken(params: {
       continue;
     }
     if (err === "expired_token") {
-      throw new GitHubDeviceFlowError(
-        GITHUB_DEVICE_EXPIRED,
-        "GitHub device code expired; run login again",
-      );
+      return { status: "expired" };
     }
     if (err === "access_denied") {
-      throw new GitHubDeviceFlowError(GITHUB_DEVICE_ACCESS_DENIED, "GitHub login cancelled");
+      return { status: "access_denied" };
     }
     throw new Error(`GitHub device flow error: ${err}`);
   }
 
-  throw new GitHubDeviceFlowError(
-    GITHUB_DEVICE_EXPIRED,
-    "GitHub device code expired; run login again",
-  );
+  return { status: "expired" };
 }
 
 async function sleepGitHubDevicePollDelay(
@@ -346,23 +319,12 @@ export async function runGitHubCopilotDeviceFlow(
   }
   assertCurrent();
 
-  try {
-    const accessToken = await pollForAccessToken({
-      deviceCode: device.deviceCode,
-      intervalMs: Math.max(1000, device.intervalMs),
-      expiresAt: device.expiresAt,
-      domain: host,
-      ...(io.signal ? { signal: io.signal } : {}),
-      assertCurrent,
-    });
-    return { status: "authorized", accessToken };
-  } catch (err) {
-    if (isGitHubDeviceAccessDeniedError(err)) {
-      return { status: "access_denied" };
-    }
-    if (isGitHubDeviceExpiredError(err)) {
-      return { status: "expired" };
-    }
-    throw err;
-  }
+  return await pollForAccessToken({
+    deviceCode: device.deviceCode,
+    intervalMs: Math.max(1000, device.intervalMs),
+    expiresAt: device.expiresAt,
+    domain: host,
+    ...(io.signal ? { signal: io.signal } : {}),
+    assertCurrent,
+  });
 }

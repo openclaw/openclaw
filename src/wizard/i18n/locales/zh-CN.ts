@@ -314,6 +314,7 @@ export const zh_CN = {
       workspaceSetupFailed: "工作区设置失败",
       gatewaySetupFailed: "Gateway 设置失败",
       appliedTitle: "推理已就绪",
+      localSetupTitle: "本地设置",
       complete: "OpenClaw 已准备就绪。",
       completeWithoutAi: "OpenClaw 设置已保存。连接 AI 后再打开聊天。",
       detected: "AI 检测完成。",

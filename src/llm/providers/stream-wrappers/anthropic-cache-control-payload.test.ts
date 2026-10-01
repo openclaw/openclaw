@@ -1,6 +1,6 @@
 // Anthropic cache-control payload tests cover cache metadata preservation.
+import { applyAnthropicEphemeralCacheControlMarkers } from "@openclaw/ai/transports";
 import { describe, expect, it } from "vitest";
-import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
 
 describe("applyAnthropicEphemeralCacheControlMarkers", () => {
   it("marks system text content as ephemeral and strips thinking cache markers", () => {

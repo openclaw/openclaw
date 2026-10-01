@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+  nodeWorkerPlanHash,
   parseNodeWorkerConnectionFailureMessage,
   parseNodeWorkerEnvironmentStopInput,
   parseNodeWorkerLaunchInput,
@@ -44,6 +45,26 @@ describe("node worker status wait request", () => {
 });
 
 describe("node worker supervisor launch request", () => {
+  it("keeps the old launch shape exact and binds negotiated idle retention into its plan hash", () => {
+    const descriptor = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
+    const input = {
+      environmentSession: 1,
+      launchId: "turn-1",
+      gatewayNamespace: "gateway-1",
+      expectedBundleHash: descriptor.admission.handshake.bundleHash,
+      placementGeneration: 4,
+      descriptor,
+    };
+    const legacy = parseNodeWorkerLaunchInput(JSON.stringify(input));
+    expect(legacy).toEqual(input);
+    const retained = parseNodeWorkerLaunchInput(JSON.stringify({ ...input, idleRetention: true }));
+    expect(retained).toEqual({ ...input, idleRetention: true });
+    expect(nodeWorkerPlanHash(retained)).not.toBe(nodeWorkerPlanHash(legacy));
+    expect(() =>
+      parseNodeWorkerLaunchInput(JSON.stringify({ ...input, idleRetention: false })),
+    ).toThrow("INVALID_REQUEST");
+  });
+
   it.each([undefined, 2])(
     "rejects a Gateway without the negotiated environment lifetime marker %s",
     (environmentSession) => {

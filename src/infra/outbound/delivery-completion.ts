@@ -1,6 +1,4 @@
 import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
-import type { CommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
-import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   ConversationDeliveryMissingError,
@@ -17,7 +15,6 @@ import {
   type PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { mergeRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
-import type { HarnessCompletionRecovery } from "../../config/sessions/restart-recovery-types.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -38,6 +35,7 @@ import {
 } from "../delivery-queue-sqlite.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<
@@ -61,30 +59,6 @@ export function captureConversationDeliveryTarget(
     ...(isGatewayExternallySupervised(scope.env) ? { supervisorMode: "external" as const } : {}),
   };
 }
-
-/** Serializable owner callback for a durable queue entry. */
-export type DurableDeliveryCompletion =
-  | {
-      kind: "conversation";
-      agentId: string;
-      operationId: string;
-      storePath?: string;
-      /** Present on Gateway-owned conversation intents created with route authorization. */
-      routeFingerprint?: string;
-    }
-  | {
-      kind: "pending-final";
-      /** Null means an owner was admitted without recoverable authority; fail closed. */
-      commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
-      /** Older queue records retain the canonical locator's original owner selection. */
-      agentId?: string;
-      deliveryId: string;
-      intentId: string;
-      sessionId: string;
-      sessionKey: string;
-      storePath: string;
-      sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
-    };
 
 type DurableDeliveryCompletionResult = {
   state: "prepared" | "queued" | "delivered" | "suppressed" | "rejected" | "unknown" | "stale";
@@ -168,7 +142,6 @@ export async function settlePendingFinalDelivery(
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
-  let deliveredHarnessClaim: HarnessCompletionRecovery | undefined;
   await patchSessionEntryCore(
     {
       agentId: completion.agentId,
@@ -251,9 +224,8 @@ export async function settlePendingFinalDelivery(
       const result = options.identifiedResult;
       const platformMessageId = result ? readPlatformMessageId(result) : undefined;
       const context = pending.context;
-      // Persist the receipt in the same transaction as pending-final completion,
-      // before queue acknowledgement. A crash before the separate task-store
-      // commit leaves this exact claim replayable by startup reconciliation.
+      // Commit the receipt with pending-final completion before queue acknowledgement
+      // so recovery can recognize this exact claim without another announcement.
       const terminalEvidence =
         claim &&
         result &&
@@ -282,7 +254,6 @@ export async function settlePendingFinalDelivery(
               ],
             )
           : undefined;
-      deliveredHarnessClaim = terminalEvidence ? claim : undefined;
       const clearsNotice =
         existingNotice?.state !== "acknowledged" &&
         !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
@@ -317,18 +288,6 @@ export async function settlePendingFinalDelivery(
     },
     { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
   );
-  if (deliveredHarnessClaim) {
-    const claim = deliveredHarnessClaim;
-    const { reconcileHarnessCompletionDelivery } =
-      await import("../../agents/agent-harness-completion-delivery.js");
-    reconcileHarnessCompletionDelivery({
-      agentId: claim.requesterAgentId,
-      sessionKey: completion.sessionKey,
-      storePath: completion.storePath,
-      sourceRunId: claim.sourceRunId,
-      taskRunId: claim.taskRunId,
-    });
-  }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");

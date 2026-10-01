@@ -409,7 +409,7 @@ export async function updateGitInstall(params: {
   beforeGitMutation: UpdateRunnerOptions["beforeGitMutation"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   assertCurrent?: () => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
   getDoctorContext?: Parameters<typeof runPackageUpdateDoctor>[0]["getDoctorContext"];
   getManagedServiceEnv: () => NodeJS.ProcessEnv | undefined;

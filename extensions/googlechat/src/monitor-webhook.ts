@@ -71,19 +71,6 @@ type GoogleChatWebhookAuthRejection = {
   reason: string;
 };
 
-async function verifyGoogleChatTargetAuth(
-  target: WebhookTarget,
-  bearer: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const verification = await verifyGoogleChatRequest({
-    bearer,
-    audienceType: target.audienceType,
-    audience: target.audience,
-    expectedAddOnPrincipal: target.account.config.appPrincipal,
-  });
-  return verification.ok ? { ok: true } : { ok: false, reason: verification.reason ?? "unknown" };
-}
-
 function logGoogleChatWebhookAuthRejections(rejections: GoogleChatWebhookAuthRejection[]): void {
   for (const rejection of rejections) {
     rejection.target.runtime.log?.(
@@ -103,12 +90,17 @@ async function resolveGoogleChatWebhookTargetWithAuthOrReject(params: {
     targets: params.targets,
     res: params.res,
     isMatch: async (target) => {
-      const verification = await verifyGoogleChatTargetAuth(target, params.bearer);
+      const verification = await verifyGoogleChatRequest({
+        bearer: params.bearer,
+        audienceType: target.audienceType,
+        audience: target.audience,
+        expectedAddOnPrincipal: target.account.config.appPrincipal,
+      });
       if (verification.ok) {
         verifiedTargetCount += 1;
         return true;
       }
-      rejections.push({ target, reason: verification.reason });
+      rejections.push({ target, reason: verification.reason ?? "unknown" });
       return false;
     },
   });
@@ -167,8 +159,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
       inFlightLimiter: params.webhookInFlightLimiter,
       handle: async ({ targets }) => {
         const headerBearer = extractBearerToken(req.headers.authorization);
-        let selectedTarget: WebhookTarget | null;
-        let parsedInbound: ParsedGoogleChatInboundSuccess;
+        let selectedTarget: WebhookTarget | null = null;
         const readAndParseEvent = async (
           profile: "pre-auth" | "post-auth",
         ): Promise<ParsedGoogleChatInboundSuccess | null> => {
@@ -201,20 +192,13 @@ export function createGoogleChatWebhookRequestHandler(params: {
           if (!selectedTarget) {
             return true;
           }
-
-          const parsed = await readAndParseEvent("post-auth");
-          if (!parsed) {
-            return true;
-          }
-          parsedInbound = parsed;
-        } else {
-          const parsed = await readAndParseEvent("pre-auth");
-          if (!parsed) {
-            return true;
-          }
-          parsedInbound = parsed;
-
-          if (!parsed.addOnBearerToken) {
+        }
+        const parsedInbound = await readAndParseEvent(headerBearer ? "post-auth" : "pre-auth");
+        if (!parsedInbound) {
+          return true;
+        }
+        if (!headerBearer) {
+          if (!parsedInbound.addOnBearerToken) {
             logGoogleChatWebhookAuthRejections(
               targets.map((target) => ({ target, reason: "missing token" })),
             );
@@ -226,11 +210,11 @@ export function createGoogleChatWebhookRequestHandler(params: {
           selectedTarget = await resolveGoogleChatWebhookTargetWithAuthOrReject({
             targets,
             res,
-            bearer: parsed.addOnBearerToken,
+            bearer: parsedInbound.addOnBearerToken,
           });
-          if (!selectedTarget) {
-            return true;
-          }
+        }
+        if (!selectedTarget) {
+          return true;
         }
 
         const dispatchTarget = selectedTarget;

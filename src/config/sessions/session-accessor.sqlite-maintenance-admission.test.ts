@@ -3,8 +3,8 @@ import { expect, test, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationResult } from "./session-accessor.sqlite-lifecycle-types.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import type * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker-request.js";
 
@@ -14,6 +14,7 @@ type WorkerOwner = Parameters<
 const storage = vi.hoisted(() => ({
   run: vi.fn<WorkerOwner["run"]>(),
   committed: false,
+  database: { db: { isTransaction: false } },
   release: vi.fn(),
 }));
 const options = {
@@ -33,7 +34,7 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-readonly.js")>()),
   retainOpenClawAgentDatabaseReadOnly: () => ({
     found: true,
-    database: { db: {} },
+    database: storage.database,
     claim: {
       identity: "synthetic-file",
       assertCurrent: () => {},
@@ -42,6 +43,18 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => (
     },
   }),
 }));
+vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db.js")>();
+  return {
+    ...actual,
+    getOpenClawAgentDatabaseIfOpen: (
+      request: Parameters<typeof actual.getOpenClawAgentDatabaseIfOpen>[0],
+    ) =>
+      request?.path === options.path
+        ? storage.database
+        : actual.getOpenClawAgentDatabaseIfOpen(request),
+  };
+});
 vi.mock("../../state/openclaw-agent-db-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-identity.js")>()),
   readOpenClawAgentDatabaseIdentity: () => ({ filename: options.path }),
@@ -169,6 +182,16 @@ test("maintenance preparation yields to foreground writes and retains commit adm
       materializedPlans: [],
     },
   });
+  const settledFinalization = finalization.then(
+    () => {
+      throw new Error("Finalization settled before its protocol checkpoint");
+    },
+    (error: unknown) => {
+      throw error;
+    },
+  );
+  // Observe early failure while any protocol checkpoint is pending.
+  void settledFinalization.catch(() => {});
   let precedingWriter: Promise<void> | undefined;
   let preparationWriter: Promise<void> | undefined;
   let validationWriter: Promise<void> | undefined;
@@ -186,7 +209,7 @@ test("maintenance preparation yields to foreground writes and retains commit adm
     await precedingWriter;
     releaseArchive.resolve();
     await earlierArchive;
-    await preparation.promise;
+    await Promise.race([preparation.promise, settledFinalization]);
     preparationWriter = runExclusiveSqliteSessionWrite(
       options,
       async () => {
@@ -195,7 +218,7 @@ test("maintenance preparation yields to foreground writes and retains commit adm
       "session-entry.patch",
     );
     worker.postMessage({ type: "prepare" }, []);
-    await validationGap.promise;
+    await Promise.race([validationGap.promise, settledFinalization]);
     expect(order).toEqual(["preceding-writer", "preparation-writer"]);
     validationWriter = runExclusiveSqliteSessionWrite(
       options,
@@ -205,7 +228,7 @@ test("maintenance preparation yields to foreground writes and retains commit adm
       "session-entry.patch",
     );
     worker.postMessage({ type: "continue" }, []);
-    await commitGap.promise;
+    await Promise.race([commitGap.promise, settledFinalization]);
     expect(order).toEqual(["preceding-writer", "preparation-writer", "validation-writer"]);
     laterWriter = runExclusiveSqliteSessionWrite(
       options,

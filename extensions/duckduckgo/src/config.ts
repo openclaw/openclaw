@@ -9,18 +9,8 @@ const DEFAULT_DDG_SAFE_SEARCH = "moderate";
 
 export type DdgSafeSearch = "strict" | "moderate" | "off";
 
-type DdgPluginConfig = {
-  webSearch?: {
-    region?: string;
-    safeSearch?: string;
-  };
-};
-
-function resolveDdgWebSearchConfig(
-  config?: OpenClawConfig,
-): DdgPluginConfig["webSearch"] | undefined {
-  const pluginConfig = config?.plugins?.entries?.duckduckgo?.config as DdgPluginConfig | undefined;
-  return asOptionalRecord(pluginConfig?.webSearch);
+function resolveDdgWebSearchConfig(config?: OpenClawConfig) {
+  return asOptionalRecord(config?.plugins?.entries?.duckduckgo?.config?.webSearch);
 }
 
 export function resolveDdgRegion(config?: OpenClawConfig): string | undefined {

@@ -125,7 +125,7 @@ struct QuickChatPowerFeaturesTests {
             AgentsListResult.self,
             from: Data(Self.agentsFixture.utf8))
         let snapshot = QuickChatModelControlLogic.snapshot(
-            target: QuickChatRoutingTarget(sessionKey: "agent:main:main", agentID: nil),
+            target: OpenClawChatSessionTarget(sessionKey: "agent:main:main", agentID: nil),
             models: models,
             sessions: sessions,
             agents: agents)
@@ -150,7 +150,7 @@ struct QuickChatPowerFeaturesTests {
             AgentsListResult.self,
             from: Data(Self.agentsFixture.utf8))
         let snapshot = QuickChatModelControlLogic.snapshot(
-            target: QuickChatRoutingTarget(sessionKey: "agent:work:main", agentID: nil),
+            target: OpenClawChatSessionTarget(sessionKey: "agent:work:main", agentID: nil),
             models: [.init(
                 modelID: "deepseek-v4", name: "Fixture", provider: "deepseek", contextWindow: nil,
                 thinkingLevels: [.init(id: "off", label: "off"), .init(id: "high", label: "high")],
@@ -402,7 +402,7 @@ struct QuickChatPowerFeaturesTests {
         let targetBControlsStarted = AsyncTestGate()
         var agentsCallCount = 0
         var patchCompleted = false
-        var controlTargets: [QuickChatRoutingTarget] = []
+        var controlTargets: [OpenClawChatSessionTarget] = []
         let choice = Self.solModelChoice
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:a:main" },
@@ -437,7 +437,7 @@ struct QuickChatPowerFeaturesTests {
                     defaultProvider: nil)
             },
             settingsPatchProvider: { target, _ in
-                #expect(target == QuickChatRoutingTarget(sessionKey: "agent:a:main", agentID: nil))
+                #expect(target == OpenClawChatSessionTarget(sessionKey: "agent:a:main", agentID: nil))
                 patchStarted.open()
                 await finishPatch.wait()
                 patchCompleted = true
@@ -480,7 +480,7 @@ struct QuickChatPowerFeaturesTests {
         #expect(!patchCompleted)
         #expect(!model.isUpdatingModel)
         #expect(model.canSend)
-        #expect(controlTargets.contains(QuickChatRoutingTarget(
+        #expect(controlTargets.contains(OpenClawChatSessionTarget(
             sessionKey: "agent:b:main",
             agentID: nil)))
 

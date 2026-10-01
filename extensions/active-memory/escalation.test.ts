@@ -42,6 +42,18 @@ describe("active-memory escalation", () => {
     "Помнишь, что мы решили вчера? Напомни мне завтра, что нужно отправить отчёт",
     "Пожалуйста, напомни, о чём мы договорились в прошлый раз",
     "Помнишь, как отправить отчёт?",
+    "Qual foi a causa raiz do problema que investigamos hoje?",
+    "Sem olhar a conversa atual: o que decidimos sobre o upgrade?",
+    "O que a gente discutiu ontem sobre memória?",
+    "Você lembra o que combinamos na semana passada?",
+    "O que decidimos da última vez?",
+    "Lembra-se do que conversamos outro dia?",
+    "Você lembra o que decidimos para amanhã?",
+    "Lembra o que discutimos para a próxima semana?",
+    "Voce lembra o que combinamos no mes passado?",
+    "O que decidimos da ultima vez?",
+    "Você recorda o que combinamos na semana passada?",
+    "Lembra o que discutimos para a proxima semana?",
   ])("recognizes recall intent in %j", (message) => {
     expect(hasRecallIntent(message)).toBe(true);
   });
@@ -93,6 +105,22 @@ describe("active-memory escalation", () => {
     "Ты помнишь через два часа отправить отчёт?",
     "Ты помнишь через неделю отправить отчёт?",
     "Ты помнишь, что нужно будет отправить отчёт?",
+    "Lembre de enviar o relatório amanhã",
+    "Me lembre amanhã",
+    "Lembra de configurar isso",
+    "Amanhã vamos decidir o upgrade",
+    "Lembra de enviar o relatório amanhã?",
+    "Lembra de enviar o relatório hoje à noite",
+    "Lembra de configurar isso?",
+    "Falamos inglês.",
+    "Discutimos o problema.",
+    "Você lembra o que fazer semana que vem?",
+    "Lembra o que vamos decidir mês que vem?",
+    "O relatório contém o que precisamos hoje.",
+    "A lembrança de ontem é boa.",
+    "Lembra o que fazer hoje a noite?",
+    "Lembra o que fazer amanha?",
+    "Esse arquivo relembra como configurar o serviço.",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });

@@ -300,6 +300,7 @@ export const en = {
       accessQuestion: "How should I set things up?",
       aiAccessTitle: "AI access",
       appliedTitle: "Inference ready",
+      localSetupTitle: "Local setup",
       alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
       applyFailedFallback:
         "Something went wrong while applying setup: {detail}\nLet's finish together in chat instead.",

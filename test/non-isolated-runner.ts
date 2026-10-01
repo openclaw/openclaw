@@ -74,6 +74,7 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
 );
 const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
 const SECRET_REDACTION_TEST_API = Symbol.for("openclaw.secretRedactionRegistryTestApi");
+const SUBAGENT_REGISTRY_TEST_API = Symbol.for("openclaw.subagentRegistryTestApi");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
 const nativeConsoleMethods = {
@@ -549,6 +550,16 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       ["session suspension", resetOpenClawSessionSuspensionState],
     ] as const) {
       clean(phase, run);
+    }
+    if (
+      !(await drain("subagent registry", async () => {
+        const api = (globalThis as Record<PropertyKey, unknown>)[SUBAGENT_REGISTRY_TEST_API] as
+          | { resetSubagentRegistryForTests(options: { persist: false }): void | Promise<void> }
+          | undefined;
+        await api?.resetSubagentRegistryForTests({ persist: false });
+      }))
+    ) {
+      retainSqliteTestCustody();
     }
     if (!hasRetainedSqliteTestCustody()) {
       const drained = await drain("agent database custody", async () => {

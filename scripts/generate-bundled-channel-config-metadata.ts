@@ -3,6 +3,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
+import { asOptionalRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+  uniqueStrings,
+} from "../packages/normalization-core/src/string-normalization.ts";
 import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
@@ -103,48 +109,24 @@ function resolveRootText(channelValue: unknown, manifestValue: unknown): string 
 type PackageChannelMeta = ReturnType<typeof resolvePackageChannelMeta>;
 
 function resolveRootAliases(channelMeta: PackageChannelMeta): string[] {
-  if (!Array.isArray(channelMeta?.aliases)) {
-    return [];
-  }
-  return [
-    ...new Set(
-      channelMeta.aliases
-        .map((alias) => (typeof alias === "string" ? alias.trim().toLowerCase() : ""))
-        .filter((alias) => alias.length > 0),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
+  return uniqueStrings(
+    normalizeTrimmedStringList(channelMeta?.aliases).map((alias) => alias.toLowerCase()),
+  ).toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveRootConfigurable(channelMeta: PackageChannelMeta): boolean {
-  const exposure =
-    channelMeta?.exposure &&
-    typeof channelMeta.exposure === "object" &&
-    !Array.isArray(channelMeta.exposure)
-      ? (channelMeta.exposure as Record<string, unknown>)
-      : null;
-  return exposure?.configured !== false;
+  return asOptionalRecord(channelMeta?.exposure)?.configured !== false;
 }
 
 function resolveRootChannelEnvVars(channelMeta: PackageChannelMeta): string[] {
-  const configuredState = channelMeta?.configuredState;
-  if (!configuredState || typeof configuredState !== "object" || Array.isArray(configuredState)) {
+  const env = asOptionalRecord(asOptionalRecord(channelMeta?.configuredState)?.env);
+  if (!env) {
     return [];
   }
-  const env = (configuredState as Record<string, unknown>).env;
-  if (!env || typeof env !== "object" || Array.isArray(env)) {
-    return [];
-  }
-  const envRecord = env as Record<string, unknown>;
-  const values = [envRecord.allOf, envRecord.anyOf].flatMap((value) =>
-    Array.isArray(value) ? value : [],
+  const values = [env.allOf, env.anyOf].flatMap((value) => (Array.isArray(value) ? value : []));
+  return normalizeUniqueTrimmedStringList(values).toSorted((left, right) =>
+    left.localeCompare(right),
   );
-  return [
-    ...new Set(
-      values
-        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-        .filter((entry) => entry.length > 0),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 function formatTypeScriptModule(source: string, outputPath: string, repoRoot: string): string {

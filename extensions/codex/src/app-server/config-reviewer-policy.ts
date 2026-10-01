@@ -54,17 +54,14 @@ function isTrustedCodexReviewerConfig(config: Record<string, unknown>): boolean 
     (modelProvider == null || modelProvider === "openai") &&
     (providers == null || providerRecords !== undefined) &&
     (provider == null || openAIProvider !== undefined) &&
-    isTrustedOptionalReviewerEndpoint(config.openai_base_url, isNativeOpenAIBaseUrl) &&
-    isTrustedOptionalReviewerEndpoint(config.chatgpt_base_url, isNativeChatGPTBaseUrl) &&
-    isTrustedOptionalReviewerEndpoint(openAIProvider?.base_url, isNativeOpenAIBaseUrl)
+    isTrustedOptionalReviewerEndpoint(config.openai_base_url, "api.openai.com") &&
+    isTrustedOptionalReviewerEndpoint(config.chatgpt_base_url, "chatgpt.com") &&
+    isTrustedOptionalReviewerEndpoint(openAIProvider?.base_url, "api.openai.com")
   );
 }
 
-function isTrustedOptionalReviewerEndpoint(
-  value: unknown,
-  isTrusted: (value: unknown) => boolean,
-): boolean {
-  return value == null || (typeof value === "string" && isTrusted(value));
+function isTrustedOptionalReviewerEndpoint(value: unknown, hostname: string): boolean {
+  return value == null || (typeof value === "string" && isNativeReviewerBaseUrl(value, hostname));
 }
 
 export function canUseCodexModelBackedApprovalsReviewerForModel(
@@ -398,24 +395,16 @@ function hasNonEmptyRecord(value: unknown): boolean {
 }
 
 function isNativeOpenAIBaseUrl(value: unknown): boolean {
-  if (typeof value !== "string" || !value.trim()) {
-    return true;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname.toLowerCase() === "api.openai.com";
-  } catch {
-    return false;
-  }
+  return isNativeReviewerBaseUrl(value, "api.openai.com");
 }
 
-function isNativeChatGPTBaseUrl(value: unknown): boolean {
+function isNativeReviewerBaseUrl(value: unknown, hostname: string): boolean {
   if (typeof value !== "string" || !value.trim()) {
     return true;
   }
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && url.hostname.toLowerCase() === "chatgpt.com";
+    return url.protocol === "https:" && url.hostname.toLowerCase() === hostname;
   } catch {
     return false;
   }

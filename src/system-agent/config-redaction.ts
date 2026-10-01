@@ -206,24 +206,6 @@ function isDynamicOwnerIdSegment(path: readonly string[], index: number): boolea
   );
 }
 
-function hasSensitiveHintSegmentPrefix(
-  path: readonly string[],
-  index: number,
-  metadata: SystemAgentConfigRedactionMetadata,
-): boolean {
-  const segment = path[index];
-  if (segment === undefined) {
-    return false;
-  }
-  for (let end = 1; end < segment.length; end += 1) {
-    const prefixPath = [...path.slice(0, index), segment.slice(0, end)];
-    if (metadata.sensitiveHintPaths.some((hintPath) => matchesHintPath(hintPath, prefixPath))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isKernelPassthroughSegment(path: readonly string[], index: number): boolean {
   return (
     (path[0] === "hooks" && path[1] === "entries" && (index === 2 || index === 3)) ||
@@ -244,7 +226,7 @@ function isSchemaDynamicSegment(
   // Zod passthrough/catchall objects become untyped in the public form schema.
   // These exact core containers still own arbitrary entry ids and child keys.
   if (isKernelPassthroughSegment(path, index)) {
-    return !hasSensitiveHintSegmentPrefix(path, index, metadata);
+    return !hasSensitiveSegmentPrefix(path, index, metadata, true);
   }
   const segment = path[index];
   if (segment === undefined) {
@@ -252,7 +234,7 @@ function isSchemaDynamicSegment(
   }
   const kind = classifyConfigSchemaPathSegment(metadata.schema, path.slice(0, index), segment);
   if (kind === "record-key" || kind === "array-index") {
-    return !hasSensitiveHintSegmentPrefix(path, index, metadata);
+    return !hasSensitiveSegmentPrefix(path, index, metadata, true);
   }
   if (kind === "invalid-record-key") {
     return false;
@@ -361,9 +343,10 @@ function isSensitiveConfigPathParts(
 }
 
 function hasSensitiveSegmentPrefix(
-  parsedPath: string[],
+  parsedPath: readonly string[],
   index: number,
   metadata: SystemAgentConfigRedactionMetadata,
+  hintsOnly = false,
 ): boolean {
   const segment = parsedPath[index];
   if (segment === undefined) {
@@ -373,8 +356,8 @@ function hasSensitiveSegmentPrefix(
     const prefixPath = [...parsedPath.slice(0, index), segment.slice(0, end)];
     const canonicalPath = prefixPath.join(".");
     if (
-      isSensitiveConfigPath(canonicalPath) ||
-      isSensitiveUrlConfigPath(canonicalPath) ||
+      (!hintsOnly &&
+        (isSensitiveConfigPath(canonicalPath) || isSensitiveUrlConfigPath(canonicalPath))) ||
       metadata.sensitiveHintPaths.some((hintPath) => matchesHintPath(hintPath, prefixPath))
     ) {
       return true;

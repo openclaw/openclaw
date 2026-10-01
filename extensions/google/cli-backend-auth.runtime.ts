@@ -90,8 +90,6 @@ type GeminiCliAuthHomeContext = GeminiCliRestrictedAuthContext & {
   isolatedCompletionCwd?: string;
   toolAvailability?: CliBackendToolAvailability;
   isolatedCompletionModelId?: string;
-  isolatedCompletionPrompt?: string;
-  isolatedCompletionSystemPrompt?: string;
 };
 
 type GeminiCliAuthSelectedType = "oauth-personal" | "gemini-api-key";

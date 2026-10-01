@@ -123,13 +123,11 @@ export function resolveSkillCommandInvocation(params: {
 
 export function expandBundleCommandPromptTemplate(template: string, args?: string): string {
   const normalizedArgs = args?.trim() ?? "";
-  const rendered = template.includes("$ARGUMENTS")
-    ? template.replaceAll("$ARGUMENTS", () => normalizedArgs)
-    : template;
-  if (!normalizedArgs || template.includes("$ARGUMENTS")) {
-    return rendered.trim();
+  if (template.includes("$ARGUMENTS")) {
+    return template.replaceAll("$ARGUMENTS", () => normalizedArgs).trim();
   }
-  return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
+  const rendered = template.trim();
+  return normalizedArgs ? `${rendered}\n\nUser input:\n${normalizedArgs}` : rendered;
 }
 
 /** Expands model-routed skill references while leaving unknown slash commands untouched. */

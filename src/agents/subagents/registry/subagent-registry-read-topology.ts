@@ -33,21 +33,34 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     entry.collect && entry.groupId ? (entry.swarmRequesterSessionKey ?? "") : "",
     entry.requesterSessionKey,
   ];
-  const updateBucket = (
-    index: Map<string, T[]>,
-    key: string,
-    runId: string,
-    entry?: T,
-    replace = true,
-  ) => {
+  const positionsByIndex = new Map<Map<string, T[]>, Map<string, number>>();
+  const updateBucket = (index: Map<string, T[]>, key: string, runId: string, entry?: T) => {
     if (!key) {
       return;
     }
     const rows = index.get(key) ?? [];
-    const position = replace ? rows.findIndex((row) => row.runId === runId) : -1;
-    if (position >= 0) {
-      rows.splice(position, 1, ...(entry ? [entry] : []));
+    let positions = positionsByIndex.get(index);
+    if (!positions) {
+      positions = new Map();
+      positionsByIndex.set(index, positions);
+    }
+    const position = positions.get(runId);
+    if (position !== undefined) {
+      if (entry) {
+        rows[position] = entry;
+      } else {
+        rows.splice(position, 1);
+        positions.delete(runId);
+        // Preserve published group order and repair only positions shifted by removal.
+        for (let next = position; next < rows.length; next++) {
+          const row = rows[next];
+          if (row) {
+            positions.set(row.runId, next);
+          }
+        }
+      }
     } else if (entry) {
+      positions.set(runId, rows.length);
       rows.push(entry);
     }
     if (rows.length) {
@@ -60,7 +73,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
   for (const entry of params.inMemoryRuns ?? []) {
     const childSessionKey = entry.childSessionKey.trim();
     memoryChildKeys.set(entry.runId, childSessionKey);
-    updateBucket(memoryRunsByChildSessionKey, childSessionKey, entry.runId, entry, false);
+    updateBucket(memoryRunsByChildSessionKey, childSessionKey, entry.runId, entry);
     if (!childSessionKey) {
       continue;
     }
@@ -104,13 +117,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         if (previous[position] && previous[position] !== next[position]) {
           updateBucket(index, previous[position], runId);
         }
-        updateBucket(
-          index,
-          next[position] ?? "",
-          runId,
-          entry,
-          previous[position] === next[position],
-        );
+        updateBucket(index, next[position] ?? "", runId, entry);
       });
       if (entry) {
         // Initialization reads the caller's Map; only patches write new facts.
@@ -131,7 +138,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       if (previous !== next) {
         updateBucket(memoryRunsByChildSessionKey, previous, runId);
       }
-      updateBucket(memoryRunsByChildSessionKey, next, runId, entry, previous === next);
+      updateBucket(memoryRunsByChildSessionKey, next, runId, entry);
       if (entry) {
         memoryChildKeys.set(runId, next);
       } else {

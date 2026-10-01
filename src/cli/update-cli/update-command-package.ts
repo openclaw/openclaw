@@ -38,6 +38,7 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
@@ -51,7 +52,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { CLI_NAME } from "../cli-name.js";
-import { createUpdateProgress } from "./progress.js";
+import type { UpdateDisplayProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
   readPackageName,
@@ -78,60 +79,57 @@ export async function readPackageUpdateIdentity(root: string) {
   return { version, ...(buildId ? { buildId } : {}) };
 }
 
+type PackageDoctorContext = {
+  runId: string;
+  executorFence: UpdateRecoveryFence;
+  requester?: Readonly<UpdateRequester>;
+  inputHash: string;
+  changes: UpdateDoctorConfigChange[];
+  databaseBackup?: UpdateDatabaseBackup;
+  originalRecoveryCapture?: UpdateRecoveryBaselineRef;
+  assertCurrent: () => void;
+  assertBoundChildCurrent: () => void;
+  onStateHandoff?: () => void;
+};
+
 type PackageDoctorOptions = {
   root: string;
   timeoutMs?: number;
+  /** Null leaves forward work unbounded; omission retains the caller's timeout. */
   workTimeoutMs?: number | null;
-  progress: ReturnType<typeof createUpdateProgress>["progress"];
+  progress: UpdateDisplayProgress;
   results?: UpdateStepResult[];
   managedServiceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   nodeRunner?: string;
   onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
-  getDoctorContext?: () =>
-    | {
-        runId: string;
-        executorFence: UpdateRecoveryFence;
-        requester?: Readonly<UpdateRequester>;
-        inputHash: string;
-        changes: UpdateDoctorConfigChange[];
-        databaseBackup?: UpdateDatabaseBackup;
-        assertCurrent: () => void;
-        assertBoundChildCurrent: () => void;
-        onStateHandoff?: () => void;
-      }
-    | undefined;
+  getDoctorContext?: () => PackageDoctorContext | undefined;
 };
 
-export function preparePackageDoctorContext(params: {
+export function preparePackageDoctorContext({
+  capable,
+  runId,
+  executorFence,
+  inputHash,
+  ...context
+}: Omit<PackageDoctorContext, "runId" | "executorFence" | "inputHash"> & {
   capable: boolean;
   runId?: string;
   executorFence?: UpdateRecoveryFence;
-  requester?: Readonly<UpdateRequester>;
   inputHash?: string | null;
-  changes: UpdateDoctorConfigChange[];
-  databaseBackup?: UpdateDatabaseBackup;
-  assertCurrent: () => void;
-  assertBoundChildCurrent: () => void;
-  onStateHandoff?: () => void;
 }) {
-  params.assertCurrent();
-  if (!params.capable) {
+  context.assertCurrent();
+  if (!capable) {
     return undefined;
   }
-  if (!params.runId || !params.executorFence || params.inputHash === undefined) {
+  if (!runId || !executorFence || inputHash === undefined) {
     throw new Error("Validated Doctor requires its live update executor and captured config hash.");
   }
   return {
-    runId: params.runId,
-    executorFence: params.executorFence,
-    requester: params.requester,
-    inputHash: params.inputHash ?? hashConfigRaw(null),
-    changes: params.changes,
-    databaseBackup: params.databaseBackup,
-    assertCurrent: params.assertCurrent,
-    assertBoundChildCurrent: params.assertBoundChildCurrent,
-    onStateHandoff: params.onStateHandoff,
+    ...context,
+    runId,
+    executorFence,
+    inputHash: inputHash ?? hashConfigRaw(null),
   };
 }
 
@@ -376,6 +374,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
+                originalRecoveryCapture: context.originalRecoveryCapture,
               },
             },
             runDoctor,
@@ -460,22 +459,15 @@ export async function prepareGitPackageExposure(
   };
 }
 
-export type PackageInstallUpdateParams = {
+export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> & {
   reapplyLocalOverrides?: boolean;
   requirePackageReplacement?: boolean;
-  root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
   installSpec?: string;
   timeoutMs: number;
-  /** Null leaves forward work unbounded; omission retains the caller's timeout. */
-  workTimeoutMs?: number | null;
   startedAt: number;
-  progress: ReturnType<typeof createUpdateProgress>["progress"];
-  managedServiceEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
   honorPackageRoot?: boolean;
-  nodeRunner?: string;
   resolveLifecycleNodeRunner?: () => string | undefined;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
@@ -485,8 +477,6 @@ export type PackageInstallUpdateParams = {
   assertCurrent?: () => void;
   reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
-  onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
-  getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
   getActivation?: () => PackageActivationOptions | undefined;
 };
 
@@ -500,6 +490,7 @@ export async function stagePackageInstallUpdate(
   const staged = createDeferredCore<string>();
   const continuation = createDeferredCore<PackageInstallUpdateParams | undefined>();
   let continued = false;
+  let deliveredFailure: { error: unknown } | undefined;
   let active: PackageInstallUpdateParams | undefined;
   const requireActive = () => {
     if (!active) {
@@ -577,14 +568,30 @@ export async function stagePackageInstallUpdate(
       }
       continued = true;
       continuation.resolve(next);
-      return await completed;
+      try {
+        return await completed;
+      } catch (error) {
+        deliveredFailure = { error };
+        throw error;
+      }
     },
     async close() {
       if (!continued) {
         continued = true;
         continuation.resolve(undefined);
       }
-      await completed;
+      try {
+        await completed;
+      } catch (error) {
+        // Closing joins the same operation; a delivered refusal is not a new cleanup failure.
+        if (
+          !deliveredFailure ||
+          deliveredFailure.error !== error ||
+          hasCommandProcessCleanupError(error)
+        ) {
+          throw error;
+        }
+      }
     },
   };
 }
@@ -641,6 +648,7 @@ export async function runPackageInstallUpdate(
     getActivation: params.getActivation,
     installTarget,
     installSpec,
+    installCwd: params.invocationCwd,
     packageName,
     packageRoot: pkgRoot,
     // Artifact equality cannot skip a method switch or retained-runtime staging.

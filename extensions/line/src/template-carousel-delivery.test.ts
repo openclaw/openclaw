@@ -1,16 +1,16 @@
 // Line tests cover carousel text fallback across both delivery paths.
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import {
   baseDeliveryParams,
   createDeps,
+  createQuickReply,
   LINE_TEST_CFG,
 } from "./auto-reply-delivery.test-helpers.js";
+import { createRuntime } from "./channel.sendPayload.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
-import { createLineSendReceipt } from "./send-receipt.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData } from "./types.js";
 
@@ -33,39 +33,12 @@ const lineData = {
 
 const fallbackText = "First: A (One)\nB (Two)";
 
-function lineResult(messageId: string) {
-  return {
-    messageId,
-    chatId: "line:user:1",
-    receipt: createLineSendReceipt({ messageId, chatId: "line:user:1", kind: "text" }),
-  };
-}
-
 function createOutboundRuntime() {
-  const pushMessageLine = vi.fn(async (_to: string, _text: string, _options: unknown) =>
-    lineResult("text"),
-  );
-  const pushMessagesLine = vi.fn(async () => lineResult("batch"));
-  const pushTemplateMessage = vi.fn(async () => lineResult("template"));
-  const runtime = {
-    channel: {
-      line: {
-        buildTemplateMessageFromPayload,
-        pushMessageLine,
-        pushMessagesLine,
-        pushTemplateMessage,
-        pushFlexMessage: vi.fn(async () => lineResult("flex")),
-        pushLocationMessage: vi.fn(async () => lineResult("location")),
-        pushTextMessageWithQuickReplies: vi.fn(async () => lineResult("quick")),
-        createQuickReplyItems: vi.fn((labels: string[]) => ({ items: labels })),
-        sendMessageLine: vi.fn(async () => lineResult("media")),
-      },
-      text: {
-        chunkMarkdownText: (text: string) => [text],
-        resolveTextChunkLimit: () => 5000,
-      },
-    },
-  } as unknown as PluginRuntime;
+  const buildTemplate = buildTemplateMessageFromPayload;
+  const { runtime, mocks } = createRuntime();
+  mocks.buildTemplateMessageFromPayload.mockImplementation(buildTemplate);
+  mocks.resolveTextChunkLimit.mockReturnValue(5000);
+  const { pushMessageLine, pushMessagesLine, pushTemplateMessage } = mocks;
 
   return { runtime, pushMessageLine, pushMessagesLine, pushTemplateMessage };
 }
@@ -139,7 +112,7 @@ describe("LINE carousel fallback delivery", () => {
         {
           type: "text",
           text: fallbackText,
-          quickReply: { items: ["Continue"] },
+          quickReply: createQuickReply("Continue"),
           quoteToken: "q-carousel-quick",
         },
       ],
@@ -200,7 +173,7 @@ describe("LINE carousel fallback delivery", () => {
     expect(pushTemplateMessage).not.toHaveBeenCalled();
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:user:1",
-      [{ type: "text", text: fallbackText, quickReply: { items: ["Continue"] } }],
+      [{ type: "text", text: fallbackText, quickReply: createQuickReply("Continue") }],
       expect.any(Object),
     );
   });

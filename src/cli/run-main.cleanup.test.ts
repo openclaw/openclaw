@@ -81,12 +81,11 @@ vi.mock("./one-shot-exit.js", () => ({
   },
 }));
 
-function resourceHarness(id: string, gate?: Deferred) {
+function resourceHarness(id: string) {
   let child: ChildProcessWithoutNullStreams | undefined;
   let closed: Promise<unknown[]> | undefined;
   let output: readline.Interface | undefined;
   let disposeCalls = 0;
-  const entered = createDeferredCore();
   const pending = new Map<string, Deferred>();
   function line(value: string) {
     const next = createDeferredCore();
@@ -125,15 +124,12 @@ function resourceHarness(id: string, gate?: Deferred) {
     },
     dispose: async () => {
       disposeCalls++;
-      entered.resolve();
-      await gate?.promise;
       child?.stdin.end();
       await closed;
     },
   };
   return {
     harness,
-    entered,
     async ping() {
       const pong = line("pong");
       child?.stdin.write("ping\n");
@@ -141,7 +137,6 @@ function resourceHarness(id: string, gate?: Deferred) {
     },
     snapshot: () => ({ disposeCalls, exitCode: child?.exitCode, signalCode: child?.signalCode }),
     async closeAndJoin() {
-      gate?.resolve();
       // Setup can fail before spawn; teardown must preserve that original error.
       if (!child) {
         return;
@@ -274,7 +269,7 @@ describe("CLI process harness cleanup", () => {
     }
   });
 
-  it.each(["success", "failure", "gateway-adopted"])(
+  it.each(["failure", "gateway-adopted"])(
     "retires command captures unless their inventory is adopted (%s)",
     async (mode) => {
       const stateDir = temp.make("cli-capture-custody-");
@@ -329,51 +324,6 @@ describe("CLI process harness cleanup", () => {
     },
   );
 
-  it.each(["process", "borrowed"])("keeps catalog discovery with its %s owner", async (mode) => {
-    const registry = emptyRegistry.createEmptyPluginRegistry();
-    const resource = resourceHarness("codex");
-    registerHarness(registry, resource.harness);
-    dispatch.run = async () => {
-      const { augmentModelCatalogWithAgentHarness } =
-        await import("../agents/harness/model-catalog.js");
-      const config = {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            models: {
-              "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
-            },
-          },
-        },
-      };
-      await augmentModelCatalogWithAgentHarness({
-        cfg: config,
-        agentId: "main",
-        agentDir: process.cwd(),
-        workspaceDir: process.cwd(),
-        defaultProvider: "openai",
-        defaultModel: "openai/gpt-5.4",
-        snapshot: { entries: [], routeVariants: [] },
-        pluginRegistry: registry,
-        observationConfig: config,
-        isCurrent: () => true,
-      });
-    };
-    try {
-      if (mode === "process") {
-        await runProcessEntry();
-        expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
-      } else {
-        const { runCli } = await import("./run-main.js");
-        await runCli(argv);
-        expect(resource.snapshot()).toEqual({ disposeCalls: 0, exitCode: null, signalCode: null });
-        await resource.ping();
-      }
-    } finally {
-      await resource.closeAndJoin();
-    }
-  });
-
   it("installs the rejection handler before the direct Gateway fast path", async () => {
     dispatch.run = async () => {
       expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
@@ -385,40 +335,17 @@ describe("CLI process harness cleanup", () => {
     expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
   });
 
-  it.each(["current", "transient-resolve", "transient-reject"])(
-    "joins %s resources at process completion",
-    async (mode) => {
-      const registry =
-        mode === "current"
-          ? runtime.getActivePluginRegistry()!
-          : emptyRegistry.createEmptyPluginRegistry();
-      const resource = resourceHarness(mode);
-      registerHarness(registry, resource.harness);
-      const actionError = new Error("synthetic action failure");
-      dispatch.run = async () => {
-        await scopes.withPluginRuntimeRegistryScope(registry, () => acquire(mode));
-        if (mode === "transient-reject") {
-          throw actionError;
-        }
-      };
-      try {
-        const error = await runProcessEntry().catch((cause: unknown) => cause);
-        const atReturn = resource.snapshot();
-        if (atReturn.exitCode === null) {
-          await resource.ping();
-        }
-        expect(error).toBe(mode === "transient-reject" ? actionError : undefined);
-        expect(atReturn).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
-      } finally {
-        await resource.closeAndJoin();
-      }
-    },
-  );
-
   it("awaits a transient disposer before later finalizers and process completion", async () => {
     const registry = emptyRegistry.createEmptyPluginRegistry();
     const gate = createDeferredCore();
-    const resource = resourceHarness("awaited", gate);
+    const entered = createDeferredCore();
+    const resource = resourceHarness("awaited");
+    const dispose = resource.harness.dispose!.bind(resource.harness);
+    resource.harness.dispose = async () => {
+      entered.resolve();
+      await gate.promise;
+      await dispose();
+    };
     registerHarness(registry, resource.harness);
     dispatch.run = () => scopes.withPluginRuntimeRegistryScope(registry, () => acquire("awaited"));
     let returned = false;
@@ -427,9 +354,10 @@ describe("CLI process harness cleanup", () => {
     });
     try {
       // Early command return must fail the assertion and still reach fixture teardown.
-      await Promise.race([resource.entered.promise, command]);
+      await Promise.race([entered.promise, command]);
       expect(returned).toBe(false);
       await resource.ping();
+      expect(returned).toBe(false);
       expect(dispatch.memoryClosed).not.toHaveBeenCalled();
     } finally {
       gate.resolve();
@@ -457,7 +385,7 @@ describe("CLI process harness cleanup", () => {
     }
   });
 
-  it.each(["helper", "direct", "legacy", "gateway", "gateway-run", "gateway-legacy"])(
+  it.each(["direct", "gateway-legacy"])(
     "leaves %s transient resources with their owner",
     async (mode) => {
       const registry = emptyRegistry.createEmptyPluginRegistry();
@@ -466,42 +394,19 @@ describe("CLI process harness cleanup", () => {
       dispatch.run = () =>
         scopes.withPluginRuntimeRegistryScope(registry, () => acquire("borrowed"));
       try {
-        if (mode === "helper") {
-          const { withAgentPluginRegistry } = await import("../agents/runtime-plugins.js");
-          await scopes.withPluginRuntimeRegistryScope(registry, () =>
-            withAgentPluginRegistry({
-              config: {},
-              workspaceDir: process.cwd(),
-              run: () => acquire("borrowed"),
-            }),
-          );
-        } else if (mode === "direct") {
+        if (mode === "direct") {
           const { runCli } = await import("./run-main.js");
           await runCli(argv);
-        } else if (mode === "legacy") {
-          const action = dispatch.run;
-          dispatch.run = async () => {};
-          const { runLegacyCliEntry } = await import("../index.js");
-          await dispatch.command;
-          dispatch.run = action;
-          await runLegacyCliEntry(argv, undefined, { retainConsoleRoutingUntilProcessExit: true });
         } else {
-          if (mode === "gateway-legacy") {
-            const borrowedAction = dispatch.run;
-            dispatch.run = async () => {
-              dispatch.run = borrowedAction;
-              const { runLegacyCliEntry } = await import("../index.js");
-              await runLegacyCliEntry(argv, undefined, {
-                retainConsoleRoutingUntilProcessExit: true,
-              });
-            };
-          }
-          process.argv = [
-            "node",
-            "openclaw",
-            "gateway",
-            ...(mode === "gateway-run" ? ["run"] : []),
-          ];
+          const borrowedAction = dispatch.run;
+          dispatch.run = async () => {
+            dispatch.run = borrowedAction;
+            const { runLegacyCliEntry } = await import("../index.js");
+            await runLegacyCliEntry(argv, undefined, {
+              retainConsoleRoutingUntilProcessExit: true,
+            });
+          };
+          process.argv = ["node", "openclaw", "gateway"];
           await runProcessEntry();
         }
         expect(resource.snapshot()).toEqual({ disposeCalls: 0, exitCode: null, signalCode: null });

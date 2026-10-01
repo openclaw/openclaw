@@ -36,19 +36,14 @@ func processFile(ctx context.Context, translator docsTranslator, tm *Translation
 		}
 	}
 
-	if err := translateFrontMatter(ctx, translator, tm, frontData, relPath, srcLang, tgtLang); err != nil {
-		return false, "", err
-	}
+	translateFrontMatter(ctx, translator, tm, frontData, relPath, srcLang, tgtLang)
 
 	body, err = translateHTMLBlocks(ctx, translator, body, srcLang, tgtLang)
 	if err != nil {
 		return false, "", err
 	}
 
-	segments, err := extractSegments(body, relPath)
-	if err != nil {
-		return false, "", err
-	}
+	segments := extractSegments(body, relPath)
 
 	namespace := cacheNamespace()
 	for i := range segments {
@@ -135,10 +130,7 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 	return fmt.Sprintf("---\n%s---\n\n", string(encoded)), nil
 }
 
-func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *TranslationMemory, data map[string]any, relPath, srcLang, tgtLang string) error {
-	if len(data) == 0 {
-		return nil
-	}
+func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *TranslationMemory, data map[string]any, relPath, srcLang, tgtLang string) {
 	for _, field := range []string{"summary", "title"} {
 		text, ok := data[field].(string)
 		if !ok {
@@ -147,10 +139,7 @@ func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *Tr
 		if docsI18nVerboseLogs() {
 			log.Printf("docs-i18n: frontmatter start %s field=%s bytes=%d", relPath, field, len(text))
 		}
-		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:"+field, text, srcLang, tgtLang)
-		if err != nil {
-			return err
-		}
+		translated := translateSnippet(ctx, translator, tm, relPath+":frontmatter:"+field, text, srcLang, tgtLang)
 		if docsI18nVerboseLogs() {
 			log.Printf("docs-i18n: frontmatter done %s field=%s out_bytes=%d", relPath, field, len(translated))
 		}
@@ -167,10 +156,7 @@ func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *Tr
 			if docsI18nVerboseLogs() {
 				log.Printf("docs-i18n: frontmatter start %s field=read_when[%d] bytes=%d", relPath, idx, len(textValue))
 			}
-			value, err := translateSnippet(ctx, translator, tm, fmt.Sprintf("%s:frontmatter:read_when:%d", relPath, idx), textValue, srcLang, tgtLang)
-			if err != nil {
-				return err
-			}
+			value := translateSnippet(ctx, translator, tm, fmt.Sprintf("%s:frontmatter:read_when:%d", relPath, idx), textValue, srcLang, tgtLang)
 			if docsI18nVerboseLogs() {
 				log.Printf("docs-i18n: frontmatter done %s field=read_when[%d] out_bytes=%d", relPath, idx, len(value))
 			}
@@ -178,7 +164,6 @@ func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *Tr
 		}
 		data["read_when"] = translated
 	}
-	return nil
 }
 
 func docsI18nVerboseLogs() bool {
@@ -194,24 +179,24 @@ func docsI18nVerboseLogs() bool {
 	}
 }
 
-func translateSnippet(ctx context.Context, translator docsTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {
+func translateSnippet(ctx context.Context, translator docsTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) string {
 	if strings.TrimSpace(textValue) == "" {
-		return textValue, nil
+		return textValue
 	}
 	namespace := cacheNamespace()
 	textHash := hashText(textValue)
 	ck := cacheKey(namespace, srcLang, tgtLang, segmentID, textHash)
 	if entry, ok := tm.Get(ck); ok {
-		return entry.Translated, nil
+		return entry.Translated
 	}
 	translated, err := translator.Translate(ctx, textValue, srcLang, tgtLang)
 	if err != nil {
 		log.Printf("docs-i18n: frontmatter fallback %s reason=%v", segmentID, err)
-		return textValue, nil
+		return textValue
 	}
 	if validationErr := validateFrontmatterScalarTranslation(textValue, translated); validationErr != nil {
 		log.Printf("docs-i18n: frontmatter fallback %s reason=%v", segmentID, validationErr)
-		return textValue, nil
+		return textValue
 	}
 	sourcePath := segmentID
 	if path, _, ok := strings.Cut(segmentID, ":frontmatter:"); ok {
@@ -229,7 +214,7 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 	tm.Put(entry)
-	return translated, nil
+	return translated
 }
 
 func validateFrontmatterScalarTranslation(source, translated string) error {

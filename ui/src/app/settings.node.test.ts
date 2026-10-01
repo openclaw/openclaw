@@ -276,20 +276,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const gwUrl = expectedGatewayUrl("");
-    saveSettings({
-      gatewayUrl: gwUrl,
-      token: "session-token",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      navCollapsed: false,
-      navWidth: 258,
-      sidebarEntries: [],
-      textScale: 100,
-    });
+    saveSettings(makeUiSettings(gwUrl, { token: "session-token", textScale: 100 }));
 
     persistSessionToken(gwUrl, "session-token");
     const settings = loadSettings();
@@ -306,33 +293,8 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const gwUrl = expectedGatewayUrl("");
     const otherUrl = "wss://other-gateway.example:8443";
-    saveSettings({
-      gatewayUrl: gwUrl,
-      token: "gateway-a-token",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      navCollapsed: false,
-      navWidth: 258,
-      sidebarEntries: [],
-    });
-
-    saveSettings({
-      gatewayUrl: otherUrl,
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      navCollapsed: false,
-      navWidth: 258,
-      sidebarEntries: [],
-    });
+    saveSettings(makeUiSettings(gwUrl, { token: "gateway-a-token" }));
+    saveSettings(makeUiSettings(otherUrl));
 
     persistSessionToken(gwUrl, "gateway-a-token");
     const settings = loadSettings();
@@ -348,19 +310,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const gwUrl = expectedGatewayUrl("");
-    saveSettings({
-      gatewayUrl: gwUrl,
-      token: "memory-only-token",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      navCollapsed: false,
-      navWidth: 258,
-      sidebarEntries: [],
-    });
+    saveSettings(makeUiSettings(gwUrl, { token: "memory-only-token" }));
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
     expect(settings.token).toBe("");
@@ -404,20 +354,13 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const gwUrl = expectedGatewayUrl("");
-    saveSettings({
-      gatewayUrl: gwUrl,
-      token: "",
-      sessionKey: "agent:test_old:main",
-      lastActiveSessionKey: "agent:test_old:main",
-      selectedAgentId: " OpenClaw ",
-      theme: "claw",
-      themeMode: "system",
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      navCollapsed: false,
-      navWidth: 258,
-      sidebarEntries: [],
-    });
+    saveSettings(
+      makeUiSettings(gwUrl, {
+        sessionKey: "agent:test_old:main",
+        lastActiveSessionKey: "agent:test_old:main",
+        selectedAgentId: " OpenClaw ",
+      }),
+    );
 
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
@@ -452,19 +395,12 @@ describe("loadSettings default gateway URL derivation", () => {
     }
     localStorage.setItem(scopedKey, JSON.stringify({ sessionsByGateway: staleEntries }));
 
-    saveSettings({
-      gatewayUrl: gwUrl,
-      token: "",
-      sessionKey: "agent:current:main",
-      lastActiveSessionKey: "agent:current:main",
-      theme: "claw",
-      themeMode: "system",
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      navCollapsed: false,
-      navWidth: 258,
-      sidebarEntries: [],
-    });
+    saveSettings(
+      makeUiSettings(gwUrl, {
+        sessionKey: "agent:current:main",
+        lastActiveSessionKey: "agent:current:main",
+      }),
+    );
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
 

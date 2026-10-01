@@ -17,6 +17,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import * as integrityWorker from "./sqlite-integrity-worker.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import {
   cleanupMediaPersistenceFixtures,
@@ -35,6 +37,46 @@ afterEach(() => {
 });
 
 describe("legacy media persistence doctor migration", () => {
+  it("cancels pending integrity before migrating the agent schema", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-interruption-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const pathname = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 21 });
+    const controller = new AbortController();
+    const interruption = new Error("Doctor interrupted by SIGTERM");
+    let entered!: () => void;
+    const checking = new Promise<boolean>((resolve) => {
+      entered = () => resolve(true);
+    });
+    const check = vi
+      .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
+      .mockImplementation(async () => {
+        entered();
+        await new Promise<void>((_resolve, reject) => {
+          controller.signal.addEventListener("abort", () => reject(interruption), {
+            once: true,
+          });
+        });
+      });
+    const migration = withSqliteReadOnlyWorkerScope(() => migrateLegacyMediaPersistence({ env }), {
+      signal: controller.signal,
+      deadlineOwnedByCaller: false,
+    });
+    try {
+      expect(await Promise.race([checking, migration.then(() => false)])).toBe(true);
+    } finally {
+      controller.abort(interruption);
+      await migration;
+      check.mockRestore();
+    }
+    expect((await migration).warnings.join("\n")).toContain("Doctor interrupted by SIGTERM");
+    const database = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(21);
+    } finally {
+      database.close();
+    }
+  });
+
   it("preserves the typed maintenance cause when lease acquisition fails", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-lease-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

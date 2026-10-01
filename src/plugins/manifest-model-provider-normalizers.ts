@@ -17,9 +17,9 @@ import type {
   PluginManifestModelSupport,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequest,
-  PluginManifestProviderRequestProvider,
   PluginManifestSecretProviderIntegration,
 } from "./manifest-types.js";
+import { normalizeManifestProviderRequestProvider } from "./plugin-provider-request-policy.js";
 
 const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
 const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
@@ -164,28 +164,6 @@ export function normalizeManifestProviderEndpoints(
       ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
     };
   });
-}
-
-function normalizeManifestProviderRequestProvider(
-  value: unknown,
-): PluginManifestProviderRequestProvider | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const family = normalizeOptionalString(value.family);
-  const compatibilityFamily =
-    normalizeOptionalString(value.compatibilityFamily) === "moonshot" ? "moonshot" : undefined;
-  const supportsStreamingUsage = isRecord(value.openAICompletions)
-    ? value.openAICompletions.supportsStreamingUsage
-    : undefined;
-  const openAICompletions =
-    typeof supportsStreamingUsage === "boolean" ? { supportsStreamingUsage } : undefined;
-  const providerRequest = {
-    ...(family ? { family } : {}),
-    ...(compatibilityFamily ? { compatibilityFamily } : {}),
-    ...(openAICompletions ? { openAICompletions } : {}),
-  } satisfies PluginManifestProviderRequestProvider;
-  return Object.keys(providerRequest).length > 0 ? providerRequest : undefined;
 }
 
 export function normalizeManifestProviderRequest(

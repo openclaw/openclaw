@@ -32,7 +32,7 @@ OPENCLAW_FS_SAFE_NATIVE_MODE=off
 # Prefer native primitives when the installed platform helper loads.
 OPENCLAW_FS_SAFE_NATIVE_MODE=auto
 
-# Fail closed when an operation needs native support and the binding is unavailable.
+# Fail closed when an operation lacks the required native capability.
 OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
@@ -43,6 +43,10 @@ The generic fs-safe environment name also works: `FS_SAFE_NATIVE_MODE`.
 fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes with a deprecation warning. Replace them with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`. Python interpreter path settings are no longer used.
 
 Use `require` when all native-capable operations must fail if the platform binding is unavailable. `auto` allows documented JavaScript fallbacks; no-clobber Root moves and Windows secure credential reads always require their native primitives.
+
+In fs-safe 0.21.2, `require` also refuses removal, recursive removal, directory creation, writable-open creation, and overwrite moves when the platform lacks the required confining primitive. An installed helper alone is not enough: recursive Root removal reports `helper-unavailable` on Linux without `openat2` and on Windows. These strict-mode mutations perform additional identity checks and can be slower. See the upstream [operation/platform matrix](https://github.com/openclaw/fs-safe/blob/v0.21.2/docs/security-model.md#native-root-mutation-capabilities).
+
+Keep `require` if those native guarantees are part of your deployment's security policy, and use a platform that supports the operations you need. Otherwise, the default `auto` mode retains the documented best-effort fallbacks and their existing performance.
 
 The Linux GNU addons in fs-safe 0.20.0 target glibc 2.28 and load on Ubuntu
 20.04's glibc 2.31. Older addons can fail with a missing `GLIBC_2.33` or

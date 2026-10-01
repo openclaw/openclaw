@@ -1,8 +1,21 @@
 import path from "node:path";
+import { z } from "zod";
 import { sha256Hex } from "./crypto-digest.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 
 export const UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME = "plugin-copy-plan.json";
+
+export const UpdateStateDatabaseOwnerSchema = z.discriminatedUnion("role", [
+  z.object({ role: z.literal("global") }),
+  z.object({ role: z.literal("agent"), agentId: z.string().min(1) }),
+]);
+export type UpdateStateDatabaseOwner = z.infer<typeof UpdateStateDatabaseOwnerSchema>;
+/** Every raw spelling discovered for one database, grouped by projection identity. */
+export const StateDatabaseDiscoverySchema = z.object({
+  spellings: z.tuple([z.string()], z.string()),
+  owners: z.array(UpdateStateDatabaseOwnerSchema).optional(),
+});
+export type StateDatabaseDiscovery = z.infer<typeof StateDatabaseDiscoverySchema>;
 
 /**
  * One projection identity per locator, matching the raw canonical-spelling
@@ -18,6 +31,34 @@ export function resolveUpdateCandidateStateIdentity(sourceRoot: string, source: 
     isPathInside(sourceRoot, source)
     ? normalizeWindowsPathPreservingCase(source)
     : source;
+}
+
+export function queueStateDatabaseSpelling(
+  files: Map<string, StateDatabaseDiscovery>,
+  stateRoot: string,
+  file: string,
+  owner?: UpdateStateDatabaseOwner,
+): void {
+  const identity = resolveUpdateCandidateStateIdentity(stateRoot, file);
+  const discovery = files.get(identity);
+  if (discovery) {
+    if (!discovery.spellings.includes(file)) {
+      discovery.spellings.push(file);
+    }
+    if (
+      owner &&
+      !discovery.owners?.some(
+        (current) =>
+          current.role === owner.role &&
+          (current.role === "global" ||
+            (owner.role === "agent" && current.agentId === owner.agentId)),
+      )
+    ) {
+      (discovery.owners ??= []).push(owner);
+    }
+    return;
+  }
+  files.set(identity, { spellings: [file], ...(owner ? { owners: [owner] } : {}) });
 }
 
 // Keep path projection independent of snapshot orchestration: the snapshot owner

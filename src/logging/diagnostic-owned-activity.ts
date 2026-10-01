@@ -122,7 +122,6 @@ export function beginDiagnosticBackendActivity(params: {
         }
         const now = Date.now();
         backendActivity.deadlineAtMs = now + quietAllowanceMs;
-        tool.lastProgressAt = now;
         touchSessionActivity(activity, `tool:${tool.toolName}:subagent_progress`, now);
         return true;
       }

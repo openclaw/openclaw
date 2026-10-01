@@ -403,13 +403,7 @@ export const PluginDiscoveryLocalFactsSchema = closedObject({
   present: Type.Boolean(),
   installed: Type.Boolean(),
   enabled: Type.Boolean(),
-  state: Type.Union([
-    Type.Literal("enabled"),
-    Type.Literal("disabled"),
-    Type.Literal("needs-setup"),
-    Type.Literal("not-installed"),
-    Type.Literal("error"),
-  ]),
+  state: PluginCatalogEntrySchema.properties.state,
   pluginId: Type.Optional(NonEmptyString),
   install: Type.Optional(PluginCatalogInstallActionSchema),
   action: Type.Union([
@@ -553,7 +547,34 @@ export const PluginsInspectResultSchema = closedObject({
       capabilities: Type.Optional(PluginOverviewCapabilitiesSchema),
     }),
   ),
-  credentials: Type.Optional(Type.Array(PluginCredentialDescriptorSchema)),
+  credentials: Type.Optional(
+    Type.Array(
+      closedObject({
+        ...PluginCredentialDescriptorSchema.properties,
+        /** Presence/configuration only; never secret values or service-health validation. */
+        status: Type.Union([
+          Type.Literal("configured"),
+          Type.Literal("missing"),
+          Type.Literal("invalid"),
+          Type.Literal("unresolved"),
+        ]),
+      }),
+    ),
+  ),
+  /** Stored shared OAuth state for matching plugin-owned, operator-configured HTTP servers. */
+  mcpAuth: Type.Optional(
+    Type.Array(
+      closedObject({
+        serverName: NonEmptyString,
+        state: Type.Union([
+          Type.Literal("authorized"),
+          Type.Literal("requires-authorization"),
+          Type.Literal("pending-authorization"),
+          Type.Literal("unauthenticated"),
+        ]),
+      }),
+    ),
+  ),
   decisions: Type.Optional(Type.Array(PluginDecisionProviderStatusSchema)),
   plugin: closedObject({
     id: NonEmptyString,
@@ -721,13 +742,7 @@ export const PluginsSetEnabledParamsSchema = closedObject({
 });
 
 /** Successful plugin enablement policy update. */
-export const PluginsSetEnabledResultSchema = closedObject({
-  ok: Type.Literal(true),
-  plugin: PluginCatalogEntrySchema,
-  restartRequired: Type.Boolean(),
-  runtime: Type.Optional(PluginRuntimeApplicationSchema),
-  warnings: Type.Optional(Type.Array(Type.String())),
-});
+export const PluginsSetEnabledResultSchema = closedObject(PluginsInstallResultSchema.properties);
 
 export type PluginCatalogEntry = Static<typeof PluginCatalogEntrySchema>;
 export type ControlUiPluginTab = Static<typeof ControlUiPluginTabSchema>;

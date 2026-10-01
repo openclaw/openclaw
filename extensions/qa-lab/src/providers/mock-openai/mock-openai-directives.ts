@@ -203,7 +203,7 @@ function extractBareToolArg(text: string, name: string) {
 export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
   return (
     hasToolDefinition(body, name) ||
-    instructionTextMentionsToolName(extractInstructionsText(body), name)
+    instructionTextDeclaresTool(extractInstructionsText(body), name)
   );
 }
 
@@ -236,12 +236,18 @@ export function findNamedToolDefinition(
   return null;
 }
 
-function instructionTextMentionsToolName(text: string, name: string) {
-  if (!text) {
-    return false;
-  }
+function instructionTextDeclaresTool(text: string, name: string) {
+  // Mirror the policy-filtered list and availability-gated messaging heading
+  // from system-prompt-tool-list.ts / system-prompt-messaging.ts. Ordinary
+  // instructions (including AGENTS.md's Tools notes) do not declare tools.
+  const sections = text.replaceAll("\r\n", "\n").split(/^## /m);
+  const tooling = sections.find((section) => section.startsWith("Tooling\n")) ?? "";
+  const messaging = sections.find((section) => section.startsWith("Messaging\n")) ?? "";
   const escapedName = escapeRegExp(name);
-  return new RegExp(`(^|[^A-Za-z0-9_])${escapedName}([^A-Za-z0-9_]|$)`).test(text);
+  return (
+    new RegExp(`^- ${escapedName}(?:: |$)`, "m").test(tooling) ||
+    new RegExp(`^### ${escapedName} tool$`, "m").test(messaging)
+  );
 }
 
 export function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
@@ -284,24 +290,6 @@ export function buildQaA2aMessageToolMirrorSessionsSendArgs(
     message: `qa group visible reply tool check. Use the visible room reply path. exact marker: \`${marker}\``,
     timeoutSeconds: 0,
   };
-}
-
-export function extractToolErrorForNamedCall(params: {
-  input: ResponsesInputItem[];
-  name: string;
-  toolJson: Record<string, unknown> | null;
-}) {
-  const error = typeof params.toolJson?.error === "string" ? params.toolJson.error.trim() : "";
-  if (!error) {
-    return undefined;
-  }
-  const namedFunctionCall = params.input.some(
-    (item) => item.type === "function_call" && item.name === params.name,
-  );
-  if (namedFunctionCall) {
-    return error;
-  }
-  return undefined;
 }
 
 export function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {

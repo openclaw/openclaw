@@ -1318,9 +1318,9 @@ extension MacNodeModeCoordinator {
         ]
 
         if computerControlProvider == .peekaboo {
-            commands.append(MacNodeScreenCommand.snapshot.rawValue)
+            commands.append(OpenClawScreenCommand.snapshot.rawValue)
         }
-        commands.append(MacNodeScreenCommand.record.rawValue)
+        commands.append(OpenClawScreenCommand.record.rawValue)
         commands.append(OpenClawSystemCommand.notify.rawValue)
 
         let capsSet = Set(caps)
@@ -1354,7 +1354,7 @@ extension MacNodeModeCoordinator {
         guard let manifest else { return nil }
         guard provider == .peekaboo else { return manifest }
         let providerCommands = Set([
-            MacNodeScreenCommand.snapshot.rawValue,
+            OpenClawScreenCommand.snapshot.rawValue,
             OpenClawComputerCommand.act.rawValue,
         ])
         return MacNodeHostManifest(
@@ -1370,7 +1370,7 @@ extension MacNodeModeCoordinator {
         commands: [String],
         workerManifest: MacNodeHostManifest?) -> OpenClawProtocol.AnyCodable?
     {
-        guard commands.contains(MacNodeScreenCommand.snapshot.rawValue),
+        guard commands.contains(OpenClawScreenCommand.snapshot.rawValue),
               commands.contains(OpenClawComputerCommand.act.rawValue)
         else { return nil }
         return switch provider {

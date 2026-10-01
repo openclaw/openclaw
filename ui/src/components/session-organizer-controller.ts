@@ -39,9 +39,6 @@ import type { SessionOwnerOption } from "./session-owner-chip.ts";
 export type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
-type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
-type SessionGroupDefaultsDialogOpener =
-  (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
@@ -104,6 +101,12 @@ export class SessionOrganizerController {
     }
     return operations.patchSession(this.host, session, patch, scope, options);
   };
+
+  async snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
+    await this.runOperation((operations, scope) =>
+      operations.snoozeSessionWithUndo(this.host, session, snoozedUntil, scope),
+    );
+  }
 
   async archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
     await this.runOperation((operations, scope) =>
@@ -209,15 +212,20 @@ export class SessionOrganizerController {
     this.host.requestUpdate();
   }
 
-  private draggedSidebarEntry(dataTransfer: DataTransfer | null): string | null {
+  private draggedSidebarNavigation(dataTransfer: DataTransfer | null) {
     const route = readSidebarRouteDragData(dataTransfer);
     const routeEntry = parseSidebarEntry(route ? `route:${route}` : null);
     if (routeEntry?.type === "route") {
-      return serializeSidebarEntry(routeEntry);
+      return routeEntry;
     }
     const dynamicEntry = parseSidebarEntry(route);
-    if (dynamicEntry?.type === "plugin") {
-      return serializeSidebarEntry(dynamicEntry);
+    return dynamicEntry?.type === "plugin" ? dynamicEntry : null;
+  }
+
+  private draggedSidebarEntry(dataTransfer: DataTransfer | null): string | null {
+    const navigation = this.draggedSidebarNavigation(dataTransfer);
+    if (navigation) {
+      return serializeSidebarEntry(navigation);
     }
     const sessionKey = readSessionDragData(dataTransfer);
     return sessionKey ? serializeSidebarEntry({ type: "session", key: sessionKey }) : null;
@@ -350,15 +358,7 @@ export class SessionOrganizerController {
   }
 
   handleSessionListDrop(event: DragEvent) {
-    const draggedNavigation = readSidebarRouteDragData(event.dataTransfer);
-    const routeEntry = parseSidebarEntry(draggedNavigation ? `route:${draggedNavigation}` : null);
-    const dynamicEntry = parseSidebarEntry(draggedNavigation);
-    const entry =
-      routeEntry?.type === "route"
-        ? routeEntry
-        : dynamicEntry?.type === "plugin"
-          ? dynamicEntry
-          : null;
+    const entry = this.draggedSidebarNavigation(event.dataTransfer);
     if (entry) {
       event.preventDefault();
       const serialized = serializeSidebarEntry(entry);
@@ -379,9 +379,9 @@ export class SessionOrganizerController {
   }
 
   /** A dialog that never opens still owes the operator a visible outcome. */
-  private async loadInputDialog(): Promise<InputDialogOpener | null> {
+  private async loadDialog<T>(load: Promise<T>): Promise<T | null> {
     try {
-      return (await import("./input-dialog.ts")).showInputDialog;
+      return await load;
     } catch (error) {
       const scope = this.host.sessionData.beginSessionMutation();
       if (scope) {
@@ -398,8 +398,8 @@ export class SessionOrganizerController {
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
-    const showInputDialog = await this.loadInputDialog();
-    await showInputDialog?.({
+    const dialog = await this.loadDialog(import("./input-dialog.ts"));
+    await dialog?.showInputDialog({
       title: t("sessionsView.newGroupTitle"),
       label: t("sessionsView.newGroupPrompt"),
       submitLabel: t("sessionsView.newGroupCreate"),
@@ -440,10 +440,10 @@ export class SessionOrganizerController {
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {
-    const showInputDialog = await this.loadInputDialog();
+    const dialog = await this.loadDialog(import("./input-dialog.ts"));
     // requireChange holds the submit closed on the name the group already has,
     // so the only rename that reaches the Gateway is one that changes something.
-    const next = await showInputDialog?.({
+    const next = await dialog?.showInputDialog({
       title: t("sessionsView.renameGroupTitle", { group }),
       label: t("sessionsView.groupNameLabel"),
       defaultValue: group,
@@ -453,56 +453,43 @@ export class SessionOrganizerController {
     if (!next) {
       return;
     }
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    if (!operations || !(await operations.renameSessionGroup(this.host, group, next, scope))) {
-      return;
-    }
-    // Collapse keys follow only a confirmed Gateway rename. A stale completion
-    // must not rewrite storage owned by the replacement connection.
-    const from = `category:${group}`;
-    if (this.collapsedSessionSections.has(from)) {
-      const collapsed = new Set(this.collapsedSessionSections);
-      collapsed.delete(from);
-      collapsed.add(`category:${next}`);
-      this.saveCollapsedSessionSections(collapsed);
-    }
-    this.host.requestUpdate();
+    await this.runOperation(async (operations, scope) => {
+      if (!(await operations.renameSessionGroup(this.host, group, next, scope))) {
+        return;
+      }
+      // Collapse keys follow only a confirmed Gateway rename. A stale completion
+      // must not rewrite storage owned by the replacement connection.
+      const from = `category:${group}`;
+      if (this.collapsedSessionSections.has(from)) {
+        const collapsed = new Set(this.collapsedSessionSections);
+        collapsed.delete(from);
+        collapsed.add(`category:${next}`);
+        this.saveCollapsedSessionSections(collapsed);
+      }
+      this.host.requestUpdate();
+    });
   }
 
   async deleteSessionGroupFromMenu(group: string): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    if (!operations || !(await operations.deleteSessionGroup(this.host, group, scope))) {
-      return;
-    }
-    const collapsed = new Set(this.collapsedSessionSections);
-    collapsed.delete(`category:${group}`);
-    this.saveCollapsedSessionSections(collapsed);
-    this.host.requestUpdate();
+    await this.runOperation(async (operations, scope) => {
+      if (!(await operations.deleteSessionGroup(this.host, group, scope))) {
+        return;
+      }
+      const collapsed = new Set(this.collapsedSessionSections);
+      collapsed.delete(`category:${group}`);
+      this.saveCollapsedSessionSections(collapsed);
+      this.host.requestUpdate();
+    });
   }
 
   async editSessionGroupDefaults(group: string): Promise<void> {
-    let showDialog: SessionGroupDefaultsDialogOpener;
-    try {
-      showDialog = (await import("./session-group-defaults-dialog.ts"))
-        .showSessionGroupDefaultsDialog;
-    } catch (error) {
-      const scope = this.host.sessionData.beginSessionMutation();
-      if (scope) {
-        this.host.sessionData.publishSessionMutationError(scope, error);
-      }
+    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.ts"));
+    if (!dialog) {
       return;
     }
     const defaults = this.host.sessionGroupDefaults(group);
     if (defaults) {
-      await showDialog({
+      await dialog.showSessionGroupDefaultsDialog({
         group,
         defaults,
         listDirectory: (path) => this.host.listSessionGroupFolders(path),
