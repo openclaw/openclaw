@@ -49,6 +49,7 @@ const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, MessageAction
   "thread-reply": "to",
   search: "none",
   sticker: "to",
+  dice: "to",
   "sticker-search": "none",
   "member-info": "none",
   "role-info": "none",
