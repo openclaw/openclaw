@@ -422,5 +422,66 @@ describe("inspectTelegramConversationRouteOwner", () => {
         code: "AGENT_SELECTION_REQUIRED",
       });
     });
+
+    // The sync read picks the agent; the awaited read applies the change once, as a
+    // revocation or rebind landing between the two would.
+    const bindChangingDuringResolution = (change: "revoke" | "rebind") => {
+      let targetSessionKey: string | null = "agent:codex:acp:session-1";
+      let boundAt = 1;
+      let changed = false;
+      const read = (conversation: {
+        channel: string;
+        accountId: string;
+        conversationId: string;
+      }) =>
+        targetSessionKey
+          ? {
+              bindingId: "binding-dm",
+              targetSessionKey,
+              targetKind: "session" as const,
+              conversation,
+              status: "active" as const,
+              boundAt,
+            }
+          : null;
+      registerSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation: read,
+        inspectByConversationAsync: async (conversation) => {
+          await Promise.resolve();
+          if (!changed) {
+            changed = true;
+            if (change === "revoke") {
+              targetSessionKey = null;
+            } else {
+              targetSessionKey = "agent:main:acp:session-2";
+              boundAt = 2;
+            }
+          }
+          return read(conversation);
+        },
+        touchAsync: vi.fn(async () => {}),
+      });
+    };
+
+    it("rejects the former owner when the binding is revoked during resolution", async () => {
+      bindChangingDuringResolution("revoke");
+
+      await expect(resolveTelegramConversationRoute(direct)).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+      });
+    });
+
+    it("routes to the new owner when the binding is replaced during resolution", async () => {
+      bindChangingDuringResolution("rebind");
+
+      const result = await resolveTelegramConversationRoute(direct);
+
+      expect(result.route.agentId).toBe("main");
+      expect(result.route.sessionKey).toBe("agent:main:acp:session-2");
+      expect(result.runtimeBinding?.boundAt).toBe(2);
+    });
   });
 });
