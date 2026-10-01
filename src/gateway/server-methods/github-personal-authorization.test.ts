@@ -15,12 +15,19 @@ vi.mock("../session-utils.js", () => ({
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => undefined,
 }));
+vi.mock("../../state/user-channel-identity-operations.js", () => ({
+  prepareUserProfileRoleAuthority: async (profileId: string) => ({
+    profileId,
+    isCurrent: () => true,
+  }),
+}));
 vi.mock("../../state/user-github-connections.js", () => ({
   resolvePersonalGitHubOwner: (profile: string) => profile,
 }));
 vi.mock("../operator-role-policy.js", () => ({
   resolveOperatorRolePolicy: () => null,
   resolveOperatorRolePolicyForProfile: () => null,
+  resolveOperatorRolePolicyForAssignment: () => null,
 }));
 vi.mock("../session-sharing.js", () => ({
   createSessionListEntryFilter: () => undefined,
@@ -49,7 +56,11 @@ function createRequest() {
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
       new Set(!filter || filter(client) ? ["github-cache-client"] : []),
   } as Partial<GatewayRequestContext> as GatewayRequestContext;
-  return { client, context };
+  return {
+    client,
+    context,
+    req: { type: "req" as const, id: "github-read", method: "sessions.github.options" },
+  };
 }
 
 function sessionRead(agentId = "main") {
@@ -71,10 +82,10 @@ describe("GitHub publication request discovery", () => {
     mocks.loadSession.mockReturnValue(sessionRead());
   });
 
-  it("shares store discovery while re-reading publication options live", () => {
+  it("shares store discovery while re-reading publication options live", async () => {
     const agentId = "research";
     mocks.loadSession.mockReturnValue(sessionRead(agentId));
-    const read = prepareGitHubPublicationOptionsRead(createRequest(), {
+    const read = await prepareGitHubPublicationOptionsRead(createRequest(), {
       sessionKey: "main",
       agentId,
     });

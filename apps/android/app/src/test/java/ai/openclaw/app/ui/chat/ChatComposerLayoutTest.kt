@@ -188,6 +188,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -232,6 +234,7 @@ class ChatComposerLayoutTest {
   @get:Rule
   val composeRule = createComposeRule()
 
+  private val imageDecodeDispatcher = StandardTestDispatcher(TestCoroutineScheduler())
   private lateinit var app: NodeApp
   private lateinit var prefs: SecurePrefs
   private lateinit var runtime: NodeRuntime
@@ -2458,12 +2461,13 @@ class ChatComposerLayoutTest {
         down(center)
         up()
       }
-      composeRule.waitUntil {
+      awaitPostHistoryBranchList(postHistoryListReply)
+      assertEquals(
+        "android-screenshot-branch-02",
         controller.messages.value
           .lastOrNull()
-          ?.entryId == "android-screenshot-branch-02"
-      }
-      composeRule.waitUntil { postHistoryListReply.reached.isCompleted }
+          ?.entryId,
+      )
       assertFalse("The post-history listing reply is still held", release.isCompleted)
       assertTrue("The switch has not completed at transcript publication", controller.sessionBranchSwitching.value)
       assertFalse("The original opening remains retired", old.isShowing)
@@ -2940,6 +2944,22 @@ class ChatComposerLayoutTest {
       composeRule.unregisterIdlingResource(selection)
     }
     assertFalse("The admitted switch has settled", controller.sessionBranchSwitching.value)
+  }
+
+  private fun awaitPostHistoryBranchList(hold: BranchPostHistoryListReplyHold) {
+    val postHistoryList =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() = hold.reached.isCompleted
+
+        override fun getDiagnosticMessageIfBusy(): String = "The post-history branch list reply has not been reached"
+      }
+    composeRule.registerIdlingResource(postHistoryList)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(postHistoryList)
+    }
   }
 
   private fun showBranchChat(direction: LayoutDirection = LayoutDirection.Ltr): MainViewModel {
@@ -5119,7 +5139,11 @@ class ChatComposerLayoutTest {
               .single()
           if (mode == "Photos") {
             assertEquals("image/jpeg", attachment.mimeType)
-            composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("image/jpeg").fetchSemanticsNodes().isNotEmpty() }
+            composeRule.waitForIdle()
+            composeRule.onAllNodesWithContentDescription("image/jpeg").assertCountEquals(0)
+            imageDecodeDispatcher.scheduler.advanceUntilIdle()
+            composeRule.waitForIdle()
+            composeRule.onAllNodesWithContentDescription("image/jpeg").assertCountEquals(1)
             captureComposerProof("composer-photo")
             composeRule.onNodeWithContentDescription("image/jpeg").assertIsDisplayed().performClick()
             composeRule.onNodeWithContentDescription(nativeString("Close image preview")).assertIsDisplayed()
@@ -6153,7 +6177,10 @@ class ChatComposerLayoutTest {
         }
       }
       DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale())) {
-        CompositionLocalProvider(LocalLayoutDirection provides layoutDirection()) {
+        CompositionLocalProvider(
+          LocalLayoutDirection provides layoutDirection(),
+          LocalChatImageDecodeDispatcher provides imageDecodeDispatcher,
+        ) {
           ClawDesignTheme {
             renderedCanvasColor = ClawTheme.colors.canvas
             renderedSheetColor = ClawTheme.colors.surface

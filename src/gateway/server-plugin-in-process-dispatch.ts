@@ -227,28 +227,31 @@ export function withInProcessGatewayRead<T>(
   );
 }
 
-/** Local session input uses the same authorization and commit fences as an agent RPC. */
+/** Local session input retains its operation's authorization and commit fences. */
 export async function runWithInProcessGatewaySessionMutation<T>(
+  method: "agent" | "sessions.send",
   params: { sessionKey: string; agentId?: string },
   run: (assertCurrent: () => void) => Promise<T> | T,
 ): Promise<T> {
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const requestParams =
+    method === "sessions.send" ? { key: params.sessionKey, agentId: params.agentId } : params;
   return await withInProcessGatewayDispatch(
-    "agent",
-    params,
+    method,
+    requestParams,
     { forceSyntheticClient: true, syntheticScopeMode: "minimum" },
     async (resolved) => {
       const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
         await import("./server-methods.js");
       const assertInvocationCurrent = () => {
-        assertCallerCurrent?.("agent");
+        assertCallerCurrent?.(method);
         resolved.assertContextCurrent();
         resolved.assertInvocationCurrent();
       };
       assertInvocationCurrent();
       const authorization = await authorizeGatewayRequestPreDispatch({
-        method: "agent",
-        requestParams: params,
+        method,
+        requestParams,
         client: resolved.client,
         context: resolved.context,
         methodRegistry:
@@ -260,10 +263,17 @@ export async function runWithInProcessGatewaySessionMutation<T>(
         const assertCurrent = () => {
           assertInvocationCurrent();
           if (authorization.error) {
-            unwrapGatewayMethodDispatchResponse("agent", {
+            unwrapGatewayMethodDispatchResponse(method, {
               ok: false,
               error: authorization.error,
             });
+          }
+          // Unlike the public send RPC, local notifications cannot create a session.
+          if (
+            method === "sessions.send" &&
+            !authorization.sessionMutationAuthorization?.admittedTarget
+          ) {
+            throw new Error("Session target is unavailable for notification.");
           }
           authorization.sessionMutationAuthorization?.assertCurrent();
           authorization.sessionAccessAuthority?.assertCurrent();

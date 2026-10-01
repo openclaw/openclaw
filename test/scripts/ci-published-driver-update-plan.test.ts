@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { shouldRunPublishedDriverUpdate } from "../../scripts/lib/ci-published-driver-update-plan.mts";
+import { mainLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 import {
@@ -280,6 +281,60 @@ describe("published-driver update selection", () => {
     );
     expect(containerRemoved).toBeGreaterThan(commands.indexOf(run));
     expect(commands.at(-1)).toEqual(["volume", "rm", "fixture-runtime-volume"]);
+  });
+
+  it("gives direct callers and the release lane the CI cell envelope", () => {
+    const root = tempDirs.make("openclaw-published-driver-envelope-");
+    const bin = path.join(root, "bin");
+    const githubEnv = path.join(root, "github.env");
+    const received = path.join(root, "deadline.txt");
+    const candidate = path.join(root, "candidate.tgz");
+    mkdirSync(bin);
+    writeFileSync(githubEnv, "");
+    writeFileSync(candidate, "synthetic candidate package\n");
+    writeExecutable(path.join(bin, "docker"), [
+      `#!${process.execPath}`,
+      'const fs = require("node:fs");',
+      "const args = process.argv.slice(2);",
+      'if (args[0] === "volume" && args[1] === "create") console.log("fixture-runtime-volume");',
+      'if (args[0] === "run") {',
+      `  fs.writeFileSync(${JSON.stringify(received)}, process.env.CELL_DEADLINE_EPOCH_SECONDS);`,
+      '  fs.writeFileSync(args[args.indexOf("--cidfile") + 1], "fixture-container");',
+      "}",
+    ]);
+    const { CELL_DEADLINE_EPOCH_SECONDS: _inherited, ...env } = process.env;
+    const budgetStep = readWorkflow(
+      ".github/workflows/ci-published-driver-update.yml",
+    ).jobs.update.steps.find((step: WorkflowStep) => step.name === "Start cell budget");
+
+    const ciStarted = Math.floor(Date.now() / 1000);
+    const ci = runWorkflowShellScript(budgetStep.run, {
+      cwd: root,
+      env: { ...env, GITHUB_ENV: githubEnv },
+    });
+    expect(ci.status, `${ci.stdout}${ci.stderr}`).toBe(0);
+    const ciDeadline = /^CELL_DEADLINE_EPOCH_SECONDS=(\d+)$/m.exec(readFileSync(githubEnv, "utf8"));
+    const ciBudget = Number(ciDeadline?.[1]) - ciStarted;
+
+    const directStarted = Math.floor(Date.now() / 1000);
+    const direct = runWorkflowShellScript('bash "$CELL_SCRIPT" "$CANDIDATE" "$ARTIFACTS"', {
+      cwd: root,
+      env: {
+        ...env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        CELL_SCRIPT: path.resolve("scripts/e2e/published-driver-update-docker.sh"),
+        CANDIDATE: candidate,
+        ARTIFACTS: path.join(root, "artifacts"),
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+      },
+    });
+    expect(direct.status, `${direct.stdout}${direct.stderr}`).toBe(0);
+    const directBudget = Number(readFileSync(received, "utf8")) - directStarted;
+
+    // Second-boundary crossings between date calls can shift either reading by one.
+    expect(Math.abs(directBudget - ciBudget)).toBeLessThanOrEqual(2);
+    const releaseLane = mainLanes.find((lane) => lane.name === "published-driver-update");
+    expect(releaseLane?.timeoutMs).toBeGreaterThan(ciBudget * 1000);
   });
 
   it("records the omitted cell when a dispatch fallback selects a different revision", () => {

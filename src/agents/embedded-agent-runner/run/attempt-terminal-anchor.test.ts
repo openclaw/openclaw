@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
 
 type FakeEntry = { id: string; parentId: string | null; type: string; customType?: string };
@@ -71,8 +72,7 @@ describe("resolveTerminalMessageEntryId", () => {
     expect(entryId).toBeNull();
   });
 
-  it("cuts through a real cache-ttl marker on a SessionManager leaf", async () => {
-    const { SessionManager } = await import("../../sessions/session-manager.js");
+  it("cuts through a real cache-ttl marker on a SessionManager leaf", () => {
     const timestamp = new Date().toISOString();
     const sessionManager = SessionManager.fromEntries([
       {

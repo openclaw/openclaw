@@ -13,7 +13,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("keeps the runner event loop responsive while verifying a completed generation", async () => {
+it("keeps the runner event loop responsive while verifying a completed generation", async ({
+  signal,
+}) => {
   const directory = tempDirs.make("vitest-worker-verification-");
   fs.mkdirSync(path.join(directory, "dist"));
   const manifest: VitestWorkerManifest = {
@@ -33,19 +35,38 @@ it("keeps the runner event loop responsive while verifying a completed generatio
     manifest.outputs[output] = hash;
   }
 
+  const held = path.join(directory, "input-0.ts");
+  const started = createDeferred();
+  const release = createDeferred();
+  const readFile = fs.promises.readFile.bind(fs.promises);
+  const reader = vi.spyOn(fs.promises, "readFile").mockImplementation(async (...args) => {
+    if (args[0] === held) {
+      started.resolve();
+      await release.promise;
+    }
+    return readFile(...args);
+  });
   let completed = false;
   // Supply the manifest so an asynchronous manifest read alone cannot satisfy
   // the assertion: the source/artifact traversal itself must yield to I/O.
-  const verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(
-    () => {
-      completed = true;
-    },
-  );
+  let verification: Promise<void> | undefined;
   try {
+    verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(() => {
+      completed = true;
+    });
+    await withinTest(
+      awaitGateBeforeSettlement(started.promise, verification, "verification bypassed async reads"),
+      signal,
+    );
     await nextTurn();
     expect(completed, "verification blocked the runner until every file was hashed").toBe(false);
   } finally {
-    await verification;
+    release.resolve();
+    try {
+      await verification;
+    } finally {
+      reader.mockRestore();
+    }
   }
 });
 

@@ -15,7 +15,6 @@ import {
 } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { mock } from "node:test";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   type DesktopProofSourceStatus,
@@ -366,7 +365,8 @@ describe("desktop proof identity and public evidence", () => {
 
   it("keeps the tap off a port claimed before its listener binds", async () => {
     const upstream = await acquireTestPortBlock({ offsets: [0] });
-    const listen = mock.method(net.Server.prototype, "listen");
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply binds each listener.
+    const listen = net.Server.prototype.listen;
     // Model the kernel choosing another fixture's claimed but unbound port.
     const listenSpy = vi.spyOn(net.Server.prototype, "listen").mockImplementation(function (
       this: net.Server,
@@ -387,11 +387,7 @@ describe("desktop proof identity and public evidence", () => {
         closeTap = tap.close;
         expect(tap.port).not.toBe(upstream.port);
       },
-      () => {
-        listenSpy.mockRestore();
-        listen.mock.restore();
-        listen.mock.resetCalls();
-      },
+      () => listenSpy.mockRestore(),
       () => closeTap?.(),
       () => upstream.release(),
     );

@@ -130,6 +130,8 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
+        // Native builds load this private entry through the generator's temporary bundle.
+        ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
         // imported by generated child scripts. Keep workspace-relative entries.
         ...[

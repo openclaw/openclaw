@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { sleep } from "../utils.js";
@@ -36,7 +37,6 @@ import {
   formatSystemLaunchDaemonOwnershipSummary,
   inspectSystemLaunchDaemonOwnership,
 } from "./launchd-system.js";
-import { parseKeyValueOutput } from "./runtime-parse.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import {
   ServiceInspectionError,
@@ -77,8 +77,26 @@ export function parseLaunchctlJob(output: string, serviceTarget: string) {
   }
   const block = (name: string) =>
     output.match(new RegExp(`^\\t${name} = \\{\\n([\\s\\S]*?)^\\t\\}`, "m"))?.[1];
+  const runtime: LaunchctlPrintInfo = {};
+  const state = fields.get("state")?.trim();
+  if (state) {
+    runtime.state = state;
+  }
+  const pid = parseStrictPositiveInteger(fields.get("pid"));
+  if (pid !== undefined) {
+    runtime.pid = pid;
+  }
+  const status = parseStrictInteger(fields.get("last exit status"));
+  if (status !== undefined) {
+    runtime.lastExitStatus = status;
+  }
+  const exitReason = fields.get("last exit reason")?.trim();
+  if (exitReason) {
+    runtime.lastExitReason = exitReason;
+  }
   return {
     fields,
+    runtime,
     arguments: block("arguments")
       ?.split("\n")
       .filter((line) => line.startsWith("\t\t"))
@@ -150,9 +168,7 @@ export async function readLoadedLaunchAgentState(
     ...(Object.keys(environment).length ? { environment } : {}),
     sourcePath,
   };
-  const parsed = parseLaunchctlPrint(
-    [...job.fields].map(([name, value]) => `${name} = ${value}`).join("\n"),
-  );
+  const parsed = job.runtime;
   const running = parsed.state === "running" || (parsed.pid !== undefined && parsed.pid > 1);
   return {
     installed: true,
@@ -421,28 +437,6 @@ type LaunchctlPrintInfo = {
   lastExitReason?: string;
 };
 
-export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
-  const entries = parseKeyValueOutput(output, "=");
-  const info: LaunchctlPrintInfo = {};
-  const state = entries.state;
-  if (state) {
-    info.state = state;
-  }
-  const pid = parseStrictPositiveInteger(entries.pid);
-  if (pid !== undefined) {
-    info.pid = pid;
-  }
-  const status = parseStrictInteger(entries["last exit status"]);
-  if (status !== undefined) {
-    info.lastExitStatus = status;
-  }
-  const exitReason = entries["last exit reason"];
-  if (exitReason) {
-    info.lastExitReason = exitReason;
-  }
-  return info;
-}
-
 export function parseLaunchAgentEnabled(output: string, label: string): boolean {
   const labelPrefix = `"${label}"`;
   for (const line of output.split("\n")) {
@@ -607,12 +601,13 @@ export async function probeLaunchAgentState(
       inspectionReason: launchctlInspectionReason(probe, serviceTarget),
     };
   }
-  const runtime = parseLaunchctlPrint(probe.stdout || probe.stderr || "");
-  if (
-    normalizeLowercaseStringOrEmpty(runtime.state) === "running" ||
-    (typeof runtime.pid === "number" && runtime.pid > 1)
-  ) {
-    return { state: "running", runtime };
+  try {
+    const { runtime } = parseLaunchctlJob(probe.stdout || probe.stderr || "", serviceTarget);
+    const running =
+      normalizeLowercaseStringOrEmpty(runtime.state) === "running" ||
+      (typeof runtime.pid === "number" && runtime.pid > 1);
+    return { state: running ? "running" : "stopped", runtime };
+  } catch (error) {
+    return { state: "unknown", detail: formatErrorMessage(error) };
   }
-  return { state: "stopped", runtime };
 }

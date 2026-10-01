@@ -942,15 +942,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return result;
   };
 
-  const markClosedStreamingContentClaimed = (generation: number | undefined): void => {
-    if (generation !== undefined) {
-      const settlement = closedStreamingSettlements.get(generation);
-      if (settlement) {
-        settlement.contentClaimed = true;
-      }
-    }
-  };
-
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
     content: string | undefined,
@@ -984,7 +975,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             closeOutcome.generation !== undefined &&
             completion.streamingGeneration === closeOutcome.generation;
           if (completions.some((completion) => ownsCurrentClose(completion))) {
-            markClosedStreamingContentClaimed(closeOutcome.generation);
+            claimClosedStreamingResult(closeOutcome.generation, undefined);
           }
           for (const completion of completions) {
             const claimedSettlement = ownsCurrentClose(completion)

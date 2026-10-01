@@ -16,7 +16,7 @@ import {
   bootstrapLaunchAgentOrThrow,
   isLaunchctlAlreadyLoaded,
   isUnsupportedGuiDomain,
-  parseLaunchctlPrint,
+  parseLaunchctlJob,
   probeLaunchAgentState,
   readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,
@@ -58,7 +58,7 @@ function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
   if (result.code !== 0) {
     throw new Error(`launchctl print failed: ${formatLaunchctlResultDetail(result)}`);
   }
-  const pid = parseLaunchctlPrint(result.stdout || result.stderr || "").pid;
+  const pid = parseLaunchctlJob(result.stdout || result.stderr || "", serviceTarget).runtime.pid;
   if (pid === undefined) {
     throw new Error("launchctl print did not report a running pid");
   }

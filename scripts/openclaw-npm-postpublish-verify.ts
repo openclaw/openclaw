@@ -1080,7 +1080,7 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   return { manifests, errors };
 }
 
-function npmExec(args: string[], cwd: string): string {
+export function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
     npmArgs: args,
     npmExecPath: process.env.npm_execpath,
