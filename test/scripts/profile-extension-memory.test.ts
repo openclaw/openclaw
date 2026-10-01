@@ -94,6 +94,7 @@ async function cleanupProfileFixture(
   detached = true,
 ): Promise<void> {
   let childClosed = false;
+  let stopFailed = false;
   let descendantPid: number | undefined;
   await runQaGatewayFixture(
     async () => {
@@ -106,6 +107,7 @@ async function cleanupProfileFixture(
         process.kill(detached ? -child.pid : child.pid, detached ? "SIGKILL" : "SIGTERM");
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          stopFailed = true;
           throw error;
         }
       }
@@ -116,6 +118,11 @@ async function cleanupProfileFixture(
       }
     },
     async () => {
+      // A denied runner stop cannot promise a future close. Preserve that failure,
+      // rescue known descendants, and retain inputs rather than blocking later cleanup.
+      if (!detached && stopFailed && child.exitCode === null && child.signalCode === null) {
+        throw new Error(`profile child did not close; retained fixture: ${root}`);
+      }
       await closed;
       childClosed = true;
     },

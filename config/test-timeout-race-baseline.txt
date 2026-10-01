@@ -142,7 +142,6 @@ test/scripts/ci-run-node-test-shard.test.ts	3
 test/scripts/compiler-input-snapshot.test.ts	1
 test/scripts/plugin-gateway-gauntlet.test.ts	3
 test/scripts/plugin-sdk-api-diff.test.ts	2
-test/scripts/process-fixture-cleanup.test.ts	3
 test/scripts/run-tsgo.test.ts	2
 test/scripts/run-vitest-bounded.test.ts	1
 test/scripts/run-vitest-progress.test.ts	5
