@@ -209,6 +209,13 @@ export async function validateUpdateCandidateCanary(params: {
     phase = "snapshot";
     activeStep = { name: "candidate-state-snapshot", command: "Preparing update checks" };
     stepStartedAt = Date.now();
+    // Admit the progress writer before the child chooses its source snapshot path.
+    await params.onProgress?.({
+      step: "candidate-state-snapshot",
+      status: "in_progress",
+      startedAtMs: stepStartedAt,
+      detail: "Preparing update checks",
+    });
     rehearsal = await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
       config: params.config,
