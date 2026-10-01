@@ -42,12 +42,12 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", 
     }
     document.body.append(tooltip);
     await tooltip.updateComplete;
-    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     const shown = new Promise<Event>((resolve) => {
-      popup.addEventListener("wa-after-show", resolve, { once: true });
+      tooltip.addEventListener("wa-after-show", resolve, { once: true });
     });
     trigger.focus();
     await shown;
+    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     const body = popup.shadowRoot!.querySelector<HTMLElement>('[part="body"]')!;
     await expect.poll(() => body.getBoundingClientRect().width).toBeGreaterThan(0);
     return { tooltip, trigger, popup, body, link };
@@ -109,6 +109,11 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership
     tooltip.append(trigger);
     document.body.append(tooltip);
     await tooltip.updateComplete;
+    // Materialize with canceled intent so each transition test starts closed.
+    trigger.focus();
+    trigger.blur();
+    await tooltip.updateComplete;
+    await customElements.whenDefined("wa-tooltip");
     const native = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     await native.updateComplete;
     await native.popup.updateComplete;
@@ -126,7 +131,11 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership
     async (zeroDuration) => {
       const { tooltip, trigger, native, events } = await fixture(zeroDuration);
       const shown = afterTransition(native, "show");
+      const opening = new Promise<void>((resolve) => {
+        native.addEventListener("wa-show", () => resolve(), { once: true });
+      });
       trigger.focus();
+      await opening;
       await native.updateComplete;
       const duration = Number.parseFloat(getComputedStyle(native.popup.popup).animationDuration);
       if (zeroDuration) {

@@ -2,6 +2,10 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
+import {
+  formatIosSimulatorSelectionSummary,
+  resolveIosSimulatorTestSelection,
+} from "./lib/ci-ios-smoke-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -548,6 +552,16 @@ if (runtimePullRequest && runNodeFull) {
     onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
+const fullIosSimulatorPr = parseCiEnvFlag(process.env.OPENCLAW_CI_IOS_SIMULATOR_FULL);
+const iosSimulatorSelection = resolveIosSimulatorTestSelection(changedPaths, {
+  enabled: runIosBuild,
+  forceFull: !runtimePullRequest || releaseGate || compatibilityTarget || fullIosSimulatorPr,
+  fullReason: fullIosSimulatorPr
+    ? "OPENCLAW_CI_IOS_SIMULATOR_FULL"
+    : compatibilityTarget
+      ? "compatibility target"
+      : "scheduled, main, or release validation",
+});
 const uiOwnerScope = {
   unit: runUiTests,
   mocked: runControlUiE2e,
@@ -1432,6 +1446,9 @@ const manifest = {
     (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
   run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
+  run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
+  run_ios_lifecycle_tests: iosSimulatorSelection.lifecycle.selected,
+  ios_simulator_selection: iosSimulatorSelection,
   run_android_job: runAndroid,
   run_android_access_native: runAndroidAccessNative,
   use_compatible_android_ci: useCompatibleAndroidCi,
@@ -1760,6 +1777,12 @@ if (releaseFastLane) {
   }
 }
 if (process.env.GITHUB_STEP_SUMMARY) {
+  if (runIosBuild) {
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      formatIosSimulatorSelectionSummary(iosSimulatorSelection),
+    );
+  }
   if (uiE2eSelection) {
     const escapeSummaryCell = (value) =>
       String(value)

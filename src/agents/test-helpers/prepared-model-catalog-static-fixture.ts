@@ -9,6 +9,7 @@ import { markPluginMetadataSnapshotProvided } from "./prepared-model-catalog-wor
 export function createStaticCatalogSnapshotFixture(params: {
   makeTempDir: (prefix: string) => string;
   retireAfterTest: (retire: () => void | Promise<void>) => void;
+  receiptBroadcastName?: () => string;
 }) {
   const { makeTempDir, retireAfterTest } = params;
   return async function createStaticSnapshot(
@@ -25,7 +26,10 @@ export function createStaticCatalogSnapshotFixture(params: {
       provideMetadataToWorker?: boolean;
     },
   ) {
-    const fixture = createCatalogFixture(makeTempDir, spinMs, envOverride, options);
+    const fixture = createCatalogFixture(makeTempDir, spinMs, envOverride, {
+      ...options,
+      receiptBroadcastName: params.receiptBroadcastName?.(),
+    });
     const { agentDir, workspaceDir, config, env, root } = fixture;
     const input = {
       agentId: "main",

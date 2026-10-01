@@ -115,11 +115,14 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   ...configMocks,
 }));
-vi.mock("../../media/store.js", async (importOriginal) => ({
-  ...mediaStoreMocks,
-  extractOriginalFilename: (await importOriginal<typeof import("../../media/store.js")>())
-    .extractOriginalFilename,
-}));
+vi.mock("../../media/store.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../media/store.js")>();
+  return {
+    ...mediaStoreMocks,
+    extractOriginalFilename: original.extractOriginalFilename,
+    getMediaDir: original.getMediaDir,
+  };
+});
 vi.mock("../../media/media-probe.js", () => ({
   probeMediaFilesWithinBudget: probeMediaFilesWithinBudgetMock,
 }));

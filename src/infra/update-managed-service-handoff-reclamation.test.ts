@@ -15,6 +15,7 @@ import {
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const roots: string[] = [];
@@ -78,13 +79,17 @@ await withUpdateCommandExecutor(runId, async (executor) => {
 });
 `,
     );
-    const result = spawnSync(process.execPath, ["--import", "tsx", binding.nodeOption, child], {
-      cwd: fileURLToPath(new URL("../../", import.meta.url)),
-      env,
-      encoding: "utf8",
-      timeout: 10_000,
-      killSignal: "SIGKILL",
-    });
+    const result = spawnSync(
+      resolveTestNodeExecPath(),
+      ["--import", "tsx", binding.nodeOption, child],
+      {
+        cwd: fileURLToPath(new URL("../../", import.meta.url)),
+        env,
+        encoding: "utf8",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+      },
+    );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.signal, result.stderr).toBe("SIGKILL");
     assertManagedHandoffTestConsumer(binding, result.pid, path.resolve("src"));

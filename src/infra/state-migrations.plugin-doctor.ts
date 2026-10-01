@@ -421,7 +421,10 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     stateDir,
     oauthDir: resolveOAuthDir(params.env, stateDir),
   };
-  const run = async (repairAuthority?: PluginDoctorRepairAuthority): Promise<MigrationMessages> => {
+  const run = async (
+    repairAuthority?: PluginDoctorRepairAuthority,
+    certifyCompletion = true,
+  ): Promise<MigrationMessages> => {
     const warnings: string[] = [];
     repairAuthority?.assertCurrent();
     const collected = await collectPluginDoctorStateMigrationPlans(input, {
@@ -452,30 +455,35 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       collected.assertResourceScope,
     );
     // The later phase cannot certify an earlier action that still reports pending work.
-    const earlier = await collectPluginDoctorStateMigrationPlans(input, {
-      includeDoctorOnly: true,
-      inventory: params.inventory,
-      repairAuthority,
-      warnings,
-    });
-    const unfinishedEarlierIds = new Set([
-      ...earlier.plans.map((plan) => plan.pluginId),
-      ...[...collected.inspectedPluginIds].filter(
-        (pluginId) => !earlier.inspectedPluginIds.has(pluginId),
-      ),
-    ]);
+    // Without a consumer for that certification, the default-phase detectors stay unrun.
+    const earlier = certifyCompletion
+      ? await collectPluginDoctorStateMigrationPlans(input, {
+          includeDoctorOnly: true,
+          inventory: params.inventory,
+          repairAuthority,
+          warnings,
+        })
+      : undefined;
+    const notices = [...collected.notices, ...(earlier?.notices ?? [])];
     return {
       ...result,
       completedPluginIds: undefined,
-      ...completedPluginInspection(collected, result, unfinishedEarlierIds),
+      ...(earlier
+        ? completedPluginInspection(
+            collected,
+            result,
+            new Set([
+              ...earlier.plans.map((plan) => plan.pluginId),
+              ...[...collected.inspectedPluginIds].filter(
+                (pluginId) => !earlier.inspectedPluginIds.has(pluginId),
+              ),
+            ]),
+          )
+        : {}),
       ...pluginInspectionFacts(collected),
       warnings: [...warnings, ...result.warnings],
-      ...([...collected.notices, ...earlier.notices].length > 0
-        ? {
-            notices: [
-              ...new Set([...collected.notices, ...earlier.notices, ...(result.notices ?? [])]),
-            ],
-          }
+      ...(notices.length > 0
+        ? { notices: [...new Set([...notices, ...(result.notices ?? [])])] }
         : {}),
       ...(warnings.length > 0 ? { warningDisposition: undefined } : {}),
     };
@@ -492,6 +500,9 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   } = await import("./deferred-plugin-migrations.js");
   maintenance.assertCurrent();
   const expectedPending = readDeferredPluginMigrations({ env: params.env });
+  // Certification resolves deferred obligations and settles retained session sources.
+  // A fresh install has neither, so it skips the second detector pass and its stores.
+  const certifyCompletion = expectedPending.length > 0 || params.beforeCompletion !== undefined;
   const assertCompletionCurrent = () => {
     maintenance.assertCurrent();
     assertDeferredPluginMigrationsCurrent({ env: params.env, expectedPending });
@@ -524,7 +535,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
           try {
             // Lease settlement can reject after the callback's mutations committed.
             // Retain those facts without treating a failed settlement as success.
-            completed = await run(authority);
+            completed = await run(authority, certifyCompletion);
             return completed;
           } finally {
             active = false;

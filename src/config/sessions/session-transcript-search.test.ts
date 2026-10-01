@@ -82,13 +82,17 @@ async function appendAssistantMessage(sessionId: string, sessionKey: string, tex
   });
 }
 
-function search(query: string, options: { limit?: number; sessionKeys?: string[] } = {}) {
+function search(
+  query: string,
+  options: { limit?: number; sessionKeys?: string[]; match?: "prefix" } = {},
+) {
   return searchSessionTranscripts({
     agentId: "main",
     env: env(),
     query,
     ...(options.limit !== undefined ? { limit: options.limit } : {}),
     ...(options.sessionKeys ? { sessionKeys: options.sessionKeys } : {}),
+    ...(options.match ? { match: options.match } : {}),
   });
 }
 
@@ -142,6 +146,7 @@ describe("searchSessionTranscripts", () => {
         { message: { role: "user", content: [{ type: "text", text: "readonly search needle" }] } },
       );
       const databasePath = storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: env() });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
 
       expect(
@@ -265,6 +270,34 @@ describe("searchSessionTranscripts", () => {
       expect(hit.sessionId).toBe("session-1");
       expect(hit.snippet).toContain("deployment");
       expect(hit.messageId).toBeTruthy();
+    }
+  });
+
+  it("matches an unfinished final word in prefix mode while preserving literal AND queries", async () => {
+    for (const [sessionId, text] of [
+      ["complete", "Per-session communication controls in UI"],
+      ["missing-word", "Session communication controls in UI"],
+      ["earlier-prefixes", "Periodic sessions communication controls in UI"],
+      ["literal", 'A literal "OR" keyword in the message'],
+    ] as const) {
+      await appendUserMessage(sessionId, `agent:main:${sessionId}`, text);
+    }
+
+    expect(search("per session communi").hits).toEqual([]);
+    expect(search("per session communication controls").hits).toEqual([
+      expect.objectContaining({ sessionId: "complete" }),
+    ]);
+    for (const [query, sessionIds] of [
+      ["per session communi", ["complete"]],
+      ["per-session communi", ["complete"]],
+      ['literal "OR" key', ["literal"]],
+      ["literal OR missing", []],
+      ['"', []],
+    ] as const) {
+      expect(
+        search(query, { match: "prefix" }).hits.map((hit) => hit.sessionId),
+        query,
+      ).toEqual(sessionIds);
     }
   });
 
