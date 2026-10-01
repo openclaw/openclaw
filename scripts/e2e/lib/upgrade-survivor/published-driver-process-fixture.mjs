@@ -48,7 +48,7 @@ if (role === "npm") {
       { mode: 0o755 },
     );
   } else {
-    throw new Error("unexpected npm args " + args);
+    throw new Error("unexpected npm args " + args.join(","));
   }
 } else if (role === "server") {
   const c = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH));
@@ -215,7 +215,7 @@ if (role === "npm") {
       ],
     });
   } else {
-    throw new Error("unexpected CLI args " + args);
+    throw new Error("unexpected CLI args " + args.join(","));
   }
 } else {
   throw new Error("unexpected role " + role);
