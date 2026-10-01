@@ -24,12 +24,6 @@ const CHANNEL_LABELS = new Map<string, string>([
   ["sms", "SMS"],
 ]);
 
-/** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
-function shortenPeerId(identifier: string): string {
-  const trimmed = identifier.trim();
-  return trimmed.length <= 10 ? trimmed : `…${sliceUtf16Safe(trimmed, -6)}`;
-}
-
 // Long hex/uuid runs inside keys and node ids are machine ids, not names;
 // keep a short recognizable tail so rows never fill with opaque hashes.
 const OPAQUE_ID_RUN_RE =
@@ -165,21 +159,6 @@ type SessionKeyInfo = {
   accountId?: string;
 };
 
-/**
- * Two DMs from different accounts routinely share a name, so the account is the
- * only discriminator; `default` is what key builders write for absence and says
- * nothing. Which account to show comes from the recorded fact alone, never from
- * the rendered name. The suffix check preserves labels persisted by older
- * clients that included this decoration, avoiding `Alice · cards · cards`.
- */
-function withAccountDisambiguator(name: string, accountId: string | undefined): string {
-  if (!accountId || accountId === "default") {
-    return name;
-  }
-  const suffix = ` · ${accountId}`;
-  return name.endsWith(suffix) ? name : `${name}${suffix}`;
-}
-
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
@@ -227,9 +206,11 @@ function parseSessionKey(key: string): SessionKeyInfo {
       return { prefix: "", fallbackName: key, accountId };
     }
     const channelLabel = formatSessionChannelLabel(channel);
+    const peerId = identifier.trim();
+    const peerLabel = peerId.length <= 10 ? peerId : `…${sliceUtf16Safe(peerId, -6)}`;
     return {
       prefix: "",
-      fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}`,
+      fallbackName: `${channelLabel} · ${peerLabel}`,
       accountId,
     };
   }
@@ -322,7 +303,13 @@ export function resolveSessionDisplayName(
     return fallbackName;
   };
 
-  return withAccountDisambiguator(resolveNamedOrFallback(), accountId);
+  const name = resolveNamedOrFallback();
+  if (!accountId || accountId === "default") {
+    return name;
+  }
+  // Preserve account suffixes stored by older clients.
+  const suffix = ` · ${accountId}`;
+  return name.endsWith(suffix) ? name : `${name}${suffix}`;
 }
 
 // Wire kinds exclude cron; labels, sorting and grouping share this display classification.

@@ -8,13 +8,16 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 
 function hasGatewayErrorDetail(err: unknown, expectedCode: string, detailCode: string): boolean {
   const error = asRecord(err);
+  if (!error) {
+    return false;
+  }
   const code =
-    typeof error?.gatewayCode === "string"
+    typeof error.gatewayCode === "string"
       ? error.gatewayCode
-      : typeof error?.code === "string"
+      : typeof error.code === "string"
         ? error.code
         : null;
-  return code === expectedCode && asRecord(error?.details)?.code === detailCode;
+  return code === expectedCode && asRecord(error.details)?.code === detailCode;
 }
 
 /** Identifies an expired process-local wizard session without parsing public copy. */
