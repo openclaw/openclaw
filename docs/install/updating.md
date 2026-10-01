@@ -182,6 +182,12 @@ stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
 config diagnostics stay separate from the result.
 
+Bun-hosted updates from 2026.9.7 can finish candidate Doctor and restart the
+Gateway after package replacement. Idle candidate workers release their IPC
+references after native work closes, so a completed Doctor does not leave the
+installed updater waiting indefinitely for its exit. This fix runs in the
+updated package; the published updater and its handoff markers are unchanged.
+
 The running Gateway retains its shutdown code before an in-place update can
 replace the package's bundled files. Transcript shutdown drains captures and
 persists deterministic notes without starting optional model inference. This
