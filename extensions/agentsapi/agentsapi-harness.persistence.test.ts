@@ -176,39 +176,66 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
   });
 });
 
-it("continues image-bearing input and the following turn on the same native session", async () => {
-  await withOpenClawTestState({ label: "agentsapi-image-recovery" }, async (state) => {
-    const params = await createAttempt(state.stateDir);
-    const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue("image-session");
-    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
-    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
-    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
-    const harness = registerHarness(state.env);
-    try {
-      const result = await harness.runAttempt({
-        ...params,
-        prompt: "Read the supplied image.",
-        images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
-      });
-      expect(result).toMatchObject({ terminal: { kind: "ok" } });
-      const input = message.mock.calls[0]![1];
-      expect(input).toContain("Read the supplied image.");
-      expect(input).toContain("The Agents API harness does not support inline image inputs.");
-      expect(input).toContain("No original attachment files were transferred for this message.");
-      expect(input).toContain("ask for a text description if the image is necessary");
-      expect(await harness.runAttempt({ ...params, runId: "following-turn" })).toMatchObject({
-        terminal: { kind: "ok" },
-      });
-      expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
-        "image-session",
-        "image-session",
-      ]);
-      expect(create).toHaveBeenCalledTimes(1);
-    } finally {
-      await harness.dispose();
-    }
-  });
-});
+it.each(["inline images", "oversized original"])(
+  "continues %s and the following turn on the same native session",
+  async (inputKind) => {
+    await withOpenClawTestState({ label: "agentsapi-image-recovery" }, async (state) => {
+      const params = await createAttempt(state.stateDir);
+      const create = vi
+        .spyOn(AgentsApiClient.prototype, "create")
+        .mockResolvedValue("image-session");
+      vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
+      const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
+      vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+      const original =
+        inputKind === "oversized original"
+          ? await saveMediaBuffer(
+              Buffer.alloc(5 * 1024 * 1024 + 1, 32),
+              "application/pdf",
+              "inbound",
+              5 * 1024 * 1024 + 1,
+              "brief.pdf",
+            )
+          : undefined;
+      const prompt = original
+        ? "Summarize the supplied extracted text: the launch window is October."
+        : "Read the supplied image.";
+      const harness = registerHarness(state.env);
+      try {
+        const result = await harness.runAttempt({
+          ...params,
+          prompt,
+          media: original ? [{ path: original.path, sizeBytes: 1 }] : undefined,
+          images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+        });
+        expect(result).toMatchObject({ terminal: { kind: "ok" } });
+        const input = message.mock.calls[0]![1];
+        expect(input).toContain(prompt);
+        expect(input).toContain("The Agents API harness does not support inline image inputs.");
+        expect(input).toContain("No original attachment files were transferred for this message.");
+        expect(input).toContain("ask for a text description if the image is necessary");
+        if (original) {
+          expect(input).toContain(
+            "Input attachment feedback: 1 attachment(s) were not transferred to the hosted VM.",
+          );
+          expect(input).toContain("exceeds the 5 MiB file limit");
+          expect(input).toContain("ask for a smaller attachment or the relevant text");
+          expect(create.mock.calls[0]?.[3]?.files).toEqual([]);
+        }
+        expect(await harness.runAttempt({ ...params, runId: "following-turn" })).toMatchObject({
+          terminal: { kind: "ok" },
+        });
+        expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+          "image-session",
+          "image-session",
+        ]);
+        expect(create).toHaveBeenCalledTimes(1);
+      } finally {
+        await harness.dispose();
+      }
+    });
+  },
+);
 
 it("transfers each turn's original image bytes to unique paths on the same hosted session", async () => {
   await withOpenClawTestState({ label: "agentsapi-original-images" }, async (state) => {

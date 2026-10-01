@@ -460,6 +460,7 @@ export async function runAgentsApiAttempt(
         promptBuild.prompt,
         inputs.mappingText,
         environment.type,
+        inputs.feedbackText,
       ),
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();

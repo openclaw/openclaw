@@ -163,6 +163,7 @@ export function buildAgentsApiTurnInput(
   prompt: string,
   mappingText: string,
   environmentType: AgentsApiEnvironment["type"],
+  attachmentFeedback?: string,
 ): string {
   // Deduplicate only after prompt hooks; a replacement prompt still needs
   // the workspace owner's freshly prepared executor paths.
@@ -172,6 +173,7 @@ export function buildAgentsApiTurnInput(
     buildAgentsApiTurnContext(params, tools),
     prompt,
     attachmentNote,
+    attachmentFeedback,
     buildAgentsApiImageInputNotice(params.images, mappingText),
   ]
     .filter(Boolean)

@@ -169,6 +169,11 @@ Hosted environments support input attachments and output file transfers. Each
 turn transfers its admitted original files, including images, to unique hosted
 paths, so later uploads with the same filename keep their own bytes and mapping.
 Inline image preparation does not replace this original-file transfer.
+Hosted input transfer examines at most 50 attachments, with a 5 MiB per-file
+limit and a 10 MiB total limit. Files exceeding these limits are omitted with
+per-turn feedback; supplied text and accepted files still reach the model.
+The model can use available tools that can access the originals or ask for a
+smaller attachment or relevant text when needed content remains inaccessible.
 Self-hosted input attachments use the
 registered workspace provider's existing staging service. It prepares admitted
 originals on the executor workspace and returns execution-only paths without

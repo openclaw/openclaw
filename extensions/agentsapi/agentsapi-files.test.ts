@@ -145,7 +145,14 @@ describe("Agents API input attachment custody", () => {
 
     await expect(
       prepareInputs(
-        [{ path: foreignPath, url: `media://inbound/${saved.id}`, workspaceDir }],
+        [
+          {
+            path: foreignPath,
+            url: `media://inbound/${saved.id}`,
+            workspaceDir,
+            sizeBytes: fileLimit + 1,
+          },
+        ],
         workspaceDir,
         () => {},
         signal,
@@ -153,7 +160,7 @@ describe("Agents API input attachment custody", () => {
     ).rejects.toThrow("does not match its managed media identity");
   });
 
-  it("enforces the file and aggregate budgets against actual bytes, independent of metadata", async () => {
+  it("keeps accepted files and explains omissions at actual byte limits, independent of metadata", async () => {
     const bytes = Buffer.alloc(fileLimit, 97);
     const full = await saveMediaBuffer(bytes, undefined, "inbound");
     const extra = await saveMediaBuffer(Buffer.from("x"), undefined, "inbound");
@@ -166,26 +173,70 @@ describe("Agents API input attachment custody", () => {
       );
     }
 
-    await expect(
-      prepareInputs([fact, fact, { path: extra.path }], workspaceDir, () => {}, signal),
-    ).rejects.toThrow(/readMediaBuffer: media ID/u);
+    const smaller = await saveMediaBuffer(bytes.subarray(1), undefined, "inbound");
+    const partial = await prepareInputs(
+      [fact, { path: extra.path }, fact, { path: smaller.path }],
+      workspaceDir,
+      () => {},
+      signal,
+    );
+    const acceptedBytes = [bytes, Buffer.from("x"), bytes.subarray(1)];
+    expect(partial.files).toHaveLength(acceptedBytes.length);
+    for (const [index, file] of partial.files.entries()) {
+      expect(
+        Buffer.from(file.data, "base64").equals(acceptedBytes[index]!),
+        `accepted attachment ${index + 1} bytes`,
+      ).toBe(true);
+    }
+    expect(
+      JSON.parse(partial.mappingText.split("\n")[1]!).map(
+        ({ attachment }: { attachment: number }) => attachment,
+      ),
+    ).toEqual([1, 2, 4]);
+    expect(partial.feedbackText).toContain(
+      '{"attachment":3,"reason":"exceeds the remaining 10 MiB total transfer budget"}',
+    );
 
     await fs.appendFile(full.path, "x");
-    await expect(prepareInputs([fact], workspaceDir, () => {}, signal)).rejects.toThrow(
-      /readMediaBuffer: media ID/u,
+    const oversized = await prepareInputs(
+      [fact, { path: extra.path }],
+      workspaceDir,
+      () => {},
+      signal,
+    );
+    expect(oversized.files.map((file) => Buffer.from(file.data, "base64").toString())).toEqual([
+      "x",
+    ]);
+    expect(oversized.feedbackText).toContain(
+      '{"attachment":1,"reason":"exceeds the 5 MiB file limit"}',
     );
   });
 
-  it("admits 50 small attachments and rejects a fifty-first", async () => {
+  it("transfers only the first 50 candidates and reports the unread remainder", async () => {
     const saved = await saveMediaBuffer(Buffer.from("x"), undefined, "inbound");
     const facts = Array.from({ length: 50 }, () => ({ path: saved.path }));
-    const prepared = await prepareInputs(facts, workspaceDir, () => {}, signal);
+    const prepared = await prepareInputs(
+      [...facts, { path: path.join(workspaceDir, "not-read.txt") }],
+      workspaceDir,
+      () => {},
+      signal,
+    );
     expect(prepared.files).toHaveLength(50);
     expect(new Set(prepared.files.map((file) => file.path)).size).toBe(50);
-    await expect(
-      prepareInputs([...facts, facts[0]!], workspaceDir, () => {}, signal),
-    ).rejects.toThrow("at most 50 input attachments");
+    expect(prepared.feedbackText).toContain(
+      "1 attachment(s) after the first 50 were omitted without reading them",
+    );
   });
+
+  it.each([Number.NaN, -1, 1.5])(
+    "rejects invalid size metadata %s without treating it as a limit omission",
+    async (sizeBytes) => {
+      const saved = await saveMediaBuffer(Buffer.from("x"), undefined, "inbound");
+      await expect(
+        prepareInputs([{ path: saved.path, sizeBytes }], workspaceDir, () => {}, signal),
+      ).rejects.toThrow("Agents API input attachment has an invalid size");
+    },
+  );
 
   it("stops before reading attachments when the attempt is already cancelled or revoked", async () => {
     const saved = await saveMediaBuffer(Buffer.from("owned bytes"), undefined, "inbound");
