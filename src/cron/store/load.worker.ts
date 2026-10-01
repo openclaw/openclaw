@@ -8,9 +8,22 @@ import { loadCronStoreFromDatabase } from "./load.kernel.js";
 export function loadMutableCronStoreInWorker(
   database: OpenClawStateDatabase,
   storeKey: string,
+  jobIds?: readonly string[],
 ): CronStoreWorkerOperations["cron.loadMutable"]["output"] {
   let repairCommits = 0;
   try {
+    if (jobIds) {
+      if (jobIds.length === 0) {
+        // An empty selection would widen to every row in the partition, which is
+        // the cost this read exists to avoid; the caller must ask for real rows.
+        throw new Error("cron.loadMutable requires at least one jobId");
+      }
+      return {
+        ok: true,
+        loaded: loadCronStoreFromDatabase(database.db, storeKey, undefined, { jobIds }),
+        repairCommits,
+      };
+    }
     const loaded = loadCronStoreFromDatabase(database.db, storeKey, {
       write: (operation, operationLabel) =>
         runOpenClawStateWriteTransaction(

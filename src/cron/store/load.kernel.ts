@@ -31,8 +31,14 @@ export function loadCronStoreFromDatabase(
   database: DatabaseSync,
   storeKey: string,
   writer?: CronLoadWriter,
+  opts?: { jobIds?: readonly string[] },
 ): LoadedCronStore {
-  let rows = loadCronRows(database, storeKey);
+  // Row selection only serves a read: retiring rows re-widens to the full store,
+  // so a narrow request must never reach the writer branch.
+  let rows =
+    !writer && opts?.jobIds
+      ? loadCronRows(database, storeKey, new Set(opts.jobIds))
+      : loadCronRows(database, storeKey);
   const retiredIds = new Set(rows.filter(isRetiredCollectionReview).map((row) => row.job_id));
   if (!writer) {
     // Hide retired jobs before validation; the next mutable load owns durable deletion.
