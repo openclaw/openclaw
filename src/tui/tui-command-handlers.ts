@@ -4,13 +4,13 @@ import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/in
 import { modelKey } from "../agents/model-ref-shared.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   isSessionDefaultDirectiveValue,
   listThinkingLevelOptions,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
-import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
 import { formatFastModeValue } from "../shared/fast-mode.js";
@@ -58,7 +58,7 @@ function isBtwCommand(text: string): boolean {
 
 function isSlashStopCommand(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
+  return trimmed.startsWith("/") && isAbortRequestText(trimmed);
 }
 
 const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
@@ -877,7 +877,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     }
     const isBtw = isBtwCommand(text);
     const forgetRunId = isBtw ? forgetLocalBtwRunId : forgetLocalRunId;
-    if (isSlashStopCommand(text) || (hasTrackedAbortTarget() && isChatStopCommandText(text))) {
+    if (isSlashStopCommand(text) || (hasTrackedAbortTarget() && isAbortRequestText(text))) {
       await abortActive({ preferActive: true });
       return;
     }

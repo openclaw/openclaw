@@ -15,6 +15,9 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import {
+  MANAGED_MEMORY_DREAMING_CRON_NAME,
+  MANAGED_MEMORY_DREAMING_CRON_TAG,
+  MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
@@ -50,10 +53,6 @@ type DoctorMemoryCoreRuntime = Pick<
   | "repairDreamingArtifacts"
   | "writeBackfillDiaryEntries"
 >;
-
-const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
-const MANAGED_DEEP_SLEEP_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
-const DEEP_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
 
 type DoctorMemoryDreamingPhasePayload = {
   enabled: boolean;
@@ -395,7 +394,7 @@ type ManagedCronJobLike = {
 
 function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
   const description = normalizeOptionalString(job.description);
-  if (description?.includes(MANAGED_DEEP_SLEEP_CRON_TAG)) {
+  if (description?.includes(MANAGED_MEMORY_DREAMING_CRON_TAG)) {
     return true;
   }
   // Older managed jobs may lack the tag, so fall back to the exact system-event signature.
@@ -403,9 +402,9 @@ function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
   const payloadKind = normalizeOptionalString(job.payload?.kind)?.toLowerCase();
   const payloadText = normalizeOptionalString(job.payload?.text);
   return (
-    name === MANAGED_DEEP_SLEEP_CRON_NAME &&
+    name === MANAGED_MEMORY_DREAMING_CRON_NAME &&
     payloadKind === "systemevent" &&
-    payloadText === DEEP_SLEEP_SYSTEM_EVENT_TEXT
+    payloadText === MEMORY_DREAMING_SYSTEM_EVENT_TEXT
   );
 }
 
@@ -454,7 +453,6 @@ function resolveDoctorMemoryAgent(
   context: GatewayRequestContext,
   params: unknown,
   respond: RespondFn,
-  omittedAgentId?: string,
 ): {
   cfg: OpenClawConfig;
   agentId: string;
@@ -470,7 +468,7 @@ function resolveDoctorMemoryAgent(
   }
   const requestedAgentId =
     typeof rawAgentId === "string" ? normalizeAgentId(rawAgentId) : undefined;
-  let agentId = requestedAgentId ?? omittedAgentId;
+  let agentId = requestedAgentId ?? tryResolveAmbientOwnerAgentId(cfg);
   if (!agentId) {
     try {
       agentId = resolveDefaultAgentId(cfg, {
@@ -505,12 +503,7 @@ function resolveDoctorMemoryTarget(
   agentId: string;
   workspaceDir: string;
 } | null {
-  // Apply the same ambient-owner fallback that doctor.memory.status uses so
-  // that legacy clients (e.g. embedded UI builds that pre-date the agent-
-  // selection gate) do not get a hard rejection on multi-agent installs when
-  // a single default agent can be unambiguously resolved.
-  const omittedAgentId = tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
-  const resolved = resolveDoctorMemoryAgent(context, params, respond, omittedAgentId);
+  const resolved = resolveDoctorMemoryAgent(context, params, respond);
   if (!resolved) {
     return null;
   }
@@ -546,8 +539,7 @@ export const createDoctorHandlers = (
   memoryCoreRuntime: DoctorMemoryCoreRuntime = defaultMemoryCoreRuntime,
 ): GatewayRequestHandlers => ({
   "doctor.memory.status": async ({ respond, context, params }) => {
-    const omittedAgentId = tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
-    const resolved = resolveDoctorMemoryAgent(context, params, respond, omittedAgentId);
+    const resolved = resolveDoctorMemoryAgent(context, params, respond);
     if (!resolved) {
       return;
     }
