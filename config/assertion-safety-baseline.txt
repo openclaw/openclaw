@@ -1556,7 +1556,6 @@ src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-restore.ts	1
-src/agents/subagents/registry/subagent-registry.store.sqlite.ts	2
 src/agents/subagents/registry/subagent-registry.ts	2
 src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	1
