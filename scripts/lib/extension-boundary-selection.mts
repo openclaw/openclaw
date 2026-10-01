@@ -1,8 +1,7 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { parse } from "@babel/parser";
-import { resolveImportGraphDependents } from "../test-projects.test-support.mts";
 
 type Change = { path: string; status: string };
 type Selection = {
@@ -22,8 +21,29 @@ function fullSelection(extensionIds: string[], reason: string): Selection {
   };
 }
 
-function parseSource(source: string, file: string) {
-  return parse(source, {
+// Greedy direct public-SDK coverage: 98 + 16 + 5 distinct entries across these packages.
+const SMOKE_PACKAGES = ["telegram", "codex", "slack"];
+const SOURCE = /\.[cm]?[jt]sx?$/u;
+
+function publicEntries(rootDir: string, base?: string) {
+  const read = (name: string, revision?: string): string[] => {
+    const file = `scripts/lib/plugin-sdk-${name}.json`;
+    return JSON.parse(
+      revision
+        ? execFileSync("git", ["show", `${revision}:${file}`], { cwd: rootDir, encoding: "utf8" })
+        : readFileSync(resolve(rootDir, file), "utf8"),
+    );
+  };
+  return new Set(
+    [undefined, ...(base ? [base] : [])].flatMap((revision) => {
+      const privateEntries = new Set(read("private-local-only-subpaths", revision));
+      return read("entrypoints", revision).filter((entry) => !privateEntries.has(entry));
+    }),
+  );
+}
+
+function sdkImports(source: string, file: string): Set<string> {
+  const ast = parse(source, {
     sourceType: "unambiguous",
     plugins: [
       ["typescript", { dts: /\.d\.[cm]?ts$/u.test(file) }],
@@ -31,225 +51,127 @@ function parseSource(source: string, file: string) {
       ...(/\.[jt]sx$/u.test(file) ? ["jsx" as const] : []),
     ],
   });
-}
-
-function hasGlobalInfluence(source: string, file: string) {
-  const { program, comments } = parseSource(source, file);
-  // Reference directives and augmentations need compiler-wide membership.
-  return (
-    comments?.some((comment) => /<reference\s/u.test(comment.value)) ||
-    program.body.some((node) => node.type === "TSModuleDeclaration") ||
-    !program.body.some((node) => /^(?:Import|Export)/u.test(node.type))
-  );
-}
-
-function opaqueDeclarationRoot(rootDir: string, affected: Set<string>) {
-  const config = JSON.parse(readFileSync(resolve(rootDir, "tsconfig.json"), "utf8")) as {
-    compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> };
-  };
-  const aliases = Object.entries(config.compilerOptions?.paths ?? {});
-  const targetAffected = (specifier: string, declaringFile: string) => {
-    const targets: string[] = [];
-    if (specifier.startsWith(".")) {
-      targets.push(resolve(rootDir, dirname(declaringFile), specifier));
-    } else {
-      for (const [alias, paths] of aliases) {
-        const star = alias.indexOf("*");
-        if (
-          star < 0
-            ? alias !== specifier
-            : !specifier.startsWith(alias.slice(0, star)) ||
-              !specifier.endsWith(alias.slice(star + 1))
-        ) {
-          continue;
-        }
-        const wildcard =
-          star < 0 ? "" : specifier.slice(star, specifier.length - (alias.length - star - 1));
-        targets.push(
-          ...paths.map((path) =>
-            resolve(rootDir, config.compilerOptions?.baseUrl ?? ".", path.replace("*", wildcard)),
-          ),
-        );
-      }
-      if (targets.length === 0) {
-        // Dependency changes already force full checking. Unknown workspace aliases cannot be scoped.
-        return /^(?:@openclaw\/|openclaw(?:\/|$))/u.test(specifier);
-      }
+  const imports = new Set<string>();
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== "object") {
+      return;
     }
-    let resolved = false;
-    for (const target of targets) {
-      const stem = target.replace(/(?:\.d)?\.[cm]?[jt]sx?$/u, "");
-      for (const suffix of [
-        "",
-        ".ts",
-        ".tsx",
-        ".mts",
-        ".cts",
-        ".d.ts",
-        ".d.mts",
-        ".d.cts",
-        ".js",
-        ".jsx",
-        ".mjs",
-        ".cjs",
-      ]) {
-        for (const candidate of [stem + suffix, resolve(stem, "index" + suffix)]) {
-          const file = relative(rootDir, candidate).replaceAll("\\", "/");
-          if (affected.has(file)) {
-            return true;
-          }
-          resolved ||= existsSync(candidate) && statSync(candidate).isFile();
-        }
-      }
-    }
-    return !resolved;
-  };
-  const candidates = spawnSync(
-    "git",
-    [
-      "grep",
-      "-l",
-      "-z",
-      "-E",
-      "module|<reference",
-      "--",
-      ...["src", "extensions", "packages"].flatMap((root) =>
-        ["ts", "tsx", "mts", "cts"].map((extension) => `:(glob)${root}/**/*.${extension}`),
-      ),
-    ],
-    { cwd: rootDir, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
-  );
-  if (candidates.status !== 0 && candidates.status !== 1) {
-    throw new Error("Declaration-root inventory unavailable");
-  }
-  for (const file of candidates.stdout.split("\0").filter(Boolean)) {
-    if (/\.(?:test|spec)\.ts$/u.test(file) || !existsSync(resolve(rootDir, file))) {
-      continue;
-    }
-    const source = readFileSync(resolve(rootDir, file), "utf8");
+    const value = node as Record<string, unknown>;
     if (
-      !/\.d\.[cm]?ts$/u.test(file) &&
-      !/\bdeclare\b|(?:^|[;{}])\s*module\b|\bmodule\s+["'/]|\/\/\/\s*<reference/mu.test(source)
+      [
+        "ImportDeclaration",
+        "ExportNamedDeclaration",
+        "ExportAllDeclaration",
+        "ImportExpression",
+        "TSImportType",
+      ].includes(String(value.type))
     ) {
-      continue;
+      const specifier = value.source as { value?: string } | undefined;
+      if (specifier?.value) {
+        imports.add(specifier.value);
+      }
+    } else if (value.type === "CallExpression") {
+      const callee = value.callee as { type?: string; name?: string } | undefined;
+      const argument = (value.arguments as { value?: string }[] | undefined)?.[0];
+      if ((callee?.type === "Import" || callee?.name === "require") && argument?.value) {
+        imports.add(argument.value);
+      }
     }
-    const { program, comments } = parseSource(source, file);
-    if (
-      comments?.some((comment) => /^\/\s*<reference\s+(?:path|types)\s*=/u.test(comment.value)) ||
-      program.body.some(
-        (node) =>
-          node.type === "TSModuleDeclaration" &&
-          node.id.type === "StringLiteral" &&
-          targetAffected(node.id.value, file),
-      )
-    ) {
-      return file;
+    for (const child of Object.values(value)) {
+      if (Array.isArray(child)) {
+        child.forEach(visit);
+      } else if (child && typeof child === "object") {
+        visit(child);
+      }
     }
-  }
-  return undefined;
+  };
+  visit(ast.program);
+  return imports;
 }
 
-/** Use the tested tree's source edges, never a restored compiler receipt's older membership. */
+/** PR scope intentionally omits transitive declaration consumers; hourly checks them all. */
 export function selectAffectedBoundaryPackages(
   rootDir: string,
   extensionIds: string[],
   changes: Change[],
   base?: string,
 ): Selection {
-  const sourcePaths: string[] = [];
   const reasons = new Map<string, string>();
-  for (const change of changes) {
-    const file = change.path;
+  let sharedChange: string | undefined;
+  const changedEntries = new Set<string>();
+  const entries = changes.some(({ path }) => path.startsWith("src/plugin-sdk/"))
+    ? publicEntries(rootDir, base)
+    : new Set<string>();
+  for (const { path: file } of changes) {
     const owner = /^extensions\/([^/]+)\//u.exec(file)?.[1];
     if (owner && extensionIds.includes(owner)) {
       reasons.set(owner, `PR changes ${file}`);
     }
-    if (/\.(?:md|mdx|txt|png|jpg|jpeg|gif|svg|webp)$/u.test(file)) {
-      continue;
+    const entry = /^src\/plugin-sdk\/([^/]+)\.ts$/u.exec(file)?.[1];
+    if (entry && entries.has(entry)) {
+      changedEntries.add(`openclaw/plugin-sdk/${entry}`);
     }
     if (
-      !["M", "A", "D"].includes(change.status) ||
-      (change.status === "D" && !base) ||
-      !/^(?:src|extensions|packages|ui\/src|test)\/.+\.[cm]?[jt]sx?$/u.test(file) ||
-      /\.d\.[cm]?ts$/u.test(file)
+      (/^(?:src|packages)\//u.test(file) &&
+        SOURCE.test(file) &&
+        !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)) ||
+      /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig[^/]*\.json)$/u.test(file) ||
+      /^scripts\/(?:lib\/plugin-sdk-|(?:prepare|check|compile)-extension.*boundary)/u.test(file)
     ) {
-      return fullSelection(extensionIds, `conservative full check: ${change.status} ${file}`);
+      sharedChange ??= file;
     }
-    if (
-      change.status !== "D" &&
-      (!existsSync(resolve(rootDir, file)) || !lstatSync(resolve(rootDir, file)).isFile())
-    ) {
-      return fullSelection(extensionIds, `missing or nonregular source: ${file}`);
-    }
-    if (base && change.status !== "A") {
-      const previous = execFileSync("git", ["show", `${base}:${file}`], {
-        cwd: rootDir,
-        encoding: "utf8",
-        maxBuffer: 8 * 1024 * 1024,
-      });
-      if (hasGlobalInfluence(previous, file)) {
-        return fullSelection(extensionIds, `previous global or ambient declaration: ${file}`);
+  }
+  if (sharedChange) {
+    for (const id of SMOKE_PACKAGES) {
+      if (extensionIds.includes(id) && !reasons.has(id)) {
+        reasons.set(id, `SDK smoke sample for ${sharedChange}`);
       }
     }
-    sourcePaths.push(file);
   }
-  const affected = new Set([
-    ...sourcePaths,
-    ...resolveImportGraphDependents(sourcePaths, rootDir, {
-      tooling: true,
-      resolveAliases: true,
-    }),
-  ]);
-  if (sourcePaths.length > 0) {
-    const opaqueRoot = opaqueDeclarationRoot(rootDir, affected);
-    if (opaqueRoot) {
-      return fullSelection(extensionIds, `opaque declaration/reference root: ${opaqueRoot}`);
-    }
-  }
-  for (const file of affected) {
-    if (
-      !/^(?:src|extensions|packages)\//u.test(file) ||
-      /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)
-    ) {
-      continue;
-    }
-    if (/\.d\.[cm]?ts$/u.test(file)) {
-      return fullSelection(extensionIds, `declaration dependency influence: ${file}`);
-    }
-    if (/^extensions\/(?:browser|xai)\//u.test(file)) {
-      return fullSelection(
-        extensionIds,
-        `package declaration aliases differ from source graph: ${file}`,
-      );
-    }
-    // Deleted module candidates remain in the graph's resolver inventory. Their
-    // previous bytes were checked above; surviving importers still select owners.
-    if (!existsSync(resolve(rootDir, file))) {
-      if (base && changes.some((change) => change.path === file && change.status === "D")) {
+  if (changedEntries.size > 0) {
+    const files = execFileSync("git", ["ls-files", "-z", "--", "extensions"], {
+      cwd: rootDir,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+    })
+      .split("\0")
+      .filter((file) => SOURCE.test(file) && !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file));
+    for (const file of files) {
+      const owner = file.split("/")[1]!;
+      if (
+        !extensionIds.includes(owner) ||
+        reasons.has(owner) ||
+        !existsSync(resolve(rootDir, file))
+      ) {
         continue;
       }
-      return fullSelection(extensionIds, `missing source: ${file}`);
-    }
-    const source = readFileSync(resolve(rootDir, file), "utf8");
-    // Augmentation and script globals affect consumers without a module import edge.
-    if (hasGlobalInfluence(source, file)) {
-      return fullSelection(extensionIds, `global or ambient declaration influence: ${file}`);
-    }
-    const owner = /^extensions\/([^/]+)\//u.exec(file)?.[1];
-    if (owner && extensionIds.includes(owner) && !reasons.has(owner)) {
-      reasons.set(owner, `transitive source/type dependency: ${file}`);
+      if (!lstatSync(resolve(rootDir, file)).isFile()) {
+        reasons.set(owner, `nonregular package source: ${file}`);
+        continue;
+      }
+      const source = readFileSync(resolve(rootDir, file), "utf8");
+      if (!source.includes("openclaw/plugin-sdk/") && !source.includes("\\")) {
+        continue;
+      }
+      const direct = [...sdkImports(source, file)].find((entry) => changedEntries.has(entry));
+      if (direct) {
+        reasons.set(owner, `direct import of changed public entry ${direct}: ${file}`);
+      }
     }
   }
   return {
     mode: "affected",
-    reason: "PR merge-base diff and current source/type dependency graph",
+    reason: "PR diff: touched packages, SDK smoke sample and direct public-entry consumers",
     selected: extensionIds.flatMap((id) => {
       const reason = reasons.get(id);
       return reason ? [{ package: id, reason }] : [];
     }),
     skipped: extensionIds
       .filter((id) => !reasons.has(id))
-      .map((id) => ({ package: id, reason: "unaffected by PR diff; main drift covered hourly" })),
+      .map((id) => ({
+        package: id,
+        reason: "outside PR selection; transitive consumers and main drift covered hourly",
+      })),
   };
 }
 
@@ -293,7 +215,7 @@ export function resolveExtensionBoundarySelection(
     }
     return { ...selectAffectedBoundaryPackages(rootDir, extensionIds, changes, base), base };
   } catch {
-    return fullSelection(extensionIds, "PR diff or dependency graph unavailable");
+    return fullSelection(extensionIds, "PR diff or direct-import inventory unavailable");
   }
 }
 
