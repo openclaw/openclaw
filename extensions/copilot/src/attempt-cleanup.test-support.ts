@@ -75,7 +75,7 @@ export function registerCopilotCleanupTests({
 
   it("keeps cancellation raised during pre-session preparation", async () => {
     const controller = new AbortController();
-    const sandboxStarted = createDeferred();
+    const sandboxStarted = createDeferred<void>();
     const finishSandbox = createDeferred<null>();
     const sdk = makeFakeSdk();
     const attempt = runCopilotAttempt(
