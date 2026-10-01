@@ -559,10 +559,12 @@ Fresh dependency checks detect binaries installed into directories already on
 </ParamField>
 
 <Note>
-  Legacy `metadata.clawdbot` blocks are still accepted when
-  `metadata.openclaw` is absent, so older installed skills keep their
-  dependency gates and installer hints. New skills should use
-  `metadata.openclaw`.
+  The pre-July 2026 `metadata.clawdbot` format is no longer read. To update an
+  older skill, edit its `SKILL.md` frontmatter and rename that block to
+  `metadata.openclaw`, preserving its requirements and installer fields. If
+  both blocks exist, keep the current block and merge only the legacy fields
+  you still want. OpenClaw does not rewrite the file; the old block's dependency
+  gates and installer hints are ignored until you update it.
 </Note>
 
 ### Installer specs

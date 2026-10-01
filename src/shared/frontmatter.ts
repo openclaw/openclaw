@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
-import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../compat/legacy-names.js";
+import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
@@ -40,15 +40,7 @@ export function resolveOpenClawManifestBlock(params: {
       return undefined;
     }
 
-    const manifestKeys = [MANIFEST_KEY, ...LEGACY_MANIFEST_KEYS];
-    // Prefer the current manifest key, but still read legacy names for existing skill/hook files.
-    for (const key of manifestKeys) {
-      const candidate = asOptionalObjectRecord(parsed[key]);
-      if (candidate) {
-        return candidate;
-      }
-    }
-    return undefined;
+    return asOptionalObjectRecord(parsed[MANIFEST_KEY]);
   } catch {
     return undefined;
   }
