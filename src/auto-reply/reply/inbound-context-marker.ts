@@ -19,3 +19,11 @@ export const INBOUND_CONTEXT_MARKER = "⟦openclaw:ctx⟧";
 export function markInboundContextLabel(label: string): string {
   return `${label} ${INBOUND_CONTEXT_MARKER}`;
 }
+
+/**
+ * Instruction line injected after the `Conversation info:` block when the
+ * requester is a verified linked profile. It carries no marker, so strippers
+ * match it as an exact line (like the message-tool delivery hints).
+ */
+export const REQUESTER_PROFILE_GUIDANCE =
+  'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';

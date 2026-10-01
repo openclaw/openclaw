@@ -4,8 +4,9 @@ import {
   MESSAGE_TOOL_DELIVERY_HINTS,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { bindRequesterProfile } from "../requester-profile.js";
 import type { TemplateContext } from "../templating.js";
-import { markInboundContextLabel } from "./inbound-context-marker.js";
+import { markInboundContextLabel, REQUESTER_PROFILE_GUIDANCE } from "./inbound-context-marker.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
   extractInboundSenderLabel,
@@ -366,6 +367,19 @@ describe("builder compatibility", () => {
     const input = [MESSAGE_TOOL_ONLY_DELIVERY_HINT, "", "Actual user message"].join("\n");
 
     expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips the verified requester guidance emitted with Conversation info", () => {
+    const ctx = { ChatType: "direct", Provider: "webchat", Surface: "webchat" } as TemplateContext;
+    bindRequesterProfile(ctx, { id: "profile-1", displayName: "Nathan", isCurrent: () => true });
+    const prefix = buildInboundUserContextPrefix(ctx);
+
+    expect(prefix).toContain(REQUESTER_PROFILE_GUIDANCE);
+    expect(stripInboundMetadata(`${prefix}\n\nActual user message`)).toBe("Actual user message");
+  });
+
+  it("strips a stored message that holds only the requester guidance", () => {
+    expect(stripInboundMetadata(`${REQUESTER_PROFILE_GUIDANCE}\n`)).toBe("");
   });
 
   it("strips room-event delivery hints from replayed user text", () => {

@@ -171,7 +171,12 @@ function prepareComparableMessage(
     role,
     text: comparableText.text,
     driftNoteText: comparableText.driftNoteText,
-    timestamp: asFiniteNumber(record.timestamp),
+    // A queued send keeps its send time in `timestamp`; the transcript record
+    // time is when the turn reached the CLI, which is what the import carries.
+    timestamp:
+      asFiniteNumber(
+        asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.recordTimestampMs,
+      ) ?? asFiniteNumber(record.timestamp),
   };
 }
 
