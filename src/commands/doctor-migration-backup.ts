@@ -24,6 +24,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
+import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -269,5 +270,13 @@ export async function backupDoctorSqliteDatabases(params: {
       { kind: "data-at-risk", reason: "incomplete-migration" },
     );
   }
-  return { changes, warnings: [] };
+  const warnings: string[] = [];
+  try {
+    recordDoctorMigrationBackups(params.env, backupId, inventory);
+  } catch (error) {
+    warnings.push(
+      `Migration backups remain protected; cleanup registration failed: ${formatErrorMessage(error)}`,
+    );
+  }
+  return { changes, warnings };
 }

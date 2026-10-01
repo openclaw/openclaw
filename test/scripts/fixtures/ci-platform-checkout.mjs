@@ -17,6 +17,9 @@ const instance = randomUUID();
 let ownWindowsCreationTime;
 let census;
 let actorLease;
+// Orphan ceiling for every fixture process. The owning test's abort signal ends a
+// supervised run; this only bounds processes whose owner died or never cancels.
+const lifetimeCeilingMs = 60_000;
 let operationDeadline;
 const workspace = path.join(root, "workspace");
 const runnerTemp = path.join(root, "temp");
@@ -210,9 +213,9 @@ async function liveRecords(deadline = operationDeadline) {
     }
   } else {
     // Linux can census the owned PID set in one ps call. Apple ps scans the
-    // whole host for multiple PIDs; keep its singleton queries under one budget.
+    // whole host for multiple PIDs; its singleton queries share the caller's
+    // operation deadline, like the Windows witness.
     const pidLists = process.platform === "linux" ? [[...pids]] : [...pids].map((pid) => [pid]);
-    const deadline = Date.now() + 1_000;
     for (const selectedPids of pidLists) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
@@ -262,8 +265,7 @@ async function liveRecords(deadline = operationDeadline) {
   });
 }
 
-function isWorkflowDescendant(pid, shellPid) {
-  const deadline = Date.now() + 1_000;
+function isWorkflowDescendant(pid, shellPid, deadline = operationDeadline) {
   const visited = new Set();
   while (pid > 1 && !visited.has(pid)) {
     if (pid === shellPid) return true;
@@ -386,7 +388,7 @@ function holdLease() {
   };
   // Orphans stop themselves when the supervisor releases the lease; no PID discovery/kills.
   // The independent ceiling also covers a supervisor killed before it can unlink the lease.
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + lifetimeCeilingMs;
   const checkLease = () => {
     if (!isLive() || Date.now() >= deadline) {
       process.exit(0);
@@ -1285,8 +1287,12 @@ async function supervise() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.once(signal, () => void stop(`supervisor received ${signal}`));
   }
-  operationDeadline = Date.now() + 45_000;
-  setTimeout(() => void stop("fixture deadline exceeded"), 45_000);
+  // The owning test's signal bounds the run: a slow host must not lose a race
+  // against a fixture deadline. Cancellation still runs this owned cleanup.
+  process.on("message", (message) => {
+    if (message?.type === "ci-checkout:cancel") void stop("test cancelled");
+  });
+  operationDeadline = Date.now() + lifetimeCeilingMs;
   try {
     if (process.platform === "win32") {
       census = createWindowsProcessCensus({
@@ -1297,7 +1303,7 @@ async function supervise() {
           void stop(error);
         },
       });
-      // Interpreter startup belongs to the existing supervisor watchdog, not a query deadline.
+      // Interpreter startup belongs to the owning test's cancellation, not a query deadline.
       await census.ready;
       if (stopping) {
         await stopping;
@@ -1322,7 +1328,7 @@ async function supervise() {
           cwd: workspace,
           env: { PATH: commandPath },
           encoding: "utf8",
-          timeout: 2_000,
+          timeout: Math.max(1, operationDeadline - Date.now()),
           killSignal: "SIGKILL",
         },
       );

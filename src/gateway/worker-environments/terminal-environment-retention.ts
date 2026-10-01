@@ -10,7 +10,7 @@ import { WORKER_ENVIRONMENT_TERMINAL_STATES } from "./state.js";
 import type {
   WorkerEnvironmentPruneObservation,
   WorkerEnvironmentPruneReadInput,
-} from "./store-worker-contract.js";
+} from "./store.types.js";
 
 const TERMINAL_ENVIRONMENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const TERMINAL_ENVIRONMENT_PRUNE_LIMIT = 256;

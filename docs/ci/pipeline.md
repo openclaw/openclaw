@@ -237,11 +237,12 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `57fadf566d797870759abbe103206ee3981a9323` with WebKit
-`f20ce7744553c910bcf16a33faf976af208de091` in prerelease
-`openclaw-v1.4.3-20260930-57fadf566d-webkit-f20ce77445`.
-This WebKit build preserves string bounds checks through FTL dead-code elimination,
-fixing the CSS tokenizer's end-of-input loop.
+The pinned build pairs Bun `17c9ecf9eb4aa0b60ae1a2c9f28c1b6dc0f4c8ac` with WebKit
+`fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
+`openclaw-v1.4.3-20261001-17c9ecf9eb-webkit-fb1167ebf2`.
+It syncs upstream Bun through `4b02e1031d`, moving WebKit from `f20ce77445`
+to `fb1167ebf2`, and includes fixes for thread-safe function ownership,
+shared-environment deletion, and a module-key crash.
 The fork keeps the lifecycle-script `node` shim in a per-user directory, with a
 private fallback when that directory is unusable. This lets several accounts on
 one host run Bun installs without Node.
