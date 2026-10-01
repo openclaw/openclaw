@@ -29,6 +29,8 @@ The native Codex app-server harness exposes `turn/steer` instead of OpenClaw run
 
 Codex review and manual compaction turns reject same-turn steering. When a runtime cannot accept steering in `steer` mode, OpenClaw waits for the active run to finish before starting the prompt.
 
+When a model request fails while a steered message is waiting, OpenClaw leaves the original request for retry or fallback and runs the steered message as its own turn afterward.
+
 ## Tool launch boundaries
 
 OpenClaw distinguishes started work from requested work:

@@ -620,6 +620,52 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(session.agent.hasQueuedMessages()).toBe(false);
   });
 
+  it("does not answer a steer in place of a failed request", async () => {
+    const requests: Context[] = [];
+    const requestStarted = createDeferredCore();
+    const steerAccepted = createDeferredCore();
+    let failInitialResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        failInitialResponse = () => {
+          const message = {
+            ...createAssistant(activeModel, [], "error"),
+            errorMessage: "Unknown error (no error details in response)",
+          };
+          stream.push({ type: "error", reason: "error", error: message });
+          stream.end();
+        };
+        requestStarted.resolve();
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "answered only the steer" }]),
+      );
+    });
+    const { session } = await createTestSession();
+    const prompt = session.prompt("first question");
+    await requestStarted.promise;
+    const delivery = steerActiveSessionWithOptionalDeliveryWait(session, "second question", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      onQueueAccepted: () => steerAccepted.resolve(),
+    });
+    await steerAccepted.promise;
+    expect(session.getSteeringMessages()).toEqual(["second question"]);
+
+    failInitialResponse?.();
+    // The run owner retries the failed request; the caller re-queues the steer.
+    await expect(delivery).rejects.toThrow(
+      "active session ended before queued steering message was committed",
+    );
+    await prompt;
+
+    expect(requests).toHaveLength(1);
+    expect(session.agent.hasQueuedMessages()).toBe(false);
+  });
+
   it("applies session model, tool, and prompt changes on the following tool turn", async () => {
     const nextModel = { ...testModel, id: "next-model" };
     const sessionRef: { current?: AgentSession } = {};
