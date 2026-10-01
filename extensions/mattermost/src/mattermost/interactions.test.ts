@@ -113,7 +113,7 @@ describe("setInteractionSecret / getInteractionSecret", () => {
     const secret = createHmac("sha256", "openclaw-mattermost-interactions")
       .update("test-bot-token")
       .digest("hex");
-    expect(attachments[0]?.actions?.[0]?.integration.context._token).toBe(
+    expect(attachments[0]?.actions?.[0]?.integration.context["_token"]).toBe(
       createHmac("sha256", secret).update('{"action_id":"probe"}').digest("hex"),
     );
   });
