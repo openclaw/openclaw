@@ -238,7 +238,8 @@ describe("developer source discovery", () => {
     });
 
     const current = await discovery.discover(signal());
-    expect(current.flatMap((group) => [...group.files.keys()])).toEqual([
+    expect(current).toHaveLength(1);
+    expect([...expectDefined(current[0], "rediscovered observation").files.keys()]).toEqual([
       path.join(source, "child.ts"),
     ]);
   });
