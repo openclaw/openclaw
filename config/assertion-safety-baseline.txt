@@ -1267,7 +1267,7 @@ src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	4
-src/agents/agent-command-restart-recovery.ts	3
+src/agents/agent-command-restart-recovery.ts	1
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	13
 src/agents/agent-project-settings-snapshot.ts	5
@@ -2431,7 +2431,7 @@ src/infra/state-migrations.channel-pairing.ts	5
 src/infra/state-migrations.config-machine-state.ts	1
 src/infra/state-migrations.cron-run-logs.ts	4
 src/infra/state-migrations.debug-proxy.ts	5
-src/infra/state-migrations.doctor.ts	5
+src/infra/state-migrations.doctor.ts	3
 src/infra/state-migrations.exec-approvals.ts	1
 src/infra/state-migrations.fs.ts	1
 src/infra/state-migrations.legacy-session-store.ts	3
