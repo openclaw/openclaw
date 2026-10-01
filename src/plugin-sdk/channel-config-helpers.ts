@@ -59,18 +59,12 @@ type ChannelCrudConfigAdapter<ResolvedAccount> = Pick<
   | "deleteAccount"
 >;
 
-type ChannelConfigAdapterWithAccessors<ResolvedAccount> = Pick<
-  ChannelConfigAdapter<ResolvedAccount>,
-  | "listAccountIds"
-  | "resolveAccount"
-  | "inspectAccount"
-  | "defaultAccountId"
-  | "setAccountEnabled"
-  | "deleteAccount"
-  | "resolveAllowFrom"
-  | "formatAllowFrom"
-  | "resolveDefaultTo"
->;
+type ChannelConfigAdapterWithAccessors<ResolvedAccount> =
+  ChannelCrudConfigAdapter<ResolvedAccount> &
+    Pick<
+      ChannelConfigAdapter<ResolvedAccount>,
+      "resolveAllowFrom" | "formatAllowFrom" | "resolveDefaultTo"
+    >;
 
 /** Returns whether config writes are enabled for a channel/account target. */
 export function resolveChannelConfigWrites(params: {
@@ -96,15 +90,8 @@ type MultiAccountChannelConfigAdapterParams<
   ResolvedAccount,
   AccessorAccount = ResolvedAccount,
   Config extends OpenClawConfig = OpenClawConfig,
-> = {
-  sectionKey: string;
-  accountKeyPolicy?: ChannelAccountKeyPolicy;
-  listAccountIds: (cfg: Config) => string[];
-  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
+> = NamedAccountChannelConfigBaseParams<ResolvedAccount, Config> & {
   resolveAccessorAccount?: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
-  defaultAccountId: (cfg: Config) => string;
-  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
-  clearBaseFields: string[];
   resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
@@ -331,15 +318,7 @@ export function createTopLevelChannelConfigBase<
   inspectAccount?: (cfg: Config) => unknown;
   deleteMode?: "remove-section" | "clear-fields";
   clearBaseFields?: string[];
-}): Pick<
-  ChannelConfigAdapter<ResolvedAccount>,
-  | "listAccountIds"
-  | "resolveAccount"
-  | "inspectAccount"
-  | "defaultAccountId"
-  | "setAccountEnabled"
-  | "deleteAccount"
-> {
+}): ChannelCrudConfigAdapter<ResolvedAccount> {
   return {
     listAccountIds(cfg) {
       return params.listAccountIds?.(cfg as Config) ?? [DEFAULT_ACCOUNT_ID];
