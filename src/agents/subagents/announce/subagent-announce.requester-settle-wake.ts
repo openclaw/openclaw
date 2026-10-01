@@ -390,7 +390,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
   const parentOnly = privateRows.length > 0;
   if (
-    privateRows.some((entry) => entry.completionRequesterSessionId !== requesterEntry.sessionId)
+    privateRows.some(
+      (entry) =>
+        entry.completionRequesterSessionId !== requesterEntry.sessionId ||
+        entry.completionRequesterLifecycleRevision !== requesterEntry.lifecycleRevision,
+    )
   ) {
     await completeBatch(settledBatch, selectedState, {
       delivered: false,
@@ -612,6 +616,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
                   ? {
                       completionTarget: "parent",
                       completionRequesterSessionId: requesterEntry.sessionId,
+                      completionRequesterLifecycleRevision: requesterEntry.lifecycleRevision,
                     }
                   : {}),
                 ...(!parentOnly && requesterYieldedAfterDelivery

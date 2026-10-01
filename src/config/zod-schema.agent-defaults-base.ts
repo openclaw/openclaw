@@ -54,7 +54,6 @@ const EmbeddedAgentConfigSchema = z
 export const SilentReplyPolicyConfigSchema = z
   .object({
     group: SilentReplyPolicySchema.optional(),
-    internal: SilentReplyPolicySchema.optional(),
   })
   .strict();
 

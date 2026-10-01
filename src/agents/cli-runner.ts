@@ -23,6 +23,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
 import {
   loadAuthProfileStoreForRuntime,
@@ -63,6 +64,7 @@ import {
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
+  isMissingRequiredCliReply,
 } from "./cli-runner/delivery-evidence.js";
 import { createCliFailoverError } from "./cli-runner/exit-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
@@ -77,6 +79,7 @@ import {
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
+import { recordModelFallbackStop } from "./failover-error.js";
 import { bootstrapHarnessContextEngine } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
@@ -84,7 +87,6 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
-import { resolveReplyExpectation } from "./reply-completion.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 const cliRunnerDeps = cliRunSettlementDeps;
@@ -440,13 +442,7 @@ async function runPreparedCliAgentOwned(
     const assistantText = sourceReplyMirror.delivered
       ? (sourceReplyMirror.visibleText ?? "")
       : output.text.trim();
-    if (
-      !assistantText &&
-      !output.didSendViaMessagingTool &&
-      resolveReplyExpectation(params) === "required" &&
-      // Strict isolated completion owns valid-empty output after reasoning is removed.
-      !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
-    ) {
+    if (isMissingRequiredCliReply({ output, runParams: params, isolatedCompletion })) {
       const process = output.diagnostics?.process;
       if (process) {
         const diagnostics = [
@@ -463,14 +459,18 @@ async function runPreparedCliAgentOwned(
         ].join(" ");
         cliBackendLog.warn(`cli empty response diagnostics: ${diagnostics}`);
       }
-      throw attachCliMessagingDeliveryEvidence(
-        createCliFailoverError(
-          "CLI backend returned an empty response.",
-          "empty_response",
-          cliFailoverContext,
-        ),
-        output,
+      const error = createCliFailoverError(
+        "CLI backend returned an empty response.",
+        "empty_response",
+        cliFailoverContext,
       );
+      if (
+        (output.toolSummary?.calls ?? 0) > 0 ||
+        hasAcceptedSessionSpawn(output.acceptedSessionSpawns)
+      ) {
+        recordModelFallbackStop(error);
+      }
+      throw attachCliMessagingDeliveryEvidence(error, output);
     }
     const assistantTexts = assistantText ? [assistantText] : [];
     const lastAssistant =

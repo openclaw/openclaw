@@ -144,7 +144,7 @@ describe("sessions_yield tool", () => {
     expect(result.details).toMatchObject({
       status: "error",
       error:
-        'No pending child completion is owned by this turn. If the assigned work is complete, return its result normally. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".',
+        'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".',
     });
     expect(onYield).not.toHaveBeenCalled();
   });

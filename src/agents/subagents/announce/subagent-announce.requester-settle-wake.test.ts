@@ -70,8 +70,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       "send it through an available, permitted messaging tool",
     );
     expect(String(deliveredCallArg().triggerMessage)).toContain(
-      "when no further work or user-facing update is owed, or after sending that update",
+      "briefly record the reviewed outcome and any remaining work",
     );
+    expect(String(deliveredCallArg().triggerMessage)).not.toContain("NO_REPLY");
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
     expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
@@ -80,10 +81,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("does not pass private findings to a replacement requester incarnation", async () => {
+    setSessionStore({
+      [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "replacement-revision" },
+    });
     const child = makeSettledChild({
       runId: "run-b",
       completionTarget: "parent",
-      completionRequesterSessionId: "old-parent",
+      completionRequesterSessionId: "sess-main",
+      completionRequesterLifecycleRevision: "original-revision",
       delivery: { status: "pending" },
       completion: { required: true, resultText: "private marker" },
     });

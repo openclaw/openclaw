@@ -18,7 +18,7 @@ export const COMMAND_REPLY_EXPECTATION_CASES: ReadonlyArray<{
     opts: { inputProvenance: { kind: "external_user", sourceTool: "subagent_announce" } },
     expected: "required",
   },
-  { name: "subagent-lane", opts: { lane: "subagent" }, expected: "optional" },
+  { name: "subagent-lane", opts: { lane: "subagent" }, expected: "required" },
   {
     name: "child-report-without-tool-handoff",
     opts: {
@@ -28,22 +28,17 @@ export const COMMAND_REPLY_EXPECTATION_CASES: ReadonlyArray<{
         sourceRole: "subagent",
       },
     },
-    expected: "optional",
+    expected: "required",
   },
   {
     name: "settlement-wake",
     opts: { inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" } },
-    expected: "optional",
+    expected: "required",
   },
   {
     name: "peer-result",
     opts: { inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" } },
-    expected: "optional",
-  },
-  {
-    name: "internal-notification",
-    opts: { inputProvenance: { kind: "internal_system" } },
-    expected: "optional",
+    expected: "required",
   },
 ];
 

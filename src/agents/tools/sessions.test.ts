@@ -116,7 +116,7 @@ vi.mock("../../sessions/session-participant-recording.js", () => ({
 
 let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
 let createSessionsSendTool: typeof import("./sessions-send-tool.js").createSessionsSendTool;
-let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["resolveAnnounceTarget"];
+let resolveSessionsSendReplyTarget: (typeof import("./sessions-delivery-target.js"))["resolveSessionsSendReplyTarget"];
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
@@ -177,7 +177,7 @@ function requireGatewayRequest(index = 0) {
 beforeAll(async () => {
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
   ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
-  ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));
+  ({ resolveSessionsSendReplyTarget } = await import("./sessions-delivery-target.js"));
   ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
 });
 
@@ -552,14 +552,14 @@ it("authorizes an arbitrary bare key against its persisted fixed-store owner", a
   ]);
 });
 
-describe("resolveAnnounceTarget", () => {
+describe("resolveSessionsSendReplyTarget", () => {
   beforeEach(async () => {
     callGatewayMock.mockClear();
     await installRegistry();
   });
 
   it("derives non-WhatsApp announce targets from the session key", async () => {
-    const target = await resolveAnnounceTarget({
+    const target = await resolveSessionsSendReplyTarget({
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
       callGateway: callGatewayMock,
@@ -568,22 +568,20 @@ describe("resolveAnnounceTarget", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("hydrates WhatsApp accountId from sessions.list when available", async () => {
+  it("hydrates WhatsApp accountId from sessions.describe when available", async () => {
     callGatewayMock.mockResolvedValueOnce({
-      sessions: [
-        {
-          key: "agent:main:whatsapp:group:123@g.us",
-          deliveryContext: {
-            channel: "whatsapp",
-            to: "123@g.us",
-            accountId: "work",
-            threadId: 99,
-          },
+      session: {
+        key: "agent:main:whatsapp:group:123@g.us",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "123@g.us",
+          accountId: "work",
+          threadId: 99,
         },
-      ],
+      },
     });
 
-    const target = await resolveAnnounceTarget({
+    const target = await resolveSessionsSendReplyTarget({
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       displayKey: "agent:main:whatsapp:group:123@g.us",
       callGateway: callGatewayMock,
@@ -595,25 +593,23 @@ describe("resolveAnnounceTarget", () => {
       threadId: "99",
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(requireGatewayRequest().method).toBe("sessions.list");
+    expect(requireGatewayRequest().method).toBe("sessions.describe");
   });
 
-  it("hydrates announce delivery from the canonical external projection", async () => {
+  it("hydrates delivery from the canonical external projection", async () => {
     callGatewayMock.mockResolvedValueOnce({
-      sessions: [
-        {
-          key: "agent:main:feishu:direct:ou_user",
-          deliveryContext: {
-            channel: "feishu",
-            to: "user:ou_user",
-            accountId: "work",
-            threadId: "thread-77",
-          },
+      session: {
+        key: "agent:main:feishu:direct:ou_user",
+        deliveryContext: {
+          channel: "feishu",
+          to: "user:ou_user",
+          accountId: "work",
+          threadId: "thread-77",
         },
-      ],
+      },
     });
 
-    const target = await resolveAnnounceTarget({
+    const target = await resolveSessionsSendReplyTarget({
       sessionKey: "agent:main:feishu:direct:ou_user",
       displayKey: "agent:main:feishu:direct:ou_user",
       callGateway: callGatewayMock,
@@ -626,21 +622,19 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
-  it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
+  it("preserves threaded Slack session keys when sessions.describe lacks stored thread metadata", async () => {
     callGatewayMock.mockResolvedValueOnce({
-      sessions: [
-        {
-          key: "agent:main:slack:channel:C123:thread:1710000000.000100",
-          deliveryContext: {
-            channel: "slack",
-            to: "channel:C123",
-            accountId: "workspace",
-          },
+      session: {
+        key: "agent:main:slack:channel:C123:thread:1710000000.000100",
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "workspace",
         },
-      ],
+      },
     });
 
-    const target = await resolveAnnounceTarget({
+    const target = await resolveSessionsSendReplyTarget({
       sessionKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
       displayKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
       callGateway: callGatewayMock,
@@ -1044,7 +1038,7 @@ describe("sessions_send gating", () => {
           status: "accepted",
           sessionKey: targetSessionKey,
           targetDisposition: "queued",
-          delivery: { status: "skipped", mode: "announce" },
+          delivery: { status: "skipped" },
           watched: false,
         });
         expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
@@ -1472,12 +1466,6 @@ describe("sessions_send gating", () => {
           reply: "Already delivered to the source",
           sessionKey: targetSessionKey,
         });
-        await vi.waitFor(() => expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce());
-        expect(vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0]).toMatchObject({
-          roundOneReply: "Already delivered to the source",
-          sourceReplyDelivered: true,
-          targetSessionKey,
-        });
       } else {
         expect(requireDetails(result)).toMatchObject({
           status: "no_reply",
@@ -1566,27 +1554,23 @@ describe("sessions_send gating", () => {
     {
       label: "canonical cron run",
       requesterSessionKey: "agent:main:cron:job:run:abc",
-      expected: 0,
       expectedRequesterSessionKey: "agent:main:cron:job:run:abc",
     },
     {
       label: "normal requester",
       requesterSessionKey: "agent:main:telegram:direct:user",
-      expected: 5,
-      expectedRequesterSessionKey: "agent:main:main",
+      expectedRequesterSessionKey: "agent:main:telegram:direct:user",
     },
     {
       label: "non-canonical cron-like requester",
       requesterSessionKey: "agent:main:slack:cron:job:run:uuid",
-      expected: 5,
       expectedRequesterSessionKey: "agent:main:slack:cron:job:run:uuid",
     },
   ] as const)(
-    "uses the expected ping-pong turns for a $label",
-    async ({ requesterSessionKey, expected, expectedRequesterSessionKey }) => {
+    "keeps requester delivery on the caller key for a $label",
+    async ({ requesterSessionKey, expectedRequesterSessionKey }) => {
       const flowParams = await executeFireAndForgetA2AFrom(requesterSessionKey);
 
-      expect(flowParams.maxPingPongTurns).toBe(expected);
       expect(flowParams.requesterSessionKey).toBe(expectedRequesterSessionKey);
     },
   );
@@ -1659,34 +1643,32 @@ describe("sessions_send gating", () => {
     { label: "peer direct", key: "agent:main:direct:peer-1" },
     { label: "channel dm", key: "agent:main:feishu:dm:peer-1" },
     { label: "account direct", key: "agent:main:feishu:default:direct:peer-1" },
-  ] as const)(
-    "routes a legacy $label requester back to its monitored main session",
-    async ({ key }) => {
-      const flowParams = await executeFireAndForgetA2AFrom(key);
+  ] as const)("keeps a legacy $label requester on its own session key", async ({ key }) => {
+    const flowParams = await executeFireAndForgetA2AFrom(key);
 
-      expect(flowParams.requesterSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
-      const agentCall = callGatewayMock.mock.calls.find(
-        ([request]) => (request as { method?: string }).method === "agent",
-      );
-      expect(agentCall?.[0]).toMatchObject({
-        method: "agent",
-        params: {
-          inputProvenance: {
-            kind: "inter_session",
-            sourceSessionKey: MAIN_AGENT_SESSION_KEY,
-            sourceTool: "sessions_send",
-          },
+    expect(flowParams.requesterSessionKey).toBe(key);
+    const agentCall = callGatewayMock.mock.calls.find(
+      ([request]) => (request as { method?: string }).method === "agent",
+    );
+    expect(agentCall?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: key,
+          sourceTool: "sessions_send",
         },
-      });
-    },
-  );
+      },
+    });
+  });
 
-  it("routes a legacy direct requester to its configured main session key", async () => {
-    const flowParams = await executeFireAndForgetA2AFrom("agent:main:feishu:direct:peer-1", {
+  it("keeps a legacy direct requester on its own key with a custom main key", async () => {
+    const key = "agent:main:feishu:direct:peer-1";
+    const flowParams = await executeFireAndForgetA2AFrom(key, {
       mainKey: "work",
     });
 
-    expect(flowParams.requesterSessionKey).toBe("agent:main:work");
+    expect(flowParams.requesterSessionKey).toBe(key);
   });
 
   it.each([
@@ -1764,14 +1746,14 @@ describe("sessions_send gating", () => {
       key: "agent:main:feishu:default:direct:peer-1",
     },
   ] as const)(
-    "honors a main-scope binding overriding global $dmScope",
+    "keeps the requester key when a main-scope binding overrides global $dmScope",
     async ({ dmScope, key }) => {
       const flowParams = await executeFireAndForgetA2AFrom(key, {
         dmScope,
         bindingDmScope: "main",
       });
 
-      expect(flowParams.requesterSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+      expect(flowParams.requesterSessionKey).toBe(key);
     },
   );
 

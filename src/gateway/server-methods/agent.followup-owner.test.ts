@@ -340,7 +340,7 @@ describe("Gateway followup owner final effect", () => {
         return await reply.promise;
       };
       try {
-        startSessionsSendReplyFlow({
+        await startSessionsSendReplyFlow({
           completion,
           callGateway: gatewayCall,
           runId: "owner-proof-child",
@@ -352,9 +352,7 @@ describe("Gateway followup owner final effect", () => {
           displayKey: CHILD,
           requesterSessionKey: SESSION,
           requesterAgentId: "main",
-          message: "continue authorized task",
-          announceTimeoutMs: 1000,
-          maxPingPongTurns: 0,
+          replyTimeoutMs: 1000,
           replyMode: "one-way",
         });
         if (delayedDispatch) {

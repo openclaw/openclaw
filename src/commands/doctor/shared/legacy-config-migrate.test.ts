@@ -495,7 +495,7 @@ describe("legacy Codex provider config migrate", () => {
 });
 
 describe("legacy silent reply config migrate", () => {
-  it("removes silent reply rewrite and direct-chat silent reply config", () => {
+  it("removes silent reply rewrite plus direct and internal silent reply config", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
@@ -505,13 +505,13 @@ describe("legacy silent reply config migrate", () => {
       },
       surfaces: {
         telegram: {
-          silentReply: { direct: "disallow", group: "allow" },
+          silentReply: { direct: "disallow", group: "allow", internal: "allow" },
           silentReplyRewrite: { direct: true },
         },
       },
     });
     expect(res.config?.agents?.defaults).toEqual({
-      silentReply: { group: "allow", internal: "allow" },
+      silentReply: { group: "allow" },
     });
     expect(res.config?.surfaces?.telegram).toEqual({ silentReply: { group: "allow" } });
   });

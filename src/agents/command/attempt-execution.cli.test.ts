@@ -3601,8 +3601,8 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
-    expect(embeddedArg.terminalReplyExpectation).toBe("optional");
-    expect(embeddedArg.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(embeddedArg.terminalReplyExpectation).toBe("required");
+    expect(embeddedArg.silentReplyPromptMode).toBe("none");
   });
 
   it.each(COMMAND_REPLY_EXPECTATION_CASES)(

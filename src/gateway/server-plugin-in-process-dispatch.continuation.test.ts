@@ -264,10 +264,8 @@ describe("typed in-process agent continuation authorization", () => {
                     requesterSessionKey: "agent:main:requester",
                     requesterChannel: "webchat",
                     replyMode: "one-way",
-                    message: "Finish the task",
-                    waitRunId: "target-followup",
-                    announceTimeoutMs: 10_000,
-                    maxPingPongTurns: 0,
+                    runId: "target-followup",
+                    replyTimeoutMs: 10_000,
                     callGateway: async (request) => {
                       try {
                         return await callAgentToolGatewayRequest(request);

@@ -5,7 +5,7 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
 const NO_PENDING_CHILD_COMPLETION_ERROR =
-  'No pending child completion is owned by this turn. If the assigned work is complete, return its result normally. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
+  'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
 
 export type SessionsYieldClaimResult =
   | boolean

@@ -7,7 +7,6 @@ import { resolveSessionThreadInfo } from "../../channels/plugins/session-convers
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
-import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
@@ -21,24 +20,15 @@ import {
   lookupFailedOperationMessage,
   sessionOwnershipLookupFailure,
 } from "../../plugin-sdk/session-visibility-internal.js";
-import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
-  buildAgentMainSessionKey,
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
-  normalizeAccountId,
   normalizeAgentId,
   normalizeAgentIdStrict,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
-import {
-  isCronRunSessionKey,
-  parseAgentSessionKey,
-  parseSessionDeliveryRoute,
-} from "../../sessions/session-key-utils.js";
+import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -449,108 +439,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           entry: requesterSessionEntry,
         }),
       );
-      const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterSessionKey = rawRequesterSessionKey;
-      let replyRequesterSessionKey = rawRequesterSessionKey;
-      // Preserve exact admitted incarnations. Legacy key-only callers still normalize
-      // unthreaded DM reply addresses to their monitored main session.
-      if (
-        !opts?.agentSessionId &&
-        rawRequesterSessionKey &&
-        parsedRequesterSessionKey &&
-        rawRequesterSessionKey !== resolvedKey &&
-        !parsedRequesterSessionKey.rest.startsWith("cron:") &&
-        !parsedRequesterSessionKey.rest.startsWith("hook:") &&
-        !requesterIsSubagent &&
-        deriveSessionChatTypeFromKey(rawRequesterSessionKey) === "direct" &&
-        !resolveSessionThreadInfo(rawRequesterSessionKey).threadId
-      ) {
-        const requesterRouteBindings = cfg.bindings?.filter(
-          (binding): binding is AgentRouteBinding => binding.type !== "acp",
-        );
-        const requesterDeliveryRoute = requesterRouteBindings?.length
-          ? parseSessionDeliveryRoute(rawRequesterSessionKey)
-          : null;
-        const bareRequesterPeerId = parsedRequesterSessionKey?.rest.startsWith("direct:")
-          ? parsedRequesterSessionKey.rest.slice("direct:".length)
-          : parsedRequesterSessionKey?.rest.startsWith("dm:")
-            ? parsedRequesterSessionKey.rest.slice("dm:".length)
-            : undefined;
-        const requesterRouteChannel = requesterDeliveryRoute?.channel ?? opts?.agentChannel;
-        const requesterRoutePeerId = requesterDeliveryRoute?.peerId ?? bareRequesterPeerId;
-        const requesterRoute =
-          requesterRouteBindings?.length && requesterRouteChannel && requesterRoutePeerId
-            ? resolveAgentRoute({
-                cfg,
-                channel: requesterRouteChannel,
-                accountId: requesterDeliveryRoute?.accountId,
-                peer: { kind: "direct", id: requesterRoutePeerId },
-              })
-            : undefined;
-        // Any configured route can transfer this peer to another agent. A key
-        // without enough route facts must never be reassigned to guessed ownership.
-        const hasUnresolvedRequesterRoute = Boolean(
-          requesterRouteBindings?.length &&
-          (!requesterRoute || requesterRoute.agentId !== parsedRequesterSessionKey?.agentId),
-        );
-        // Session keys can discard account, peer casing, team, guild, and roles.
-        // Preserve the authenticated caller whenever any possible binding would
-        // choose another agent or an isolated DM scope using those missing facts.
-        const hasUnsafeRequesterDmBinding = Boolean(
-          requesterRouteBindings?.some((binding) => {
-            const effectiveDmScope = binding.session?.dmScope ?? cfg.session?.dmScope ?? "main";
-            const isForeignAgent =
-              normalizeAgentId(binding.agentId) !== parsedRequesterSessionKey?.agentId;
-            if (!isForeignAgent && effectiveDmScope === "main") {
-              return false;
-            }
-            if (
-              requesterRouteChannel &&
-              normalizeRouteBindingChannelId(binding.match.channel) !==
-                normalizeRouteBindingChannelId(requesterRouteChannel)
-            ) {
-              return false;
-            }
-            const bindingAccountId = binding.match.accountId?.trim();
-            if (
-              requesterDeliveryRoute?.accountId &&
-              bindingAccountId !== "*" &&
-              normalizeAccountId(bindingAccountId) !==
-                normalizeAccountId(requesterDeliveryRoute.accountId)
-            ) {
-              return false;
-            }
-            const peer = binding.match.peer;
-            if (peer) {
-              const peerId = peer.id.trim();
-              if (
-                peer.kind !== "direct" ||
-                (peerId !== "*" &&
-                  peerId.toLowerCase() !== requesterRoutePeerId?.trim().toLowerCase())
-              ) {
-                return false;
-              }
-            }
-            return true;
-          }),
-        );
-        const requesterDmScope =
-          requesterRoute && requesterRoute.agentId === parsedRequesterSessionKey?.agentId
-            ? (requesterRoute.dmScope ?? cfg.session?.dmScope ?? "main")
-            : (cfg.session?.dmScope ?? "main");
-        // Normalize only the reply address after exact-key visibility checks;
-        // global/binding-isolated DMs keep their authenticated identity.
-        if (
-          requesterDmScope === "main" &&
-          !hasUnresolvedRequesterRoute &&
-          !hasUnsafeRequesterDmBinding
-        ) {
-          replyRequesterSessionKey = buildAgentMainSessionKey({
-            agentId: parsedRequesterSessionKey.agentId,
-            mainKey,
-          });
-        }
-      }
       const timeoutMs =
         finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
           floorSeconds: true,
@@ -674,10 +563,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             const watched =
               watchRequested &&
               !expectedSessionId &&
-              replyRequesterSessionKey &&
-              replyRequesterSessionKey !== targetSessionKey
+              requesterSessionKey &&
+              requesterSessionKey !== targetSessionKey
                 ? registerSessionStateWatch({
-                    watcherSessionKey: replyRequesterSessionKey,
+                    watcherSessionKey: requesterSessionKey,
                     targetSessionKey,
                     targetAgentId,
                   })
@@ -686,7 +575,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           };
           const inputProvenance = {
             kind: "inter_session" as const,
-            sourceSessionKey: replyRequesterSessionKey,
+            sourceSessionKey: requesterSessionKey,
             sourceChannel: requesterChannel,
             sourceTool: "sessions_send",
             ...(requesterIsSubagent ? { sourceRole: "subagent" as const } : {}),
@@ -788,14 +677,14 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             replyMode === "one-way" &&
             ownChild &&
             // Key-only DM rerouting keeps its run-scoped contract, not new authority for another key.
-            replyRequesterSessionKey === effectiveRequesterKey &&
-            replyRequesterSessionKey
+            requesterSessionKey === effectiveRequesterKey &&
+            requesterSessionKey
               ? await prepareSessionsSendFollowup({
                   withRequesterAuthority,
                   requesterTurnRunId: opts?.requesterTurnRunId,
                   runId,
                   requesterAgentId,
-                  requesterSessionKey: replyRequesterSessionKey,
+                  requesterSessionKey,
                   targetAgentId,
                   targetSessionKey: resolvedKey,
                 })
@@ -807,7 +696,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             displayKey,
             replyTimeoutMs,
             replyMode,
-            requesterSessionKey: replyRequesterSessionKey,
+            requesterSessionKey,
             requesterAgentId,
             requesterSession: requesterContinuationSession,
             requesterDeliveryGeneration,
@@ -878,18 +767,15 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               ...watchField,
             });
           const startReplyFlow = ({
-            reply,
             notifyRequesterOnWaitFailure = false,
           }: {
-            reply?: Awaited<ReturnType<typeof waitForAgentRunReply>>;
             notifyRequesterOnWaitFailure?: boolean;
           }) =>
             startSessionsSendReplyFlow({
               ...replyContext,
               runId,
               completion,
-              reply,
-              skip: (reply ? delivery : delayedDelivery).status === "skipped",
+              skip: delayedDelivery.status === "skipped",
               targetSessionKey: acceptedTargetSessionKey,
               displayKey: start.a2aSessionKey ?? displayKey,
               notifyRequesterOnWaitFailure:
@@ -941,16 +827,13 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           }
           const reply = result.replyText;
           const response = reply
-            ? { status: "ok" as const, delivery, reply }
+            ? { status: "ok" as const, delivery: { status: "skipped" as const }, reply }
             : {
                 status: "no_reply" as const,
                 message: result.sourceReplyDelivered
                   ? "The target delivered its final reply directly to its source conversation. Do not resend."
                   : NO_REPLY_MESSAGE,
               };
-          if (reply) {
-            startReplyFlow({ reply: result });
-          }
           return jsonResult({ runId, sessionKey: displayKey, ...response, ...watchField });
         },
       });

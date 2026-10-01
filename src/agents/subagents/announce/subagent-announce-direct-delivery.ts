@@ -80,6 +80,7 @@ export type SubagentAnnounceDirectParams = {
   expectsCompletionMessage: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
@@ -203,7 +204,8 @@ export async function sendSubagentAnnounceDirectly(
     if (
       parentOnly &&
       (!params.completionRequesterSessionId ||
-        requesterActivity.sessionId !== params.completionRequesterSessionId)
+        requesterActivity.sessionId !== params.completionRequesterSessionId ||
+        requesterEntry?.lifecycleRevision !== params.completionRequesterLifecycleRevision)
     ) {
       return {
         delivered: false,
@@ -373,7 +375,13 @@ export async function sendSubagentAnnounceDirectly(
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
     const directAgentParams: Record<string, unknown> = {
-      ...(parentOnly ? { expectedExistingSessionId: params.completionRequesterSessionId } : {}),
+      ...(parentOnly
+        ? {
+            expectedExistingSessionId: params.completionRequesterSessionId,
+            expectedExistingSessionLifecycleRevision:
+              params.completionRequesterLifecycleRevision ?? null,
+          }
+        : {}),
       sessionKey: canonicalRequesterSessionKey,
       timeout: params.requesterRunTimeoutSeconds,
       message: params.triggerMessage,

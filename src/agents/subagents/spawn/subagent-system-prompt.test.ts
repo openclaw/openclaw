@@ -67,7 +67,7 @@ describe("subagent spawn envelope", () => {
     const envelope = buildEnvelope({ completionTarget: "parent" });
     for (const text of [envelope.systemPrompt, envelope.acceptedNote]) {
       expect(text).toContain("No result is automatically sent to a channel");
-      expect(text).toContain("remain silent");
+      expect(text).toContain("continues any unfinished work");
     }
     expect(envelope.acceptedNote).toContain("private requester turn");
     expect(envelope.acceptedNote).not.toContain("after your final answer");

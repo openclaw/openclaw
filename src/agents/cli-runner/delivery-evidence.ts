@@ -1,9 +1,32 @@
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { hasCompletionMessageSessionSpawn } from "../accepted-session-spawn.js";
 /**
  * Carries confirmed CLI messaging delivery across failed execution/finalization paths.
  */
 import type { CliOutput } from "../cli-output-contracts.js";
+import { resolveSourceReplyDelivery } from "../embedded-agent-runner/delivery-evidence.js";
+import { resolveReplyExpectation } from "../reply-completion.js";
+import type { RunCliAgentParams } from "./types.js";
 
 const CLI_MESSAGING_DELIVERY_EVIDENCE_KEY = "cliMessagingDeliveryEvidence";
+
+export function isMissingRequiredCliReply(params: {
+  output: CliOutput;
+  runParams: RunCliAgentParams;
+  isolatedCompletion: boolean;
+}): boolean {
+  const { output, runParams, isolatedCompletion } = params;
+  return (
+    (!output.text.trim() || isSilentReplyPayloadText(output.text)) &&
+    resolveSourceReplyDelivery(output) === "missing" &&
+    !output.toolMediaUrls?.length &&
+    !output.yielded &&
+    !hasCompletionMessageSessionSpawn(output.acceptedSessionSpawns) &&
+    !output.terminalInterruption &&
+    resolveReplyExpectation(runParams) === "required" &&
+    !(isolatedCompletion && runParams.outputTextPolicy === "strict-visible")
+  );
+}
 
 type CliMessagingDeliveryEvidence = Pick<
   CliOutput,

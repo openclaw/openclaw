@@ -720,11 +720,9 @@ describe("message tool gateway timeout", () => {
         requesterSessionKey: sessionKey,
         requesterChannel: "telegram",
         displayKey: sessionKey,
-        message: "Reply to the source",
-        announceTimeoutMs: 10_000,
-        maxPingPongTurns: 0,
-        roundOneReply: marker,
-        sourceReplyDelivered: delivery?.sourceReplyDelivered,
+        runId: "source-reply",
+        replyTimeoutMs: 10_000,
+        reply: { status: "ok", replyText: marker, sourceReplyDelivered: true },
       });
       expect(visible).toEqual([marker]);
     }
