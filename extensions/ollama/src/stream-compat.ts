@@ -16,10 +16,7 @@ import {
   resolveMoonshotThinkingType,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  resolveOllamaCloudThinkingFloor,
-  supportsOllamaCloudFullThinkingEffort,
-} from "./model-reasoning.js";
+import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
 import { isOllamaCloudKimiModelRef } from "./sanitizers/kimi-inline-reasoning.js";
 
 export type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
@@ -147,7 +144,7 @@ function normalizeOllamaThinkValue(
   return undefined;
 }
 
-export function resolveOllamaThinkParamValue(
+function resolveOllamaThinkParamValue(
   params: Record<string, unknown> | undefined,
   nativeMax = false,
 ): OllamaThinkValue | undefined {
@@ -164,13 +161,22 @@ export function supportsNativeOllamaMax(
   return isCloudProvider && supportsOllamaCloudFullThinkingEffort(model?.id ?? "");
 }
 
-export function shouldForwardNativeOllamaThink(
+function shouldForwardNativeOllamaThink(
   model: ProviderRuntimeModel | undefined,
   think: OllamaThinkValue,
 ): boolean {
   // Ollama accepts top-level `think` as the native chat contract, but rejects
   // truthy values for models known not to expose thinking support.
   return think === false || model?.reasoning !== false;
+}
+
+/** Configured `think` that the native transport sends, when the model accepts it. */
+export function resolveOllamaConfiguredThink(
+  model: ProviderRuntimeModel,
+  nativeMax: boolean,
+): OllamaThinkValue | undefined {
+  const think = resolveOllamaThinkParamValue(model.params, nativeMax);
+  return think !== undefined && shouldForwardNativeOllamaThink(model, think) ? think : undefined;
 }
 
 export function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {
@@ -229,21 +235,9 @@ export function createConfiguredOllamaCompatStreamWrapper(
     runtimeThinkValue === false && configuredThinkValue !== undefined
       ? undefined
       : runtimeThinkValue;
-  const runtimeThink =
-    ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)
-      ? ollamaThinkValue
-      : undefined;
-  // Without a runtime patch, the configured value stays in the request. A `false` either
-  // way cannot disable thinking on these hosted models; they would answer with their
-  // reasoning inline, so send their lowest advertised level instead.
-  const thinkingFloor =
-    isNativeOllamaTransport && (runtimeThink ?? configuredThinkValue) === false
-      ? resolveOllamaCloudThinkingFloor(model?.id ?? "")
-      : undefined;
-  const patchedThink = thinkingFloor ?? runtimeThink;
-  if (patchedThink !== undefined) {
+  if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
     streamFn = createLazyPayloadPatchStreamWrapper(streamFn, ({ payload }) => {
-      payload.think = patchedThink;
+      payload.think = ollamaThinkValue;
     });
   }
 

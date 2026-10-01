@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -16,19 +17,63 @@ type FloorCase = {
   name: string;
   provider: string;
   id: string;
-  level: "off" | "high";
   baseUrl?: string;
   params?: Record<string, unknown>;
   reasoning?: boolean;
-  expected: string | false;
+  expected: string | false | undefined;
 };
 
 afterEach(() => {
   fetchMock.mockReset();
 });
 
+function createModel({
+  provider,
+  id,
+  baseUrl,
+  params,
+  reasoning,
+}: FloorCase): ProviderRuntimeModel {
+  return {
+    id,
+    name: "test model",
+    provider,
+    api: "ollama",
+    baseUrl: baseUrl ?? "https://ollama.com",
+    reasoning: reasoning ?? true,
+    input: ["text"],
+    contextWindow: 131072,
+    maxTokens: 8192,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(params ? { params } : {}),
+  };
+}
+
+async function readSentThink(model: ProviderRuntimeModel, streamFn: StreamFn): Promise<unknown> {
+  fetchMock.mockResolvedValue({
+    response: new Response(
+      JSON.stringify({
+        model: model.id,
+        created_at: "2026-01-01T00:00:00Z",
+        message: { role: "assistant", content: "ok" },
+        done: true,
+        prompt_eval_count: 1,
+        eval_count: 1,
+      }) + "\n",
+    ),
+    release: async () => undefined,
+  });
+  const stream = await streamFn(
+    model,
+    { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+    {},
+  );
+  expect((await stream.result()).stopReason).toBe("stop");
+  return JSON.parse(fetchMock.mock.calls[0]?.[0].init.body).think;
+}
+
 describe("Ollama models that cannot disable thinking", () => {
-  it.each<FloorCase>([
+  it.each<FloorCase & { level: "off" | "high" }>([
     {
       name: "Off on glm-5.3",
       provider: "ollama-cloud",
@@ -90,52 +135,48 @@ describe("Ollama models that cannot disable thinking", () => {
       level: "off",
       expected: false,
     },
-  ])(
-    "$name sends $expected",
-    async ({ provider, id, level, baseUrl, params, reasoning, expected }) => {
-      fetchMock.mockResolvedValue({
-        response: new Response(
-          JSON.stringify({
-            model: id,
-            created_at: "2026-01-01T00:00:00Z",
-            message: { role: "assistant", content: "ok" },
-            done: true,
-            prompt_eval_count: 1,
-            eval_count: 1,
-          }) + "\n",
-        ),
-        release: async () => undefined,
-      });
-      const model: ProviderRuntimeModel = {
-        id,
-        name: "test model",
-        provider,
-        api: "ollama",
-        baseUrl: baseUrl ?? "https://ollama.com",
-        reasoning: reasoning ?? true,
-        input: ["text"],
-        contextWindow: 131072,
-        maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        ...(params ? { params } : {}),
-      };
-      const streamFn = expectDefined(
-        createConfiguredOllamaCompatStreamWrapper({
-          provider,
-          modelId: id,
-          model,
-          thinkingLevel: level,
-          streamFn: createConfiguredOllamaStreamFn({ model }),
-        }),
-        "wrapped stream",
-      );
-      const stream = await streamFn(
+  ])("agent turn: $name sends $expected", async ({ level, ...testCase }) => {
+    const model = createModel(testCase);
+    const streamFn = expectDefined(
+      createConfiguredOllamaCompatStreamWrapper({
+        provider: testCase.provider,
+        modelId: testCase.id,
         model,
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        {},
-      );
-      expect((await stream.result()).stopReason).toBe("stop");
-      expect(JSON.parse(fetchMock.mock.calls[0]?.[0].init.body).think).toBe(expected);
+        thinkingLevel: level,
+        streamFn: createConfiguredOllamaStreamFn({ model }),
+      }),
+      "wrapped stream",
+    );
+    expect(await readSentThink(model, streamFn)).toBe(testCase.expected);
+  });
+
+  // Plugin llm.complete() and other one-shot completions call the transport without
+  // the agent stream wrapper, so the transport itself must apply the floor.
+  it.each<FloorCase>([
+    {
+      name: "configured false on glm-5.3",
+      provider: "ollama-cloud",
+      id: "glm-5.3",
+      params: { think: false },
+      expected: "low",
     },
-  );
+    {
+      name: "configured false on glm-5.2, which lists false",
+      provider: "ollama-cloud",
+      id: "glm-5.2",
+      params: { think: false },
+      expected: false,
+    },
+    {
+      name: "no configured value on glm-5.3",
+      provider: "ollama-cloud",
+      id: "glm-5.3",
+      expected: undefined,
+    },
+  ])("direct completion: $name sends $expected", async (testCase) => {
+    const model = createModel(testCase);
+    expect(await readSentThink(model, createConfiguredOllamaStreamFn({ model }))).toBe(
+      testCase.expected,
+    );
+  });
 });
