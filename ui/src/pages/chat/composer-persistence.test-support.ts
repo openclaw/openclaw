@@ -119,13 +119,3 @@ export function reloadStorage(state: ComposerState) {
   freshStorage.setItem(storageKey, stored!);
   vi.stubGlobal("sessionStorage", freshStorage);
 }
-
-export function seedLegacySessions(
-  sessions: Record<string, unknown>,
-  gatewayUrl = "ws://gateway.test/control",
-) {
-  sessionStorage.setItem(
-    legacyStorageKeyForGateway(gatewayUrl),
-    JSON.stringify({ version: 1, sessions }),
-  );
-}
