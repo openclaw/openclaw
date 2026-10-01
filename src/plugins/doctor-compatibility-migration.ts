@@ -11,17 +11,18 @@ export function applyPluginDoctorCompatibilitySequence(
     normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
   }>,
 ): { config: OpenClawConfig; changes: string[]; warnings?: string[] } {
+  let next = config;
   const changes: string[] = [];
   const warnings: string[] = [];
   for (const { pluginId, normalizeCompatibilityConfig } of entries) {
     if (!normalizeCompatibilityConfig) {
       continue;
     }
-    const candidate = cloneConfigWithResolutionFacts(config);
+    const candidate = cloneConfigWithResolutionFacts(next);
     try {
       const mutation = normalizeCompatibilityConfig({ cfg: candidate });
       if (mutation?.changes.length) {
-        config = mutation.config;
+        next = mutation.config;
         changes.push(...mutation.changes);
       }
       warnings.push(...(mutation?.warnings ?? []));
@@ -31,5 +32,5 @@ export function applyPluginDoctorCompatibilitySequence(
       );
     }
   }
-  return { config, changes, ...(warnings.length ? { warnings } : {}) };
+  return { config: next, changes, ...(warnings.length ? { warnings } : {}) };
 }
