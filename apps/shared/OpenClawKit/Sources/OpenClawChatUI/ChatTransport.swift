@@ -448,12 +448,12 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         agentID: String? = nil,
         expectedSessionID: String? = nil,
         expectedMarkedUnreadAt: Double?? = nil,
-        label: String??,
-        category: String??,
+        label: String?? = nil,
+        category: String?? = nil,
         color: String?? = nil,
-        pinned: Bool?,
-        archived: Bool?,
-        unread: Bool?) async throws -> OpenClawChatSessionPatchReceipt?
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        unread: Bool? = nil) async throws -> OpenClawChatSessionPatchReceipt?
     {
         try await self.patchSessionImpl(
             OpenClawChatSessionTarget(sessionKey: key, agentID: agentID),
@@ -729,6 +729,14 @@ public enum OpenClawChatMediaKind: String, Sendable {
     case audio
     case video
     case file
+
+    public var maximumDownloadBytes: Int {
+        switch self {
+        case .image: 12 * 1024 * 1024
+        case .audio, .video: 16 * 1024 * 1024
+        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
+        }
+    }
 
     public var acceptHeader: String {
         self == .file ? "*/*" : "\(rawValue)/*"

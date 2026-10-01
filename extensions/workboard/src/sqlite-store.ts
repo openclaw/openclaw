@@ -194,20 +194,16 @@ export function createWorkboardSqliteStores(options: {
       delete: bindOperation((connection, args) =>
         execute("cards.delete", { connection, args }, true),
       ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.entries", { connection, args: captured }),
-        ),
+      entries: bindOperation((connection, args) => execute("cards.entries", { connection, args })),
       listCardStatuses: bindOperation((connection, args) =>
         execute("cards.listCardStatuses", { connection, args }),
       ),
       listBoardAggregates: bindOperation((connection, args) =>
         execute("cards.listBoardAggregates", { connection, args }),
       ),
-      listStatsAggregates: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.listStatsAggregates", { connection, args: captured }),
-        ),
+      listStatsAggregates: bindOperation((connection, args) =>
+        execute("cards.listStatsAggregates", { connection, args }),
+      ),
       hasCards: bindOperation((connection, args) =>
         execute("cards.hasCards", { connection, args }),
       ),
@@ -244,10 +240,9 @@ export function createWorkboardSqliteStores(options: {
       delete: bindOperation((connection, args) =>
         execute("subscriptions.delete", { connection, args }, true),
       ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.entries", { connection, args: captured }),
-        ),
+      entries: bindOperation((connection, args) =>
+        execute("subscriptions.entries", { connection, args }),
+      ),
     },
     attachments: {
       register: bindOperation((connection, args) =>

@@ -142,10 +142,6 @@ final class ChatSessionUnreadMutationQueue {
                 agentID: agentID,
                 expectedSessionID: expectedSessionID,
                 expectedMarkedUnreadAt: expectedMarkedUnreadAt,
-                label: nil,
-                category: nil,
-                pinned: nil,
-                archived: nil,
                 unread: unread)
         }
         let tail = Task { @MainActor in

@@ -850,7 +850,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     }
                     guard chatEvent.runId == runId else { continue }
                     if let eventSessionKey = chatEvent.sessionKey,
-                       !Self.matchesSessionKey(eventSessionKey, target.sessionKey)
+                       !OpenClawChatSessionKey.matchesIncludingDefaultMainAlias(eventSessionKey, target.sessionKey)
                     {
                         continue
                     }
@@ -901,16 +901,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
             group.cancelAll()
             return result
         }
-    }
-
-    private nonisolated static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
-        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if incoming == current {
-            return true
-        }
-        return (incoming == "agent:main:main" && current == "main") ||
-            (incoming == "main" && current == "agent:main:main")
     }
 
     private static func waitForAgentResult(

@@ -60,6 +60,10 @@ export type AgentHarnessHostCapabilities = Readonly<{
   annotateCurrentUserTurn?: (
     annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
   ) => Promise<void>;
+  /** Detached admitted originals before inline projection; file readers still enforce custody. */
+  resolveInputAttachmentMedia?: () => Promise<
+    readonly Readonly<import("../../media/media-facts.js").MediaFact>[]
+  >;
   /** Execution-only document paths after the harness confirms unsandboxed local placement. */
   prepareInputAttachments?: (request: {
     placement: "local-host";

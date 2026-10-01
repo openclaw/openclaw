@@ -325,7 +325,9 @@ export async function createPluginReloadRecoveryFixture(
           sourceConfig: nextConfig,
           changedPaths,
           checkpoint: options.checkpoint,
-          prepareConfigEffects: options.prepareConfigEffects ?? (() => rollbackConfigEffects),
+          prepareConfigEffects:
+            options.prepareConfigEffects ??
+            (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
           pluginLifecycle: {
             reason: "reload",
             waitForDrain: options.waitForDrain,

@@ -414,9 +414,11 @@ describe("media store", () => {
   it("rejects oversized media ID reads before materializing the file", async () => {
     const saved = await store.saveMediaBuffer(Buffer.from("too large"), "text/plain");
 
-    await expect(store.readMediaBuffer(saved.id, "inbound", 3)).rejects.toThrow(
-      "maximum is 3 bytes",
-    );
+    await expect(store.readMediaBuffer(saved.id, "inbound", 3)).rejects.toMatchObject({
+      name: "FsSafeError",
+      code: "too-large",
+      message: `readMediaBuffer: media ID ${JSON.stringify(saved.id)} is 9 bytes; maximum is 3 bytes`,
+    });
   });
 
   it("rejects traversal media subdirs before reading IDs", async () => {

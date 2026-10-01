@@ -1,5 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
@@ -29,6 +32,18 @@ import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
+import type { ChatPageHost } from "../chat-state-host.ts";
+import {
+  ensureSidebarConversation,
+  promoteSidebarPanel,
+  setSidebarDock,
+  setSidebarExpanded,
+  sidebarActivePanel,
+  sidebarDock,
+  sidebarMainPanel,
+  type SidebarLayout,
+} from "../sidebar-layout.ts";
+import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
@@ -509,4 +524,125 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       </div>
     </div>
   `;
+}
+
+export function renderChatPanePanelLayoutActions(
+  layout: SidebarLayout | undefined,
+  definitions: SidebarPanelDefinition[],
+  narrow: boolean,
+  onLayoutChange: ChatPageHost["updateSidebarLayout"],
+) {
+  if (!layout) {
+    return nothing;
+  }
+  const side = sidebarActivePanel(layout);
+  const mainSlot = sidebarMainPanel(layout)?.slot ?? "conversation";
+  const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
+  const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
+  const split = layout.open === true && !layout.expanded;
+  const focusLabel = t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand");
+  const swapLabel =
+    mainDefinition && sideDefinition
+      ? t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label })
+      : "";
+  return html`${
+    mainDefinition?.headerAction
+      ? html`<span class="side-panel__action-group side-panel__action-group--content"
+          >${mainDefinition.headerAction}</span
+        >`
+      : nothing
+  }
+  ${
+    split || layout.expanded
+      ? html`<openclaw-tooltip .content=${focusLabel}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-panel-focus"
+            type="button"
+            aria-pressed=${String(layout.expanded === true)}
+            aria-label=${focusLabel}
+            @click=${() =>
+              onLayoutChange(
+                setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+                { dashboardPresentation: "personal" },
+              )}
+          >
+            ${layout.expanded ? icons.minimize : icons.maximize}
+          </button>
+        </openclaw-tooltip>`
+      : nothing
+  }
+  ${
+    split && side && swapLabel
+      ? html`<openclaw-tooltip .content=${swapLabel}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
+            type="button"
+            aria-label=${swapLabel}
+            @click=${() => onLayoutChange(promoteSidebarPanel(layout, side.id))}
+          >
+            ${icons.arrowLeftRight}
+          </button>
+        </openclaw-tooltip>`
+      : nothing
+  }
+  ${
+    narrow || !split
+      ? nothing
+      : html`<wa-dropdown
+          class="chat-panel-layout-menu"
+          placement="bottom-end"
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            const dock = event.detail.item.value;
+            if (dock === "left" || dock === "right" || dock === "bottom") {
+              onLayoutChange(setSidebarDock(layout, dock), {
+                geometryOnly: true,
+              });
+            }
+          }}
+        >
+          <button
+            slot="trigger"
+            class="btn btn--ghost btn--icon chat-icon-btn"
+            type="button"
+            aria-label=${t("chat.sidePanel.layout")}
+            title=${t("chat.sidePanel.layout")}
+          >
+            ${icons.columns2}
+          </button>
+          ${(
+            [
+              ["left", "dockLeft", icons.panelLeftOpen],
+              ["right", "dockRight", icons.panelRightOpen],
+              ["bottom", "dockBottom", icons.panelBottomOpen],
+            ] as const
+          ).map(
+            ([dock, label, icon]) => html`<wa-dropdown-item
+              value=${dock}
+              type="checkbox"
+              ?checked=${sidebarDock(layout) === dock}
+              ><span slot="icon">${icon}</span>${t(`chat.sidePanel.${label}`)}</wa-dropdown-item
+            >`,
+          )}
+        </wa-dropdown>`
+  }`;
+}
+
+export function resolveChatPaneWorkspaceIcon(
+  context: ApplicationContext,
+  sessionKey: string | undefined,
+) {
+  if (!sessionKey) {
+    return null;
+  }
+  const gateway = context.gateway;
+  const authTokens = resolveControlUiAuthCandidates({
+    hello: gateway.snapshot.hello,
+    settings: { token: gateway.connection.token },
+    password: gateway.connection.password,
+  });
+  return {
+    routeUrl: buildControlUiResourcePath("workspaceIcon", context.resourceBasePath, sessionKey),
+    authTokens,
+    authReady: Boolean(gateway.snapshot.hello || authTokens.length),
+  };
 }
