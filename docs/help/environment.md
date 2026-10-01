@@ -76,6 +76,10 @@ Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
 directory otherwise. Child processes reuse the same build namespace. Source
 checkouts keep their existing cache-disable policy.
 
+Release builds use a stable 16-character hash of the build ID. On Windows,
+OpenClaw skips cache paths longer than 200 characters with a warning and disables
+unsafe inherited caches for child processes, avoiding a Node startup hang.
+
 The compile-cache bootstrap owner starts best-effort maintenance in a background
 worker that does not keep CLI commands alive. Node permission mode skips this
 maintenance because workers do not inherit its filesystem restrictions; cache
