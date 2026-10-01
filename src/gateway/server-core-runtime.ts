@@ -667,6 +667,7 @@ export async function startGatewayCoreRuntime(input: {
     startEarlyRuntime,
     sessionCompanion,
     sessionObserver,
+    liveActivityCoordinator,
     approvalSessionEvents,
     execApprovalManager,
     questionManager,

@@ -38,6 +38,7 @@ import {
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
+import type { ApnsLiveActivityPayload } from "./push-live-activity-payload.js";
 
 export {
   ApnsRegistrationPairingChangedError,
@@ -72,6 +73,15 @@ const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
 const PLUGIN_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.plugin-approval";
 
 type ApnsPushType = "alert" | "background";
+type DirectApnsSendRegistration = Pick<
+  DirectApnsRegistration,
+  "transport" | "token" | "topic" | "environment"
+>;
+type RelayApnsSendRegistration = Pick<
+  RelayApnsRegistration,
+  "transport" | "relayHandle" | "sendGrant" | "topic" | "environment" | "tokenDebugSuffix"
+>;
+type ApnsSendRegistration = DirectApnsSendRegistration | RelayApnsSendRegistration;
 
 type ApnsRequestParams = {
   token: string;
@@ -79,15 +89,18 @@ type ApnsRequestParams = {
   environment: ApnsEnvironment;
   bearerToken: string;
   payload: object;
+  bodyJson?: string;
   timeoutMs: number;
-  pushType: ApnsPushType;
+  pushType: ApnsPushType | "liveactivity";
   priority: "10" | "5";
   signal?: AbortSignal;
   isCurrent?: () => Promise<boolean>;
+  assertCurrent?: () => undefined;
 };
 
 type ApnsRequestResponse = { status: number; apnsId?: string; body: string };
 
+// Injected senders own the same final cancellation/currentness boundary as HTTP/2.
 type ApnsRequestSender = (params: ApnsRequestParams) => Promise<ApnsRequestResponse>;
 
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
@@ -151,24 +164,13 @@ export function shouldClearStoredApnsRegistration(params: {
   return shouldInvalidateApnsRegistration(params.result);
 }
 
-async function sendApnsRequest(params: {
-  token: string;
-  topic: string;
-  environment: ApnsEnvironment;
-  bearerToken: string;
-  payload: object;
-  timeoutMs: number;
-  pushType: ApnsPushType;
-  priority: "10" | "5";
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsRequestResponse> {
+async function sendApnsRequest(params: ApnsRequestParams): Promise<ApnsRequestResponse> {
   const authority =
     params.environment === "production"
       ? "https://api.push.apple.com"
       : "https://api.sandbox.push.apple.com";
 
-  const body = JSON.stringify(params.payload);
+  const body = params.bodyJson ?? JSON.stringify(params.payload);
   const requestPath = `/3/device/${params.token}`;
 
   const client = await connectApnsHttp2Session({
@@ -233,6 +235,8 @@ async function sendApnsRequest(params: {
           return;
         }
 
+        // Consume one-shot authority only at admission, never during async preparation.
+        params.assertCurrent?.();
         const req = client.request({
           ":method": "POST",
           ":path": requestPath,
@@ -301,7 +305,7 @@ function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
 
 function resolveDirectSendContext(params: {
   auth: ApnsAuthConfig;
-  registration: DirectApnsRegistration;
+  registration: DirectApnsSendRegistration;
 }): {
   token: string;
   topic: string;
@@ -325,7 +329,7 @@ function resolveDirectSendContext(params: {
 }
 
 function resolveRegistrationDebugSuffix(
-  registration: ApnsRegistration,
+  registration: ApnsSendRegistration,
   relayResult?: Pick<ApnsRelayPushResponse, "tokenSuffix">,
 ): string {
   if (registration.transport === "direct") {
@@ -337,7 +341,7 @@ function resolveRegistrationDebugSuffix(
 }
 
 function toPushResult(params: {
-  registration: ApnsRegistration;
+  registration: ApnsSendRegistration;
   response: ApnsRequestResponse | ApnsRelayPushResponse;
   tokenSuffix?: string;
 }): ApnsPushResult {
@@ -371,14 +375,16 @@ function toPushResult(params: {
 
 async function sendDirectApnsPush(params: {
   auth: ApnsAuthConfig;
-  registration: DirectApnsRegistration;
+  registration: DirectApnsSendRegistration;
   payload: object;
+  bodyJson?: string;
   timeoutMs?: number;
   requestSender?: ApnsRequestSender;
-  pushType: ApnsPushType;
+  pushType: ApnsPushType | "liveactivity";
   priority: "10" | "5";
   signal?: AbortSignal;
   isCurrent?: () => Promise<boolean>;
+  assertCurrent?: () => undefined;
 }): Promise<ApnsPushResult> {
   const { token, topic, environment, bearerToken } = resolveDirectSendContext({
     auth: params.auth,
@@ -397,6 +403,8 @@ async function sendDirectApnsPush(params: {
     priority: params.priority,
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
+    ...(params.bodyJson !== undefined ? { bodyJson: params.bodyJson } : {}),
   });
   return toPushResult({
     registration: params.registration,
@@ -415,6 +423,7 @@ async function sendRelayApnsPush(params: {
   requestSender?: ApnsRelayRequestSender;
   signal?: AbortSignal;
   isCurrent?: () => Promise<boolean>;
+  assertCurrent?: () => undefined;
 }): Promise<ApnsPushResult> {
   const response = await sendApnsRelayPush({
     relayConfig: params.relayConfig,
@@ -427,6 +436,7 @@ async function sendRelayApnsPush(params: {
     requestSender: params.requestSender,
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
   });
   return toPushResult({ registration: params.registration, response });
 }
@@ -454,7 +464,85 @@ type RelayApnsTransportParams = ApnsTransportCommonParams & {
 };
 
 type ApnsTransportParams = DirectApnsTransportParams | RelayApnsTransportParams;
-type ApnsLifecycleControls = Pick<ApnsRequestParams, "signal" | "isCurrent">;
+type ApnsLifecycleControls = Pick<ApnsRequestParams, "signal" | "isCurrent" | "assertCurrent">;
+
+type LiveActivityRegistrationBase = Readonly<{
+  purpose: "liveActivity";
+  bundleId: string;
+  environment: ApnsEnvironment;
+}>;
+type DirectLiveActivityRegistration = LiveActivityRegistrationBase &
+  Readonly<{ transport: "direct"; token: string }>;
+type RelayLiveActivityRegistration = LiveActivityRegistrationBase &
+  Readonly<{ transport: "relay"; relayHandle: string; sendGrant: string; relayRevision: number }>;
+
+type ApnsLiveActivityParams = {
+  payload: ApnsLiveActivityPayload;
+  signal: AbortSignal;
+  assertCurrent: () => undefined;
+} & (
+  | {
+      registration: DirectLiveActivityRegistration;
+      auth: ApnsAuthConfig;
+      timeoutMs?: number;
+      requestSender?: ApnsRequestSender;
+    }
+  | {
+      registration: RelayLiveActivityRegistration;
+      relayConfig: ApnsRelayConfig;
+      relayRequestSender?: ApnsRelayRequestSender;
+      relayGatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
+    }
+);
+
+/** Sends only an activity-scoped destination; ordinary registrations are never a fallback. */
+export async function sendApnsLiveActivity(
+  params: ApnsLiveActivityParams,
+): Promise<ApnsPushResult> {
+  const { registration, payload, signal, assertCurrent } = params;
+  const bundleId = normalizeApnsTopic(registration.bundleId);
+  const topic = `${bundleId}.push-type.liveactivity`;
+  if (
+    registration.purpose !== "liveActivity" ||
+    !isValidApnsTopic(bundleId) ||
+    bundleId.endsWith(".push-type.liveactivity") ||
+    !isValidApnsTopic(topic)
+  ) {
+    throw new Error("Live Activity base bundle ID required");
+  }
+  if (registration.transport === "direct" && "auth" in params) {
+    return await sendDirectApnsPush({
+      registration: { ...registration, topic },
+      auth: params.auth,
+      timeoutMs: params.timeoutMs,
+      requestSender: params.requestSender,
+      payload: payload.value,
+      bodyJson: payload.json,
+      pushType: "liveactivity",
+      priority: payload.priority,
+      signal,
+      assertCurrent,
+    });
+  }
+  if (registration.transport !== "relay" || !("relayConfig" in params)) {
+    throw new Error("Live Activity transport required");
+  }
+  const destination = { ...registration, topic };
+  const response = await sendApnsRelayPush({
+    relayConfig: params.relayConfig,
+    sendGrant: registration.sendGrant,
+    relayHandle: registration.relayHandle,
+    purpose: "liveActivity",
+    revision: registration.relayRevision,
+    payload,
+    pushType: "liveactivity",
+    gatewayIdentity: params.relayGatewayIdentity,
+    requestSender: params.relayRequestSender,
+    signal,
+    assertCurrent,
+  });
+  return toPushResult({ registration: destination, response });
+}
 
 type ApnsAlertParams = ApnsTransportParams &
   ApnsLifecycleControls & {
@@ -529,6 +617,7 @@ async function sendApnsPush(
       requestSender: relayParams.relayRequestSender,
       ...(controls?.signal ? { signal: controls.signal } : {}),
       ...(controls?.isCurrent ? { isCurrent: controls.isCurrent } : {}),
+      ...(controls?.assertCurrent ? { assertCurrent: controls.assertCurrent } : {}),
     });
   }
   const directParams = transport as DirectApnsTransportParams;
@@ -542,6 +631,7 @@ async function sendApnsPush(
     priority: params.priority,
     ...(controls?.signal ? { signal: controls.signal } : {}),
     ...(controls?.isCurrent ? { isCurrent: controls.isCurrent } : {}),
+    ...(controls?.assertCurrent ? { assertCurrent: controls.assertCurrent } : {}),
   });
 }
 

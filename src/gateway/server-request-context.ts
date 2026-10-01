@@ -45,6 +45,7 @@ type GatewayRequestContextRuntime = Pick<
   | "forwardPluginApprovalRequest"
   | "approvalWebPushDelivery"
   | "pluginApprovalIosPushDelivery"
+  | "liveActivityCoordinator"
   | "pluginApprovalManager"
   | "placementStandingGrants"
   | "systemAgentApprovalManager"
@@ -276,6 +277,7 @@ export function createGatewayRequestContext(
     forwardPluginApprovalRequest: runtime.forwardPluginApprovalRequest,
     approvalWebPushDelivery: runtime.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: runtime.pluginApprovalIosPushDelivery,
+    liveActivityCoordinator: runtime.liveActivityCoordinator,
     pluginApprovalManager: runtime.pluginApprovalManager,
     placementStandingGrants: runtime.placementStandingGrants,
     systemAgentApprovalManager: runtime.systemAgentApprovalManager,
@@ -425,6 +427,9 @@ export function createGatewayRequestContext(
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
+      if (!opts?.role || opts.role === "operator" || opts.role === "node") {
+        runtime.liveActivityCoordinator?.retireDevice(deviceId);
+      }
       for (const gatewayClient of clients) {
         if (gatewayClient.connect.device?.id !== deviceId) {
           continue;
@@ -443,6 +448,9 @@ export function createGatewayRequestContext(
       invalidateDeviceTransports?.(deviceId, opts);
     },
     disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
+      if (!opts?.role || opts.role === "operator" || opts.role === "node") {
+        runtime.liveActivityCoordinator?.retireDevice(deviceId);
+      }
       for (const gatewayClient of clients) {
         if (gatewayClient.connect.device?.id !== deviceId) {
           continue;
@@ -464,6 +472,7 @@ export function createGatewayRequestContext(
       disconnectDeviceTransports?.(deviceId, opts);
     },
     disconnectClientsForUserProfile: (profileId: string) => {
+      runtime.liveActivityCoordinator?.retireProfile(profileId);
       for (const gatewayClient of clients) {
         if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
           continue;

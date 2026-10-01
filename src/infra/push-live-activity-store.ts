@@ -56,9 +56,11 @@ import {
   type LiveActivityClaim,
 } from "./push-live-activity-store-state.js";
 
+export { LIVE_ACTIVITY_MAX_ATTEMPT_MS } from "./push-live-activity-store-state.js";
 export type {
   LiveActivityBinding,
   LiveActivityDestination,
+  LiveActivitySnapshot,
   LiveActivityObservation,
   LiveActivityRegistrationInput,
   LiveActivityRegistration,

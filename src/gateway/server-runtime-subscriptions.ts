@@ -27,7 +27,10 @@ import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onGatewaySuspendAdmissionChange } from "../process/gateway-work-admission.js";
-import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  onSessionIdentityMutation,
+  onSessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -156,6 +159,9 @@ export function startGatewayEventSubscriptions(params: {
       ? onTrustedMessageAuditEvent(auditRecorder.recordMessage)
       : undefined;
   const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
+  const unsubscribeActivityIdentity = params.liveActivityCoordinator
+    ? onSessionIdentityMutation(params.liveActivityCoordinator.retireSession)
+    : undefined;
   const agentEventDispatches = new Set<Promise<void>>();
   const trackedRunIds = (runId: string, clientRunId: string) =>
     runId === clientRunId ? [runId] : [runId, clientRunId];
@@ -507,6 +513,7 @@ export function startGatewayEventSubscriptions(params: {
       ?.then((handler) => handler.dispose())
       .catch(() => undefined);
     await sessionLifecyclePersistence.drain();
+    unsubscribeActivityIdentity?.();
     await params.liveActivityCoordinator?.stop();
     await auditRecorder.stop();
   };
