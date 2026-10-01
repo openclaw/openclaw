@@ -1,14 +1,17 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
+import type { CronService } from "../../cron/service.js";
 import type { CronJob } from "../../cron/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 function createPrefixOnlyChannelPlugin(
   id: string,
@@ -158,12 +161,13 @@ export function createCronTestContext(
           return { ok: true, enqueued: true, runId: "run-1" };
         },
       ),
+      waitForManualRun: vi.fn(async () => false),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(() => ({ ok: true }) as const),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
-      readScratch: vi.fn(async () => ({ content: null, revision: 0 })),
+      readScratch: vi.fn<CronService["readScratch"]>(async () => ({ currentRevision: 0 })),
       writeScratch: vi.fn(
         async (_id: string, params: { content: string | null; commitGuard?: () => void }) => {
           params.commitGuard?.();
@@ -219,6 +223,18 @@ export function createCronTestContext(
     validateAgentRuntimeApprovalAuthority: undefined as
       | GatewayRequestContext["validateAgentRuntimeApprovalAuthority"]
       | undefined,
+  };
+}
+
+export function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "cron job",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
+    ...overrides,
   };
 }
 
@@ -323,4 +339,77 @@ export function slackConfig(params: { includeMainSession?: boolean } = {}): Open
     },
     plugins: pluginEntries("slack"),
   } as OpenClawConfig;
+}
+
+export function createCronCallerClient(
+  agentId: string,
+  accountId?: string,
+  sessionKey?: string,
+  currentJobId?: string,
+  currentJobExpiresAtMs = Date.now() + 60_000,
+): GatewayClient {
+  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
+  return {
+    connect: {} as GatewayClient["connect"],
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId,
+        sessionKey: sessionKey ?? `agent:${agentId}:main`,
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance,
+          lifecycleGeneration: "test-generation",
+          claimId: "test-claim",
+        },
+        ...(accountId ? { turnSourceAccountId: accountId } : {}),
+        ...(currentJobId
+          ? {
+              cronSelfManagementContext: {
+                jobId: currentJobId,
+                expiresAtMs: currentJobExpiresAtMs,
+              },
+            }
+          : {}),
+      },
+    },
+  };
+}
+
+export function createCronTestInvoker(
+  handlers: typeof import("./cron.js").cronHandlers,
+  getRuntimeConfig: () => OpenClawConfig,
+) {
+  type CronMethod = keyof typeof handlers;
+
+  return async function invokeCron(
+    method: CronMethod,
+    params: Record<string, unknown>,
+    options: {
+      currentJob?: CronJob;
+      context?: ReturnType<typeof createCronTestContext>;
+      client?: GatewayClient;
+      respond?: ReturnType<typeof vi.fn>;
+      sessionMutationCommitGuard?: () => void;
+      hasCurrentClientAuthority?: () => boolean;
+    } = {},
+  ) {
+    const context = options.context ?? createCronTestContext(options.currentJob, getRuntimeConfig);
+    const respond = options.respond ?? vi.fn();
+    await expectDefined(
+      handlers[method],
+      "cronHandlers[method] test invariant",
+    )({
+      req: {} as never,
+      params: params as never,
+      respond: respond as never,
+      context: context as never,
+      client: options.client ?? null,
+      sessionMutationCommitGuard: options.sessionMutationCommitGuard,
+      hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+      isWebchatConnect: () => false,
+    });
+    return { context, respond };
+  };
 }

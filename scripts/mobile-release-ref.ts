@@ -9,6 +9,8 @@ import {
   type AndroidStorePlan,
   validateAndroidStorePlan,
 } from "./lib/android-store-version.ts";
+import { parseFlagArgs } from "./lib/arg-utils.mts";
+import { versionValueFlag } from "./lib/version-script-args.ts";
 
 type MobileReleasePlatform = "ios" | "android";
 type MobileReleaseCommand = "preflight" | "record" | "resolve" | "initialize-android";
@@ -80,14 +82,6 @@ function gitAllowFailure(
   }
 }
 
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
-}
-
 function parsePlatform(raw: string | null): MobileReleasePlatform {
   if (raw === "ios" || raw === "android") {
     return raw;
@@ -114,62 +108,49 @@ function parseCommand(raw: string | undefined): MobileReleaseCommand {
 
 export function parseArgs(argv: string[]): MobileReleaseOptions {
   const command = parseCommand(argv[0]);
-  let build: string | null = null;
-  let platform: string | null = null;
-  let remote = "origin";
-  let rootDir = path.resolve(".");
-  let sha = "HEAD";
-  let version = "";
-  let versionCode: string | null = null;
-  let planPath: string | null = null;
-  let explicitSha = false;
-
-  for (let index = 1; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--":
-        break;
-      case "--platform":
-        platform = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--version":
-        version = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--build":
-        build = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--version-code":
-        versionCode = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--sha":
-        sha = readOptionValue(argv, index, arg);
-        explicitSha = true;
-        index += 1;
-        break;
-      case "--plan":
-        planPath = path.resolve(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      case "--remote":
-        remote = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--root":
-        rootDir = path.resolve(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      case "-h":
-      case "--help":
-        throw new Error(usage());
-      default:
+  const args: {
+    build: string | null;
+    platform: string | null;
+    remote: string;
+    rootDir: string;
+    sha: string | undefined;
+    version: string;
+    versionCode: string | null;
+    planPath: string | null;
+  } = {
+    build: null,
+    platform: null,
+    remote: "origin",
+    rootDir: path.resolve("."),
+    sha: undefined,
+    version: "",
+    versionCode: null,
+    planPath: null,
+  };
+  parseFlagArgs(
+    argv.slice(1),
+    args,
+    [
+      versionValueFlag("--platform", "platform"),
+      versionValueFlag("--version", "version"),
+      versionValueFlag("--build", "build"),
+      versionValueFlag("--version-code", "versionCode"),
+      versionValueFlag("--sha", "sha"),
+      versionValueFlag("--plan", "planPath", path.resolve),
+      versionValueFlag("--remote", "remote"),
+      versionValueFlag("--root", "rootDir", path.resolve),
+    ],
+    {
+      onUnhandledArg(arg) {
+        if (arg === "-h" || arg === "--help") {
+          throw new Error(usage());
+        }
         throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
-
+      },
+    },
+  );
+  let { build, platform, sha = "HEAD", version, versionCode } = args;
+  const { planPath, remote, rootDir } = args;
   const androidPlan = planPath
     ? validateAndroidStorePlan(JSON.parse(readFileSync(planPath, "utf8")))
     : undefined;
@@ -182,7 +163,7 @@ export function parseArgs(argv: string[]): MobileReleaseOptions {
       (version && version !== androidPlan.version) ||
       (versionCode !== null && versionCode !== String(androidPlan.versionCode)) ||
       (build !== null && build !== String(androidPlan.buildNumber)) ||
-      (explicitSha && sha !== androidPlan.sourceSha)
+      (args.sha !== undefined && sha !== androidPlan.sourceSha)
     ) {
       throw new Error("Explicit release identity does not match the Android store plan.");
     }

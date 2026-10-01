@@ -1,6 +1,9 @@
 import { getCommandPathWithRootOptions, isSimpleCommandHelpInvocation } from "./argv.js";
+import {
+  PRECOMPUTED_SUBCOMMAND_HELP_NAMES,
+  type PrecomputedSubcommandHelpName,
+} from "./precomputed-help-commands.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
-import type { PrecomputedSubcommandHelpName } from "./root-help-metadata.js";
 
 type OutputPrecomputedHelpText = () => boolean;
 
@@ -17,14 +20,7 @@ export type PrecomputedCommandHelpDeps = {
   env?: NodeJS.ProcessEnv;
 };
 
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set<PrecomputedSubcommandHelpName>([
-  "config",
-  "doctor",
-  "gateway",
-  "models",
-  "plugins",
-  "sessions",
-]);
+const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set(PRECOMPUTED_SUBCOMMAND_HELP_NAMES);
 
 function resolvePrecomputedCommandHelpName<T extends string>(
   argv: string[],

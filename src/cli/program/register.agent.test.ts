@@ -152,12 +152,14 @@ describe("agent command registration", () => {
   it.each([
     {
       args: ["alpha"],
-      options: { name: "alpha", workspace: undefined, bind: [] },
+      options: { name: "alpha", bind: [] },
+      workspace: undefined,
       hasAutomationFlags: false,
     },
     {
       args: "editor --role writer --json".split(" "),
       options: { name: "editor", role: "writer", json: true, nonInteractive: false },
+      workspace: undefined,
       hasAutomationFlags: false,
     },
     {
@@ -166,21 +168,25 @@ describe("agent command registration", () => {
       ),
       options: {
         name: "beta",
-        workspace: "/tmp/ws",
         bind: ["telegram", "discord:acct"],
         nonInteractive: true,
         json: true,
       },
+      workspace: "/tmp/ws",
       hasAutomationFlags: true,
     },
-  ])("selects agent creation posture for $args", async ({ args, options, hasAutomationFlags }) => {
-    await runCli(["agents", "add", ...args]);
-    expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining(options),
-      runtime,
-      { hasAutomationFlags },
-    );
-  });
+  ])(
+    "selects agent creation posture for $args",
+    async ({ args, options, workspace, hasAutomationFlags }) => {
+      await runCli(["agents", "add", ...args]);
+      expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining(options),
+        runtime,
+        { hasAutomationFlags },
+      );
+      expect(mocks.agentsAddCommandMock.mock.calls[0]?.[0].workspace).toBe(workspace);
+    },
+  );
 
   it.each([
     ["", mocks.agentsListCommandMock, {}],

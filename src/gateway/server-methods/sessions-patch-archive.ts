@@ -42,7 +42,7 @@ import {
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
 import {
-  isAgentMainSessionKey,
+  resolveProtectedSessionVisibilityError,
   resolveSessionWorkerPlacementPatchError,
   sessionLog,
 } from "./sessions-shared.js";
@@ -86,37 +86,20 @@ function archiveUnavailableError(key: string, message: "active" | "stopping"): E
   );
 }
 
-function protectedArchiveError(cfg: OpenClawConfig, canonicalKey: string): ErrorShape | undefined {
-  if (canonicalKey === "unknown") {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive the unknown session sentinel.");
-  }
-  if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive an agent's main session.");
-  }
-  return undefined;
-}
-
 function archiveTargetChanged(params: {
   baselineEntry: SessionEntry | undefined;
   currentEntry: SessionEntry | undefined;
   patch: SessionsPatchParams;
 }): boolean {
   const { baselineEntry, currentEntry, patch } = params;
-  const expectedSessionChanged =
+  return (
     (patch.expectedSessionId !== undefined &&
       currentEntry?.sessionId !== patch.expectedSessionId) ||
     (patch.expectedLifecycleRevision !== undefined &&
-      currentEntry?.lifecycleRevision !== patch.expectedLifecycleRevision);
-  const generationChanged =
-    baselineEntry !== undefined &&
-    currentEntry !== undefined &&
-    (currentEntry.sessionId !== baselineEntry.sessionId ||
-      currentEntry.lifecycleRevision !== baselineEntry.lifecycleRevision);
-  return (
-    expectedSessionChanged ||
-    (baselineEntry !== undefined && currentEntry === undefined) ||
-    (baselineEntry === undefined && currentEntry !== undefined) ||
-    generationChanged
+      currentEntry?.lifecycleRevision !== patch.expectedLifecycleRevision) ||
+    (baselineEntry === undefined) !== (currentEntry === undefined) ||
+    currentEntry?.sessionId !== baselineEntry?.sessionId ||
+    currentEntry?.lifecycleRevision !== baselineEntry?.lifecycleRevision
   );
 }
 
@@ -180,7 +163,11 @@ export async function prepareSessionPatchArchive(params: {
     if (missingHarnessSessionError) {
       return err(errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
     }
-    const protectedError = protectedArchiveError(cfg, freshCanonicalKey);
+    const protectedError = resolveProtectedSessionVisibilityError(
+      cfg,
+      freshCanonicalKey,
+      "archive",
+    );
     if (protectedError) {
       return err(protectedError);
     }
@@ -326,7 +313,7 @@ export function validateSessionPatchArchiveProjection(params: {
     return archiveChangedError(params.key);
   }
   return (
-    protectedArchiveError(params.cfg, params.primaryKey) ??
+    resolveProtectedSessionVisibilityError(params.cfg, params.primaryKey, "archive") ??
     resolvePluginSessionOwnershipError({
       action: "patch",
       entry: params.existingEntry,

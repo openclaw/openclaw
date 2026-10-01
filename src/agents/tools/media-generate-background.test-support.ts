@@ -5,7 +5,6 @@ import {
   resetGeneratedMediaTaskActivityForTests,
   admitMediaHandle,
 } from "../media-generation-activity.test-support.js";
-import type { createMediaGenerationTaskLifecycle } from "./media-generate-background-shared.js";
 
 type MockWithReset = {
   mockReset(): void;
@@ -199,15 +198,3 @@ export function expectFallbackMediaAnnouncement({
   expect(event.mediaUrls).toEqual(mediaUrls);
   expect(String(event.replyInstruction)).toContain("visible-reply contract");
 }
-
-export const imageMediaLifecycleOptions = {
-  toolName: "image_generate",
-  taskKind: "image_generation",
-  label: "Image generation",
-  queuedProgressSummary: "Queued image generation",
-  generatedLabel: "image",
-  failureProgressSummary: "Image generation failed",
-  eventSource: "image_generation",
-  announceType: "image generation task",
-  completionLabel: "image",
-} satisfies Parameters<typeof createMediaGenerationTaskLifecycle>[0];

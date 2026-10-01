@@ -5,8 +5,7 @@ import { createRedactingStreamWriter } from "../logging/redacting-stream.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
-  buildCellCreateArgs,
-  buildCellRunArgs,
+  buildCellContainerArgs,
   validateCellContainerProfile,
   validateFleetImage,
   type CellContainerProfile,
@@ -660,9 +659,7 @@ export function createFleetContainerRuntime(
     async run(profile: CellContainerProfile, start: boolean): Promise<void> {
       validateCellContainerProfile(profile);
       await withContainerEnvFile(profile.environment, async (environmentFile) => {
-        const args = start
-          ? buildCellRunArgs(profile, { environmentFile })
-          : buildCellCreateArgs(profile, { environmentFile });
+        const args = buildCellContainerArgs(start ? "run" : "create", profile, { environmentFile });
         await execute(profile.runtime, args, {
           redactValues: Object.values(profile.environment),
         });

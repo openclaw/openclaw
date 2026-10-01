@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import {
@@ -261,7 +261,9 @@ describe("AppSidebar session attention details", () => {
         ).toBe("Waiting for approval\npnpm test"),
       );
       context.overlays.snapshot.approvalQueue = [];
-      sidebar.requestUpdate();
+      for (const [notify] of vi.mocked(context.overlays.subscribe).mock.calls) {
+        notify(context.overlays.snapshot);
+      }
       await sidebar.updateComplete;
       await waitForFast(() =>
         expect(

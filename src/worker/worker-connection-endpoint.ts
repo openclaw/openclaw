@@ -91,8 +91,7 @@ export type WorkerConnectionEndpoint = z.infer<typeof EndpointSchema>;
 export function parseWorkerConnectionEndpoint(
   value: unknown,
 ): WorkerConnectionEndpoint | undefined {
-  const parsed = EndpointSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return EndpointSchema.safeParse(value).data;
 }
 
 type WorkerConnectionTarget = {

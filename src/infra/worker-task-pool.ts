@@ -3,6 +3,8 @@ import type {
   WorkerTaskInput,
   WorkerTaskOptions,
   WorkerTaskPoolOptions,
+  WorkerTaskPoolOwnerOptions,
+  OwnedWorkerTaskOptions,
 } from "./worker-task-pool.types.js";
 
 export { WorkerTaskError } from "./worker-task-pool-core.js";
@@ -45,15 +47,22 @@ export class WorkerTaskPool<Input, Output> {
 }
 
 /** Internal resource owners can retain task custody or use settled ordinary reads. */
-export function createOwnedWorkerTaskPool<Input, Output>(options: WorkerTaskPoolOptions<Output>) {
-  const core = new WorkerTaskPoolCore<Input, Output>(options);
+export function createOwnedWorkerTaskPool<Input, Output>(
+  options: WorkerTaskPoolOptions<Output>,
+  ownerOptions?: WorkerTaskPoolOwnerOptions,
+) {
+  const core = new WorkerTaskPoolCore<Input, Output>(options, undefined, ownerOptions);
   return {
     run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
       core.run(input, taskOptions),
     rotate: () => core.rotate(),
-    runTask: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
+    runTask: (input: WorkerTaskInput<Input>, taskOptions: OwnedWorkerTaskOptions<Input>) =>
       core.runTask(input, taskOptions),
-    closeResources: (key?: string) => core.closeResources(key),
+    startTask: (input: WorkerTaskInput<Input>, taskOptions: OwnedWorkerTaskOptions<Input>) =>
+      core.startTask(input, taskOptions),
+    closeResources: (key?: string) => core.startCloseResources(key).result,
+    startCloseResources: (key?: string) => core.startCloseResources(key),
+    startRotate: () => core.startRotate(),
     getSnapshot: () => core.getSnapshot(),
     close: (error?: Error) => core.close(error),
   };

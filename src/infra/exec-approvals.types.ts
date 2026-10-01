@@ -18,3 +18,8 @@ export type ExecAllowlistEntry = {
   lastUsedCommand?: string;
   lastResolvedPath?: string;
 };
+
+export type AllowAlwaysPattern = {
+  pattern: string;
+  argPattern?: string;
+};

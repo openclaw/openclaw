@@ -331,17 +331,6 @@ export async function createChildAdapter(
       ),
     );
   }
-  const onStdout: ChildAdapter["onStdout"] = (listener, onRaw) => {
-    if (awaitedStdout) {
-      throw new Error("Process stdout requires its awaited consumer");
-    }
-    outputUnsubscribers.push(onDecodedOutput(child.stdout, listener, onRaw));
-  };
-
-  const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) => {
-    outputUnsubscribers.push(onDecodedOutput(child.stderr, listener, onRaw));
-  };
-
   const completion = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
   const cleanup = createDeferredCore();
   // Worker errors can precede wait(), including while secret delivery is still pending.
@@ -423,19 +412,6 @@ export async function createChildAdapter(
     forceKillWaitFallbackTimer.unref?.();
   };
 
-  const resolveObservedExitState = (fallback: {
-    code: number | null;
-    signal: NodeJS.Signals | null;
-  }) => {
-    if (childExitState != null) {
-      return childExitState;
-    }
-    return {
-      code: child.exitCode ?? fallback.code,
-      signal: child.signalCode ?? fallback.signal,
-    };
-  };
-
   const scheduleForcedWindowsCloseSettlement = () => {
     if (
       process.platform !== "win32" ||
@@ -450,7 +426,7 @@ export async function createChildAdapter(
     forcedWindowsCloseTimer = setTimeout(() => {
       child.stdout?.destroy();
       child.stderr?.destroy();
-      settleWait(resolveObservedExitState(exitState));
+      settleWait(childExitState ?? exitState);
     }, FORCED_WINDOWS_CLOSE_SETTLE_MS);
     forcedWindowsCloseTimer.unref?.();
   };
@@ -468,7 +444,7 @@ export async function createChildAdapter(
     ) {
       return;
     }
-    settleObservedClose(resolveObservedExitState(childExitState));
+    settleObservedClose(childExitState);
   };
 
   if (params.ownedWorker) {
@@ -522,15 +498,8 @@ export async function createChildAdapter(
     if (isWindowsHardKillSettlementBlocked()) {
       return;
     }
-    settleObservedClose(resolveObservedExitState(childCloseState));
+    settleObservedClose(childExitState);
   });
-
-  const wait = async () => {
-    if (!awaitedStdout) {
-      return await completion.promise;
-    }
-    return await joinProcessCompletionAndOutput(completion.promise, awaitedStdout.drain());
-  };
 
   // A no-detach fallback shares the Gateway's group and must never group-kill it.
   const childIsDetached = useDetached && !spawned.usedFallback;
@@ -615,7 +584,7 @@ export async function createChildAdapter(
             }
             windowsTreeKillCompleted = true;
             if (childCloseState) {
-              settleObservedClose(resolveObservedExitState(childCloseState));
+              settleObservedClose(childExitState ?? childCloseState);
               return;
             }
             maybeSettleAfterExit();
@@ -667,35 +636,7 @@ export async function createChildAdapter(
     events.clear();
   };
 
-  const closeStartGate = params.ownedWorker ? disconnectWorkerIpc : undefined;
-
   let startGateOpened = false;
-  const openStartGate = params.ownedWorker
-    ? async () => {
-        if (startGateOpened) {
-          return;
-        }
-        startGateOpened = true;
-        await new Promise<void>((resolve, reject) => {
-          if (!child.connected) {
-            reject(new Error("worker lifecycle IPC channel closed before startup"));
-            return;
-          }
-          try {
-            child.send(WORKER_START_MESSAGE, (error) => {
-              if (error) {
-                reject(error);
-                return;
-              }
-              resolve();
-            });
-          } catch (error) {
-            reject(toErrorObject(error, "worker lifecycle IPC send failed"));
-          }
-        });
-      }
-    : undefined;
-
   const adapter: WorkerChildAdapter = {
     get pid() {
       return windowsJob?.commandPid ?? child.pid;
@@ -703,19 +644,55 @@ export async function createChildAdapter(
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: true,
-    onStdout,
+    onStdout: (listener, onRaw) => {
+      if (awaitedStdout) {
+        throw new Error("Process stdout requires its awaited consumer");
+      }
+      outputUnsubscribers.push(onDecodedOutput(child.stdout, listener, onRaw));
+    },
     ...(awaitedStdout ? { consumeStdout: awaitedStdout.consume } : {}),
-    onStderr,
+    onStderr: (listener, onRaw) => {
+      outputUnsubscribers.push(onDecodedOutput(child.stderr, listener, onRaw));
+    },
     onExit: events.onExit,
     onError: events.onError,
-    wait,
+    wait: async () => {
+      if (!awaitedStdout) {
+        return await completion.promise;
+      }
+      return await joinProcessCompletionAndOutput(completion.promise, awaitedStdout.drain());
+    },
     ...(process.platform === "win32" && {
       waitForExtinction: () => windowsCleanup ?? cleanup.promise.then(() => windowsFallback),
     }),
     kill,
     dispose,
-    closeStartGate,
-    openStartGate,
+    closeStartGate: params.ownedWorker ? disconnectWorkerIpc : undefined,
+    openStartGate: params.ownedWorker
+      ? async () => {
+          if (startGateOpened) {
+            return;
+          }
+          startGateOpened = true;
+          await new Promise<void>((resolve, reject) => {
+            if (!child.connected) {
+              reject(new Error("worker lifecycle IPC channel closed before startup"));
+              return;
+            }
+            try {
+              child.send(WORKER_START_MESSAGE, (error) => {
+                if (error) {
+                  reject(error);
+                  return;
+                }
+                resolve();
+              });
+            } catch (error) {
+              reject(toErrorObject(error, "worker lifecycle IPC send failed"));
+            }
+          });
+        }
+      : undefined,
   };
   if (!windowsCleanup) {
     params.onSpawnCleanup?.(adapter.waitForExtinction?.() ?? cleanup.promise);

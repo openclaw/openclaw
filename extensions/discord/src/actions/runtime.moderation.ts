@@ -58,43 +58,25 @@ export async function handleDiscordModerationAction(
     accountId,
     cfg,
   });
-  switch (command.action) {
-    case "timeout": {
-      const member = await discordModerationActionRuntime.timeoutMemberDiscord(
-        {
-          guildId: command.guildId,
-          userId: command.userId,
-          durationMinutes: command.durationMinutes,
-          until: command.until,
-          reason: command.reason,
-        },
-        withOpts(),
-      );
-      return jsonResult({ ok: true, member });
-    }
-    case "kick": {
-      await discordModerationActionRuntime.kickMemberDiscord(
-        {
-          guildId: command.guildId,
-          userId: command.userId,
-          reason: command.reason,
-        },
-        withOpts(),
-      );
-      return jsonResult({ ok: true });
-    }
-    case "ban": {
-      await discordModerationActionRuntime.banMemberDiscord(
-        {
-          guildId: command.guildId,
-          userId: command.userId,
-          reason: command.reason,
-          deleteMessageDays: command.deleteMessageDays,
-        },
-        withOpts(),
-      );
-      return jsonResult({ ok: true });
-    }
+  const target = { guildId: command.guildId, userId: command.userId, reason: command.reason };
+  if (command.action === "timeout") {
+    const member = await discordModerationActionRuntime.timeoutMemberDiscord(
+      {
+        ...target,
+        durationMinutes: command.durationMinutes,
+        until: command.until,
+      },
+      withOpts(),
+    );
+    return jsonResult({ ok: true, member });
   }
-  throw new Error("Unsupported Discord moderation action");
+  if (command.action === "kick") {
+    await discordModerationActionRuntime.kickMemberDiscord(target, withOpts());
+    return jsonResult({ ok: true });
+  }
+  await discordModerationActionRuntime.banMemberDiscord(
+    { ...target, deleteMessageDays: command.deleteMessageDays },
+    withOpts(),
+  );
+  return jsonResult({ ok: true });
 }

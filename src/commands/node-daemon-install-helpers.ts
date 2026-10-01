@@ -1,36 +1,16 @@
 /** Managed node-host install plan builder. */
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
-import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonRuntimeBinDir,
+  type GatewayInstallPlan,
 } from "./daemon-install-plan.shared.js";
 import {
   emitNodeRuntimeWarning,
   type DaemonInstallWarnFn,
 } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
-
-type NodeInstallPlan = {
-  programArguments: string[];
-  workingDirectory?: string;
-  environment: Record<string, string | undefined>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
-  description?: string;
-};
-
-function buildNodeInstallEnvironmentValueSources(): Record<
-  string,
-  GatewayServiceEnvironmentValueSource | undefined
-> {
-  return {
-    OPENCLAW_GATEWAY_TOKEN: "file",
-    OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
-    CF_ACCESS_CLIENT_ID: "file",
-    CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
-  };
-}
 
 /** Builds launch arguments, environment, and metadata for a managed node-host service install. */
 export async function buildNodeInstallPlan(params: {
@@ -52,7 +32,7 @@ export async function buildNodeInstallPlan(params: {
   pinnedRuntimePath?: string;
   wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
-}): Promise<NodeInstallPlan> {
+}): Promise<Omit<GatewayInstallPlan, "runtime"> & { description?: string }> {
   const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
@@ -100,7 +80,12 @@ export async function buildNodeInstallPlan(params: {
     programArguments,
     workingDirectory,
     environment,
-    environmentValueSources: buildNodeInstallEnvironmentValueSources(),
+    environmentValueSources: {
+      OPENCLAW_GATEWAY_TOKEN: "file",
+      OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      CF_ACCESS_CLIENT_ID: "file",
+      CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
+    },
     description: "OpenClaw Node Host",
   };
 }

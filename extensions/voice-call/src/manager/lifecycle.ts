@@ -17,20 +17,6 @@ type CallLifecycleContext = Pick<
     Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers" | "notifyHangupTimers">
   >;
 
-/** Remove a provider-call mapping only when it still points at this call. */
-function removeProviderCallMapping(
-  providerCallIdMap: Map<string, string>,
-  call: Pick<CallRecord, "callId" | "providerCallId">,
-): void {
-  if (!call.providerCallId) {
-    return;
-  }
-  const mappedCallId = providerCallIdMap.get(call.providerCallId);
-  if (mappedCallId === call.callId) {
-    providerCallIdMap.delete(call.providerCallId);
-  }
-}
-
 /** Finalize under the manager mutation queue, publishing cleanup only after persistence. */
 export async function finalizeCall(params: {
   ctx: CallLifecycleContext;
@@ -44,9 +30,7 @@ export async function finalizeCall(params: {
   if (ctx.activeCalls.get(call.callId) !== call) {
     return;
   }
-  const previousState = call.state;
-
-  if (!TerminalStates.has(previousState)) {
+  if (!TerminalStates.has(call.state)) {
     const next = copyCallRecord(params.preparedCall ?? call);
     next.endedAt = params.endedAt ?? Date.now();
     next.endReason = endReason;
@@ -75,5 +59,8 @@ export async function finalizeCall(params: {
   }
 
   ctx.activeCalls.delete(call.callId);
-  removeProviderCallMapping(ctx.providerCallIdMap, call);
+  // Remove a provider-call mapping only when it still points at this call.
+  if (call.providerCallId && ctx.providerCallIdMap.get(call.providerCallId) === call.callId) {
+    ctx.providerCallIdMap.delete(call.providerCallId);
+  }
 }

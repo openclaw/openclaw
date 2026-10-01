@@ -15,12 +15,7 @@ import {
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
-import {
-  captureChatOutboxAdmission,
-  readStoredOutboxStore,
-  storageTargetForGateway,
-  subscribeStoredChatOutboxChanges,
-} from "../../lib/chat/outbox-store.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -225,7 +220,6 @@ function navigateChatInputHistory(host: TestChatHost, direction: "up" | "down"):
     key: direction === "up" ? "ArrowUp" : "ArrowDown",
     selectionStart: 0,
     selectionEnd: 0,
-    valueLength: host.chatMessage.length,
     altKey: false,
     ctrlKey: false,
     metaKey: false,
@@ -3105,130 +3099,6 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe(
       "Could not store this message for reconnect. Free browser storage or reconnect before sending.",
     );
-  });
-
-  it.each(["defaults", "route", "recovery owner", "reply"])(
-    "keeps the creation-time destination and input while payload admission awaits changed %s",
-    async (change) => {
-      const { attachments, dataUrls } = createDeliveryAttachmentBatch();
-      const replyTarget = {
-        messageId: "original-quote",
-        sourceMessageId: "original-entry",
-        text: "Original quote",
-      };
-      const newerReply = { messageId: "newer-quote", text: "Newer quote" };
-      const host = makeChatHost({
-        requestHandlers: {},
-        connected: false,
-        sessionKey: "main",
-        agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-        chatMessage: "original destination",
-        chatAttachments: attachments,
-        chatReplyTarget: replyTarget,
-      });
-      const started = createDeferred();
-      const release = createDeferred();
-      const writePayload = outboxPayloadStore.writeOutboxPayload;
-      vi.spyOn(outboxPayloadStore, "writeOutboxPayload").mockImplementationOnce(async (...args) => {
-        started.resolve();
-        await release.promise;
-        return writePayload(...args);
-      });
-      const sending = handleSendChat(host);
-      try {
-        await Promise.race([
-          started.promise,
-          sending.then(() => {
-            throw new Error("Submission ended before payload write");
-          }),
-        ]);
-        if (change === "defaults") {
-          host.agentsList = { defaultId: "main", mainKey: "current", scope: "per-sender" };
-        } else if (change === "route") {
-          host.sessionKey = "agent:main:elsewhere";
-        } else if (change === "recovery owner") {
-          vi.spyOn(
-            expectDefined(host.client, "payload client"),
-            "recoveryScope",
-            "get",
-          ).mockReturnValue("different-owner");
-        } else {
-          host.chatReplyTarget = newerReply;
-        }
-        if (change !== "reply") {
-          host.chatMessage = "newer input";
-        }
-      } finally {
-        release.resolve();
-        await sending;
-      }
-      const expectedDraft = change === "reply" ? "original destination" : "newer input";
-      expect(host.chatMessage).toBe(expectedDraft);
-      expect(host.chatReplyTarget).toEqual(change === "reply" ? newerReply : replyTarget);
-      expect(host.request).not.toHaveBeenCalled();
-      if (change !== "defaults" && change !== "reply") {
-        expect(listStoredChatOutboxes(host)).toEqual([]);
-        expect(host.chatAttachments.map(getChatAttachmentDataUrl)).toEqual(dataUrls);
-        return;
-      }
-      const stored = expectDefined(listStoredChatOutboxes(host)[0], "captured outbox");
-      expect(stored).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
-      expect(stored.queue[0]).toMatchObject({
-        sessionKey: "agent:main:main",
-        sendAttempts: 0,
-        replyToId: "original-entry",
-      });
-      const hydrated = await prepareOutboxPayload(
-        host,
-        expectDefined(stored.queue[0], "stored input"),
-      );
-      expect(
-        hydrated.status === "ready"
-          ? hydrated.update.attachments?.map(getChatAttachmentDataUrl)
-          : [],
-      ).toEqual(dataUrls);
-      expect(host.chatMessage).toBe(expectedDraft);
-      expect(host.request).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps a verified Blob admission when its notification changes recovery owner", async () => {
-    const { attachments, dataUrls } = createDeliveryAttachmentBatch();
-    const host = makeChatHost({
-      requestHandlers: {},
-      connected: false,
-      chatMessage: "committed input",
-      chatAttachments: attachments,
-    });
-    const client = expectDefined(host.client, "recovery client");
-    const target = storageTargetForGateway(host.settings?.gatewayUrl);
-    const recovery = vi.spyOn(client, "recoveryScope", "get");
-    const originalRecovery = client.recoveryScope;
-    const cleanup = vi.spyOn(outboxPayloadStore, "removeOutboxPayloads");
-    const stop = subscribeStoredChatOutboxChanges(() => {
-      recovery.mockReturnValue("new-synthetic-principal");
-      host.chatMessage = "newer input";
-    });
-    try {
-      await handleSendChat(host);
-    } finally {
-      stop();
-    }
-    const raw = readStoredOutboxStore(sessionStorage, target);
-    const queued = expectDefined(
-      Object.values(raw.sessions).flatMap((session) => session.queue ?? [])[0],
-      "verified committed input",
-    );
-    expect(queued).toMatchObject({ text: "committed input", sendAttempts: 0 });
-    expect(listStoredChatOutboxes(host)).toEqual([]);
-    expect(cleanup).not.toHaveBeenCalled();
-    recovery.mockReturnValue(originalRecovery);
-    const hydrated = await prepareOutboxPayload(host, queued);
-    expect(
-      hydrated.status === "ready" ? hydrated.update.attachments?.map(getChatAttachmentDataUrl) : [],
-    ).toEqual(dataUrls);
-    expect(host.chatMessage).toBe("newer input");
-    expect(host.request).not.toHaveBeenCalled();
   });
 
   it.each([

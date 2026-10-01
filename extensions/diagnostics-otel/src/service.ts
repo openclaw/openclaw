@@ -53,7 +53,6 @@ import {
 import { createDiagnosticsLogExporter } from "./service-logs.js";
 import { createDiagnosticsMetrics } from "./service-metrics.js";
 import { registerOwnedSdkRuntime } from "./service-propagation.js";
-import { createDiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import { createHarnessRecorders } from "./service-recorders-harness.js";
 import { createModelRecorders } from "./service-recorders-model.js";
 import { createOperationsRecorders } from "./service-recorders-operations.js";
@@ -575,12 +574,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       active.logProvider = diagnosticsLogs.logProvider;
       const { recordLogRecord, recordSecurityEvent } = diagnosticsLogs;
 
-      const recorderRuntime = createDiagnosticsRecorderRuntime({
+      const recorderRuntime = {
+        ...diagnosticMetrics,
+        ...diagnosticsTrace,
         contentCapturePolicy,
-        metrics: diagnosticMetrics,
-        traces: diagnosticsTrace,
         tracesEnabled: tracesActive,
-      });
+      };
       const recorders = {
         ...createUsageRecorders(recorderRuntime),
         ...createOperationsRecorders(recorderRuntime),

@@ -65,7 +65,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMentionInBotThreads`: per-channel bot-thread override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
-- `toolsBySender` keys should use explicit prefixes: `channel:`, `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
+- `toolsBySender` keys use explicit prefixes: `channel:`, `id:`, `e164:`, `username:`, `name:`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries.
 - `channels.msteams.authType`: authentication type - `"secret"` (default) or `"federated"`.
 - `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).
 - `channels.msteams.certificateThumbprint`: certificate thumbprint; accepted, not required for auth.

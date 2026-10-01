@@ -9,45 +9,23 @@ import {
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
+import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 
-type SharedToolDisplaySpec = ToolDisplaySpec & {
-  emoji?: string;
-};
-
 type ToolDisplay = {
   name: string;
-  icon: string;
-  title: string;
+  icon: ReturnType<typeof resolveToolDisplayIcon>;
   label: string;
-  verb?: string;
   detail?: string;
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
 
-const EMOJI_ICON_MAP: Record<string, string> = {
-  "🧩": "puzzle",
-  "🛠️": "wrench",
-  "🧰": "wrench",
-  "📖": "fileText",
-  "✍️": "edit",
-  "📝": "penLine",
-  "📎": "paperclip",
-  "🌐": "globe",
-  "📺": "monitor",
-  "🧾": "fileText",
-  "🔐": "settings",
-  "💻": "monitor",
-  "🔌": "plug",
-  "💬": "messageSquare",
-};
-
 const FALLBACK = SHARED_TOOL_DISPLAY_JSON.fallback;
-const TOOL_MAP: Record<string, SharedToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
+const TOOL_MAP: Record<string, ToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
 
 function shortenHomeInString(input: string): string {
   // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
@@ -59,27 +37,22 @@ function shortenHomeInString(input: string): string {
 export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
-  meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
   const name = normalizeToolDisplayName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const icon = EMOJI_ICON_MAP[(spec ?? FALLBACK).emoji ?? ""] ?? "puzzle";
-  const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? title;
-  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
+  const icon = resolveToolDisplayIcon(name);
+  const label = spec?.label ?? spec?.title ?? defaultTitle(name);
+  let { detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
-    meta: params.meta,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
     toolDetailMode: params.detailMode,
     detailCoerce: { includeFalsy: true },
   });
-  const { verb } = toolDisplayParts;
-  let { detail } = toolDisplayParts;
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -88,9 +61,7 @@ export function resolveToolDisplay(params: {
   return {
     name,
     icon,
-    title,
     label,
-    verb,
     detail,
   };
 }

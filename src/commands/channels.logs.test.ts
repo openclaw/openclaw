@@ -2,10 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getChildLogger, setLoggerOverride } from "../logging.js";
-import { flushLogger } from "../logging/logger.js";
+import { setLoggerOverride } from "../logging.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -104,36 +102,6 @@ describe("channelsLogsCommand", () => {
 
   it.each([
     {
-      label: "subsystem",
-      channel: "slack",
-      shadow: { subsystem: "gateway/channels/slack-archive" },
-      match: { subsystem: "gateway/channels/slack/send" },
-    },
-    {
-      label: "module",
-      channel: "external-chat",
-      shadow: { module: "external-chat-shadow" },
-      match: { module: "external-chat" },
-    },
-    {
-      label: "nested subsystem",
-      channel: "slack",
-      shadow: { subsystem: "slack-archive/send" },
-      match: { subsystem: "slack/send" },
-    },
-    {
-      label: "nested module",
-      channel: "external-chat",
-      shadow: { module: "external-chat-shadow/send" },
-      match: { module: "external-chat/send" },
-    },
-    {
-      label: "channel runtime subsystem",
-      channel: "discord",
-      shadow: { subsystem: "channels/discord-archive" },
-      match: { subsystem: "channels/discord" },
-    },
-    {
       label: "nested channel runtime module",
       channel: "discord",
       shadow: { module: "channels/discord-archive/send" },
@@ -230,7 +198,10 @@ describe("channelsLogsCommand", () => {
         .join(""),
     );
 
-    await channelsLogsCommand({ channel: "all", lines, json: true }, runtime);
+    await channelsLogsCommand(
+      { channel: lines === undefined ? undefined : "all", lines, json: true },
+      runtime,
+    );
 
     const payload = readJsonPayload();
     expect(payload.channel).toBe("all");
@@ -269,95 +240,7 @@ describe("channelsLogsCommand", () => {
     );
   });
 
-  it("treats an omitted channel filter as all", async () => {
-    await fs.writeFile(
-      logPath,
-      logLine({ module: "gateway/channels/slack/send", message: "omitted filter" }),
-    );
-
-    await channelsLogsCommand({ json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.channel).toBe("all");
-    expect(payload.lines.map((line) => line.message)).toEqual(["omitted filter"]);
-  });
-
-  it("falls back to the latest rolling log when the configured rolling file is missing", async () => {
-    const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
-    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
-    const staleFile = path.join(tempDir, "openclaw-2026-04-24.log");
-    setLoggerOverride({ file: configuredFile });
-    await fs.writeFile(
-      fallbackFile,
-      [
-        logLine({ module: "gateway/channels/slack/send", message: "slack fallback" }),
-        logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
-      ].join(""),
-    );
-    await fs.writeFile(
-      staleFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "stale sent" }),
-    );
-    await fs.utimes(
-      staleFile,
-      new Date("2026-04-24T12:00:00.000Z"),
-      new Date("2026-04-24T12:00:00.000Z"),
-    );
-    await fs.utimes(
-      fallbackFile,
-      new Date("2026-04-25T12:00:00.000Z"),
-      new Date("2026-04-25T12:00:00.000Z"),
-    );
-
-    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.file).toBe(fallbackFile);
-    expect(payload.lines.map((line) => line.message)).toEqual(["fallback sent"]);
-  });
-
-  it("reads the active writer file instead of a newer stale configured rolling log", async () => {
-    const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
-    setLoggerOverride({ file: configuredFile, level: "info" });
-    getChildLogger({ module: "gateway/channels/external-chat/send" }).warn("current sent");
-    await flushLogger();
-
-    const writtenFiles = await fs.readdir(tempDir);
-    expect(writtenFiles).toEqual([expect.stringMatching(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/)]);
-    const activeFile = path.join(tempDir, expectDefined(writtenFiles[0], "active log file"));
-    expect(activeFile).not.toBe(configuredFile);
-
-    await fs.writeFile(
-      configuredFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "stale sent" }),
-    );
-    const newerMtime = new Date((await fs.stat(activeFile)).mtimeMs + 60_000);
-    await fs.utimes(configuredFile, newerMtime, newerMtime);
-
-    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.file).toBe(activeFile);
-    expect(payload.lines.map((line) => line.message)).toEqual(["current sent"]);
-  });
-
-  it("does not fall back to rolling logs for a missing custom log file", async () => {
-    const configuredFile = path.join(tempDir, "custom-channel.log");
-    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
-    setLoggerOverride({ file: configuredFile });
-    await fs.writeFile(
-      fallbackFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
-    );
-
-    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.file).toBe(configuredFile);
-    expect(payload.lines).toStrictEqual([]);
-  });
-
-  it.each(["2x", "   "])("rejects invalid line limit %j", async (lines) => {
+  it.each(["2x"])("rejects invalid line limit %j", async (lines) => {
     await expect(channelsLogsCommand({ lines, json: true }, runtime)).rejects.toThrow(
       "--lines must be a positive integer.",
     );

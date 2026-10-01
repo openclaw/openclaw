@@ -487,23 +487,22 @@ export function readLegacySessionRecords(
     verifiedSourcePaths?: ReadonlySet<string>;
   } = {},
 ): LegacySessionRecord[] {
-  const records: LegacySessionRecord[] = [];
-  for (const { entry, sessionKey } of readLegacySessionStoreEntries(target, issues, options)
-    .entries) {
-    const { transcriptPath, transcriptDependencies } = resolveLegacyTranscriptPaths(
-      target,
-      entry,
-      options.verifiedSourcePaths,
-    );
-    records.push({
-      // Import repairs file-era fields before canonical SQLite readers can see them.
-      entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(entry)),
-      sessionKey,
-      transcriptPath,
-      transcriptDependencies,
-    });
-  }
-  return records;
+  return readLegacySessionStoreEntries(target, issues, options).entries.map(
+    ({ entry, sessionKey }) => {
+      const { transcriptPath, transcriptDependencies } = resolveLegacyTranscriptPaths(
+        target,
+        entry,
+        options.verifiedSourcePaths,
+      );
+      return {
+        // Import repairs file-era fields before canonical SQLite readers can see them.
+        entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(entry)),
+        sessionKey,
+        transcriptPath,
+        transcriptDependencies,
+      };
+    },
+  );
 }
 
 export function listUnreferencedJsonlFiles(

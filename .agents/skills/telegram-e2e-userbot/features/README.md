@@ -25,6 +25,8 @@ sees through the dedicated QA user account.
 
 - [Basic turns](./basic-turns.md): real-user group, DM, and native-command entry points.
 - [Delivery lifecycle](./delivery-lifecycle.md): messages, edits, typing, and finalization.
+- [Private yielded reply policy](./private-yield-reply-policy.md): real private-child settlement with tool-only and automatic delivery controls.
+- [Restart attribution](./restart-attribution.md): visible baseline, process replacement, and a distinct fresh reply.
 - [Reaction lifecycle](./reaction-lifecycle.md): acknowledgement and status reactions on the user's message.
 - Photo and album turns: pass `--photo PATH` to the canonical runner; repeat it for one Telegram media album and inspect `messagePhoto` events plus provider evidence.
 

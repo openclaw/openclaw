@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -13,31 +14,24 @@ const PREVIOUS_SCOPE = "session-cost-usage-rollup-v2";
 
 /** Migration-only reader for the retired complete-JSON representation. */
 function decodePreviousRollup(valueJson: string | null): UsageCostRollupEntry | undefined {
-  if (valueJson === null) {
+  const value = safeParseJsonRecord(valueJson ?? "");
+  if (
+    !value ||
+    value.version !== USAGE_COST_ROLLUP_VERSION ||
+    typeof value.pricingFingerprint !== "string" ||
+    !isRecord(value.checkpoint) ||
+    (value.checkpoint.kind !== "jsonl" && value.checkpoint.kind !== "sqlite") ||
+    typeof value.scannedAt !== "number" ||
+    typeof value.parsedRecords !== "number" ||
+    typeof value.countedRecords !== "number" ||
+    !isRecord(value.rollup) ||
+    !isRecord(value.rollup.buckets) ||
+    !isRecord(value.rollup.untimestamped)
+  ) {
     return undefined;
   }
-  try {
-    const value: unknown = JSON.parse(valueJson);
-    if (
-      !isRecord(value) ||
-      value.version !== USAGE_COST_ROLLUP_VERSION ||
-      typeof value.pricingFingerprint !== "string" ||
-      !isRecord(value.checkpoint) ||
-      (value.checkpoint.kind !== "jsonl" && value.checkpoint.kind !== "sqlite") ||
-      typeof value.scannedAt !== "number" ||
-      typeof value.parsedRecords !== "number" ||
-      typeof value.countedRecords !== "number" ||
-      !isRecord(value.rollup) ||
-      !isRecord(value.rollup.buckets) ||
-      !isRecord(value.rollup.untimestamped)
-    ) {
-      return undefined;
-    }
-    // SAFETY: The former cache producer owns the versioned checkpoint and bucket shapes.
-    return value as UsageCostRollupEntry;
-  } catch {
-    return undefined;
-  }
+  // SAFETY: The former cache producer owns the versioned checkpoint and bucket shapes.
+  return value as UsageCostRollupEntry;
 }
 
 /** Caller owns the migration transaction; retain at most one complete report body at a time. */

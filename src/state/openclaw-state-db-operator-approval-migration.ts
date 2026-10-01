@@ -38,7 +38,7 @@ const COLUMNS = [
 function tableSql(db: DatabaseSync): string | undefined {
   const row = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'operator_approvals'")
-    .get() as { sql?: unknown } | undefined;
+    .get();
   return typeof row?.sql === "string" ? row.sql : undefined;
 }
 

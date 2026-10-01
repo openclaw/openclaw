@@ -438,10 +438,7 @@ export function applyPreparedRuntimeAuthToModel<
     ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
     headers: requestConfig.headers,
   };
-  const routeFacts = getModelProviderRequestRouteFacts(model);
-  return routeFacts
-    ? attachModelProviderRequestRouteFacts(next, routeFacts.providerMetadataOwners)
-    : next;
+  return inheritModelProviderRequestRouteFacts(model, next);
 }
 
 function resolveProxyOverride(request: ProviderRequestTransportOverrides | undefined) {
@@ -715,7 +712,6 @@ export function attachModelProviderRequestRouteFacts<TModel extends ProviderRequ
   if (!providerMetadataOwners || !model.provider) {
     return model;
   }
-  const next = { ...model } as TModel & ModelWithProviderRequestRouteFacts;
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,
     api: model.api,
@@ -726,14 +722,16 @@ export function attachModelProviderRequestRouteFacts<TModel extends ProviderRequ
     modelId: model.id,
     compat: model.compat,
   });
-  next[MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL] = {
-    providerMetadataOwners,
-    capabilities,
-    ...(!["default", "invalid", "local", "custom"].includes(capabilities.endpointClass)
-      ? { providerOwner: capabilities.endpointClass }
-      : {}),
+  return {
+    ...model,
+    [MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL]: {
+      providerMetadataOwners,
+      capabilities,
+      ...(!["default", "invalid", "local", "custom"].includes(capabilities.endpointClass)
+        ? { providerOwner: capabilities.endpointClass }
+        : {}),
+    },
   };
-  return next;
 }
 
 /** Reads the prepared provider route attached to a transport model. */

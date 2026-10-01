@@ -183,6 +183,8 @@ const qaScenarioGatewayRuntimeSchema = z.object({
   allowUnhealthyStartup: z.boolean().optional(),
   forwardHostHome: z.boolean().optional(),
   preserveDebugArtifacts: z.boolean().optional(),
+  // QA-only child-gateway knobs (for example diagnostic timing overrides).
+  env: z.record(z.string().regex(/^QA_[A-Z0-9_]+$/u), z.string()).optional(),
 });
 
 export const QA_RUNTIME_PAIR_LANES = ["core", "extended", "soak"] as const;
@@ -425,7 +427,6 @@ export function resolveQaScenarioRequiredProviderMode(
 }
 
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.yaml";
-const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
 const QA_SCENARIO_DIR_PATH = "qa/scenarios";
 const repoPathCache = new Map<string, string | null>();
 let qaScenarioYamlPathsCache: string[] | null = null;
@@ -548,7 +549,7 @@ export function readQaScenarioPack(): QaScenarioPack {
   return qaScenarioPackCache;
 }
 
-export function listQaScenarioYamlPaths(): string[] {
+function listQaScenarioYamlPaths(): string[] {
   if (qaScenarioYamlPathsCache) {
     return qaScenarioYamlPathsCache;
   }
@@ -574,10 +575,6 @@ export function listQaScenarioYamlPaths(): string[] {
   return qaScenarioYamlPathsCache;
 }
 
-export function readQaScenarioOverviewMarkdown(): string {
-  return readTextFile(QA_SCENARIO_LEGACY_OVERVIEW_PATH).trim();
-}
-
 export function readQaBootstrapScenarioCatalog(): QaBootstrapScenarioCatalog {
   const pack = readQaScenarioPack();
   return {
@@ -597,8 +594,4 @@ export function readQaScenarioById(id: string): QaSeedScenarioWithSource {
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
   return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
-}
-
-export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {
-  return qaScenarioConfigSchema.parse(config);
 }

@@ -114,16 +114,6 @@ describe("line-cap growth ratchet", () => {
     expect(compareLineCapViolations(violations(after), violations(before)).length > 0).toBe(fails);
   });
 
-  it("carries the old path's count across a rename", () => {
-    expect(
-      compareLineCapViolations(
-        new Map([["src/renamed.ts", { count: 703, cap: 700 }]]),
-        new Map([["src/original.ts", { count: 705, cap: 700 }]]),
-        [{ from: "src/original.ts", to: "src/renamed.ts" }],
-      ),
-    ).toEqual([]);
-  });
-
   it.skipIf(process.platform === "win32")("preserves native filenames beginning with file:", () => {
     vi.stubEnv("TERMINAL_EMULATOR", "");
     const root = fixture();

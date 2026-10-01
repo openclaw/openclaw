@@ -331,10 +331,7 @@ export async function browserExtensionStatus(params: {
         : []),
       ...discovery.issues,
       ...(windows?.issues ?? []),
-      ...storeInstallRequests.flatMap((entry) =>
-        entry.issue ? [`${entry.browser}: ${entry.issue}`] : [],
-      ),
-      ...registrations.flatMap((entry) =>
+      ...[...storeInstallRequests, ...registrations].flatMap((entry) =>
         entry.issue ? [`${entry.browser}: ${entry.issue}`] : [],
       ),
     ],

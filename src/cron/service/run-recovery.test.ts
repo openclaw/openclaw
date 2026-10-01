@@ -15,7 +15,7 @@ import {
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStore } from "../store.js";
 import {
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
@@ -204,7 +204,7 @@ describe("atomic cron run recovery", () => {
       );
     } finally {
       statements.restore();
-      finishCronRunReceipt({ handle: receipt, status: "ok", finishedAtMs: nowMs + 1 });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "ok", finishedAtMs: nowMs + 1 });
     }
   });
 
@@ -794,7 +794,7 @@ describe("atomic cron run recovery", () => {
         durationMs: 1,
       },
     });
-    finishCronRunReceipt({
+    await finishCronRunReceiptAsync({
       handle: priorReceipt,
       status: "ok",
       finishedAtMs: startedAtMs + 1,
@@ -915,7 +915,11 @@ describe("atomic cron run recovery", () => {
     if (!receipt) {
       throw new Error("Expected the successor receipt");
     }
-    finishCronRunReceipt({ handle: receipt, status: "interrupted", finishedAtMs: queuedAtMs + 2 });
+    await finishCronRunReceiptAsync({
+      handle: receipt,
+      status: "interrupted",
+      finishedAtMs: queuedAtMs + 2,
+    });
   });
 
   it("does not clobber a same-millisecond successor receipt", async () => {
@@ -927,7 +931,7 @@ describe("atomic cron run recovery", () => {
     const first = claimReceipt(storePath, job, startedAtMs);
     const proposal = await observeCronRecoveryForTest(state, job.id, undefined, startedAtMs);
 
-    finishCronRunReceipt({
+    await finishCronRunReceiptAsync({
       handle: first,
       status: "interrupted",
       finishedAtMs: startedAtMs + 1,
@@ -947,7 +951,7 @@ describe("atomic cron run recovery", () => {
         .get(successor.receiptId),
     ) as { status: string };
     expect(successorRow.status).toBe("running");
-    finishCronRunReceipt({
+    await finishCronRunReceiptAsync({
       handle: successor,
       status: "interrupted",
       finishedAtMs: startedAtMs + 2,

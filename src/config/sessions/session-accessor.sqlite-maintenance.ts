@@ -27,10 +27,10 @@ import {
   emptySessionEntryMaintenancePlan,
   readSessionTranscriptJsonlBytesInDatabase,
 } from "./session-accessor.sqlite-maintenance-store.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   createSessionMaintenanceFinalizationOperation,
   createSessionMaintenanceStatisticsOperation,
-  runSqliteSessionReclamation,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
 import {

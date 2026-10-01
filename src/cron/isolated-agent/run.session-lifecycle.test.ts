@@ -1,8 +1,7 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi, assert } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi, assert } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { prepareEmbeddedAttemptStream } from "../../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
@@ -41,7 +40,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   dispatchCronDeliveryMock,
@@ -105,19 +104,14 @@ function seedPersistentSession(sessionKey: string, sessionId: string) {
 }
 
 describe("runCronIsolatedAgentTurn session lifecycle", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
-      closeOpenClawAgentDatabasesForTest();
-      cleanup();
-    }),
-  );
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-prompt-provenance-");
   beforeEach(() => {
     resetRunCronIsolatedAgentTurnHarness();
     mockRunCronFallbackPassthrough();
   });
 
   it("persists current-session CLI prompt provenance in the detached transcript", async () => {
-    const dir = tempDirs.make("openclaw-cron-prompt-provenance-");
+    const dir = sessionDirs.make();
     const sessionId = "cron-provenance-run";
     const jobId = "daily-monitor";
     const sourceSessionKey = "agent:main:main";
@@ -205,7 +199,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it.each(["base", "continuation", "interrupted clear"] as const)(
     "seals only accepted CLI continuity at %s settlement",
     async (failurePoint) => {
-      const dir = tempDirs.make("openclaw-cron-binding-settlement-");
+      const dir = sessionDirs.make();
       const target = {
         agentId: "main",
         sessionId: `binding-${failurePoint}`,

@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createDedupeCache } from "../infra/dedupe.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   parseToolsBySenderTypedKey,
@@ -26,12 +25,6 @@ type CompiledSenderPolicy = {
   wildcard?: GroupToolPolicyConfig;
 };
 
-const MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS = 4096;
-// Warning state spans fresh config snapshots; bounding it means evicted legacy keys can re-warn.
-const warnedLegacyToolsBySenderKeys = createDedupeCache({
-  ttlMs: 0,
-  maxSize: MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS,
-});
 const compiledToolsBySenderCache = new WeakMap<
   GroupToolPolicyBySenderConfig,
   CompiledSenderPolicy
@@ -88,20 +81,6 @@ function normalizeChannelSenderKey(value: string): string {
   return `${channel}:${senderId}`;
 }
 
-function warnLegacyToolsBySenderKey(rawKey: string) {
-  const trimmed = rawKey.trim();
-  if (!trimmed || warnedLegacyToolsBySenderKeys.check(trimmed)) {
-    return;
-  }
-  process.emitWarning(
-    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (channel:, id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
-    {
-      type: "DeprecationWarning",
-      code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
-    },
-  );
-}
-
 function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined {
   const trimmed = rawKey.trim();
   if (!trimmed) {
@@ -111,39 +90,11 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
     return { kind: "wildcard" };
   }
   const typed = parseToolsBySenderTypedKey(trimmed);
-  if (typed) {
-    const key = normalizeTypedSenderKey(typed.value, typed.type);
-    if (!key) {
-      return undefined;
-    }
-    return {
-      kind: "typed",
-      type: typed.type,
-      key,
-    };
+  if (!typed) {
+    throw new Error('Untyped toolsBySender keys are retired. Run "openclaw doctor --fix".');
   }
-
-  // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
-  warnLegacyToolsBySenderKey(trimmed);
-  const key = normalizeSenderKey(trimmed, { stripLeadingAt: true });
-  if (!key) {
-    return undefined;
-  }
-  return {
-    kind: "typed",
-    type: "id",
-    key,
-  };
-}
-
-function createSenderPolicyBuckets(): SenderPolicyBuckets {
-  return {
-    channel: new Map<string, GroupToolPolicyConfig>(),
-    id: new Map<string, GroupToolPolicyConfig>(),
-    e164: new Map<string, GroupToolPolicyConfig>(),
-    username: new Map<string, GroupToolPolicyConfig>(),
-    name: new Map<string, GroupToolPolicyConfig>(),
-  };
+  const key = normalizeTypedSenderKey(typed.value, typed.type);
+  return key ? { kind: "typed", type: typed.type, key } : undefined;
 }
 
 function resolveCompiledToolsBySenderPolicy(
@@ -158,7 +109,13 @@ function resolveCompiledToolsBySenderPolicy(
     return undefined;
   }
 
-  const buckets = createSenderPolicyBuckets();
+  const buckets: SenderPolicyBuckets = {
+    channel: new Map(),
+    id: new Map(),
+    e164: new Map(),
+    username: new Map(),
+    name: new Map(),
+  };
   let wildcard: GroupToolPolicyConfig | undefined;
   for (const [rawKey, policy] of entries) {
     if (!policy) {
@@ -190,11 +147,11 @@ function normalizeSenderIdCandidates(value: string | null | undefined): string[]
     return [];
   }
   const typed = normalizeTypedSenderKey(trimmed, "id");
-  const legacy = normalizeSenderKey(trimmed, { stripLeadingAt: true });
-  if (!legacy || legacy === typed) {
+  const withoutAt = normalizeSenderKey(trimmed, { stripLeadingAt: true });
+  if (!withoutAt || withoutAt === typed) {
     return [typed];
   }
-  return [typed, legacy];
+  return [typed, withoutAt];
 }
 
 function matchToolsBySenderPolicy(

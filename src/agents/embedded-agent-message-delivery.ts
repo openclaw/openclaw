@@ -168,17 +168,10 @@ const PLUGIN_SIGNALS = {
       status === "not_found"
     );
   },
-  delivery: (record: Record<string, unknown>, status: string | undefined) => {
-    const message = asOptionalRecord(record.message);
-    const ids = [record.messageId, record.pollId, message?.id]
-      .map(normalizeStatus)
-      .filter((id): id is string => Boolean(id));
-    return (
-      ids.some((id) => !NON_DELIVERY_IDS.has(id)) ||
-      status === "sent" ||
-      normalizeStatus(record.text) === "sent"
-    );
-  },
+  delivery: (record: Record<string, unknown>, status: string | undefined): boolean =>
+    PLUGIN_SIGNALS.deliveryId(record) ||
+    status === "sent" ||
+    normalizeStatus(record.text) === "sent",
   deliveryId: (record: Record<string, unknown>) =>
     [record.messageId, record.pollId, asOptionalRecord(record.message)?.id]
       .map(normalizeStatus)

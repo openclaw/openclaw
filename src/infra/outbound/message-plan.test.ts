@@ -43,6 +43,15 @@ describe("outbound message planning", () => {
       chunkMode: "length",
       expected: ["```txt\naa\nbb\n```", "```txt\ncc\n```"],
     },
+    {
+      name: "long fenced paragraphs with a text-mode chunker",
+      text: "intro\n\n```txt\naa\nbb\ncc\n```",
+      limit: 16,
+      chunker: chunkMarkdownText,
+      chunkerMode: "text",
+      chunkMode: "newline",
+      expected: ["intro", "```txt\naa\nbb\n```", "```txt\ncc\n```"],
+    },
   ] as const)("plans $name with one implicit reply", (testCase) => {
     const policy = createReplyToDeliveryPolicy({
       replyToId: "reply-1",

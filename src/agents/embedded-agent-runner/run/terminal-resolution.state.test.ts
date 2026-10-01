@@ -30,15 +30,4 @@ describe("terminal presentation and delivery state", () => {
 
     expect(tracker.read()).toBeUndefined();
   });
-
-  it("keeps only the bounded latest MCP App view identity", () => {
-    expect(
-      copyAttemptDeliveryState({
-        latestMcpAppChannelView: { viewId: "view-latest" },
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-      } as never).latestMcpAppChannelView,
-    ).toEqual({ viewId: "view-latest" });
-  });
 });

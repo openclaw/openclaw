@@ -1,8 +1,3 @@
-/**
- * Built-in ls session tool.
- *
- * Lists directory entries through local or injected operations with bounded output rendering.
- */
 import { readdir } from "node:fs/promises";
 import type { DirectoryEntry } from "../../../infra/directory-entries.js";
 import { toErrorObject } from "../../../infra/errors.js";

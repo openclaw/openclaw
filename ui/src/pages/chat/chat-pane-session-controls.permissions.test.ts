@@ -141,9 +141,12 @@ describe("chat pane model-setting permissions", () => {
   ] as const)(
     "uses exact field permissions with $scope on a $sharingRole session",
     async ({ scope, sharingRole, allowed }) => {
-      const { state, selectedSession, controls, container } = createControlsFixture(
+      const { state, selectedSession, access, controls, container } = createControlsFixture(
         scope,
         sharingRole,
+      );
+      expect(access.unarchive.allowed).toBe(
+        allowed && (scope === "operator.admin" || sharingRole === "owner"),
       );
       const readOnly = !allowed;
       expect(
@@ -153,7 +156,7 @@ describe("chat pane model-setting permissions", () => {
         container.querySelector("[data-chat-thinking-select]")?.getAttribute("aria-disabled"),
       ).toBe(String(readOnly));
       const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
-      const fast = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")!;
+      const fast = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!;
       const context = container.querySelector<HTMLButtonElement>(
         "[data-chat-context-window-toggle]",
       )!;
@@ -239,7 +242,7 @@ describe("chat pane model-setting permissions", () => {
       const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
       thinking.value = "1";
       thinking.dispatchEvent(new Event("change", { bubbles: true }));
-      container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")!.click();
+      container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!.click();
       await controls.permissionPicker.onSelect("guarded");
       await getPendingChatPickerPatch(state, state.sessionKey);
       expect(state.request).not.toHaveBeenCalled();

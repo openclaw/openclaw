@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -341,7 +342,10 @@ describe("meeting node host audio output", () => {
       MAX_QUEUED_INPUT_BYTES / chunkBytes,
     );
     const pulled = await invokeBridge(bridge, "pullAudio");
-    expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.alloc(chunkBytes, 1));
+    assert.deepStrictEqual(
+      Buffer.from(pulled.base64 as string, "base64"),
+      Buffer.alloc(chunkBytes, 1),
+    );
     await invokeBridge(bridge, "stop");
   });
 
@@ -357,7 +361,7 @@ describe("meeting node host audio output", () => {
     source.fill(0);
 
     const pulled = await invokeBridge(bridge, "pullAudio");
-    expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(expected);
+    assert.deepStrictEqual(Buffer.from(pulled.base64 as string, "base64"), expected);
     await invokeBridge(bridge, "stop");
   });
 

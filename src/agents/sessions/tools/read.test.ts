@@ -85,6 +85,13 @@ const DOCUMENT_FIXTURES = [
   ],
 ] as const;
 
+function executeRead(
+  tool: ReturnType<typeof createReadToolDefinition>,
+  args: Parameters<typeof tool.execute>[1],
+) {
+  return tool.execute("read", args, undefined, undefined, {} as never);
+}
+
 const plainTheme = {
   fg: (_token: string, text: string) => text,
   bold: (text: string) => text,
@@ -123,13 +130,7 @@ describe("read tool", () => {
     const tool = createReadToolDefinition("/workspace", { autoResizeImages: false });
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const result = await tool.execute(
-          "call-1",
-          { path: `media://inbound/${mediaId}` },
-          undefined,
-          undefined,
-          {} as never,
-        );
+        const result = await executeRead(tool, { path: `media://inbound/${mediaId}` });
 
         expect(result.content).toHaveLength(2);
         expect(result.content[0]).toStrictEqual({
@@ -192,13 +193,7 @@ describe("read tool", () => {
     const filePath = path.join(tempDir, "pixel.bmp");
     await fs.writeFile(filePath, createTinyBmp());
     const tool = createReadToolDefinition(tempDir, { autoResizeImages: false });
-    const result = await tool.execute(
-      "call-bmp",
-      { path: filePath },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: filePath });
 
     expect(textContent(result)).toContain("Read image file [image/png]");
     expect(textContent(result)).toContain("converted from image/bmp to image/png");
@@ -213,15 +208,7 @@ describe("read tool", () => {
     const tempDir = tempDirs.make("openclaw-read-directory-");
     const tool = createReadToolDefinition(tempDir);
 
-    await expect(
-      tool.execute(
-        "call-directory",
-        { path: ".", optional: true },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow(
+    await expect(executeRead(tool, { path: ".", optional: true })).rejects.toThrow(
       "Read requires a file path, but . is a directory. List the directory, then read a specific file.",
     );
   });
@@ -231,13 +218,7 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, "present.txt"), "present");
     const tool = createReadToolDefinition(tempDir);
 
-    const missing = await tool.execute(
-      "call-optional-missing",
-      { path: "missing.txt", optional: true },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const missing = await executeRead(tool, { path: "missing.txt", optional: true });
     expect(missing).toStrictEqual({
       content: [{ type: "text", text: "Optional file not found: missing.txt." }],
       details: {
@@ -248,23 +229,9 @@ describe("read tool", () => {
       },
     });
 
-    await expect(
-      tool.execute(
-        "call-required-missing",
-        { path: "missing.txt" },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow(/not found/i);
+    await expect(executeRead(tool, { path: "missing.txt" })).rejects.toThrow(/not found/i);
 
-    const present = await tool.execute(
-      "call-optional-present",
-      { path: "present.txt", optional: true },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const present = await executeRead(tool, { path: "present.txt", optional: true });
     expect(textContent(present)).toBe("present");
     expect(present.details).toEqual({ kind: "text", content: "present" });
   });
@@ -359,13 +326,7 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, "empty.txt"), "");
     const tool = createReadToolDefinition(tempDir);
 
-    const result = await tool.execute(
-      "call-empty",
-      { path: "empty.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "empty.txt" });
 
     expect(textContent(result)).toBe("File is empty (0 bytes).");
   });
@@ -378,13 +339,7 @@ describe("read tool", () => {
       },
     });
 
-    const result = await tool.execute(
-      "call-bom-only",
-      { path: "bom.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "bom.txt" });
 
     expect(textContent(result)).toBe("File contains no readable text (3 bytes).");
   });
@@ -397,13 +352,7 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, "blank.txt"), contents);
     const tool = createReadToolDefinition(tempDir);
 
-    const result = await tool.execute(
-      "call-blank-line",
-      { path: "blank.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "blank.txt" });
 
     expect(textContent(result)).toBe("File contains 1 blank line.");
   });
@@ -416,13 +365,7 @@ describe("read tool", () => {
       },
     });
 
-    const result = await tool.execute(
-      "call-blank-range",
-      { path: "blank.txt", limit: 1 },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "blank.txt", limit: 1 });
 
     expect(textContent(result)).toBe(
       "Selected range contains 1 blank line.\n\n[1 more line in file. Use offset=2 to continue.]",
@@ -439,13 +382,7 @@ describe("read tool", () => {
         },
       });
 
-      const result = await tool.execute(
-        "call-custom-text",
-        { path: `report.${extension}` },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const result = await executeRead(tool, { path: `report.${extension}` });
 
       expect(textContent(result)).toBe("plain text");
     },
@@ -492,13 +429,7 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, storedName), "matched");
     const tool = createReadToolDefinition(tempDir);
 
-    const result = await tool.execute(
-      "call-unicode",
-      { path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt" });
 
     expect(textContent(result)).toContain("Resolved filename");
     expect(textContent(result)).toContain("matched");
@@ -511,13 +442,7 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, storedName), "x".repeat(DEFAULT_MAX_BYTES));
     const tool = createReadToolDefinition(tempDir);
 
-    const result = await tool.execute(
-      "call-unicode-budget",
-      { path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt" });
 
     expect(textContent(result)).toContain("Resolved filename");
     expect(textContent(result)).toContain("cursor=");
@@ -530,13 +455,7 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, "report .txt"), "equivalent");
     const tool = createReadToolDefinition(tempDir);
 
-    const result = await tool.execute(
-      "call-unicode-exact",
-      { path: "report\u00a0.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "report\u00a0.txt" });
 
     expect(textContent(result)).toBe("exact");
   });
@@ -547,15 +466,9 @@ describe("read tool", () => {
     await fs.writeFile(path.join(tempDir, "d\u2019accord.txt"), "curly");
     const tool = createReadToolDefinition(tempDir);
 
-    await expect(
-      tool.execute(
-        "call-unicode-ambiguous",
-        { path: "d\u2018accord.txt" },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow(/ambiguous.*d'accord\.txt.*d\u2019accord\.txt/i);
+    await expect(executeRead(tool, { path: "d\u2018accord.txt" })).rejects.toThrow(
+      /ambiguous.*d'accord\.txt.*d\u2019accord\.txt/i,
+    );
   });
 
   it("suggests a close filename without reading it", async () => {
@@ -616,15 +529,9 @@ describe("read tool", () => {
       },
     });
 
-    await expect(
-      tool.execute(
-        "call-surrogate",
-        { path: "emoji.txt", cursor: 2 },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow(/cursor.*surrogate.*(?:1|3)/i);
+    await expect(executeRead(tool, { path: "emoji.txt", cursor: 2 })).rejects.toThrow(
+      /cursor.*surrogate.*(?:1|3)/i,
+    );
   });
 
   it.each([
@@ -641,13 +548,7 @@ describe("read tool", () => {
         },
       });
 
-      const result = await tool.execute(
-        "call-cursor-eof",
-        { path: "done.txt", cursor },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const result = await executeRead(tool, { path: "done.txt", cursor });
 
       expect(textContent(result)).toBe(
         `Cursor ${cursor} is at or beyond the end of line 1 (${length} characters).`,
@@ -714,25 +615,18 @@ describe("read tool", () => {
       },
     });
 
-    const first = await tool.execute(
-      "call-line-first",
-      { path: "lines.txt", offset: 2, limit: 1 },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const first = await executeRead(tool, { path: "lines.txt", offset: 2, limit: 1 });
     const continuation = (
       first.details as { continuation?: { kind: string; offset: number; cursor: number } }
     ).continuation;
     expect(continuation).toMatchObject({ kind: "cursor", offset: 2 });
 
-    const second = await tool.execute(
-      "call-line-second",
-      { path: "lines.txt", offset: 2, cursor: continuation?.cursor, limit: 1 },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const second = await executeRead(tool, {
+      path: "lines.txt",
+      offset: 2,
+      cursor: continuation?.cursor,
+      limit: 1,
+    });
     if (first.details.kind !== "truncated" || second.details.kind !== "truncated") {
       throw new Error("Expected both partial pages to retain their continuation");
     }
@@ -773,13 +667,7 @@ describe("read tool", () => {
       },
     });
 
-    const selected = await tool.execute(
-      "call-lines",
-      { path: "lines.txt", ...args },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const selected = await executeRead(tool, { path: "lines.txt", ...args });
 
     expect(textContent(selected)).toBe(expected);
   });
@@ -795,13 +683,7 @@ describe("read tool", () => {
       },
     });
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "notes.txt", limit: -1 },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "notes.txt", limit: -1 });
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
     expect(result.details).toMatchObject({
@@ -831,15 +713,9 @@ describe("read tool", () => {
       },
     });
 
-    await expect(
-      tool.execute(
-        "call-1",
-        { path: "notes.txt", offset, optional: true },
-        undefined,
-        undefined,
-        {} as never,
-      ),
-    ).rejects.toThrow("Offset must be an integer at least 1");
+    await expect(executeRead(tool, { path: "notes.txt", offset, optional: true })).rejects.toThrow(
+      "Offset must be an integer at least 1",
+    );
     expect(access).not.toHaveBeenCalled();
     expect(detectImageMimeType).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
@@ -875,13 +751,7 @@ describe("read tool", () => {
     try {
       await fs.writeFile(filePath, legacyBytes);
       const tool = createReadToolDefinition(tempDir);
-      const result = await tool.execute(
-        "call-1",
-        { path: "legacy.txt" },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const result = await executeRead(tool, { path: "legacy.txt" });
 
       expect(decodeWindowsTextFileBufferMock).toHaveBeenCalledWith({ buffer: legacyBytes });
       expect(textContent(result)).toBe("decoded legacy text");
@@ -899,13 +769,7 @@ describe("read tool", () => {
         readFile: async () => bytes,
       },
     });
-    const result = await tool.execute(
-      "call-1",
-      { path: "legacy.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "legacy.txt" });
 
     expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
     expect(textContent(result)).toBe(bytes.toString("utf8"));
@@ -920,13 +784,7 @@ describe("read tool", () => {
       },
     });
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "source.ts" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await executeRead(tool, { path: "source.ts" });
 
     expect(textContent(result)).toBe("import value\nconst marker = '\uFEFF';");
   });
@@ -944,13 +802,7 @@ describe("read tool", () => {
           readFile: async () => bytes,
         },
       });
-      const result = await tool.execute(
-        "call-1",
-        { path: "legacy.txt" },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      const result = await executeRead(tool, { path: "legacy.txt" });
 
       expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
       expect(textContent(result)).toBe(

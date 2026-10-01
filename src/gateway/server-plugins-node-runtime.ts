@@ -208,8 +208,6 @@ export function projectGatewayRuntimeNodes(
   });
 }
 
-// Extracted from the plugin runtime assembler to keep server-plugins.ts within the
-// max-lines boundary; mirrors createGatewayNodesRuntime/createGatewaySubagentRuntime.
 // The gateway context is optional (absent outside an in-process Gateway) and the
 // dispatcher enforces isolation + email content wrapping, so this only forwards the
 // host-bound plugin id.

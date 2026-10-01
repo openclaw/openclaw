@@ -120,9 +120,7 @@ function createPromotedToolCallBlocksFromTextParts(
       return offset;
     }),
   );
-  if (lineBreakOffsets.has(text.length)) {
-    lineBreakOffsets.delete(text.length);
-  }
+  lineBreakOffsets.delete(text.length);
   return createPromotedToolCallBlocks(text, options, lineBreakOffsets);
 }
 
@@ -198,10 +196,7 @@ export function projectStandalonePlainTextToolCallMessage(
     return undefined;
   }
 
-  if (!flushTextParts()) {
-    return undefined;
-  }
-  if (!promotedTextBlock) {
+  if (!flushTextParts() || !promotedTextBlock) {
     return undefined;
   }
 

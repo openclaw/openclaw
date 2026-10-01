@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
-import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { createGateway, createSessions, mountSidebar, TWO_AGENTS } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar transient menus", () => {
@@ -29,7 +29,12 @@ describe("AppSidebar transient menus", () => {
 
   it("ignores a stale agent-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main");
     if (!trigger) {
       throw new Error("expected agent menu trigger");

@@ -1,4 +1,3 @@
-// Defines Slack channel configuration types.
 import type {
   ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
@@ -8,7 +7,6 @@ import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
-  ChannelExecApprovalTarget,
   ChannelReactionConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
@@ -67,7 +65,6 @@ type SlackPresenceEventsConfig = {
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
-export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
 // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
 export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
   /** Slack progress presentation. "compact" keeps one editable text draft. Default: "card". */
@@ -76,7 +73,6 @@ export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
   nativeTaskCards?: boolean;
 };
 export type SlackChannelStreamingConfig = ChannelStreamingConfig<SlackStreamingProgressConfig>;
-export type SlackExecApprovalTarget = ChannelExecApprovalTarget;
 export type SlackExecApprovalConfig = ChannelExecApprovalConfig;
 export type SlackCapabilitiesConfig = string[];
 

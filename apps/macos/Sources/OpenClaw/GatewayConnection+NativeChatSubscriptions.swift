@@ -13,11 +13,7 @@ extension GatewayConnection {
             // Serialize both intent changes and RPCs. A retiring window cannot remove
             // a subscription that another native window has already acquired.
             if let owner {
-                if let target {
-                    self.nativeChatSubscriptionOwners[owner] = target
-                } else {
-                    self.nativeChatSubscriptionOwners.removeValue(forKey: owner)
-                }
+                self.nativeChatSubscriptionOwners[owner] = target
             }
             let captured = target == nil ? await self.captureServerLease() : try await self.acquireServerLease()
             guard let lease = captured else { return }
@@ -38,9 +34,7 @@ extension GatewayConnection {
                         uniquingKeysWith: { _, new in new }),
                     timeoutMs: 10000)
                 _ = try await self.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
+                    request,
                     ifCurrentServerLease: lease)
                 self.nativeChatSubscribedScopes.remove(scope)
             }
@@ -49,9 +43,7 @@ extension GatewayConnection {
                     sessionKey: scope.sessionKey,
                     agentID: scope.agentID)
                 _ = try await self.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
+                    request,
                     ifCurrentServerLease: lease)
                 self.nativeChatSubscribedScopes.insert(scope)
             }

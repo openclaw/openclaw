@@ -1,11 +1,12 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -65,6 +66,7 @@ it.each(["reopening the store", "reconciling an unchanged host"] as const)(
       const request = { limit: 1, archived: "all" as const };
       const initial = await listSessions({ context, client, request });
       const projection = getSessionRowProjection(context)!;
+      await projection.ensureMaterialized();
       const before = projection.materializedCount;
       const environment = store.get(environmentId);
       if (operation === "reopening the store") {
@@ -182,6 +184,13 @@ describe("worker store session change publications", () => {
       },
       claimId: "pending-row-change",
     });
+    const authority = await store.prepareTurnClaimAuthority(claim);
+    const previousObservation = await store.prepareRuntimeRefresh(claim.sessionId);
+    previousObservation.release();
+    const observation = await store.prepareRuntimeRefresh(claim.sessionId);
+    previousObservation.release();
+    onTestFinished(authority.release);
+    onTestFinished(observation.release);
     const observed: Array<{ reconciling: boolean; conflict: boolean; transaction: boolean }> = [];
     onTestFinished(
       sessionChanges.subscribe((change) => {
@@ -201,18 +210,72 @@ describe("worker store session change publications", () => {
       }),
     );
     const ref = "refs/openclaw/worker-results/pending-row-change";
-    expect(() =>
-      runOpenClawStateWriteTransaction(
-        () => {
-          store.recordStagedWorkspaceResult(claim, ref);
-          expect(observed).toEqual([]);
-          throw new Error("rollback pending row");
-        },
-        { database },
-      ),
-    ).toThrow("rollback pending row");
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    let refused = 0;
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("rollback pending row");
+      }
+    };
+    const admission = vi
+      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (
+            request.stage === "commit" &&
+            isRecord(request.facts) &&
+            isRecord(request.facts.placement) &&
+            request.facts.placement.sessionId === claim.sessionId
+          ) {
+            refused++;
+            expect(observed).toEqual([]);
+            current = false;
+          }
+          admit(request, grant);
+        }, attachment),
+      );
+    try {
+      await expect(
+        store.recordStagedWorkspaceResult(claim, ref, undefined, assertCurrent),
+      ).rejects.toThrow("rollback pending row");
+    } finally {
+      admission.mockRestore();
+    }
+    expect(refused).toBe(1);
     expect(observed).toEqual([]);
-    store.recordStagedWorkspaceResult(claim, ref);
+    expect(store.listPendingWorkspaceResults()).toMatchObject([{ stagedResultRef: null }]);
+    expect(authority.isCurrent()).toBe(true);
+    expect(() => observation.assertCurrent()).not.toThrow();
+    let commitGrants = 0;
+    const successfulAdmission = vi
+      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          admit(request, () => {
+            if (
+              request.stage === "commit" &&
+              isRecord(request.facts) &&
+              isRecord(request.facts.placement) &&
+              request.facts.placement.sessionId === claim.sessionId
+            ) {
+              commitGrants++;
+              expect(authority.isCurrent()).toBe(true);
+              expect(() => observation.assertCurrent()).toThrow("placement authority changed");
+              expect(observed).toEqual([]);
+            }
+            return grant();
+          });
+        }, attachment),
+      );
+    try {
+      await store.recordStagedWorkspaceResult(claim, ref);
+    } finally {
+      successfulAdmission.mockRestore();
+    }
+    expect(commitGrants).toBe(1);
+    expect(authority.isCurrent()).toBe(true);
+    expect(() => observation.assertCurrent()).toThrow("placement authority changed");
     expect(observed.at(-1)).toEqual({ reconciling: true, conflict: false, transaction: false });
     store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef: ref });
     expect(observed.at(-1)).toEqual({ reconciling: true, conflict: true, transaction: false });

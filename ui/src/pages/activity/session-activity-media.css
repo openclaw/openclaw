@@ -54,6 +54,24 @@ openclaw-activity-session-media {
   display: none;
 }
 
+/* Chat's attachment-card stylesheet does not load on this route; fit failed tiles to 128x80. */
+.activity-feed__media .chat-assistant-attachment-card,
+.activity-feed__media .chat-assistant-attachment-card__header,
+.activity-feed__media .chat-assistant-attachment-card__identity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+}
+
+.activity-feed__media .chat-assistant-attachment-card__title,
+.activity-feed__media .chat-assistant-attachment-card__status-separator,
+.activity-feed__media .chat-assistant-attachment-card__status-reason {
+  display: none;
+}
+
 .activity-feed__media .activity-feed__note-action {
   align-self: center;
   flex: none;

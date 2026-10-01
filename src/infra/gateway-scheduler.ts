@@ -14,6 +14,24 @@ export type GatewayScheduledJob = {
   stop: () => Promise<void>;
 };
 
+type ScheduleParams = {
+  id: string;
+  everyMs?: number;
+  /** Keep both pending clock deadlines when a stale read would postpone the wake. */
+  mode?: "replace" | "earliest";
+  run: () => void | Promise<unknown>;
+} & ({ atMs: number } | { delayMs: number });
+
+export type GatewaySchedulerScope = Pick<
+  GatewayScheduler,
+  "signal" | "now" | "schedule" | "beginClose" | "stop"
+>;
+
+type ScheduleOwner = {
+  signal: AbortSignal;
+  jobs: Set<ScheduledWork>;
+};
+
 type ScheduledWork = {
   id: string;
   atMs: number;
@@ -21,8 +39,9 @@ type ScheduledWork = {
   everyMs?: number;
   run: () => void | Promise<unknown>;
   context: ReturnType<typeof AsyncLocalStorage.snapshot>;
-  pending: Set<Promise<void>>;
+  running?: Promise<void>;
   cancelled: boolean;
+  owner?: ScheduleOwner;
 };
 
 const log = createSubsystemLogger("gateway/scheduler");
@@ -47,7 +66,6 @@ export class GatewayScheduler {
   private cancelTimer?: () => void;
   private dispatching = false;
   private timerGeneration = 0;
-  private closed = false;
   private readonly controller = new AbortController();
 
   constructor(
@@ -71,7 +89,7 @@ export class GatewayScheduler {
     const elapsedMs = this.clock.monotonicNow();
     let next: number | null = null;
     for (const job of this.jobs.values()) {
-      if (job.pending.size > 0) {
+      if (job.running) {
         continue;
       }
       const atMs = nowMs + this.remaining(job, nowMs, elapsedMs);
@@ -80,15 +98,36 @@ export class GatewayScheduler {
     return next;
   }
 
-  schedule(
-    params: {
-      id: string;
-      everyMs?: number;
-      /** Keep both pending clock deadlines when a stale read would postpone the wake. */
-      mode?: "replace" | "earliest";
-      run: () => void | Promise<unknown>;
-    } & ({ atMs: number } | { delayMs: number }),
-  ): GatewayScheduledJob {
+  /** Closes one owner's timers without retiring siblings or losing in-flight joins. */
+  scope(): GatewaySchedulerScope {
+    const controller = new AbortController();
+    const owner: ScheduleOwner = {
+      signal: AbortSignal.any([this.signal, controller.signal]),
+      jobs: new Set(),
+    };
+    const beginClose = () => {
+      controller.abort();
+      for (const job of owner.jobs) {
+        this.cancel(job);
+      }
+    };
+    return {
+      signal: owner.signal,
+      now: () => this.now(),
+      schedule: (params) => this.scheduleOwned(params, owner),
+      beginClose,
+      stop: async () => {
+        beginClose();
+        await Promise.all([...owner.jobs].flatMap((job) => job.running ?? []));
+      },
+    };
+  }
+
+  schedule(params: ScheduleParams): GatewayScheduledJob {
+    return this.scheduleOwned(params);
+  }
+
+  private scheduleOwned(params: ScheduleParams, owner?: ScheduleOwner): GatewayScheduledJob {
     const relative = "delayMs" in params;
     const nowMs = this.now();
     const atMs = relative ? nowMs + params.delayMs : params.atMs;
@@ -98,10 +137,8 @@ export class GatewayScheduler {
     ) {
       throw new Error(`Invalid Gateway schedule: ${params.id}`);
     }
-    const previous = this.jobs.get(params.id);
-    if (previous) {
-      previous.cancelled = true;
-    }
+    const cancelled = this.signal.aborted || owner?.signal.aborted === true;
+    const previous = cancelled ? undefined : this.jobs.get(params.id);
     const job: ScheduledWork = {
       id: params.id,
       run: params.run,
@@ -112,10 +149,10 @@ export class GatewayScheduler {
           ? this.clock.monotonicNow() + Math.max(0, atMs - nowMs)
           : undefined,
       context: runOutsideAsyncWorkScope(() => AsyncLocalStorage.snapshot()),
-      pending: new Set(),
-      cancelled: this.closed,
+      cancelled,
+      owner,
     };
-    if (params.mode === "earliest" && previous && previous.pending.size === 0) {
+    if (params.mode === "earliest" && previous && !previous.running) {
       job.atMs = Math.min(job.atMs, previous.atMs);
       if (previous.elapsedAtMs !== undefined) {
         job.elapsedAtMs =
@@ -124,34 +161,42 @@ export class GatewayScheduler {
             : Math.min(job.elapsedAtMs, previous.elapsedAtMs);
       }
     }
-    const cancel = () => {
-      job.cancelled = true;
-      if (this.jobs.get(job.id) === job) {
-        this.jobs.delete(job.id);
-        this.arm();
-      }
-    };
-    if (!this.closed) {
+    const cancel = () => this.cancel(job);
+    if (!cancelled) {
+      owner?.jobs.add(job);
       this.jobs.set(job.id, job);
+      if (previous) {
+        this.cancel(previous);
+      }
       this.arm();
     }
     return {
       cancel,
       stop: async () => {
         cancel();
-        await Promise.all(job.pending);
+        await job.running;
       },
     };
   }
 
+  private cancel(job: ScheduledWork): void {
+    job.cancelled = true;
+    if (!job.running) {
+      job.owner?.jobs.delete(job);
+    }
+    if (this.jobs.get(job.id) === job) {
+      this.jobs.delete(job.id);
+      this.arm();
+    }
+  }
+
   beginClose(): void {
-    this.closed = true;
     this.controller.abort();
     this.timerGeneration += 1;
     this.cancelTimer?.();
     this.cancelTimer = undefined;
     for (const job of this.jobs.values()) {
-      job.cancelled = true;
+      this.cancel(job);
     }
     this.jobs.clear();
   }
@@ -171,7 +216,7 @@ export class GatewayScheduler {
   }
 
   private arm(): void {
-    if (this.closed || this.dispatching) {
+    if (this.signal.aborted || this.dispatching) {
       return;
     }
     this.cancelTimer?.();
@@ -191,13 +236,13 @@ export class GatewayScheduler {
 
   private wake(expectedAtMs: number): Promise<void> | void {
     this.cancelTimer = undefined;
-    if (this.closed) {
+    if (this.signal.aborted) {
       return;
     }
     const nowMs = this.now();
     const elapsedMs = this.clock.monotonicNow();
     const due = [...this.jobs.values()]
-      .filter((job) => job.pending.size === 0 && this.remaining(job, nowMs, elapsedMs) <= 0)
+      .filter((job) => !job.running && this.remaining(job, nowMs, elapsedMs) <= 0)
       .toSorted(
         (a, b) => this.remaining(a, nowMs, elapsedMs) - this.remaining(b, nowMs, elapsedMs),
       );
@@ -208,7 +253,12 @@ export class GatewayScheduler {
     this.dispatching = true;
     try {
       for (const job of due) {
-        if (this.closed || job.cancelled || this.jobs.get(job.id) !== job) {
+        if (
+          this.signal.aborted ||
+          job.cancelled ||
+          job.owner?.signal.aborted ||
+          this.jobs.get(job.id) !== job
+        ) {
           continue;
         }
         if (job.everyMs === undefined) {
@@ -224,18 +274,26 @@ export class GatewayScheduler {
   }
 
   private run(job: ScheduledWork): Promise<void> {
-    log.debug(`running ${job.id}`);
+    // Cadence jobs can run every few milliseconds (event-loop sampling runs every 20ms),
+    // so only one-shot runs are worth a debug line.
+    if (job.everyMs === undefined) {
+      log.debug(`running ${job.id}`);
+    } else {
+      log.trace(`running ${job.id}`);
+    }
     const done = createDeferredCore();
     const work = new AsyncWorkScope();
-    job.pending.add(done.promise);
+    job.running = done.promise;
     this.pending.add(done.promise);
     const finish = () => {
-      job.pending.delete(done.promise);
+      job.running = undefined;
       this.pending.delete(done.promise);
       // Coalesce all missed periods, including time spent in the callback, into this one run.
-      if (job.everyMs !== undefined && !job.cancelled && !this.closed) {
+      if (job.everyMs !== undefined && !job.cancelled && !this.signal.aborted) {
         job.atMs = this.now() + job.everyMs;
         job.elapsedAtMs = this.clock.monotonicNow() + job.everyMs;
+      } else {
+        job.owner?.jobs.delete(job);
       }
       done.resolve();
       this.arm();

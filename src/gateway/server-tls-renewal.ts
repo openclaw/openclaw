@@ -14,7 +14,8 @@ export function startGatewayTlsRenewal(params: {
   onRenewed: () => Promise<void>;
   log: { info: (message: string) => void; warn: (message: string) => void };
 }) {
-  const { runtime, scheduler } = params;
+  const { runtime } = params;
+  const scheduler = params.scheduler.scope();
   const options = runtime.tlsOptions;
   if (!runtime.enabled || !options || scheduler.signal.aborted) {
     return undefined;
@@ -23,17 +24,16 @@ export function startGatewayTlsRenewal(params: {
     (value): value is string => Boolean(value),
   );
   let enabled = params.enabled;
-  let stopped = false;
   let epoch = 0;
   let refreshJob: GatewayScheduledJob | undefined;
   let pending = Promise.resolve();
   const isCurrent = (expected: number) =>
-    !stopped && enabled && !scheduler.signal.aborted && epoch === expected;
+    enabled && !scheduler.signal.aborted && epoch === expected;
   const requestRefresh = () => {
     const expected = ++epoch;
     refreshJob?.cancel();
     if (!isCurrent(expected)) {
-      if (!stopped && !enabled && !scheduler.signal.aborted) {
+      if (!enabled && !scheduler.signal.aborted) {
         params.log.info("gateway TLS renewal deferred (gateway.reload.mode=off)");
       }
       return;
@@ -100,12 +100,11 @@ export function startGatewayTlsRenewal(params: {
       }
     },
     async stop() {
-      stopped = true;
-      refreshJob?.cancel();
+      scheduler.beginClose();
       for (const path of paths) {
         unwatchFile(path, requestRefresh);
       }
-      await pending;
+      await scheduler.stop();
     },
   };
 }

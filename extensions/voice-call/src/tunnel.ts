@@ -65,7 +65,6 @@ function listenForChildStreamErrors(
 }
 
 interface TunnelConfig {
-  /** Tunnel provider: ngrok, tailscale-serve, or tailscale-funnel */
   provider: "ngrok" | "tailscale-serve" | "tailscale-funnel" | "none";
   /** Local port to tunnel */
   port: number;
@@ -106,7 +105,6 @@ async function startNgrokTunnel(config: {
   authToken?: string;
   domain?: string;
 }): Promise<TunnelResult> {
-  // Build ngrok command args
   const args = ["http", String(config.port), "--log", "stdout", "--log-format", "json"];
 
   // Add custom domain if provided (paid ngrok feature)
@@ -161,17 +159,14 @@ async function startNgrokTunnel(config: {
           publicUrl = log.url;
         }
 
-        // Also check for the URL field directly
         if (log.addr && log.url && !publicUrl) {
           publicUrl = log.url;
         }
 
-        // Check for ready state
         if (publicUrl && !startupSettled) {
           startupSettled = true;
           clearTimeout(timeout);
 
-          // Add path to the public URL
           const fullUrl = publicUrl + config.path;
 
           console.log(`[voice-call] ngrok tunnel active: ${fullUrl}`);

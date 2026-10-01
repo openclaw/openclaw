@@ -13,9 +13,19 @@ vi.mock("node:fs", async (importOriginal) => ({
 vi.mock("./cli/run-main.js", () => ({
   runCli: vi.fn(async () => undefined),
 }));
+const lifecycleImports = vi.hoisted(() => ({ failureOutput: vi.fn() }));
+
 vi.mock("./cli/one-shot-exit.js", () => ({
   runCliWithExitFinalization: vi.fn(),
 }));
+vi.mock("./cli/failure-output.js", () => {
+  lifecycleImports.failureOutput();
+  return {
+    formatCliFailureLines: vi.fn(() => []),
+    formatCliJsonFailure: vi.fn(),
+    isExpectedCliError: vi.fn(() => false),
+  };
+});
 vi.mock("./entry.version-fast-path.js", () => ({
   tryHandleRootVersionFastPath: vi.fn(() => false),
 }));
@@ -24,6 +34,26 @@ vi.mock("./infra/is-main.js", () => ({
 }));
 vi.mock("./infra/package-lifecycle.js", () => ({
   completePendingPackageLifecycle: vi.fn(async () => true),
+}));
+vi.mock("./library.js", () => ({
+  applyTemplate: vi.fn(),
+  createDefaultDeps: vi.fn(),
+  deriveSessionKey: vi.fn(),
+  describePortOwner: vi.fn(),
+  ensureBinary: vi.fn(),
+  ensurePortAvailable: vi.fn(),
+  getReplyFromConfig: vi.fn(),
+  handlePortError: vi.fn(),
+  loadConfig: vi.fn(),
+  monitorWebChannel: vi.fn(),
+  normalizeE164: vi.fn(),
+  PortInUseError: class PortInUseError extends Error {},
+  promptYesNo: vi.fn(),
+  resolveSessionKey: vi.fn(),
+  resolveStorePath: vi.fn(),
+  runCommandWithTimeout: vi.fn(),
+  runExec: vi.fn(),
+  waitForever: vi.fn(),
 }));
 
 const originalArgv = process.argv;
@@ -37,6 +67,7 @@ describe("legacy package executable entrypoint", () => {
     vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(false);
     vi.mocked(existsSync).mockReturnValue(false);
     vi.mocked(completePendingPackageLifecycle).mockResolvedValue(true);
+    lifecycleImports.failureOutput.mockClear();
     process.argv = ["node", "dist/index.js", "status"];
   });
 
@@ -58,6 +89,24 @@ describe("legacy package executable entrypoint", () => {
     expect(tryHandleRootVersionFastPath).toHaveBeenCalledWith(process.argv);
     expect(runMain.runCli).not.toHaveBeenCalled();
     expect(exitFinalization.runCliWithExitFinalization).not.toHaveBeenCalled();
+    expect(lifecycleImports.failureOutput).not.toHaveBeenCalled();
+  });
+
+  it("loads CLI failure modules only after the version fast path declines", async () => {
+    process.argv = ["node", "dist/index.js", "status"];
+
+    await import("./index.js?legacy-cli-start" as "./index.js");
+
+    expect(lifecycleImports.failureOutput).toHaveBeenCalledOnce();
+  });
+
+  it("keeps library imports free of CLI failure modules", async () => {
+    vi.mocked(isMainModule).mockReturnValue(false);
+
+    const entry = await import("./index.js?legacy-library-entry" as "./index.js");
+
+    expect(typeof entry.loadConfig).toBe("function");
+    expect(lifecycleImports.failureOutput).not.toHaveBeenCalled();
   });
 
   it("completes pending lifecycle before loading the CLI entry graph", async () => {

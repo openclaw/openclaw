@@ -7,11 +7,14 @@ import { captureOpenClawStateReadContext } from "../../state/openclaw-state-work
 import {
   matchesAcpSessionRuntimeLocator,
   resolveAcpSessionControlOwner,
-  type AcpSessionRuntimeLocator,
 } from "./session-control-owner.js";
-import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
+import type {
+  AcpSessionRuntimeLocator,
+  AcpSessionControlConstraint,
+} from "./session-meta-control.types.js";
 import {
   assertAcpSessionMutationEntry,
+  captureAcpSessionEntryBinding,
   type AcpSessionEntryExpectation,
 } from "./session-meta-entry.kernel.js";
 import {
@@ -149,13 +152,7 @@ export async function prepareAcpSessionControlRead(params: {
     }
     const ownerKey = resolveAcpSessionControlOwner(entry);
     initial ??= {
-      entry: entry
-        ? {
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            sessionStartedAt: entry.sessionStartedAt,
-          }
-        : null,
+      entry: entry ? captureAcpSessionEntryBinding(entry) : null,
       ownerKey,
     };
     let constraint: AcpSessionControlConstraint | undefined;
@@ -165,13 +162,7 @@ export async function prepareAcpSessionControlRead(params: {
         sharedSource: { path: databasePath, identity: { ...shared.admission.identity } },
         agentId: target.agentId,
         sessionKey: read.storeSessionKey,
-        entry: entry
-          ? {
-              sessionId: entry.sessionId,
-              lifecycleRevision: entry.lifecycleRevision,
-              sessionStartedAt: entry.sessionStartedAt,
-            }
-          : undefined,
+        entry: entry ? captureAcpSessionEntryBinding(entry) : undefined,
         ownerKey,
         read: {
           keys: [

@@ -5,7 +5,7 @@ import {
   formatPollResultsAsText,
   isPollEventType,
   isPollStartType,
-  parsePollStartContent,
+  parsePollStart,
   resolvePollReferenceEventId,
   type PollStartContent,
 } from "./poll-types.js";
@@ -69,13 +69,13 @@ export async function fetchMatrixPollSnapshot(
 
   const rootEvent = isPollStartType(event.type)
     ? event
-    : ((await client.getEvent(roomId, pollEventId)) as MatrixRawEvent);
+    : await client.getEvent(roomId, pollEventId);
   if (!isPollStartType(rootEvent.type)) {
     return null;
   }
 
   const pollStartContent = rootEvent.content as PollStartContent;
-  const pollSummary = parsePollStartContent(pollStartContent);
+  const pollSummary = parsePollStart(pollStartContent);
   if (!pollSummary) {
     return null;
   }

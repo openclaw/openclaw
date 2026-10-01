@@ -10,18 +10,14 @@ vi.mock("node:child_process", () => ({
 }));
 
 const profileMocks = vi.hoisted(() => ({
-  buildCellRunArgs: vi.fn((_profile: unknown, options: { environmentFile: string }) => [
-    "run",
-    "--env-file",
-    options.environmentFile,
-    "cell-image",
-  ]),
-  buildCellCreateArgs: vi.fn((_profile: unknown, options: { environmentFile: string }) => [
-    "create",
-    "--env-file",
-    options.environmentFile,
-    "cell-image",
-  ]),
+  buildCellContainerArgs: vi.fn(
+    (operation: "run" | "create", _profile: unknown, options: { environmentFile: string }) => [
+      operation,
+      "--env-file",
+      options.environmentFile,
+      "cell-image",
+    ],
+  ),
   validateCellContainerProfile: vi.fn(),
   validateFleetImage: vi.fn((image: string) => image),
 }));
@@ -154,10 +150,10 @@ describe("fleet container runtime", () => {
     await runtime.run(profile, true);
     await runtime.run(profile, false);
 
-    expect(profileMocks.buildCellRunArgs).toHaveBeenCalledWith(profile, {
+    expect(profileMocks.buildCellContainerArgs).toHaveBeenCalledWith("run", profile, {
       environmentFile: environmentFiles[0],
     });
-    expect(profileMocks.buildCellCreateArgs).toHaveBeenCalledWith(profile, {
+    expect(profileMocks.buildCellContainerArgs).toHaveBeenCalledWith("create", profile, {
       environmentFile: environmentFiles[1],
     });
     expect(executor).toHaveBeenNthCalledWith(

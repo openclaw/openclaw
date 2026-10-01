@@ -85,18 +85,21 @@ describe("dashboard default activation and personal layout persistence", () => {
     },
   );
 
-  it("relocates only the visible fullscreen widget when a replacement task menu exists", async () => {
+  it("relocates a visible full-width singleton in split and fullscreen views when a task menu exists", async () => {
     await ensureBoardViewElement();
     const { pane } = createDashboardHarness();
     const board = { ...pane.resolveBoardView(), activeTabId: "research" };
     const expanded = openDashboardPresentation({ columns: [] }, "expanded");
-    expect(pane.fullscreenBoardWidgetMenu(expanded, board)?.widget.name).toBe("source-map");
+    expect(pane.pageBoardWidgetMenu(expanded, board)?.widget.name).toBe("source-map");
     expect(
-      pane.fullscreenBoardWidgetMenu(openDashboardPresentation(expanded, "split"), board),
-    ).toBeUndefined();
-    expect(
-      pane.fullscreenBoardWidgetMenu(expanded, { ...board, activeTabId: "main" }),
-    ).toBeUndefined();
+      pane.pageBoardWidgetMenu(openDashboardPresentation(expanded, "split"), board)?.widget.name,
+    ).toBe("source-map");
+    const split = openDashboardPresentation(expanded, "split");
+    const side = promoteSidebarPanel(ensureSidebarConversation(split), "conversation");
+    expect(pane.pageBoardWidgetMenu(side, board)?.widget.name).toBe("source-map");
+    expect(pane.pageBoardWidgetMenu(openSlot(side, "workspace"), board)).toBeUndefined();
+    expect(pane.pageBoardWidgetMenu(closeSlot(side, "dashboard"), board)).toBeUndefined();
+    expect(pane.pageBoardWidgetMenu(expanded, { ...board, activeTabId: "main" })).toBeUndefined();
     const narrow = {
       ...board,
       snapshot: {
@@ -106,12 +109,12 @@ describe("dashboard default activation and personal layout persistence", () => {
         ),
       },
     };
-    expect(pane.fullscreenBoardWidgetMenu(expanded, narrow)).toBeUndefined();
+    expect(pane.pageBoardWidgetMenu(expanded, narrow)).toBeUndefined();
     pane.visuallyPresented = false;
-    expect(pane.fullscreenBoardWidgetMenu(expanded, board)).toBeUndefined();
+    expect(pane.pageBoardWidgetMenu(expanded, board)).toBeUndefined();
     pane.visuallyPresented = true;
     pane.state.sessionsResult = null;
-    expect(pane.fullscreenBoardWidgetMenu(expanded, board)).toBeUndefined();
+    expect(pane.pageBoardWidgetMenu(expanded, board)).toBeUndefined();
   });
 
   it.each(["shared", "personal"] as const)(

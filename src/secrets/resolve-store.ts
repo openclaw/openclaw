@@ -23,22 +23,16 @@ export function resolveStoreRefs(params: {
       database: params.database,
     });
     if (!result.ok) {
-      if (result.error.code === "SECRET_STORE_NOT_FOUND") {
+      if (
+        result.error.code === "SECRET_STORE_NOT_FOUND" ||
+        result.error.code === "SECRET_STORE_INVALID_NAME"
+      ) {
         params.onRefError(
           refResolutionError({
-            code: "SECRET_REF_NOT_FOUND",
-            source: "store",
-            provider: params.providerName,
-            refId: ref.id,
-            message: result.error.message,
-          }),
-        );
-        continue;
-      }
-      if (result.error.code === "SECRET_STORE_INVALID_NAME") {
-        params.onRefError(
-          refResolutionError({
-            code: "SECRET_REF_INVALID",
+            code:
+              result.error.code === "SECRET_STORE_NOT_FOUND"
+                ? "SECRET_REF_NOT_FOUND"
+                : "SECRET_REF_INVALID",
             source: "store",
             provider: params.providerName,
             refId: ref.id,

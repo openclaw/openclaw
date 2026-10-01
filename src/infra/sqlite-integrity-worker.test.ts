@@ -18,6 +18,18 @@ import {
 import type { SqliteIntegrityCheckTiming, SqliteIntegrityTableCheck } from "./sqlite-integrity.js";
 import * as inspectionBudget from "./sqlite-readonly-worker.js";
 
+const progress = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      ...(subsystem === "state/sqlite" ? { info: progress } : {}),
+    }),
+  };
+});
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, fork: vi.fn(actual.fork) };
@@ -27,6 +39,39 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("reports bounded progress while native integrity is blocked and stops after cancellation", async () => {
+    const source = path.join(tempDirs.make("openclaw-integrity-progress-"), "source.sqlite");
+    fs.writeFileSync(source, "retained source");
+    progress.mockClear();
+    const worker = new ChildProcess();
+    worker.send = vi.fn(() => true);
+    worker.kill = vi.fn(() => {
+      queueMicrotask(() => worker.emit("close", null, "SIGKILL"));
+      return true;
+    });
+    vi.mocked(fork).mockReturnValueOnce(worker);
+    const controller = new AbortController();
+    vi.useFakeTimers();
+    try {
+      const check = withSqliteIntegrityWorkerScope(
+        () => {},
+        () => assertSqliteIntegrityInWorker(source, 250, controller.signal),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit("message", { type: "phase", phase: "checking" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(progress).toHaveBeenCalledTimes(3);
+      expect(progress).toHaveBeenCalledWith(expect.stringContaining("phase=checking"));
+      const outcome = expect(check).rejects.toThrow("interrupted inspection");
+      controller.abort(new Error("interrupted inspection"));
+      await vi.advanceTimersByTimeAsync(0);
+      await outcome;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(progress).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it.each(["healthy", "quick_check", "integrity_check"] as const)(
     "settles bounded table readers and detects non-ok rows: %s",
     async (damage) => {

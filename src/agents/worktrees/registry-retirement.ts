@@ -1,6 +1,11 @@
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import type { WorktreeRetirementOperations } from "./registry-retirement.worker.js";
+import type { WorktreeWorkerOperations } from "./dispatch.worker.js";
+
+type WorktreeRetirementOperations = Pick<
+  WorktreeWorkerOperations,
+  "worktrees.deferCleanup" | "worktrees.retireMissing"
+>;
 
 export async function deferWorktreeCleanup(
   env: NodeJS.ProcessEnv,

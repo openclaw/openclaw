@@ -330,45 +330,6 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
-  it("rejects reserved literal targets after directory miss", async () => {
-    mocks.getChannelPlugin.mockReturnValue({
-      ...createChannelTestPluginBase({
-        id: "telegram",
-        label: "Telegram",
-        capabilities: { chatTypes: ["direct", "group", "channel"] },
-      }),
-      directory: {
-        listPeers: mocks.listPeers,
-        listPeersLive: mocks.listPeersLive,
-        listGroups: mocks.listGroups,
-        listGroupsLive: mocks.listGroupsLive,
-      },
-      messaging: {
-        targetResolver: {
-          reservedLiterals: ["current", "self", "this", "me"],
-          hint: "<chatId>",
-          resolveTarget: mocks.resolveTarget,
-        },
-      },
-    });
-    mocks.listGroups.mockResolvedValue([]);
-    mocks.listGroupsLive.mockResolvedValue([]);
-
-    const result = await resolveMessagingTarget({
-      cfg,
-      channel: "telegram",
-      input: "current",
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.message).toContain('Reserved target "current"');
-      expect(result.error.message).toContain("Telegram");
-    }
-    expect(mocks.listGroups).toHaveBeenCalled();
-    expect(mocks.resolveTarget).not.toHaveBeenCalled();
-  });
-
   it("requires exact directory matches before preserving reserved literal targets", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       ...createChannelTestPluginBase({

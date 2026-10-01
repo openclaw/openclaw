@@ -44,6 +44,8 @@ it.each(
       );
       expect(assignment).toBeGreaterThanOrEqual(0);
       await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      // A resting pointer opens the submenu first; Enter on its owner must not select a row.
+      await userEvent.hover(groups[assignment]!);
       groups[assignment]!.focus();
       await userEvent.keyboard("{Enter}");
     } else {

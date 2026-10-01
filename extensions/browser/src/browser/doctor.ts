@@ -4,7 +4,7 @@ import type { BrowserStatus, BrowserTransport } from "./client.types.js";
 
 type BrowserDoctorCheckStatus = "pass" | "warn" | "fail" | "info";
 
-export type BrowserDoctorCheck = {
+type BrowserDoctorCheck = {
   id: string;
   label: string;
   status: BrowserDoctorCheckStatus;

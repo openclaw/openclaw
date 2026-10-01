@@ -1,4 +1,3 @@
-// Exposes the Node pairing surface used by gateway and CLI flows.
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export type NodeApprovalSurface = {

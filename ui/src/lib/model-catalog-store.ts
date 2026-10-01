@@ -57,16 +57,13 @@ export function readAgentModelCatalog(
   client: ModelCatalogClient | null | undefined,
   agentId: string | null | undefined,
 ): ModelCatalogPresentation {
-  if (!client || !agentId) {
-    return { models: [], hasSnapshot: false, retired: false };
-  }
-  const scope = { agentId };
-  const catalog = peekModelCatalog(client, scope, { allowStale: true });
+  const catalog =
+    client && agentId ? peekModelCatalog(client, { agentId }, { allowStale: true }) : undefined;
   return {
     ...catalog,
     models: catalog?.models ?? [],
     hasSnapshot: catalog !== undefined,
-    retired: isModelCatalogRetired(client, scope),
+    retired: client && agentId ? isModelCatalogRetired(client, { agentId }) : false,
   };
 }
 
@@ -163,10 +160,31 @@ export function settleModelCatalogRequests(
   scope: ModelsListParams,
 ): Promise<void> | undefined {
   const key = modelCatalogKey(modelCatalogParams(scope));
-  const pending = Array.from(modelCatalogCache.get(client)?.requests.get(key)?.values() ?? [])
-    .map((lane) => lane.active?.transportSettled)
-    .filter((promise) => promise !== undefined);
+  const pending = Array.from(
+    modelCatalogCache.get(client)?.requests.get(key)?.values() ?? [],
+  ).flatMap(({ active }) => (active ? [active.transportSettled] : []));
   return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
+}
+
+/** Observe an eligible producer without joining its cancellation or publication ownership. */
+export function pendingModelCatalogResult(
+  client: ModelCatalogClient,
+  scope: ModelsListParams,
+  issuedBefore: ReadonlySet<ModelCatalogRead>,
+): Promise<ModelCatalogResult | undefined> | undefined {
+  const cache = modelCatalogCache.get(client);
+  const key = modelCatalogKey(modelCatalogParams(scope));
+  const pending = Array.from(cache?.requests.get(key)?.values() ?? []).find(
+    ({ active }) => active && cache?.reads.has(active.read) && !issuedBefore.has(active.read),
+  )?.active;
+  return pending?.promise.then(
+    () =>
+      modelCatalogCache.get(client) === cache &&
+      cache?.entries.get(key)?.publishedRead === pending.read.order
+        ? peekModelCatalog(client, scope)
+        : undefined,
+    () => undefined,
+  );
 }
 
 function createModelCatalogRequest(params: {
@@ -178,18 +196,22 @@ function createModelCatalogRequest(params: {
   queued: boolean;
   releaseLane: () => void;
 }): ModelCatalogRequest {
-  const { client, cache, lane, timeoutMs } = params;
+  const { client, cache, lane, timeoutMs: timeout } = params;
   const controller = new AbortController();
   const completion = createDeferredCore<ModelCatalogResult>();
   const transportSettled = createDeferredCore();
   const duration =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? resolveSafeTimeoutDelayMs(timeoutMs, { minMs: 0 })
+    typeof timeout === "number" && Number.isFinite(timeout)
+      ? resolveSafeTimeoutDelayMs(timeout, { minMs: 0 })
       : undefined;
   const deadline = duration === undefined ? undefined : Date.now() + duration;
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let requestSent = false;
+  const rejectTimeout = (timeoutMs: number) =>
+    pending.reject(
+      new GatewayProtocolRequestTimeoutError({ method: "models.list", timeoutMs, requestSent }),
+    );
   const canRetry = () =>
     !pending.settled &&
     !controller.signal.aborted &&
@@ -198,7 +220,10 @@ function createModelCatalogRequest(params: {
     cache.reads.has(pending.read) &&
     lane.active === pending &&
     !lane.queued;
-  const retireCompletion = () => {
+  const settle = (complete: () => void) => {
+    if (pending.settled) {
+      return;
+    }
     clearTimeout(deadlineTimer);
     cache.reads.delete(pending.read);
     pending.settled = true;
@@ -206,6 +231,7 @@ function createModelCatalogRequest(params: {
       lane.queued = undefined;
       params.releaseLane();
     }
+    complete();
   };
   const finishTransport = () => {
     transportSettled.resolve();
@@ -230,18 +256,8 @@ function createModelCatalogRequest(params: {
     subscribers: new Set(),
     promise: completion.promise,
     transportSettled: transportSettled.promise,
-    resolve: (result) => {
-      if (!pending.settled) {
-        retireCompletion();
-        completion.resolve(result);
-      }
-    },
-    reject: (error) => {
-      if (!pending.settled) {
-        retireCompletion();
-        completion.reject(error);
-      }
-    },
+    resolve: (result) => settle(() => completion.resolve(result)),
+    reject: (error) => settle(() => completion.reject(error)),
     start: () => {
       if (started) {
         return;
@@ -253,13 +269,7 @@ function createModelCatalogRequest(params: {
       }
       const remaining = deadline === undefined ? undefined : deadline - Date.now();
       if (params.queued && duration !== undefined && remaining !== undefined && remaining <= 0) {
-        pending.reject(
-          new GatewayProtocolRequestTimeoutError({
-            method: "models.list",
-            timeoutMs: duration,
-            requestSent: false,
-          }),
-        );
+        rejectTimeout(duration);
         finishTransport();
         return;
       }
@@ -271,10 +281,10 @@ function createModelCatalogRequest(params: {
           try {
             // Only a received rejection can retry; local timeout still owns its transport.
             // The existing numeric deadline covers every attempt and wait in this lane.
-            const result = await (timeoutMs === undefined
+            const result = await (timeout === undefined
               ? client.request<ModelCatalogResult>("models.list", requestParams)
               : client.request<ModelCatalogResult>("models.list", requestParams, {
-                  timeoutMs: duration === undefined ? timeoutMs : null,
+                  timeoutMs: duration === undefined ? timeout : null,
                   ...(duration === undefined
                     ? {}
                     : {
@@ -320,13 +330,7 @@ function createModelCatalogRequest(params: {
               stopWatching();
             }
             if (deadline !== undefined && duration !== undefined && deadline <= Date.now()) {
-              pending.reject(
-                new GatewayProtocolRequestTimeoutError({
-                  method: "models.list",
-                  timeoutMs: duration,
-                  requestSent,
-                }),
-              );
+              rejectTimeout(duration);
               return;
             }
             if (!canRetry()) {
@@ -344,17 +348,7 @@ function createModelCatalogRequest(params: {
     once: true,
   });
   if (duration !== undefined) {
-    deadlineTimer = setTimeout(
-      () =>
-        pending.reject(
-          new GatewayProtocolRequestTimeoutError({
-            method: "models.list",
-            timeoutMs: duration,
-            requestSent,
-          }),
-        ),
-      duration,
-    );
+    deadlineTimer = setTimeout(() => rejectTimeout(duration), duration);
   }
   return pending;
 }

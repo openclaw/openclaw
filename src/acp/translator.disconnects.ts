@@ -1,4 +1,3 @@
-/** Gateway disconnect grace period and pending-prompt reconciliation. */
 import type { GatewayClient } from "../gateway/client.js";
 import type {
   AcpAgentWaitResult,

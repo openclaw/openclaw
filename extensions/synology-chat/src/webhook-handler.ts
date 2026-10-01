@@ -1,7 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createFixedWindowRateLimiter,
@@ -61,13 +65,7 @@ class InvalidTokenRateLimiter {
   private touch(key: string, value: InvalidTokenRateLimitState): void {
     this.state.delete(key);
     this.state.set(key, value);
-    while (this.state.size > INVALID_TOKEN_MAX_TRACKED_KEYS) {
-      const oldestKey = this.state.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      this.state.delete(oldestKey);
-    }
+    pruneMapToMaxSize(this.state, INVALID_TOKEN_MAX_TRACKED_KEYS);
   }
 
   isLocked(key: string, nowMs = Date.now()): boolean {
@@ -169,16 +167,11 @@ function parseJsonBody(body: string): Record<string, unknown> {
   if (!body.trim()) {
     return {};
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body) as unknown;
-  } catch {
+  const parsed = asOptionalRecord(safeParseJson(body));
+  if (!parsed) {
     throw new Error("Invalid JSON body");
   }
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new Error("Invalid JSON body");
-  }
-  return parsed as Record<string, unknown>;
+  return parsed;
 }
 
 function extractTokenFromHeaders(req: IncomingMessage): string | undefined {

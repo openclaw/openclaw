@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -10,6 +11,7 @@ import {
   isReplyRunAbortableForSignal,
   isReplyRunActiveForSessionId,
   replyRunRegistry,
+  retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
@@ -52,18 +54,41 @@ describe("reply run registry cancellation", () => {
     expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
-  it("clears deferred-maintenance operations immediately on user abort", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-waiting-abort",
-    });
-
-    operation.markWaitingForDeferredMaintenance();
-    operation.abortByUser();
-
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
-    expect(isReplyRunActiveForSessionId("session-waiting-abort")).toBe(false);
-  });
+  it.each(["queued", "waiting_for_deferred_maintenance", "waiting_for_global_lane"] as const)(
+    "settles aborted %s reservations but waits for retained owners and delivery",
+    async (phase) => {
+      for (const retained of [false, true]) {
+        const operation = createTestReplyOperation({ sessionId: "session-waiting-abort" });
+        const delivery = createDeferred();
+        const settled = vi.fn();
+        void operation.ownerSettlement?.then(settled);
+        operation.setPhase(phase);
+        if (retained) {
+          retainReplyOperationUntilComplete(operation);
+        }
+        try {
+          operation.abortByUser();
+          expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+          expect(replyRunRegistry.isActive(operation.key)).toBe(retained);
+          expect(isReplyRunActiveForSessionId(operation.sessionId)).toBe(retained);
+          await Promise.resolve();
+          expect(settled).toHaveBeenCalledTimes(retained ? 0 : 1);
+          if (retained) {
+            operation.completeWithAfterClearBarrier(delivery.promise);
+            await Promise.resolve();
+            expect(replyRunRegistry.isActive(operation.key)).toBe(false);
+            expect(settled).not.toHaveBeenCalled();
+            delivery.resolve();
+            await operation.ownerSettlement;
+            expect(settled).toHaveBeenCalledOnce();
+          }
+        } finally {
+          delivery.resolve();
+          operation.complete();
+        }
+      }
+    },
+  );
 
   it("does not reset deferred-maintenance operations as backend-owned work", () => {
     const operation = createTestReplyOperation({
