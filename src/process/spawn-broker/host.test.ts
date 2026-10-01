@@ -3,6 +3,8 @@ import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { spawnWithFallback } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
@@ -413,7 +415,9 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     15_000,
   );
 
-  it("cleans a detached descendant after its root exits and the host disconnects", async () => {
+  it("cleans a detached descendant after its root exits and the host disconnects", async ({
+    signal,
+  }) => {
     const host = await start();
     const child = host.spawn(
       process.execPath,
@@ -436,7 +440,7 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     await Promise.all([once(child, "exit"), pidOutput]);
     const descendant = Number(stdout);
     try {
-      await host.close();
+      await withinTest(host.close(), signal);
       const running = async () => {
         try {
           process.kill(descendant, 0);
@@ -446,18 +450,17 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
           }
           return true;
         } catch (error) {
-          if (
-            (error as NodeJS.ErrnoException).code === "ESRCH" ||
-            (error as NodeJS.ErrnoException).code === "ENOENT"
-          ) {
+          if (hasErrnoCode(error, "ESRCH") || hasErrnoCode(error, "ENOENT")) {
             return false;
           }
           throw error;
         }
       };
-      const deadline = Date.now() + 1000;
-      while ((await running()) && Date.now() < deadline) {
-        await delay(25);
+      // Broker shutdown signals the orphaned group but cannot join this foreign PID.
+      while (await running()) {
+        await withinTest(delay(25), signal).catch((cause: unknown) => {
+          throw new Error(`Detached descendant ${descendant} is still running`, { cause });
+        });
       }
       expect(await running()).toBe(false);
     } finally {
