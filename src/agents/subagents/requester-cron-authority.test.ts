@@ -240,7 +240,7 @@ async function mark(batch: SubagentRunRecord[], persistOrThrow: () => void = () 
       ...requester,
       preparedAuthority: preparedAuthority ?? null,
       runs,
-      transfer: ownBatchTransfer(batch, persistOrThrow, preparedAuthority?.assertCurrent),
+      transfer: ownBatchTransfer(batch, persistOrThrow, () => preparedAuthority?.assertCurrent()),
     });
   } finally {
     await preparedAuthority?.release();

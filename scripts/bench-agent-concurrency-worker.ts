@@ -712,7 +712,7 @@ async function main(): Promise<void> {
         (options.scenario === "spawnPipelineInMemory" || options.scenario === "recoverySweep") &&
         listSqliteFiles(stateDir).length > 0
       ) {
-        throw new Error("In-memory benchmark created SQLite state during teardown");
+        failure ??= new Error("In-memory benchmark created SQLite state during teardown");
       }
     } catch (error) {
       failure ??= error;

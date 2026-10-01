@@ -20,6 +20,7 @@ import {
 } from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
@@ -247,13 +248,25 @@ describe("subagent registry archive behavior", () => {
     const endedAt = Date.now();
     const lifecycleHandler = vi.mocked(onAgentEvent).mock.calls.at(-1)?.[0];
     expect(lifecycleHandler).toBeTypeOf("function");
-    lifecycleHandler?.({
-      runId: "run-delete-completed",
-      stream: "lifecycle",
-      seq: 1,
-      ts: endedAt,
-      data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
+    const terminalPublished = createDeferred();
+    const stop = subscribeSubagentRunChanges(() => {
+      const run = subagentRuns.get("run-delete-completed");
+      if (run?.execution.status === "terminal" && run.execution.endedAt === endedAt) {
+        terminalPublished.resolve();
+      }
     });
+    try {
+      lifecycleHandler?.({
+        runId: "run-delete-completed",
+        stream: "lifecycle",
+        seq: 1,
+        ts: endedAt,
+        data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
+      });
+      await terminalPublished.promise;
+    } finally {
+      stop();
+    }
 
     await settleRootWork(true);
     expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
@@ -537,7 +550,8 @@ describe("subagent registry archive behavior", () => {
       await sweepAndSettleCleanup();
       expect(rejectedWrites).toBe(1);
       expect(refusedPreimage).toBeDefined();
-      expect(subagentRuns.get(runId)).toEqual(refusedPreimage);
+      expect(refusedPreimage?.cleanupHandled).toBe(true);
+      expect(subagentRuns.get(runId)).toEqual({ ...refusedPreimage, cleanupHandled: false });
       expect(subagentRuns.get(runId)).toMatchObject({
         endedReason: "subagent-killed",
         execution: { status: "terminal", outcome: { status: "error", error: "manual kill" } },

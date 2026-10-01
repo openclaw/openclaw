@@ -14,6 +14,7 @@ type PendingLifecycleKind = "error" | "timeout";
 
 type PendingLifecycleParams = {
   runId: string;
+  expectedEntry: SubagentRunRecord;
   endedAt: number;
   startedAt?: number;
   cancellation?: true;
@@ -47,14 +48,20 @@ export function createPendingLifecycleScheduler(params: {
     pendingByRunId.clear();
   }
 
-  const canComplete = (kind: PendingLifecycleKind, entry: SubagentRunRecord) =>
+  const canComplete = (
+    kind: PendingLifecycleKind,
+    entry: SubagentRunRecord,
+    expected: SubagentRunRecord,
+  ) =>
+    entry.execution.startedAt === expected.execution.startedAt &&
     entry.pauseReason !== "sessions_yield" &&
     entry.execution.outcome?.status !== "ok" &&
     (kind !== "error" || entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE);
 
   function schedule(kind: PendingLifecycleKind, scheduleParams: PendingLifecycleParams) {
-    const selected = params.runs.get(scheduleParams.runId);
-    if (!selected || !canComplete(kind, selected)) {
+    const selected = scheduleParams.expectedEntry;
+    const current = getCurrentSubagentRunOwner(params.runs, selected);
+    if (!current || !canComplete(kind, current, selected)) {
       return;
     }
     clearKind(scheduleParams.runId);
@@ -65,7 +72,7 @@ export function createPendingLifecycleScheduler(params: {
       }
       pendingByRunId.delete(scheduleParams.runId);
       const entry = getCurrentSubagentRunOwner(params.runs, pending.entry);
-      if (!entry || !canComplete(kind, entry)) {
+      if (!entry || !canComplete(kind, entry, pending.entry)) {
         return;
       }
       let publication: Pick<SubagentRunRecord, "execution" | "endedReason"> | undefined;
@@ -77,14 +84,14 @@ export function createPendingLifecycleScheduler(params: {
           (publication
             ? current.endedReason === publication.endedReason &&
               isDeepStrictEqual(current.execution, publication.execution)
-            : canComplete(kind, current))
+            : canComplete(kind, current, pending.entry))
         );
       };
       params.completeInBackground(
         {
           runId: entry.runId,
           expectedEntry: entry,
-          // Yield can commit after this timer fires but before completion reaches admission.
+          // Yield or retry-start can commit after this timer fires, before terminal admission.
           recoveryCurrent: {
             prepare: async () => isCurrent(),
             isHostCurrent: isCurrent,
@@ -121,6 +128,13 @@ export function createPendingLifecycleScheduler(params: {
 
   return {
     clear: clearKind,
+    clearPriorAttempt: (runId: string) => {
+      const pending = pendingByRunId.get(runId);
+      const current = params.runs.get(runId);
+      if (pending && current && pending.entry.execution.startedAt !== current.execution.startedAt) {
+        clearKind(runId);
+      }
+    },
     clearError: (runId: string) => clearKind(runId, "error"),
     clearTimeout: (runId: string) => clearKind(runId, "timeout"),
     clearAll,

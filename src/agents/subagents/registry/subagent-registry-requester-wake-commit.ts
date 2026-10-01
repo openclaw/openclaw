@@ -121,7 +121,7 @@ export function hasRequesterWakeOwner(
   const pending = getPendingWakeCommit(context, entry);
   return (
     isSameSubagentRunOwner(current, entry) ||
-    (current === undefined && pending?.isPublishedRetirement(entry) === true)
+    (current === undefined && pending?.ownsRetirement(entry) === true)
   );
 }
 
@@ -394,7 +394,7 @@ export function commitRequesterInitialTransfer(
         return false;
       }
     },
-    isPublishedRetirement: (entry) => initialTransfer.published && retiredRunIds.has(entry.runId),
+    ownsRetirement: (entry) => initialTransfer.published && retiredRunIds.has(entry.runId),
     adoptPublished,
     async commit() {
       if (
@@ -531,7 +531,6 @@ export function commitRequesterWake(
         killIntent: entry.killIntent,
         killReconciliation: entry.killReconciliation,
         published: false,
-        retired: false,
       },
     ]),
   );
@@ -548,9 +547,17 @@ export function commitRequesterWake(
     retryWholeBatch,
     failures: 0,
     nextAttemptAt: 0,
-    isPublishedRetirement: (entry) => {
-      const owner = owners.get(getSubagentRunRuntimeKey(entry));
-      return owner?.published === true && owner.retired;
+    ownsRetirement: (entry) => {
+      const key = getSubagentRunRuntimeKey(entry);
+      const committed = pending.committedWake;
+      // A canonical conflict refresh may expose our deletion before its callback publishes.
+      return Boolean(
+        owners.has(key) &&
+        !context.options.runs.has(entry.runId) &&
+        committed?.result.applied === true &&
+        committed.result.retiredRunIds.includes(entry.runId) &&
+        committed.entries.some(({ subagent }) => isSameSubagentRunOwner(subagent, entry)),
+      );
     },
     adoptPublished(members) {
       const published = new Map<string, SubagentRunRecord>();
@@ -568,7 +575,6 @@ export function commitRequesterWake(
         owner.published = true;
         owner.generation = current?.requesterSettleWake?.rearmGeneration;
         owner.progress = current && captureRequesterSettleWakeProgress(current);
-        owner.retired = pending.committedWake?.result.retiredRunIds.includes(entry.runId) === true;
         published.set(entry.runId, current ?? entry);
       }
       pending.entries = pending.entries.map((entry) => published.get(entry.runId) ?? entry);
@@ -580,11 +586,10 @@ export function commitRequesterWake(
         return false;
       }
       const live = context.options.runs.get(entry.runId);
-      if (owner.published && owner.retired) {
-        return live === undefined;
+      if (!live) {
+        return pending.ownsRetirement(entry);
       }
       if (
-        !live ||
         !isSameSubagentRunOwner(live, entry) ||
         !isDeepStrictEqual(captureRequesterSettleRunIdentity(live), owner.identity) ||
         !isDeepStrictEqual(live.killIntent, owner.killIntent) ||

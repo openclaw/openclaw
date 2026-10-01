@@ -87,14 +87,14 @@ function resolveWaitTimeoutMsForRun(
   return Math.max(1, Math.min(normalizedWaitTimeoutMs, deadlineMs - now));
 }
 
-/** A restart ends execution, not the task; lifecycle and wait observations share this owner. */
+/** Return the admitted observation so delayed lifecycle classification retains its attempt. */
 export async function preserveSubagentRunForRestart(params: {
   entry: SubagentRunRecord;
   terminal: AgentRunTerminalOutcome;
   runs: Map<string, SubagentRunRecord>;
   context?: OpenClawStateWorkerContext;
   assertCurrent?: () => void;
-}): Promise<boolean> {
+}): Promise<{ preserved: boolean; observedEntry: SubagentRunRecord }> {
   return mutateSubagentRuns(
     [params.entry.runId],
     (rows) => {
@@ -109,17 +109,17 @@ export async function preserveSubagentRunForRestart(params: {
         params.terminal.endedAt === undefined &&
         (params.terminal.reason === "failed" || params.terminal.reason === "timed_out")
       ) {
-        return { value: true };
+        return { value: { preserved: true, observedEntry: entry } };
       }
       if (params.terminal.reason !== "cancelled" || params.terminal.stopReason !== "restart") {
-        return { value: false };
+        return { value: { preserved: false, observedEntry: entry } };
       }
       if (
         entry.execution.status === "terminal" ||
         typeof entry.execution.endedAt === "number" ||
         shouldSuppressSubagentRecoverySessionEffects(entry)
       ) {
-        return { value: true };
+        return { value: { preserved: true, observedEntry: entry } };
       }
       if (
         entry.killIntent ||
@@ -131,13 +131,13 @@ export async function preserveSubagentRunForRestart(params: {
           now: Date.now(),
         }) !== undefined
       ) {
-        return { value: false };
+        return { value: { preserved: false, observedEntry: entry } };
       }
       if (entry.execution.status === "interrupted") {
-        return { value: true };
+        return { value: { preserved: true, observedEntry: entry } };
       }
       return {
-        value: true,
+        value: { preserved: true, observedEntry: entry },
         postimages: new Map([
           [
             entry.runId,
@@ -385,13 +385,15 @@ export class SubagentWaitManager {
       }
       if (
         waitTerminalOutcome &&
-        (await preserveSubagentRunForRestart({
-          entry,
-          terminal: waitTerminalOutcome,
-          runs: this.options.runs,
-          context: stateContext,
-          assertCurrent,
-        }))
+        (
+          await preserveSubagentRunForRestart({
+            entry,
+            terminal: waitTerminalOutcome,
+            runs: this.options.runs,
+            context: stateContext,
+            assertCurrent,
+          })
+        ).preserved
       ) {
         this.options.clearPendingLifecycleError(runId);
         this.options.clearPendingLifecycleTimeout(runId);

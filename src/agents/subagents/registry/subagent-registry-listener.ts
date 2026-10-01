@@ -83,7 +83,6 @@ export function createSubagentRegistryListener(config: {
           }
         };
         if (phase === "start") {
-          pendingLifecycle.clear(evt.runId);
           const startedAt =
             typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
           if (startedAt) {
@@ -122,6 +121,8 @@ export function createSubagentRegistryListener(config: {
               { runs, context, assertCurrent },
             );
           }
+          assertCurrent();
+          pendingLifecycle.clearPriorAttempt(evt.runId);
           return;
         }
         if (phase !== "end" && phase !== "error") {
@@ -216,21 +217,26 @@ export function createSubagentRegistryListener(config: {
           );
           return;
         }
-        if (
-          await preserveSubagentRunForRestart({
-            entry,
-            terminal: terminalOutcome,
-            runs,
-            context,
-            assertCurrent,
-          })
-        ) {
+        const preservation = await preserveSubagentRunForRestart({
+          entry,
+          terminal: terminalOutcome,
+          runs,
+          context,
+          assertCurrent,
+        });
+        if (preservation.preserved) {
           pendingLifecycle.clear(evt.runId);
           return;
         }
         assertCurrent();
         const classification = classifySubagentTerminalOutcome(terminalOutcome);
-        const pendingTerminal = { runId: evt.runId, endedAt, startedAt, terminalReply };
+        const pendingTerminal = {
+          runId: evt.runId,
+          expectedEntry: preservation.observedEntry,
+          endedAt,
+          startedAt,
+          terminalReply,
+        };
         if (
           classification === "cancellation" &&
           evt.data?.aborted === true &&

@@ -127,7 +127,12 @@ export function registerRequesterWakeSettlementBoundaryTests({
       task: "main completed batch",
       cleanup: "keep",
       createdAt: 1_000,
-      execution: { status: "terminal", startedAt: 1_100, endedAt: 1_200 },
+      execution: {
+        status: "terminal",
+        startedAt: 1_100,
+        endedAt: 1_200,
+        outcome: { status: "ok" },
+      },
       expectsCompletionMessage: true,
       delivery: { status: "pending" },
       requesterSettleWake: {
@@ -148,7 +153,12 @@ export function registerRequesterWakeSettlementBoundaryTests({
       task: "main stale settle blocker",
       cleanup: "keep",
       createdAt: 2_000,
-      execution: { status: "terminal", startedAt: 2_100, endedAt: 2_200 },
+      execution: {
+        status: "terminal",
+        startedAt: 2_100,
+        endedAt: 2_200,
+        outcome: { status: "ok" },
+      },
       expectsCompletionMessage: true,
       delivery: { status: "pending" },
     });

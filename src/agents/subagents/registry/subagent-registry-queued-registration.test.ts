@@ -12,6 +12,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
@@ -24,6 +25,7 @@ import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queu
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import * as registryState from "./subagent-registry-state.js";
 import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
+import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
 afterEach(() => {
   resetGatewayWorkAdmission();
@@ -229,6 +231,107 @@ it.each([false, true])(
         expect(f.current().killIntent).toBeDefined();
       } finally {
         listener.reset();
+      }
+    });
+  },
+);
+
+it.each(["pending", "already dispatched", "next attempt"] as const)(
+  "keeps lifecycle error grace on its admitted attempt (%s)",
+  async (timing) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      await f.change((draft) => {
+        draft.execution = { ...draft.execution, status: "running", startedAt: 10 };
+        draft.sessionStartedAt = 10;
+      });
+      vi.useFakeTimers();
+      let emit: ((event: AgentEventPayload) => void) | undefined;
+      const completeInBackground = vi.fn<(completion: SubagentCompletionRequest) => void>();
+      const pendingLifecycle = createPendingLifecycleScheduler({
+        runs: f.runs,
+        completeInBackground,
+      });
+      const warn = vi.fn();
+      const listener = createSubagentRegistryListener({
+        runs: f.runs,
+        pendingLifecycle,
+        onAgentEvent: (handler) => {
+          emit = handler;
+          return () => {};
+        },
+        resumeRequesterSettleWake: vi.fn(),
+        refreshFrozenResultFromSession: async () => {},
+        completeSubagentRunWithRecovery: async () => {},
+        warn,
+      });
+      const restarted = createDeferred();
+      const stop = onSubagentRegistryPersisted(() => {
+        if (f.current().execution.startedAt === 20) {
+          restarted.resolve();
+        }
+      });
+      const startAck = f.holdNextWrite();
+      listener.ensure();
+      try {
+        if (timing !== "next attempt") {
+          emit?.({
+            runId: f.registration.runId,
+            seq: 1,
+            stream: "lifecycle",
+            ts: 15,
+            data: { phase: "error", error: "rate limit", startedAt: 10, endedAt: 15 },
+          });
+        }
+        emit?.({
+          runId: f.registration.runId,
+          seq: 2,
+          stream: "lifecycle",
+          ts: 20,
+          data: { phase: "start", startedAt: 20 },
+        });
+        await startAck.entered;
+        expect(f.current().execution.startedAt).toBe(10);
+        if (timing === "already dispatched") {
+          await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+          expect(completeInBackground).toHaveBeenCalledOnce();
+          expect(completeInBackground.mock.calls[0]![0].recoveryCurrent?.isHostCurrent()).toBe(
+            true,
+          );
+        } else if (timing === "next attempt") {
+          emit?.({
+            runId: f.registration.runId,
+            seq: 3,
+            stream: "lifecycle",
+            ts: 25,
+            data: { phase: "error", error: "new attempt failed", endedAt: 25 },
+          });
+        }
+        startAck.release();
+        await restarted.promise;
+        await mutateSubagentRuns([f.registration.runId], () => ({ value: undefined }), {
+          runs: f.runs,
+        });
+        await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+        expect(warn).not.toHaveBeenCalled();
+        expect(f.current().execution).toMatchObject({ status: "running", startedAt: 20 });
+        if (timing === "pending") {
+          expect(completeInBackground).not.toHaveBeenCalled();
+        } else {
+          expect(completeInBackground).toHaveBeenCalledOnce();
+          const completion = completeInBackground.mock.calls[0]![0];
+          expect(completion.recoveryCurrent?.isHostCurrent()).toBe(timing === "next attempt");
+          expect(await completion.recoveryCurrent?.prepare()).toBe(timing === "next attempt");
+          expect(completion.expectedEntry?.execution.startedAt).toBe(
+            timing === "next attempt" ? 20 : 10,
+          );
+        }
+      } finally {
+        startAck.release();
+        stop();
+        listener.reset();
+        pendingLifecycle.clearAll();
+        vi.useRealTimers();
       }
     });
   },

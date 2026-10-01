@@ -266,7 +266,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
   );
 
   it.each([undefined, { kind: "local" } as const])(
-    "delivers a private result once when the child finishes before the parent yields (placement: %j)",
+    "delivers one requester reply after a private child finishes before yield (placement: %j)",
     { timeout: TEST_TIMEOUT_MS },
     async (placement) => {
       const yieldGate = createDeferred();
@@ -355,29 +355,21 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           },
           { interval: 50, timeout: 30_000 },
         );
-        const receipts = withOpenClawAgentDatabaseReadOnly(
-          ({ db }) =>
-            executeSqliteQuerySync(
-              db,
-              getSessionKysely(db)
-                .selectFrom("session_input_completions")
-                .selectAll()
-                .where("session_id", "=", sessionId),
-            ).rows,
-          { agentId: REQUESTER_AGENT_ID },
-        );
-        expect(receipts.found).toBe(true);
-        if (!receipts.found) {
-          throw new Error("Expected durable private completion receipts");
-        }
-        expect(receipts.value.filter((receipt) => receipt.succeeded === 1)).toHaveLength(1);
         expect(modelServer.completionResponseCount()).toBe(1);
         expect(chatErrors).toEqual([]);
-        const history = await client.request<{ messages: unknown[] }>("chat.history", {
+        const history = await client.request<{
+          messages: Array<{ role?: string; content?: unknown }>;
+        }>("chat.history", {
           sessionKey,
           agentId: REQUESTER_AGENT_ID,
           limit: 30,
         });
+        expect(
+          history.messages.filter(
+            (message) =>
+              message.role === "assistant" && extractFirstTextBlock(message) === CHILD_MARKER,
+          ),
+        ).toHaveLength(1);
         expect(JSON.stringify(history.messages)).not.toContain("This turn ended before a reply");
         const inputs = readInputs();
         expect(inputs.found && inputs.value.filter((input) => input.state !== "cancelled")).toEqual(

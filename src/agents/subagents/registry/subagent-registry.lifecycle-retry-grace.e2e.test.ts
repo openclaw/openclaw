@@ -242,8 +242,13 @@ describe("subagent registry lifecycle error grace", () => {
     }
   });
 
-  const { flushAsync, waitForDeliveredCleanup, waitForFrozenResult, waitForFrozenResultText } =
-    createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
+  const {
+    flushAsync,
+    waitForRun,
+    waitForDeliveredCleanup,
+    waitForFrozenResult,
+    waitForFrozenResultText,
+  } = createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
 
   const waitForAgentCallCount = (count: number) => agentCallWaits.waitForAgentCallCount(count);
   const waitForCleanupHandledFalse = (runId: string) =>
@@ -678,18 +683,29 @@ describe("subagent registry lifecycle error grace", () => {
     await vi.advanceTimersByTimeAsync(14_999);
     expect(getAgentCalls()).toHaveLength(0);
 
-    emitLifecycleEvent(runId, { phase: "start", startedAt: Date.now() });
-    await flushAsync();
+    const restartedAt = Date.now();
+    emitLifecycleEvent(runId, { phase: "start", startedAt: restartedAt });
+    await waitForRun(
+      runId,
+      (run) => run.execution.status === "running" && run.execution.startedAt === restartedAt,
+    );
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(getAgentCalls()).toHaveLength(0);
 
+    const endedAt = Date.now();
     emitLifecycleEvent(runId, {
       phase: "end",
-      endedAt: Date.now(),
+      endedAt,
       terminalReply: { disposition: "visible", text: "Final answer transient" },
     });
-    await flushAsync();
+    await waitForRun(
+      runId,
+      (run) =>
+        run.execution.status === "terminal" &&
+        run.execution.endedAt === endedAt &&
+        run.execution.outcome?.status === "ok",
+    );
 
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("ok");

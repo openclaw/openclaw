@@ -619,11 +619,18 @@ it("keeps a restart-preserved native record distinct from an executor", async ()
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
   const entry = await register("interrupted-task");
   expect(
-    await preserveSubagentRunForRestart({
-      entry,
-      terminal: { reason: "cancelled", status: "error", stopReason: "restart", endedAt: start + 1 },
-      runs: subagentRuns,
-    }),
+    (
+      await preserveSubagentRunForRestart({
+        entry,
+        terminal: {
+          reason: "cancelled",
+          status: "error",
+          stopReason: "restart",
+          endedAt: start + 1,
+        },
+        runs: subagentRuns,
+      })
+    ).preserved,
   ).toBe(true);
   const interrupted = subagentRuns.get(entry.runId)!;
   now.mockReturnValue(olderThanCutoff);

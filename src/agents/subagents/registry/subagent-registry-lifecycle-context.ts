@@ -122,7 +122,7 @@ export type PendingRequesterSettleWakeCommit = {
     retire(): void;
   };
   stateContext?: OpenClawStateWorkerContext;
-  isPublishedRetirement(entry: SubagentRunRecord): boolean;
+  ownsRetirement(entry: SubagentRunRecord): boolean;
   adoptPublished(entries: readonly SubagentRunRecord[]): readonly SubagentRunRecord[];
   retryWholeBatch: boolean;
   inFlight?: Promise<void>;

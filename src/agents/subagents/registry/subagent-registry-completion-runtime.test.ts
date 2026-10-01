@@ -237,7 +237,7 @@ describe("subagent completion rejection ownership", () => {
         : kind === "timeout"
           ? h.runtime.pendingLifecycle.scheduleTimeout
           : h.runtime.pendingLifecycle.scheduleCancellation;
-    schedule({ runId: h.entry.runId, endedAt: 1, error: "failed" });
+    schedule({ runId: h.entry.runId, expectedEntry: h.entry, endedAt: 1, error: "failed" });
     await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
     expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
     expect(h.completeSubagentRun).toHaveBeenLastCalledWith(expect.objectContaining({ reason }));

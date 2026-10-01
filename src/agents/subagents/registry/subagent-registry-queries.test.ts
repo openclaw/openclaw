@@ -223,9 +223,8 @@ describe("subagent registry query regressions", () => {
         ] as const,
     );
     try {
-      for (const entry of [running, sibling]) {
-        subagentRuns.set(entry.runId, entry);
-      }
+      subagentRuns.set(running.runId, running);
+      subagentRuns.set(sibling.runId, sibling);
       const params = { runs: toRunMap([running, ended, sibling]), now };
       const index = buildSubagentRunReadIndexFromRuns(params);
       for (const [id, claim] of claims) {

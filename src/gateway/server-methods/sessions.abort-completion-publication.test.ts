@@ -166,16 +166,14 @@ it.for(["before commit", "after commit"] as const)(
       );
     };
     const captureResult = lifecycleDelivery.captureSubagentRunResult;
-    vi.spyOn(lifecycleDelivery, "captureSubagentRunResult").mockImplementation(
-      async (...args) => {
-        const result = await captureResult(...args);
-        if (args[1].runId === runId && boundary === "before commit" && !producer) {
-          startProducer();
-          await nativeHeld.promise;
-        }
-        return result;
-      },
-    );
+    vi.spyOn(lifecycleDelivery, "captureSubagentRunResult").mockImplementation(async (...args) => {
+      const result = await captureResult(...args);
+      if (args[1].runId === runId && boundary === "before commit" && !producer) {
+        startProducer();
+        await nativeHeld.promise;
+      }
+      return result;
+    });
     const runState = stateOperation.runWithOpenClawStateWorkerStore;
     vi.spyOn(stateOperation, "runWithOpenClawStateWorkerStore").mockImplementation(
       (store, context, operation, ...rest) =>

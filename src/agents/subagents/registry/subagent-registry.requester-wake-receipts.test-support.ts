@@ -10,7 +10,10 @@ import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryVersionConflictError,
+} from "./subagent-registry-persistence.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import type { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
@@ -35,6 +38,7 @@ function createRequesterWakeReceiptHolds(
   const mutate = completionStore.mutateRequesterSettleWakeBatch;
   const transitionPublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
   const completePublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
+  const reconcilePublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
   let failCompletePublication = options.failCompletePublication === true;
   const mutationScope = new AsyncLocalStorage<{
     entries: readonly SubagentRunRecord[];
@@ -55,20 +59,20 @@ function createRequesterWakeReceiptHolds(
               }
             },
           });
-          if (!params.committed) {
-            (params.operation.kind === "transition"
+          (params.committed
+            ? reconcilePublication
+            : params.operation.kind === "transition"
               ? transitionPublication
               : completePublication
-            ).resolve(result);
-          }
+          ).resolve(result);
           return result;
         } catch (error) {
-          if (!params.committed) {
-            (params.operation.kind === "transition"
+          (params.committed
+            ? reconcilePublication
+            : params.operation.kind === "transition"
               ? transitionPublication
               : completePublication
-            ).reject(error);
-          }
+          ).reject(error);
           throw error;
         }
       },
@@ -116,6 +120,9 @@ function createRequesterWakeReceiptHolds(
               if (phase) {
                 executions.push(phase);
               }
+              if (typeof result === "object" && result !== null && "conflictRunIds" in result) {
+                return result;
+              }
               if (hold && phase) {
                 observed.add(phase);
                 hold.entered.resolve(members);
@@ -127,7 +134,7 @@ function createRequesterWakeReceiptHolds(
         workerOptions,
       ).catch((error: unknown) => {
         const phase = capturedMutation?.phase;
-        if (phase) {
+        if (phase && !(error instanceof SubagentRegistryVersionConflictError)) {
           holds[phase].entered.reject(error);
         }
         throw error;
@@ -142,10 +149,18 @@ function createRequesterWakeReceiptHolds(
   };
   void transitionPublication.promise.catch(() => {});
   void completePublication.promise.catch(() => {});
+  void reconcilePublication.promise.catch(() => {});
   for (const hold of Object.values(holds)) {
     void hold.entered.promise.catch(() => {});
   }
-  return { ...holds, transitionPublication, completePublication, executions, releaseAll };
+  return {
+    ...holds,
+    transitionPublication,
+    completePublication,
+    reconcilePublication,
+    executions,
+    releaseAll,
+  };
 }
 
 async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
@@ -556,13 +571,14 @@ export function registerRequesterWakeReceiptBoundaryTests({
     await registry.testing.sweepOnceForTests();
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
     expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(registry.getSubagentRunByRunId(beta.runId)?.delivery).toMatchObject({
+    const delivery = registry.getSubagentRunByRunId(beta.runId)?.delivery;
+    expect(delivery).toMatchObject({
       status: "delivered",
       disposition: "delivered",
-      payload: undefined,
-      lastError: undefined,
-      lastDropReason: undefined,
     });
+    expect(delivery?.payload).toBeUndefined();
+    expect(delivery?.lastError).toBeUndefined();
+    expect(delivery?.lastDropReason).toBeUndefined();
   });
 
   it.each(["unchanged", "source-change", "callback-failure"] as const)(
@@ -644,9 +660,13 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await registry.testing.sweepOnceForTests();
           await vi.advanceTimersByTimeAsync(30_000);
           await held.reconcile.entered.promise;
+          held.reconcile.release.resolve();
+          await expect(held.reconcilePublication.promise).resolves.toEqual({
+            applied: true,
+            publication: "published",
+          });
           database.db.exec("DROP TRIGGER reject_quiet_retirement_replay");
           replayTrigger = false;
-          held.reconcile.release.resolve();
         }
         await flushOwnedWork();
         expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
@@ -654,8 +674,9 @@ export function registerRequesterWakeReceiptBoundaryTests({
         expect(getGatewayContextResolver(entry)).toBeUndefined();
         expect(getRequesterWakeCalls()).toHaveLength(0);
         expect(held.executions.filter((phase) => phase === "complete")).toHaveLength(1);
+        // A source change first refreshes its committed deletion after a version conflict.
         expect(held.executions.filter((phase) => phase === "reconcile")).toHaveLength(
-          change === "unchanged" ? 0 : 1,
+          change === "unchanged" ? 0 : change === "source-change" ? 2 : 1,
         );
       } finally {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;

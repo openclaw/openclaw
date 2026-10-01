@@ -169,6 +169,7 @@ export class SubagentLifecycleController {
         this.activeCleanupAttempts.has(identity) ||
         this.scheduledRequesterSettleWakeRuns.has(identity) ||
         pending?.inFlight ||
+        pending?.ownsRetirement(observed) ||
         (pending?.initialTransfer && !pending.initialTransfer.completed)
       ) {
         continue;
