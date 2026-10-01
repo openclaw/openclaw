@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
@@ -12,6 +11,7 @@ import { encodePackageActivationLauncher } from "./package-update-activation-jou
 import { preparePackageActivation } from "./package-update-activation.js";
 import {
   activateStagedNpmPackageRoot,
+  backupNpmPackageRoot,
   capturePackageLaunchers,
   type PackageLauncherBackup,
   discardPackageLauncherBackup,
@@ -649,7 +649,7 @@ export async function swapStagedPackageInstall(
             throw new Error(acquisition.error);
           }
         } else {
-          await fs.rename(targetSwapRoot, backupRoot);
+          await backupNpmPackageRoot(targetSwapRoot, backupRoot, params.assertCurrent, warnings);
         }
         activePackageRoot = null;
         packageBackedUp = true;
