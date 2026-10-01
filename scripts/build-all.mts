@@ -244,6 +244,7 @@ const BUILD_ALL_PROFILES: Record<string, string[]> = {
 };
 
 const FULL_RUNTIME_ONLY_STEPS = [
+  "native-protocol",
   ...ASSET_RUNTIME_STEP_LABELS,
   "ui:build",
   ...BUILD_METADATA_STEP_LABELS,

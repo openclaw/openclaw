@@ -221,11 +221,22 @@ describe("resolveBuildAllStep", () => {
 });
 
 describe("resolveBuildAllSteps", () => {
-  it.each(["full", "package", "ciArtifacts"])(
-    "generates native protocol models before compiling %s",
-    async (profile) => {
+  it.each([
+    ["full", "0"],
+    ["full", "1"],
+    ["package", "0"],
+    ["package", "1"],
+    ["ciArtifacts", "0"],
+  ])(
+    "generates native protocol models before compiling %s with skip-dts=%s",
+    async (profile, skipDts) => {
       const runner = buildRunner();
-      expect((await runBuildAllSteps(profile, { ...runner, cacheEnabled: false })).exitCode).toBe(0);
+      const result = await runBuildAllSteps(profile, {
+        ...runner,
+        cacheEnabled: false,
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts },
+      });
+      expect(result.exitCode).toBe(0);
       const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
       const generation = invocations.findIndex(({ args }) =>
         args.includes("scripts/prepare-native-protocol.mjs"),
