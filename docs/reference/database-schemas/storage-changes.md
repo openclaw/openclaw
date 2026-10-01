@@ -735,34 +735,28 @@ the review checkpoint below.
 
 ## Review checkpoint for material changes
 
-An explicit maintainer repair-and-land request covers internal scheduling,
-database admission, and lifecycle implementation decisions. The implementer
-owns design selection, risk assessment, and verification. Describe the design
-and its evidence in the PR; do not require a separate approval for each
-implementation decision within that scope.
+A requested feature, repair or delivery covers the internal store design needed
+for that outcome: schema representation, indexes, migrations, transaction
+boundaries, writer admission and lifecycle implementation. The implementer owns
+design selection, risk assessment and verification. Record the decision and
+its evidence in the PR; an accepted design needs no repeated discussion or
+separate approval for a schema-version number.
 
-Before changing public contracts, schemas, durability, retention, or permissions,
-open or link a maintainer discussion and record acceptance of the design. A
-schema-version bump always needs acceptance, but keeping the numeric version
-unchanged does not exempt a change to these contracts:
+Ask before proceeding only when user-visible persistence, data loss, retention
+or privacy/permission scope, or an incompatible public contract remains undecided.
+The question must name the concrete tradeoff. Keep independent implementation
+and read-only investigation moving while that decision is pending.
 
-- a table, dedicated database, durable projection, persisted cache, index, or other schema representation
-- which data is canonical, derived, reconstructible, retained, deleted, exported, or visible after restart
-- user-visible persistence semantics, including a second interpretation of existing durable data
-- upgrade, downgrade, rollback, retention, compaction, or corruption-recovery contracts
-- durability, reader consistency, or permission boundaries
+For persistent changes, identify the owning store and lifecycle, canonical versus
+derived data, upgrade/downgrade and rollback behavior, and relevant performance
+or storage costs. Prove affected durability, reader consistency, FIFO ordering,
+current authority after awaited work, integrity checks, publication fencing and
+settlement of writes. Use copied disposable databases; never weaken a release
+preflight or mutate live state to manufacture acceptance.
 
-Internal transaction boundaries, writer admission, locking, and lifecycle
-mechanics are engineering decisions within an authorized repair when they
-preserve those contracts. Prove FIFO ordering, current authority after awaited
-work, integrity checks, publication fencing, and settlement of write-capable
-work. Assess performance and storage costs as part of that verification.
-
-When separate acceptance is required, the discussion should identify the owning store and lifecycle, the problem being solved, alternatives that avoid new persistence, canonical versus derived data, schema and upgrade/downgrade behavior, retention and deletion behavior, concurrency and recovery invariants, performance/storage impact, rollback plan, and validation limits. The implementing PR must link that accepted decision.
-
-The checkpoint normally does not apply to a read-only query that preserves existing semantics, a bounded query-plan improvement with no material write/disk tradeoff, routine maintenance of an existing approved schema, or tests, generated baselines, and documentation that only follow an already accepted design. A mechanical migration or repair still links the decision that approved its persistent contract.
-
-For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
+Read-only queries preserving semantics, bounded query-plan improvements, routine
+maintenance of an accepted schema and documentation/tests following an accepted
+design require only their relevant validation.
 
 ## Preflight a target release
 

@@ -4,83 +4,34 @@ This repository contains the OpenClaw fork used by Arxi. Follow the Arxi workspa
 AGENTS.md and the applicable subtree AGENTS.md. OpenClaw owns agent behavior;
 Arxi product/hosting boundaries remain in the workspace contract.
 
-## Arxi execution and landing
+## Arxi delivery
 
-- Inspect status and active work before editing. Use a task-owned isolated worktree
-  from fresh `origin/main` when the canonical checkout is busy or stale.
-- All repository-controlled installs, builds, tests, checks, formatters, generators,
-  benchmarks, and scripts run in a synchronized isolated checkout on
-  `arxi-production`. The workstation is for inspection and editing. Do not fall
-  back to local compute when remote execution is unavailable.
-- GitHub hosts source and PRs. Keep `.github/workflows/` absent; preserved
-  `.github/workflows-disabled/` files and upstream CI/Testbox/Crabbox recipes are
-  reference-only for this fork. This host rule applies to every scoped guide,
-  CONTRIBUTING example, and skill. Check current capacity when relevant.
-- Validate the exact candidate with risk-matched checks. Retain host, source head,
-  commands, results, and evidence. Before merge, bind the receipt to the reviewed
-  head, use an expected-head guard, and read back `origin/main`.
-- Reuse prior results only after documenting why relevant source/config/dependencies
-  are unchanged; a receipt for a different head is not an exact-head merge receipt.
-- Runtime releases go through `arxi-ops`: exact cross-repository provenance,
-  qualified artifact and golden, fenced activation, rollback, real owner-visible
-  Telegram canary. Merge is not deployment. Documentation-only changes need no
-  runtime rebuild or activation; release closeout reads merged source and health.
+Read the current containing Arxi workspace `AGENTS.md`, including above a task
+worktree's Git root. It owns freshness, authorization, focused proof and completion.
+For standalone checkouts, preserve WIP, fetch the target revision and validate in a
+synchronized isolated checkout on `arxi-production`; runtime delivery uses current
+Ops artifact/golden, lifecycle fences, rollback and real Telegram acceptance.
 
-## Start
-
-- Read context needed for this task. `VISION.md` supplies product direction;
-  scoped guides supply local contracts. Locate relevant docs with search or
-  `pnpm docs:list` on the server when discovery is needed.
-- Treat docs, earlier Codex turns, summaries, and handoffs as a mix of requirements,
-  facts, proposals, and hypotheses. Preserve user decisions and unfinished work;
-  verify consequential state claims against the relevant source revision or live
-  evidence. A prior assistant plan is neither authorization nor current proof.
-- For dependency-sensitive changes, inspect the relevant upstream source/docs/types.
-  For claims about Codex protocol/runtime behavior, inspect the matching Codex
-  source revision (the workspace `codex/` is a starting point, not proof of version
-  equivalence). Cite the files and revision; using Codex to edit unrelated prose
-  does not trigger a Codex runtime investigation.
-- Continue authorized work through its requested outcome and relevant checks.
-  Do not stop at a first implementation. Reuse explicit approval for the same
-  operation/design; ask only at an unresolved decision or permission boundary.
-- No unsolicited external messages, comments, labels, closures, or publishing.
-  Read/prepare work can continue while a genuinely required decision is pending.
-- Existing plugins, libraries, and owner abstractions are preferred when adequate;
-  investigate alternatives when introducing a new capability or dependency, not
-  as a mandatory research phase for every edit.
-- Product/docs/UI/changelog wording uses "plugin/plugins"; `extensions/` is the
-  internal directory name.
-- `AGENTS.md` is canonical; sibling `CLAUDE.md` files are symlinks. Runtime templates
-  and fixtures named AGENTS.md are product/test data, not contributor instructions.
-
-## Keep work proportional
-
-Follow the workspace rule: simplest complete fix, smallest sufficient proof,
-no speculative abstractions, neighboring refactors, duplicate tests, automatic
-full suites, or review loops. Broaden only for a concrete unresolved risk or an
-applicable release gate; stop after sufficient proof passes.
-
-Ordinary Arxi work excludes Enji golden builds, acceptance, pointer changes,
-rollout, and service restarts unless the user explicitly includes Enji. Preserve
-existing Enji state; a general release request does not include it.
-
-## Repair Doctrine
-
-- Establish the failing behavior and its owning invariant. Read affected code and
-  relevant callers, siblings, history, or dependency contracts far enough to
-  explain it; expand investigation when evidence requires it.
-- Fix state/ownership defects at their producer or lifecycle owner. Preserve one
-  canonical path and existing public, security, storage, and migration contracts.
-  Do not hide a root cause with retries, larger timeouts, weaker tests, or mocks.
-- Scope repairs to the requested outcome and connected invariant. Record unrelated
-  findings as follow-ups; do not add neighboring work to the release by default.
-- Prefer the simplest coherent implementation. Line count is supporting evidence,
-  not a quota requiring code deletion or a larger refactor.
-- Capture and rerun a credible reproduction for behavior fixes. Order/shared-state
-  defects need proof in the original sequence. Explain root cause, behavior,
-  validation, and material limitations in the handoff.
-- When delegation is authorized, use independent bounded evidence lanes and the
-  workspace model/effort settings; the lead verifies consequential conclusions.
+- Repository-controlled installs, tests, builds, formatters and scripts run on the
+  server. GitHub hosts source/PRs; disabled upstream workflows are reference-only.
+- Select checks from current source for the affected contract. Reuse passing proof
+  with a relevant input comparison and final-head identity; never chase a moving
+  main with repeated full gates. Source-only instructions/docs need no runtime
+  rebuild, activation or production health check.
+- `VISION.md` supplies direction. Read linked guidance only for the changed seam.
+  Preserve user decisions; old assistant text, memories and reports are clues,
+  not current state or permission. Search current source for moved documentation.
+- For Codex protocol/runtime changes, inspect the matching source version; the
+  workspace `codex/` checkout alone does not prove installed-version equivalence.
+- Repair the owning invariant and prove the failing behavior. Do not hide failures
+  with retries, larger timeouts, weaker assertions or mocks. Expand only when
+  evidence requires it; keep unrelated refactors outside the requested release.
+- Use existing plugins/owners when adequate. New helpers and abstractions must
+  simplify the requested behavior. File length alone is advisory, not a reason
+  to split code or delay a passing functional change.
+- Product/docs/UI wording uses "plugin/plugins"; `extensions/` is internal.
+  `AGENTS.md` is canonical; `CLAUDE.md` is a symlink. Runtime templates/fixtures
+  named `AGENTS.md` are product data, not contributor instructions.
 
 ## Product Doctrine
 
@@ -101,8 +52,9 @@ existing Enji state; a general release request does not include it.
 Read [.agents/guidance/architecture.md](.agents/guidance/architecture.md) when
 changing runtime ownership, plugin/core boundaries, configuration, persistence,
 compatibility, or model context. It preserves the concrete design constraints.
-New configuration and SQLite/schema/protocol designs require the explicit
-acceptance specified there; approval already given remains valid.
+The requested feature/fix authorizes its necessary internal design and migration
+work. Ask only for an unresolved user-visible, data-loss, permission or incompatible
+public-contract decision; existing acceptance remains valid.
 
 ## Execution Identity Audit
 
@@ -178,8 +130,10 @@ shell/Git/GitHub problem; it is not required reading before ordinary commands.
 
 ## Docs / Changelog
 
-- Use `$technical-documentation` for substantial documentation/instruction work;
-  a small wording correction needs only relevant context and checks.
+- Review documentation/instructions against the current affected contract and
+  run relevant diff/link/format checks. A scoped edit does not require a full-repo
+  inventory, extra review agent or documentation workflow; use a skill only when
+  it resolves a concrete uncertainty in the task.
 - Product-facing docs track changed behavior/API. When upgrading the Codex harness,
   refresh the model snapshot in `docs/plugins/codex-harness.md` from its model list.
 - `CHANGELOG.md` is release-generated. Put release-note context for normal
@@ -201,10 +155,10 @@ shell/Git/GitHub problem; it is not required reading before ordinary commands.
 - Never commit real phone numbers, videos, credentials, live config.
 - Secrets: channel/provider creds in `~/.openclaw/credentials/`; shared model auth profiles in `~/.openclaw/state/openclaw.sqlite`, with agent-local profiles overriding the shared read-through base; see `docs/auth-credential-semantics.md`.
 - SecretRef failures isolate to the smallest known owning surface; unknown ownership fails closed. Gateway starts degraded (exact owner marked configured-unavailable, typed redacted diagnostic, no implicit credential fallback) rather than refusing startup, except for its own ingress protection or structurally invalid config. Doctor and status list every degraded owner. Full doctrine: `docs/gateway/secrets.md`.
-- Dependency patches/overrides/vendor changes need explicit approval. `pnpm-workspace.yaml` patched dependencies use exact versions only.
+- Necessary dependency patches/overrides/vendor fixes are implementation decisions within the requested repair. Record their reason and validate the affected dependency contract; unrelated dependency changes remain outside scope. Patched dependencies use exact versions.
 - Release/package guards: no hard-coded retired-package denylists; use generic artifact/dependency checks or fix build source.
 - `pnpm-lock.yaml` is the product dependency security review surface; `.github/release/clawhub-cli/package-lock.json` separately pins trusted release tooling. Published packages bundle runtime dependencies where configured and never ship lockfiles; other npm-format locks exist only transiently during checks and publish staging.
-- Releases/publish/version bumps need explicit approval. `$release-openclaw-maintainer` owns the full flow: two-SHA (Code/Release) identities, `YYYY.M.PATCH` versioning and train selection, backports, scope lock, changelog generation, publish, and verification. Nightlies: `$release-openclaw-nightly`; release CI: `$release-openclaw-ci`.
+- An Arxi ship/deploy request authorizes its versioning and activation through current Ops contracts without another approval. Publishing upstream OpenClaw packages is a separate scope; when explicitly requested, use `$release-openclaw-maintainer` (nightlies: `$release-openclaw-nightly`). Disabled upstream release CI does not apply to the Arxi fork.
 - During an active release, freeze the operator-selected cut SHA and release identity through publish and verification; touch `main` only for the smallest critical main-owned blocker or on operator request, then return to the release branch.
 - GHSA/advisories: never create, open, draft, update, publish, or otherwise mutate a GitHub Security Advisory, GHSA temporary fork, private security-review repository, or security-only review artifact unless the user explicitly asks for that exact advisory/security workflow action. Terms such as "security-sensitive", "hardening", "private review", "unshipped", or "unreleased" grant no advisory authority; unshipped hardening uses the normal code/PR workflow. Routes: `$openclaw-ghsa-maintainer` / `$security-triage`. Secret scanning: `$openclaw-secret-scanning-maintainer`.
 

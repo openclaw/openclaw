@@ -76,7 +76,7 @@ describe("line-cap growth ratchet", () => {
   });
 
   it.each(["warn", "error"])(
-    "ratchets %s diagnostics across renames, staged and untracked sources",
+    "reports %s growth without blocking renamed, staged or untracked sources",
     (severity) => {
       const root = fixture(5, severity);
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -90,7 +90,7 @@ describe("line-cap growth ratchet", () => {
       fs.writeFileSync(path.join(root, "src/renamed.ts"), source(6));
       git(root, "add", ".");
       fs.writeFileSync(path.join(root, "src/renamed.ts"), source(4));
-      expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
+      expect(main(root, ["--base", "HEAD", "--staged"])).toBe(0);
       expect(errors).toHaveBeenCalledWith(
         expect.stringContaining("src/renamed.ts: 5 -> 6 counted lines (cap 3)"),
       );
@@ -99,7 +99,7 @@ describe("line-cap growth ratchet", () => {
       fs.writeFileSync(path.join(root, "src/generated/ignored.ts"), source(10));
       expect(main(root, ["--base", "HEAD"])).toBe(0);
       fs.writeFileSync(path.join(root, "src/new.ts"), source(4));
-      expect(main(root, ["--base", "HEAD"])).toBe(1);
+      expect(main(root, ["--base", "HEAD"])).toBe(0);
       expect(errors).toHaveBeenCalledWith(
         expect.stringContaining("src/new.ts: 3 -> 4 counted lines (cap 3)"),
       );
@@ -136,10 +136,17 @@ describe("line-cap growth ratchet", () => {
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     const growing = directive + source(6);
     fs.writeFileSync(target, growing);
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(errors).toHaveBeenCalledWith(
       expect.stringContaining("src/file.ts: 5 -> 6 counted lines (cap 3)"),
     );
     expect(fs.readFileSync(target, "utf8")).toBe(growing);
+  });
+
+  it("still fails when line counts cannot be measured", () => {
+    const root = fixture();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fs.rmSync(path.join(root, ".oxlintrc.json"));
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
   });
 });

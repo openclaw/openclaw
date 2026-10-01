@@ -4,7 +4,7 @@ Read when writing or changing tests or configuring a test environment. Paths and
 relative unless explicitly stated otherwise. The root AGENTS.md Arxi execution
 and authorization rules apply to every example and linked skill.
 
-- Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`; example models `sonnet-4.6`, `gpt-5.6-luna`; test GPT with Luna preferred; use Sol when capability matters; no GPT-4.x agent-smoke defaults.
+- Use the current repository test runner and colocated tests. Derive supported live models from the owning provider catalog; preserve user-selected model/effort. Use the cheapest supported model only when it proves the required capability; fixtures use stable public or synthetic IDs.
 - Prefer existing coverage. Add no regression test for a prose-only change or a static value when focused inspection already establishes the result.
 - Tests protect named behavior against credible failures; avoid near-duplicates and test-only production seams. Regression tests fail pre-fix for the intended reason. Use `$test-audit` for a test audit or when coverage quality needs investigation.
 - Choose proof at the boundary where the behavior can fail. Use fault injection for relevant failure modes, not a network/provider/restart matrix for every change. Delivery/dispatch/session behavior changes need boundary proof; reuse existing coverage when it already establishes the requirement.

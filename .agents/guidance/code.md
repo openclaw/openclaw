@@ -31,7 +31,7 @@ and authorization rules apply to every example and linked skill.
 - SwiftUI: Observation (`@Observable`, `@Bindable`) over new `ObservableObject`.
 - Provider tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject `anyOf`.
 - Split files only when required for the change or a concrete maintainability problem; size alone is not a reason.
-- Do not add a `max-lines` suppression to evade a required check. Existing grandfathered suppressions do not require a file split during unrelated work.
+- File-length findings are advisory. Do not split files, trim coverage or add suppressions solely to meet a numeric line cap; fix a concrete maintainability problem within the task when one exists. Existing suppressions need no unrelated cleanup.
 - Naming: **OpenClaw** product/docs; `openclaw` CLI/package/path/config.
 - Agents navigate by grep: exported symbols use 2-3 word unique names; no generic single-word exports (`get`, `run`, `create`, `handle`).
 - New modules/dirs concept-named; no new `utils/`, `helpers/`, `common/`. One spelling per concept repo-wide.

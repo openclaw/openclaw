@@ -4,7 +4,7 @@ Read when selecting install, build, formatting, lint, typecheck, or test command
 relative unless explicitly stated otherwise. The root AGENTS.md Arxi execution
 and authorization rules apply to every example and linked skill.
 
-- Runtime: Node 22.22.3+, 24.15+, or 25.9+; Node 26 recommended (upstream CI and release workflows still pin Node 24). Keep Node + Bun paths working.
+- Derive supported Node/Bun versions and package-manager pins from current `package.json`, `pnpm-workspace.yaml` and the selected server environment. Do not use a historical guide or memory as a version inventory. Preserve supported runtime paths.
 - Package manager/runtime: repo defaults only. No swaps without approval.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched). All installs and validation execute in the synchronized isolated checkout on `arxi-production`; never on the workstation.
 - CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
