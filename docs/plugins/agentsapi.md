@@ -98,12 +98,12 @@ for provider and per-agent model settings.
 Apply the configuration through your usual Gateway workflow. In your chat
 channel, send `/new`, then try:
 
-> Use Python to calculate the sum of the squares from 1 to 100. Save the result
-> to /workspace/outputs/result.txt and send me the file.
+> Use Python to calculate the sum of the squares from 1 to 100 and show me the result.
 
-Look for the calculation result and download the attached file. This checks the
-complete path from your chat to hosted execution and back. You can then upload
-your own data or ask the agent to continue the task.
+Look for the calculation result, `338350`. This checks the path from your chat to
+hosted code execution and back. Then ask the agent to repeat the calculation for
+1 to 200 to try a follow-up in the same session. You can explore attachments and
+generated files in [Work with files and tools](/plugins/agentsapi#work-with-files-and-tools).
 
 <a id="sessions-and-instructions" />
 
@@ -189,7 +189,7 @@ transcript. Channel settings control progress and reasoning visibility. Token
 usage is reported when available from the API; it measures usage rather than
 remaining context capacity.
 
-For an end-to-end setup check, use the chat-and-file task above.
+For an end-to-end setup check, use the Python calculation above.
 `openclaw models status --probe` checks model authentication, not a complete
 Agents API session.
 
