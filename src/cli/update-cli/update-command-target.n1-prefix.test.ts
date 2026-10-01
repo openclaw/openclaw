@@ -1,6 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { resolveBunRuntimeInfo, resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
+import {
+  buildRuntimeProbeEnv,
+  resolveBunRuntimeInfo,
+  resolveNodeRuntimeInfo,
+} from "../../daemon/runtime-paths.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
 const state = vi.hoisted(() => ({
@@ -65,7 +69,8 @@ vi.mock("../../../node-sqlite.mjs", async (original) => ({
     json: true,
   }),
 }));
-vi.mock("../../daemon/runtime-paths.js", () => ({
+vi.mock("../../daemon/runtime-paths.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/runtime-paths.js")>()),
   resolveBunRuntimeInfo: vi.fn(),
   resolveNodeRuntimeInfo: vi.fn(),
 }));
@@ -249,7 +254,11 @@ it.each([
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },
     );
-    expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(bun, undefined, process.env);
+    expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(
+      bun,
+      undefined,
+      buildRuntimeProbeEnv(process.env),
+    );
     expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
   },
 );

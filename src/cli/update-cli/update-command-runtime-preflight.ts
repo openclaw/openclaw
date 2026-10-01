@@ -7,7 +7,11 @@ import { minVersion, validRange, valid } from "semver";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { SUPPORTED_NODE_VERSION_RANGE } from "../../../node-version.mjs";
 import { isBunRuntime } from "../../daemon/runtime-binary.js";
-import { resolveBunRuntimeInfo, resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
+import {
+  buildRuntimeProbeEnv,
+  resolveBunRuntimeInfo,
+  resolveNodeRuntimeInfo,
+} from "../../daemon/runtime-paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
@@ -112,12 +116,12 @@ export async function resolvePackageRuntimePreflight(params: {
         activationRuntime?.path === (await tryRealpathOrResolve(process.execPath)));
     // Bun has its own capability contract; its emulated Node version is not an engine.
     if (currentBun || isBunRuntime(selected)) {
-      const runtimeEnv = params.service?.serviceEnv ?? process.env;
+      const runtimeEnv = buildRuntimeProbeEnv(params.service?.serviceEnv ?? process.env);
       try {
         if (!activationRuntime) {
           throw captureError;
         }
-        activationRuntime = { ...activationRuntime, kind: "bun" };
+        activationRuntime = { ...activationRuntime, kind: "bun", env: runtimeEnv };
         const runtime = await resolveBunRuntimeInfo(activationRuntime.path, undefined, runtimeEnv);
         if (runtime.status === "probe-failed") {
           throw runtime.error;

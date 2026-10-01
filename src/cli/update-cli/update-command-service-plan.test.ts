@@ -38,11 +38,15 @@ const probeState = vi.hoisted(() => ({ text: true, container: false }));
 vi.mock("../../infra/container-environment.js", () => ({
   isContainerEnvironment: () => probeState.container,
 }));
-vi.mock("../../daemon/runtime-paths.js", () => ({
-  resolveBunRuntimeInfo: vi.fn(),
-  resolveNodeRuntimeInfo: vi.fn(),
-  resolvePinnedDaemonRuntimePath: vi.fn(),
-}));
+vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../daemon/runtime-paths.js")>();
+  return {
+    ...actual,
+    resolveBunRuntimeInfo: vi.fn(),
+    resolveNodeRuntimeInfo: vi.fn(),
+    resolvePinnedDaemonRuntimePath: vi.fn(),
+  };
+});
 vi.mock("../../infra/package-update-activation-paths.js", () => ({
   capturePackageActivationRuntime: vi.fn((kind, executable) => ({
     kind,
@@ -96,8 +100,17 @@ describe("package runtime compatibility guidance", () => {
   it.each([undefined, "/fixture/app-runtime"])(
     "retains renamed current Bun selected as %s without Node engine checks or provisioning",
     async (nodeRunner) => {
+      const runtimeEnv = {
+        OPENCLAW_SQLITE_LIBRARY: "/process/sqlite.dylib",
+        HOMEBREW_PREFIX: "/process/homebrew",
+      };
       vi.stubGlobal("process", {
         ...process,
+        env: {
+          ...runtimeEnv,
+          OPENCLAW_GATEWAY_TOKEN: "synthetic-unrelated-secret",
+          NODE_OPTIONS: "--require /unrelated/preload.cjs",
+        },
         execPath: path.resolve("/fixture/app-runtime"),
         versions: { ...process.versions, bun: "1.4.3", node: "24.3.0" },
       });
@@ -117,13 +130,14 @@ describe("package runtime compatibility guidance", () => {
             kind: "bun",
             path: "/fixture/app-runtime",
             identity: "fixture:/fixture/app-runtime",
+            env: runtimeEnv,
           },
         },
       });
       expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(
         "/fixture/app-runtime",
         undefined,
-        process.env,
+        runtimeEnv,
       );
       expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
       expect(resolveTargetNodeRuntime).not.toHaveBeenCalled();
@@ -137,10 +151,21 @@ describe("package runtime compatibility guidance", () => {
         "process",
         Object.create(process, {
           versions: { value: { ...process.versions, bun: "1.4.3" } },
+          env: {
+            value: {
+              OPENCLAW_SQLITE_LIBRARY: "/process/sqlite.dylib",
+              HOMEBREW_PREFIX: "/process/homebrew",
+            },
+          },
         }),
       );
       const bun = "/service/bin/bun";
-      const env = { OPENCLAW_SQLITE_LIBRARY: "/service/sqlite.dylib" };
+      const runtimeEnv = { OPENCLAW_SQLITE_LIBRARY: "/service/sqlite.dylib" };
+      const env = {
+        ...runtimeEnv,
+        OPENCLAW_GATEWAY_TOKEN: "synthetic-unrelated-secret",
+        NODE_OPTIONS: "--require /unrelated/preload.cjs",
+      };
       vi.mocked(resolvePinnedDaemonRuntimePath).mockReset();
       vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue({
         status: "supported",
@@ -169,16 +194,55 @@ describe("package runtime compatibility guidance", () => {
               value: {
                 nodeRunner: bun,
                 targetVersion: "2027.1.0",
-                activationRuntime: { kind: "bun", path: bun, identity: `fixture:${bun}` },
+                activationRuntime: {
+                  kind: "bun",
+                  path: bun,
+                  identity: `fixture:${bun}`,
+                  env: runtimeEnv,
+                },
               },
             }
           : { ok: false, error: "Bun 1.4+ with WAL-reset-safe node:sqlite is required." },
       );
-      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(bun, undefined, env);
+      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(bun, undefined, runtimeEnv);
       expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
       expect(resolveTargetNodeRuntime).not.toHaveBeenCalled();
     },
   );
+
+  it("carries a service's custom Homebrew selection without inheriting the process override", async () => {
+    const bun = "/service/bin/bun";
+    vi.stubGlobal("process", {
+      ...process,
+      env: { OPENCLAW_SQLITE_LIBRARY: "/process/sqlite.dylib" },
+      versions: { ...process.versions, bun: "1.4.3" },
+    });
+    const runtimeEnv = { HOMEBREW_PREFIX: "/service/custom-homebrew" };
+    const serviceEnv = { ...runtimeEnv, NODE_OPTIONS: "--require /unrelated/preload.cjs" };
+
+    const result = await resolvePackageRuntimePreflight({
+      target: { version: "2027.1.0", nodeEngine: ">=90.0.0" },
+      nodeRunner: bun,
+      service: { ...refreshableService, serviceEnv },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        nodeRunner: bun,
+        targetVersion: "2027.1.0",
+        activationRuntime: {
+          kind: "bun",
+          path: bun,
+          identity: `fixture:${bun}`,
+          env: runtimeEnv,
+        },
+      },
+    });
+    expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(bun, undefined, runtimeEnv);
+    serviceEnv.HOMEBREW_PREFIX = "/changed/after-preflight";
+    expect(result.ok && result.value.activationRuntime?.env).toEqual(runtimeEnv);
+  });
 
   it("does not offer the current Bun as a fallback for a managed Node service", async () => {
     vi.stubGlobal("process", {

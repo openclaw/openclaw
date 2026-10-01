@@ -23,6 +23,7 @@ import { preparePackageActivationJournal } from "./package-update-activation-pre
 import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
+import type { PackageActivationRuntime } from "./package-update-swap-contract.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as runtimeWorker from "./runtime-worker-url.js";
 
@@ -48,7 +49,11 @@ export function createPackageActivationLifetimeFixture() {
     return { root, assertDatabasePath, childGuardEnv };
   }
 
-  async function prepare(cut?: (anchor: string) => void, onCustody?: (retained: boolean) => void) {
+  async function prepare(
+    cut?: (anchor: string) => void,
+    onCustody?: (retained: boolean) => void,
+    runtime: PackageActivationRuntime = packageActivationRuntimeForTest(),
+  ) {
     const f = await createPackageSwapFixture(root);
     const anchor = resolvePackageActivationAnchor(f.packageRoot);
     const previous = await createPackageIntegrityReader().tree(f.packageRoot);
@@ -56,7 +61,7 @@ export function createPackageActivationLifetimeFixture() {
       const fence = await executor.enter(f.packageRoot);
       cut?.(anchor);
       await preparePackageActivationJournal({
-        options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+        options: { fence, runtime, onPrepared: () => {} },
         liveRoot: f.packageRoot,
         stageRoot: f.params.stage.packageRoot,
         launcherRoot: f.params.stage.layout.binDir,

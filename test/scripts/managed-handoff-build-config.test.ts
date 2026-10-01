@@ -130,7 +130,7 @@ it.each(
   let preparedPackage: Awaited<ReturnType<typeof preparePackageActivationJournal>> | undefined;
   let prepareNext: (() => Promise<NonNullable<typeof preparedPackage>>) | undefined;
   const runCommand = (command: string, action: string) =>
-    spawnSync("/bin/sh", ["-c", `exec ${command.replace(/ status$/u, ` ${action}`)}`], {
+    spawnSync("/bin/sh", ["-c", command.replace(/ status$/u, ` ${action}`)], {
       encoding: "utf8",
       timeout: 30_000,
       killSignal: "SIGKILL",
