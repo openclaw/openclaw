@@ -50,16 +50,6 @@ export function createCompactionNoticePayload(
   return createNoticePayload(params.text ?? COMPACTION_NOTICE_TEXT[params.phase], params);
 }
 
-export function readCompactionHookMessages(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
 export function createCompactionHookNoticePayload(
   params: CompactionNoticeOptions & { messages: string[] },
 ): ReplyPayload | undefined {

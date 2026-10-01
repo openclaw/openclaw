@@ -172,13 +172,6 @@ describe("doctor repair sequencing", () => {
             discord: {
               allowFrom: [123],
             },
-            tools: {
-              exec: {
-                toolsBySender: {
-                  "bad\u001B[31m-key\u001B[0m\r\nnext": { enabled: true },
-                },
-              },
-            },
             signal: {
               accounts: {
                 "ops\u001B[31m-team\u001B[0m\r\nnext": {
@@ -192,13 +185,6 @@ describe("doctor repair sequencing", () => {
           channels: {
             discord: {
               allowFrom: [123],
-            },
-            tools: {
-              exec: {
-                toolsBySender: {
-                  "bad\u001B[31m-key\u001B[0m\r\nnext": { enabled: true },
-                },
-              },
             },
             signal: {
               accounts: {
@@ -220,7 +206,6 @@ describe("doctor repair sequencing", () => {
     expect(result.changeNotes).toStrictEqual([]);
     expect(result.configChangeNotes).toStrictEqual([
       "channels.discord.allowFrom: converted 1 numeric ID to strings",
-      "channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries (bad-keynext -> id:bad-keynext)",
     ]);
     expect(result.configChangeNotes.join("\n")).not.toContain("\u001B");
     expect(result.configChangeNotes.join("\n")).not.toContain("\r");

@@ -125,7 +125,8 @@ async function inspectScratchPayload(
       item.isFile() &&
       ((layout === "root" &&
         (SQLITE_STAGING_TOKEN_FILES.some((control) => control === name) ||
-          /^config-\d+$/u.test(name))) ||
+          /^config-\d+$/u.test(name) ||
+          name === "archive.tar.gz")) ||
         (layout === "sqlite"
           ? /^database\.sqlite(?:-wal|-shm|-journal)?$/u.test(name)
           : /^(?:openclaw-state-db-\d+\.sqlite(?:-wal|-shm|-journal)?|legacy-audit-raw-\d+\.jsonl)$/u.test(

@@ -10,6 +10,58 @@ import {
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 
+/** Host teardown may cross exact plugin owners after ordinary admission closes. */
+export async function runPluginCleanupScope<T>(values: readonly object[], run: () => Promise<T>) {
+  const instances = new Set(
+    values.map(getPluginValueInstance).filter((instance) => instance !== undefined),
+  );
+  const parent = pluginInvocationContext.getStore();
+  let closed = false;
+  const assertOpen = () => {
+    if (closed) {
+      throw new Error("Plugin cleanup scope is closed");
+    }
+  };
+  const bindings = new Map(
+    [...instances].map((instance) => [
+      instance,
+      {
+        run: <R>(operation: () => R) => {
+          assertOpen();
+          return instance.runCleanup(operation);
+        },
+        wrap: <R>(value: R) => {
+          assertOpen();
+          return instance.wrap(value);
+        },
+      },
+    ]),
+  );
+  try {
+    return await pluginInvocationContext.run(
+      {
+        assertCurrent: (instance) => {
+          if (bindings.has(instance)) {
+            assertOpen();
+          } else {
+            parent?.assertCurrent?.(instance);
+          }
+        },
+        lookup: (instance) => {
+          const binding = bindings.get(instance);
+          if (binding) {
+            assertOpen();
+          }
+          return binding ?? parent?.lookup(instance);
+        },
+      },
+      run,
+    );
+  } finally {
+    closed = true;
+  }
+}
+
 /** Finite execution custody for one host-selected registry and its exact instances. */
 export class PluginInvocationScope {
   private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();

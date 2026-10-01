@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { runCommandWithTimeout, runExec } from "../exec.js";
 import { runWithSpawnBroker } from "./context.js";
@@ -86,7 +86,7 @@ describe.skipIf(skipBrokerTests)("command startup cancellation", () => {
     },
   );
 
-  it.each([
+  it.for([
     { api: "exec", reason: "timeout" },
     { api: "exec", reason: "signal" },
     { api: "runner", reason: "timeout" },
@@ -94,7 +94,7 @@ describe.skipIf(skipBrokerTests)("command startup cancellation", () => {
     { api: "runner", reason: "no-output-timeout" },
   ] as const)(
     "settles $api $reason while the broker cannot complete startup",
-    async ({ api, reason }) => {
+    async ({ api, reason }, { signal }) => {
       const host = createSpawnBrokerHost();
       await host.ready();
       const spawnExeca = host.spawnExeca.bind(host);
@@ -145,7 +145,7 @@ describe.skipIf(skipBrokerTests)("command startup cancellation", () => {
         expect(beforeInput).not.toHaveBeenCalled();
         expect(remote).toBeDefined();
         process.kill(host.pid!, "SIGCONT");
-        await withTestTimeout(remote!.result, 5_000, "late command cancellation did not settle");
+        await withinTest(remote!.result, signal);
         await remote!.child.waitForClose();
         expect(isPidDefinitelyDead(remote!.child.pid!)).toBe(true);
         expect(beforeInput).not.toHaveBeenCalled();

@@ -12,7 +12,10 @@ import {
   deliverSpy,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; lastTo?: string }>;
+let sessionStore: Record<
+  string,
+  { sessionId?: string; lifecycleRevision?: string; lastChannel?: string; lastTo?: string }
+>;
 
 const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi.hoisted(() => ({
   readDescendantFacts: vi.fn<

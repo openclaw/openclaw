@@ -1,10 +1,3 @@
-import { executeAcpSessionMutationInWorker } from "../acp/runtime/session-meta-write.worker.js";
-import {
-  readAuthProfileRows,
-  SHARED_AUTH_STORE_STATE_KEY,
-} from "../agents/auth-profiles/sqlite-json.js";
-import { isMissingDatabasePath } from "../agents/auth-profiles/sqlite-read-pool.js";
-import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
 import {
   readNativeHookRelayBridgeSnapshotFromDatabase,
   listNativeHookRelayBridgeSnapshotsInDatabase,
@@ -18,10 +11,6 @@ import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.work
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
-import {
-  isWorktreeWorkerCommand,
-  executeWorktreeWorkerCommand,
-} from "../agents/worktrees/dispatch.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import {
@@ -41,7 +30,6 @@ import {
   isCronStateWorkerCommand,
   prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
-import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import {
   executeManagedImageRecordCommand,
@@ -63,10 +51,6 @@ import { isWorkspaceJournalWriteCommand } from "../gateway/worker-environments/p
 import { executeWorkspaceJournalCommand } from "../gateway/worker-environments/placement-workspace-journal.worker.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
 import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
-import {
-  readDeferredPluginMigrationsInWorker,
-  recordDeferredPluginMigrationsInWorker,
-} from "../infra/deferred-plugin-migrations.worker.js";
 import * as deliveryQueue from "../infra/delivery-queue.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
@@ -74,10 +58,6 @@ import { isDevicePairingMutationCommand } from "../infra/device-pairing-worker-c
 import { commitExecAuthorizationsInWorker } from "../infra/exec-approvals-authorization.worker.js";
 import * as conversationBindings from "../infra/outbound/current-conversation-bindings.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
-import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
-import { executeApnsRegistrationCommand } from "../infra/push-apns-store.worker.js";
-import { readPersistedVapidKeyPairInDatabase } from "../infra/push-web-store.kernel.js";
-import { executeWebPushCommand, isWebPushCommand } from "../infra/push-web-store.worker.js";
 import { isSessionDeliveryCommand } from "../infra/session-delivery-queue.worker-contract.js";
 import { executeSessionDeliveryCommand } from "../infra/session-delivery-queue.worker.js";
 import { createSqliteAuditRecordKernel } from "../infra/sqlite-audit-record.kernel.js";
@@ -105,15 +85,6 @@ import { executeNodeWorkerJournalCommand } from "../node-host/node-worker-journa
 import { executePluginBlobCommand } from "../plugin-state/plugin-blob-store.worker.js";
 import { isPluginBlobWorkerCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import {
-  readPluginBindingApprovalsInDatabase,
-  upsertPluginBindingApprovalInDatabase,
-} from "../plugins/conversation-binding-state.kernel.js";
-import {
-  readHostedCatalogSnapshotInDatabase,
-  writeHostedCatalogSnapshotInDatabase,
-} from "../plugins/official-external-plugin-catalog-snapshot-store.kernel.js";
-import { HostedCatalogSignedFeedMonotonicityError } from "../plugins/official-external-plugin-catalog-source.js";
-import {
   executeProjectRegistryCommand,
   isProjectRegistryCommand,
 } from "../projects/project-registry.worker.js";
@@ -121,17 +92,8 @@ import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/se
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  isSkillUploadCommand,
-  executeSkillUploadCommand,
-} from "../skills/lifecycle/upload-store.worker.js";
-import * as skillWorkshop from "../skills/workshop/store.worker.js";
+import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
-import {
-  executeTranscriptWrite,
-  isTranscriptWriteCommand,
-} from "../transcripts/store-worker-write.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import {
   listAgentProvenanceInDatabase,
@@ -140,7 +102,6 @@ import {
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
-import { readConfigMachineState } from "./config-machine-state.js";
 import {
   deletePersonalGitHubSessionReceiptsInDatabase,
   readSessionReceiptDeletionIdentitiesInDatabase,
@@ -160,28 +121,18 @@ import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
 } from "./openclaw-state-worker-contract.js";
+import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 import {
   executeRepositoryWorkspaceCommand,
   isRepositoryWorkspaceCommand,
 } from "./session-repository-workspaces.worker.js";
-import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles.worker.js";
 
 const log = createSubsystemLogger("state/worker");
 
-const loadPluginIndexWriter = createLazyRuntimeModule(
-  () => import("../plugins/installed-plugin-index-store-write.js"),
-);
-let pluginIndexWriter: Awaited<ReturnType<typeof loadPluginIndexWriter>> | undefined;
-
 export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
-  if (type === "plugins.metadata.sourceAdmission.publish" && !pluginIndexWriter) {
-    return loadPluginIndexWriter().then((loaded) => {
-      pluginIndexWriter = loaded;
-    });
-  }
-  return prepareCronStateWorkerCommand(type);
+  return stateWorkerRegistry.prepare(type) ?? prepareCronStateWorkerCommand(type);
 }
 
 export function executeSharedStateCommand(
@@ -197,6 +148,9 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   });
+  if (stateWorkerRegistry.has(command)) {
+    return stateWorkerRegistry.execute(command, { open, stateOptions });
+  }
   if (isMcpOAuthWorkerCommand(command)) {
     return executeMcpOAuthWorkerCommand(open(), command);
   }
@@ -242,43 +196,6 @@ export function executeSharedStateCommand(
   if (command.type === "audit.writer.process" || command.type === "audit.writer.prune") {
     return executeAuditWriterCommand(command, stateOptions(), open);
   }
-  if (
-    command.type === "authProfiles.read" ||
-    command.type === "authProfiles.sharedOwnership" ||
-    command.type === "authProfiles.personal"
-  ) {
-    const read = () => {
-      const options = stateOptions();
-      if (command.type === "authProfiles.sharedOwnership") {
-        return readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, options);
-      }
-      if (command.type === "authProfiles.personal") {
-        return readUserModelAuthProfile(command.input.profileId, options);
-      }
-      const missing: AuthProfileRowRead = {
-        store: { status: "missing", reason: "database" },
-        state: { status: "missing", reason: "database" },
-        cacheable: false,
-      };
-      try {
-        return (
-          withExistingOpenClawStateDatabaseReadOnly(
-            ({ db }) => readAuthProfileRows(db, context.databasePath, "shared-state"),
-            options,
-          ) ?? missing
-        );
-      } catch {
-        return isMissingDatabasePath(context.databasePath)
-          ? missing
-          : {
-              store: { status: "unreadable" as const },
-              state: { status: "unreadable" as const },
-              cacheable: false,
-            };
-      }
-    };
-    return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
-  }
   if (command.type === "promotions.markNotified" || command.type === "promotions.recordClaim") {
     return executePromotionCommand(command, stateOptions(), open);
   }
@@ -295,12 +212,6 @@ export function executeSharedStateCommand(
         stateOptions(),
       ) ?? 0
     );
-  }
-  if (command.type === "webPush.readPersistedVapidKeyPair") {
-    return readPersistedVapidKeyPairInDatabase(stateOptions());
-  }
-  if (isWebPushCommand(command)) {
-    return executeWebPushCommand(command, open());
   }
   if (command.type === "nativeHookRelay.read") {
     return withOpenClawStateDatabaseReadOnly(
@@ -324,19 +235,6 @@ export function executeSharedStateCommand(
       ? withArtifactPreservingStateReads(read)
       : read();
   }
-  if (command.type === "acp.prepareMutation" || command.type === "acp.commitMutation") {
-    return executeAcpSessionMutationInWorker(open(), command);
-  }
-  if (command.type === "plugins.conversationBindingApprovals.read") {
-    return readPluginBindingApprovalsInDatabase(open().db);
-  }
-  if (command.type === "plugins.conversationBindingApprovals.upsert") {
-    const database = open();
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => upsertPluginBindingApprovalInDatabase(db, command.input),
-      { database, path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-    );
-  }
   if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
     return recordUpdateRunMutationInWorker(command, stateOptions(), (stage) =>
       requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
@@ -351,12 +249,6 @@ export function executeSharedStateCommand(
     return persistInterruptedUpdateObservation(command.input, stateOptions(), (stage) =>
       requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
-  }
-  if (
-    command.type === "plugins.deferredMigrations.read" ||
-    command.type === "plugins.deferredMigrations.completions.read"
-  ) {
-    return readDeferredPluginMigrationsInWorker(command, stateOptions());
   }
   if (command.type === "claws.install-schema-versions") {
     const read = command.input.artifactPreservingReadOnly
@@ -441,14 +333,8 @@ export function executeSharedStateCommand(
   if (command.type === "githubRepository.personalPending") {
     return readPendingRepositoryGitHubPublicationInDatabase(database.db, command.input);
   }
-  if (skillWorkshop.isSkillWorkshopCommand(command)) {
-    return skillWorkshop.executeSkillWorkshopCommand(command, database, context.databasePath);
-  }
   if (command.type === "deviceAuth.list") {
     return deviceAuth.readDeviceAuthTokensFromDatabase(database.db, command.input);
-  }
-  if (isTranscriptWriteCommand(command)) {
-    return executeTranscriptWrite(command, { database, path: context.databasePath });
   }
   switch (command.type) {
     case "transcripts.canonicalSessionRow":
@@ -477,12 +363,6 @@ export function executeSharedStateCommand(
   if (isManagedImageRecordCommand(command)) {
     return executeManagedImageRecordCommand(command, database);
   }
-  if (isApnsRegistrationWorkerCommand(command)) {
-    return executeApnsRegistrationCommand(command, database);
-  }
-  if (command.type === "plugins.catalogSnapshot.read") {
-    return readHostedCatalogSnapshotInDatabase(database.db, command.input.url);
-  }
   if (command.type === "nativeHookRelay.listSnapshots") {
     return listNativeHookRelayBridgeSnapshotsInDatabase(database);
   }
@@ -499,9 +379,6 @@ export function executeSharedStateCommand(
     database,
     ...stateOptions(),
   };
-  if (command.type === "plugins.deferredMigrations.record") {
-    return recordDeferredPluginMigrationsInWorker(command.input, writeOptions);
-  }
   if (
     command.type === "nativeHookRelay.write" ||
     command.type === "nativeHookRelay.renew" ||
@@ -551,9 +428,6 @@ export function executeSharedStateCommand(
   if (deliveryQueue.isDeliveryQueueCommand(command)) {
     return deliveryQueue.executeDeliveryQueueCommand(command, writeOptions);
   }
-  if (isSkillUploadCommand(command)) {
-    return executeSkillUploadCommand(command, writeOptions);
-  }
   if (
     command.type === "deviceAuth.store" ||
     command.type === "deviceAuth.storeOrigin" ||
@@ -574,16 +448,6 @@ export function executeSharedStateCommand(
       return result;
     }, writeOptions);
   }
-  if (
-    command.type === "fleet.cell.reserve" ||
-    command.type === "fleet.cell.updateImage" ||
-    command.type === "fleet.cell.delete" ||
-    command.type === "fleet.operation.acquire" ||
-    command.type === "fleet.operation.heartbeat" ||
-    command.type === "fleet.operation.release"
-  ) {
-    return executeFleetRegistryCommand(command, writeOptions);
-  }
   if (command.type === "agentProvenance.readBatch" || command.type === "agentProvenance.list") {
     ensureAgentProvenanceSchema(writeOptions);
     return command.type === "agentProvenance.readBatch"
@@ -598,33 +462,11 @@ export function executeSharedStateCommand(
       { operationLabel: "config-machine-state.update" },
     );
   }
+  if (command.type === "sessionUpstream.current" || command.type === "sessionUpstream.settle") {
+    return executeSessionUpstreamCommand(command, writeOptions);
+  }
   if (command.type === "sessionState.record" || command.type === "sessionState.prune") {
     return executeSessionStateCommand(command, writeOptions);
-  }
-  if (command.type === "plugins.catalogSnapshot.write") {
-    try {
-      runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          writeHostedCatalogSnapshotInDatabase(db, command.input.snapshot, command.input.now),
-        writeOptions,
-      );
-      return { ok: true };
-    } catch (error) {
-      if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
-        return { ok: false, message: error.message };
-      }
-      throw error;
-    }
-  }
-  if (command.type === "plugins.metadata.sourceAdmission.publish") {
-    if (!pluginIndexWriter) {
-      throw new Error("Plugin source admission writer is not prepared");
-    }
-    const { publishPluginSourceAdmissionInDatabase } = pluginIndexWriter;
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => publishPluginSourceAdmissionInDatabase(db, command.input),
-      writeOptions,
-    );
   }
   if (command.type === "subagents.persistChanges") {
     const { writeId, values, deleteRunIds } = command.input;
@@ -651,9 +493,6 @@ export function executeSharedStateCommand(
       ({ db }) => recordBackupRunInDatabase(db, command.input),
       writeOptions,
     );
-  }
-  if (isWorktreeWorkerCommand(command)) {
-    return executeWorktreeWorkerCommand(command, writeOptions);
   }
   if (isProjectRegistryCommand(command)) {
     return executeProjectRegistryCommand(command, writeOptions);

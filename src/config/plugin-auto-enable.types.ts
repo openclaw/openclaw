@@ -23,6 +23,10 @@ export type PluginAutoEnableCandidate = { pluginId: string } & (
       providerId: string;
     }
   | {
+      kind: "storage-provider-selected";
+      providerId: string;
+    }
+  | {
       kind: "decision-provider-selected";
       providerId: string;
     }

@@ -225,7 +225,7 @@ describe("translation provider privacy and fallback", () => {
         console.log("isolated-runtime-ok");
       `;
       const result = await execa(
-        process.execPath,
+        testNodeExecPath,
         ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", code],
         { reject: false, timeout: 120_000, stripFinalNewline: false },
       );

@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   OpenClawStateLeaseAcquisition,
   OpenClawStateLeaseIdentity,
-} from "./openclaw-state-lease-store.js";
+} from "./openclaw-state-lease.types.js";
 
 export type OpenClawStateLeaseContext = {
   signal: AbortSignal;

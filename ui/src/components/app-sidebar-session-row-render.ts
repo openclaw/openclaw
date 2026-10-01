@@ -46,6 +46,7 @@ import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
 import "./elapsed-time.ts";
 import "./tooltip.ts";
 
@@ -287,7 +288,7 @@ function renderSidebarSessionIndicators(
         .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
         .selfInstanceId=${host.sessionData.presenceInstanceId}
         .sessionKey=${session.key}
-        .excludeIdentities=${renderedIdentities ?? []}
+        .excludeIdentities=${renderedIdentities ?? EMPTY_VIEWER_IDENTITIES}
         .maxVisible=${3}
         variant="session"
       ></openclaw-viewer-facepile>

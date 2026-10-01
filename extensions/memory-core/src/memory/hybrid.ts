@@ -49,8 +49,6 @@ type HybridKeywordResult<TSource extends HybridSource = HybridSource> = HybridCa
   pathScore?: number;
 };
 
-export { buildFtsQuery } from "./keyword-query.js";
-
 export function scoreExactPathTieForTemporalDecay(contentScore: number): number {
   return (1 + Math.max(0, Math.min(1, contentScore))) / 2;
 }

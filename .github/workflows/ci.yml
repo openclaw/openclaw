@@ -215,6 +215,9 @@ jobs:
       run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
       run_openclawkit_tests: ${{ steps.manifest.outputs.run_openclawkit_tests }}
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
+      run_ios_voice_cleanup_tests: ${{ steps.manifest.outputs.run_ios_voice_cleanup_tests }}
+      run_ios_lifecycle_tests: ${{ steps.manifest.outputs.run_ios_lifecycle_tests }}
+      ios_simulator_selection: ${{ steps.manifest.outputs.ios_simulator_selection }}
       run_ios_screenshots: ${{ steps.changed_scope.outputs.run_ios_screenshots }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       run_android_access_native: ${{ steps.manifest.outputs.run_android_access_native }}
@@ -741,11 +744,12 @@ jobs:
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
-              platform_scripts = ("scripts/lib/swift-toolchain.sh",)
+              platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs")
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
               # The manifest builder runs from the harness and imports these siblings by file-relative paths.
               preflight_scripts = (
                   "scripts/ci-build-manifest.mjs",
+                  "scripts/lib/ci-ios-smoke-plan.mjs",
                   "scripts/lib/release-context.mjs",
                   "scripts/lib/release-version.mjs",
               )
@@ -1405,6 +1409,7 @@ jobs:
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_NODE_TEST_DATA_ONLY: ${{ steps.changed_scope.outputs.node_test_data_only || 'false' }}
+          OPENCLAW_CI_NODE_SELECTION: ${{ vars.OPENCLAW_CI_NODE_SELECTION }}
           # release_gate retains the PR Apple scope.
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
           OPENCLAW_CI_RUN_MACOS_NODE: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos_node || 'false' }}
@@ -1419,6 +1424,7 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_UI_E2E_FULL: ${{ vars.OPENCLAW_CI_UI_E2E_FULL || 'false' }}
+          OPENCLAW_CI_IOS_SIMULATOR_FULL: ${{ vars.OPENCLAW_CI_IOS_SIMULATOR_FULL || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHANGED_PATHS_FILE: ${{ steps.changed_scope.outputs.changed_paths_file }}
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
@@ -5050,6 +5056,7 @@ jobs:
       HISTORICAL_TARGET: *historical_target
       IOS_CI_PHASE: ${{ matrix.phase }}
       IOS_MAIN_TIER: ${{ needs.preflight.outputs.validation_tier == 'main' }}
+      IOS_SIMULATOR_SELECTION: ${{ needs.preflight.outputs.ios_simulator_selection }}
     steps:
       - *platform_checkout_step
 
@@ -5145,19 +5152,29 @@ jobs:
             echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
           fi
 
-      - name: Prepare iOS simulator
+      - name: Configure iOS build and report simulator selection
         if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import { appendFileSync } from "node:fs";
+          import { formatIosSimulatorSelectionSummary } from "./.ci-harness/scripts/lib/ci-ios-smoke-plan.mjs";
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, formatIosSimulatorSelectionSummary(JSON.parse(process.env.IOS_SIMULATOR_SELECTION)));
+          JS
+          if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
+            # Keep native architecture and test-bundle compilation even without simulator execution.
+            smoke_settings="$RUNNER_TEMP/openclaw-ios-smoke.xcconfig"
+            printf 'ARCHS = %s\nCOMPILER_INDEX_STORE_ENABLE = NO\n' "$(uname -m)" > "$smoke_settings"
+            echo "XCODE_XCCONFIG_FILE=$smoke_settings" >> "$GITHUB_ENV"
+          fi
+
+      - name: Prepare iOS simulator
+        if: (matrix.phase == 'tests' || (matrix.phase == 'smoke' && (needs.preflight.outputs.run_ios_voice_cleanup_tests == 'true' || needs.preflight.outputs.run_ios_lifecycle_tests == 'true'))) && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(select_ios_test_simulator)"
           echo "IOS_SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
-          if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
-            # Apply to the embedded Watch build and the later XCTest build too.
-            smoke_settings="$RUNNER_TEMP/openclaw-ios-smoke.xcconfig"
-            printf 'ARCHS = %s\nCOMPILER_INDEX_STORE_ENABLE = NO\n' "$(uname -m)" > "$smoke_settings"
-            echo "XCODE_XCCONFIG_FILE=$smoke_settings" >> "$GITHUB_ENV"
-          fi
 
       - name: Build iOS app
         if: matrix.phase == 'smoke' || matrix.phase == 'tests'
@@ -5165,7 +5182,11 @@ jobs:
           set -euo pipefail
           if [[ ( "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ) && "$HISTORICAL_TARGET" != "true" ]]; then
             # Full manual validation retains the universal simulator build.
-            export IOS_DEST="platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}"
+            if [[ -n "${IOS_SIMULATOR_ID:-}" ]]; then
+              export IOS_DEST="platform=iOS Simulator,id=$IOS_SIMULATOR_ID"
+            else
+              export IOS_DEST="generic/platform=iOS Simulator"
+            fi
           fi
           python3 - <<'PY'
           import os
@@ -5251,7 +5272,7 @@ jobs:
 
       - name: Run focused iOS voice cleanup simulator tests
         id: ios_voice_cleanup_tests
-        if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
+        if: (matrix.phase == 'tests' || (matrix.phase == 'smoke' && needs.preflight.outputs.run_ios_voice_cleanup_tests == 'true')) && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
@@ -5285,7 +5306,7 @@ jobs:
 
       - name: Run focused iOS lifecycle simulator tests
         id: ios_lifecycle_tests
-        if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
+        if: (matrix.phase == 'tests' || (matrix.phase == 'smoke' && needs.preflight.outputs.run_ios_lifecycle_tests == 'true')) && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh

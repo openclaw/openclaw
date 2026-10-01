@@ -1,5 +1,6 @@
 // Chunk-limit enforcement for typed rich blocks: surrogate-safe, wrapper- and
 // caption-preserving splitting against the live-verified Bot API limits.
+import { avoidTrailingHighSurrogateBreak } from "openclaw/plugin-sdk/text-chunking";
 import {
   countRichTextChars,
   measureInputRichBlocks,
@@ -9,7 +10,7 @@ import {
   type RichBlockTableCell,
   type RichText,
 } from "./rich-block-model.js";
-import { splitTelegramPlainTextChunks, surrogateSafeChunkEnd } from "./rich-plain-fallback.js";
+import { splitTelegramPlainTextChunks } from "./rich-plain-fallback.js";
 
 const TELEGRAM_RICH_MEDIA_LIMIT = 50;
 
@@ -63,7 +64,11 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
           flush();
         }
         const budget = limit - chars;
-        const end = surrogateSafeChunkEnd(node, Math.min(node.length, offset + budget), offset);
+        const end = avoidTrailingHighSurrogateBreak(
+          node,
+          offset,
+          Math.min(node.length, offset + budget),
+        );
         const fragment = node.slice(offset, end);
         current.push(wrapRichTextFragment(fragment, wrappers));
         chars += fragment.length;

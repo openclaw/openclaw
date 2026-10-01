@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import type { AcpSessionReadInput, AcpSessionRow } from "../acp/runtime/session-meta-keys.js";
+import type { AcpSessionReadInput, AcpSessionRow } from "../acp/runtime/session-meta-read.types.js";
 import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type {
   SandboxBrowserRegistryEntry,
@@ -98,6 +98,7 @@ import type {
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
 } from "./agent-deletion-journal.types.js";
+import type { BackupRunRecord } from "./backup-run-records.contract.js";
 import type {
   SharedGitHubPublicationReadInput,
   GitHubPublicationReceiptTarget,
@@ -142,6 +143,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | { type: "backup.runs" }
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
   | { type: "capture.readOnlyEvents"; sessionId: string; limit?: number }
@@ -266,6 +268,7 @@ export type OpenClawStateReadRequest = {
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
 export type OpenClawStateReadResult =
+  | { type: "backup.runs"; runs: BackupRunRecord[] }
   | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {
       type: "tui.lastSession.read";

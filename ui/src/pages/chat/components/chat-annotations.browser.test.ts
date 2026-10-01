@@ -59,12 +59,12 @@ function mountComments(count: number, top: number) {
 async function openComments(trigger: HTMLElement) {
   const tooltip = container.querySelector("openclaw-tooltip")!;
   await tooltip.updateComplete;
-  const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
   const shown = new Promise<Event>((resolve) => {
-    popup.addEventListener("wa-after-show", resolve, { once: true });
+    tooltip.addEventListener("wa-after-show", resolve, { once: true });
   });
   trigger.focus();
   await shown;
+  const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
   await expect.poll(() => popup.open).toBe(true);
   const body = popup.shadowRoot!.querySelector<HTMLElement>('[part="body"]')!;
   await expect.poll(() => body.getBoundingClientRect().height).toBeGreaterThan(0);

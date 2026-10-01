@@ -7,9 +7,11 @@ import { captureOpenClawStateReadContext } from "../../state/openclaw-state-work
 import {
   matchesAcpSessionRuntimeLocator,
   resolveAcpSessionControlOwner,
-  type AcpSessionRuntimeLocator,
 } from "./session-control-owner.js";
-import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
+import type {
+  AcpSessionRuntimeLocator,
+  AcpSessionControlConstraint,
+} from "./session-meta-control.types.js";
 import {
   assertAcpSessionMutationEntry,
   captureAcpSessionEntryBinding,

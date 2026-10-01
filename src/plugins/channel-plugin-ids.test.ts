@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
@@ -258,6 +258,11 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       origin: "global",
       contracts: { workerProviders: ["external-ssh"] },
     },
+    {
+      id: "storage-fixture",
+      activation: { onStartup: false },
+      contracts: { storageProviders: ["archive-objects"] },
+    },
   ] satisfies Array<Pick<PluginManifestRecord, "id"> & Partial<PluginManifestRecord>>;
 
   return {
@@ -276,60 +281,6 @@ function createManifestRegistryFixtureWithWorkspaceDemoChannel(): PluginManifest
     }),
   );
   return fixture;
-}
-
-function createInstalledPluginRecordFixture(
-  record: PluginManifestRecord,
-): InstalledPluginIndexRecord {
-  return {
-    pluginId: record.id,
-    manifestPath: record.manifestPath,
-    manifestHash: `test-${record.id}`,
-    source: record.source,
-    rootDir: record.rootDir,
-    origin: record.origin,
-    enabled: true,
-    ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
-    ...(record.packageManifest?.build ? { packageBuild: record.packageManifest.build } : {}),
-    startup: {
-      sidecar: record.activation?.onStartup === true,
-      memory: Array.isArray(record.kind)
-        ? record.kind.includes("memory")
-        : record.kind === "memory",
-      agentHarnesses: [
-        ...new Set([...(record.activation?.onAgentHarnesses ?? []), ...(record.cliBackends ?? [])]),
-      ].toSorted((left, right) => left.localeCompare(right)),
-      configPaths: record.activation?.onConfigPaths ?? [],
-    },
-    contributions: {
-      channels: record.channels,
-      channelConfigs: Object.keys(record.channelConfigs ?? {}),
-      providers: record.providers,
-      modelCatalogProviders: [],
-      modelSupportPrefixes: record.modelSupport?.modelPrefixes ?? [],
-      modelSupportPatterns: record.modelSupport?.modelPatterns ?? [],
-      autoEnableProviderIds: record.autoEnableWhenConfiguredProviders ?? [],
-      commandAliases: record.commandAliases?.map((alias) => alias.name) ?? [],
-      contracts: Object.fromEntries(Object.entries(record.contracts ?? {})),
-    },
-    compat: [],
-  };
-}
-
-function createInstalledPluginIndexFixture(
-  registry: PluginManifestRegistry = loadPluginManifestRegistryCore(),
-): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: registry.plugins.map(createInstalledPluginRecordFixture),
-    diagnostics: registry.diagnostics,
-  };
 }
 
 function filterManifestRegistryForInstalledIndex(params: {
@@ -380,7 +331,7 @@ function expectStartupPluginIds(params: {
 
 function resolveStartupMetadataScope(
   config: OpenClawConfig,
-  index = createInstalledPluginIndexFixture(),
+  index = createInstalledPluginIndexFixture(loadPluginManifestRegistryCore()),
 ) {
   return resolveGatewayStartupMetadataPluginIds({ config, env: {}, index });
 }
@@ -846,6 +797,35 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
     });
   });
 
+  it("keeps a configured storage provider in restrictive startup and metadata plans", () => {
+    const authoredConfig: OpenClawConfig = {
+      channels: {},
+      storage: {
+        locations: { archive: { provider: "archive-objects", settings: {}, encryption: "none" } },
+      },
+      plugins: { allow: ["browser"], slots: { memory: "none" } },
+    };
+    const registry = createManifestRegistryFixture();
+    const effectiveConfig = applyPluginAutoEnable({
+      config: authoredConfig,
+      env: {},
+      manifestRegistry: registry,
+    }).config;
+    expectStartupPluginIds({
+      config: effectiveConfig,
+      activationSourceConfig: authoredConfig,
+      expected: ["browser", "storage-fixture"],
+    });
+    expect(
+      resolveGatewayStartupMetadataPluginIds({
+        config: effectiveConfig,
+        activationSourceConfig: authoredConfig,
+        env: {},
+        index: createInstalledPluginIndexFixture(registry),
+      }),
+    ).toEqual(["browser", "storage-fixture"]);
+  });
+
   it("keeps durable external worker-provider owners behind explicit enablement", () => {
     expectStartupPluginIds({
       config: { channels: {} } as OpenClawConfig,
@@ -1282,7 +1262,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
   });
 
   it("falls back to unscoped metadata for legacy indexes without config-path activation metadata", () => {
-    const index = createInstalledPluginIndexFixture();
+    const index = createInstalledPluginIndexFixture(loadPluginManifestRegistryCore());
     const browser = index.plugins.find((plugin) => plugin.pluginId === "browser");
     if (!browser) {
       throw new Error("Expected browser plugin fixture");

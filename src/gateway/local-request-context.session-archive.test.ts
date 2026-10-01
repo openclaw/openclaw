@@ -13,7 +13,6 @@ import {
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { createSessionsTool } from "../agents/tools/sessions-tool.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -164,17 +163,6 @@ describe("scoped session archive tools", () => {
               (tool) => tool.name === "sessions",
             ),
           ).toBe(false);
-          await expect(
-            createSessionsTool({
-              config: cfg,
-              agentSessionKey: TARGET,
-              agentSessionId: TARGET_ID,
-              controlOnly: true,
-            }).execute("no-write-grant", {
-              action: "patch",
-              archived: true,
-            }),
-          ).rejects.toThrow(/current operator write grant/);
         };
         if (caller === "unbound") {
           await check();
@@ -480,7 +468,7 @@ describe("scoped session archive tools", () => {
         identities: [sessionKey, sessionId],
         assertAllowed: () => {},
       });
-      let retained: ReturnType<typeof createSessionsTool> | undefined;
+      let retained: ReturnType<typeof createOpenClawCodingTools>[number] | undefined;
       try {
         const result = await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(

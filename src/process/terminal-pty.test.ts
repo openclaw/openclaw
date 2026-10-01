@@ -2,8 +2,15 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 
 const mocks = vi.hoisted(() => ({
   signalPtySessionTree: vi.fn(),
@@ -382,8 +389,24 @@ describe("terminal PTY invocation", () => {
   });
 });
 
+// The PTY exit callback owns the shell, but kill() only signals foreign session members.
+async function waitForPidToExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isPidAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for PTY descendant ${pid} to exit`, { cause: error });
+    }
+    throw error;
+  }
+}
+
 describe.runIf(process.platform !== "win32")("terminal PTY process-session teardown", () => {
-  it("kills a background job in a distinct process group within the PTY session", async () => {
+  it("kills a background job in a distinct process group within the PTY session", async ({
+    signal,
+  }) => {
     vi.resetModules();
     vi.doUnmock("@lydell/node-pty");
     vi.doUnmock("./kill-tree.js");
@@ -398,22 +421,26 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
     let output = "";
     let shellPid: number | undefined;
     let childPid: number | undefined;
+    const ready = createDeferred();
+    const exited = createDeferred();
+    handle.onExit(() => exited.resolve());
     handle.onData((chunk) => {
       output += chunk;
+      const match = output.match(/__OPENCLAW_PIDS__\s+(\d+)\s+(\d+)\r?\n/u);
+      if (match) {
+        shellPid = Number(match[1]);
+        childPid = Number(match[2]);
+        ready.resolve();
+      }
     });
 
     try {
       handle.write(
         'sleep 300 & child=$(jobs -p); printf \'__OPENCLAW_PIDS__ %s %s\\n\' "$$" "$child"\r',
       );
-      await vi.waitFor(
-        () => {
-          const match = output.match(/__OPENCLAW_PIDS__\s+(\d+)\s+(\d+)/u);
-          expect(match, output).toBeTruthy();
-          shellPid = Number(match?.[1]);
-          childPid = Number(match?.[2]);
-        },
-        { timeout: 3_000 },
+      await withinTest(
+        awaitGateBeforeSettlement(ready.promise, exited.promise, "missing PTY process ids"),
+        signal,
       );
       if (!shellPid || !childPid) {
         throw new Error("missing PTY process ids");
@@ -445,8 +472,10 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
       }
 
       handle.kill();
-      expect(await waitForPidToExit(shellPid, 2_000)).toBe(true);
-      expect(await waitForPidToExit(childPid, 2_000)).toBe(true);
+      await withinTest(exited.promise, signal);
+      expect(isPidAlive(shellPid)).toBe(false);
+      await waitForPidToExit(childPid, signal);
+      expect(isPidAlive(childPid)).toBe(false);
     } finally {
       try {
         handle.kill();

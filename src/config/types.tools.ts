@@ -101,7 +101,7 @@ export function parseToolsBySenderTypedKey(
 /**
  * Per-sender overrides.
  *
- * Prefer explicit key prefixes:
+ * Use explicit key prefixes:
  * - channel:<channelId>:<senderId>
  * - id:<senderId>
  * - e164:<phone>
@@ -109,7 +109,7 @@ export function parseToolsBySenderTypedKey(
  * - name:<display-name>
  * - * (wildcard)
  *
- * Legacy unprefixed keys are supported for backward compatibility and are matched as senderId only.
+ * Doctor migrates retired unprefixed config keys to id: entries before runtime use.
  */
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 

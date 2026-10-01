@@ -306,3 +306,5 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Maturity scorecard](/maturity/scorecard)
 - [Install overview](/install)
 - [Release channels](/install/development-channels)
+
+Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.

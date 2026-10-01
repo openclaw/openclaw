@@ -2,6 +2,10 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
+import {
+  formatIosSimulatorSelectionSummary,
+  resolveIosSimulatorTestSelection,
+} from "./lib/ci-ios-smoke-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -530,6 +534,8 @@ if (releaseGate) {
 const includeReleaseOnlyRuntimeTests =
   !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
 const includePrExemptRuntimeTests = !runtimePullRequest;
+const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
+const nodeSelectionReasons = [];
 let selectedTestTargets;
 if (runtimePullRequest && runNodeFull) {
   if (changedPaths === null) {
@@ -542,8 +548,20 @@ if (runtimePullRequest && runNodeFull) {
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
     includeReleaseOnlyRuntimeTests,
     includePrExemptRuntimeTests,
+    selectionMode: nodeSelectionMode,
+    onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
+const fullIosSimulatorPr = parseCiEnvFlag(process.env.OPENCLAW_CI_IOS_SIMULATOR_FULL);
+const iosSimulatorSelection = resolveIosSimulatorTestSelection(changedPaths, {
+  enabled: runIosBuild,
+  forceFull: !runtimePullRequest || releaseGate || compatibilityTarget || fullIosSimulatorPr,
+  fullReason: fullIosSimulatorPr
+    ? "OPENCLAW_CI_IOS_SIMULATOR_FULL"
+    : compatibilityTarget
+      ? "compatibility target"
+      : "scheduled, main, or release validation",
+});
 const uiOwnerScope = {
   unit: runUiTests,
   mocked: runControlUiE2e,
@@ -633,7 +651,12 @@ if (uiE2eSelection) {
   // Selection also applies to UI-only plans without a Node target inventory.
   runControlUiE2e = uiE2eSelection.files.length > 0;
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-  uiE2eJobCount = Math.min(uiE2eJobCount - 1, uiE2eSelection.files.length) + 1;
+  // Narrow PR selections share a runner instead of repeating setup across eight rows.
+  const controlUiRows =
+    uiE2eSelection.mode === "owners"
+      ? Math.ceil(uiE2eSelection.files.length / 30)
+      : uiE2eSelection.files.length;
+  uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlUiRows) + 1;
 }
 if (selectedTestTargets && runWindows && !windowsTestPlan) {
   throw new Error("Current PR CI requires a target-owned Windows planner");
@@ -1423,6 +1446,9 @@ const manifest = {
     (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
   run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
+  run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
+  run_ios_lifecycle_tests: iosSimulatorSelection.lifecycle.selected,
+  ios_simulator_selection: iosSimulatorSelection,
   run_android_job: runAndroid,
   run_android_access_native: runAndroidAccessNative,
   use_compatible_android_ci: useCompatibleAndroidCi,
@@ -1751,6 +1777,12 @@ if (releaseFastLane) {
   }
 }
 if (process.env.GITHUB_STEP_SUMMARY) {
+  if (runIosBuild) {
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      formatIosSimulatorSelectionSummary(iosSimulatorSelection),
+    );
+  }
   if (uiE2eSelection) {
     const escapeSummaryCell = (value) =>
       String(value)
@@ -1777,6 +1809,35 @@ if (process.env.GITHUB_STEP_SUMMARY) {
           )
           .join("") +
         "\n",
+    );
+  }
+  if (selectedTestTargets) {
+    /** @type {Map<string, Set<string>>} */
+    const reasons = new Map();
+    for (const { rule, targets } of nodeSelectionReasons) {
+      for (const file of targets) {
+        const rules = reasons.get(file) ?? new Set();
+        rules.add(rule);
+        reasons.set(file, rules);
+      }
+    }
+    // Paths are diff-controlled; render them as escaped HTML text, never Markdown.
+    const escape = (value) =>
+      value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### PR Node test selection (${nodeSelectionMode})\n\n` +
+        `Selected ${selectedTestTargets.length} files; ${changedNodeTestShards?.filter((shard) => !shard.requiresDist).length ?? 0} Node rows. ` +
+        "Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous selection.\n\n" +
+        "<details><summary>Selected files and selection rules</summary>\n<pre>" +
+        selectedTestTargets
+          .map((file) =>
+            escape(
+              `${file}\t${[...(reasons.get(file) ?? [])].toSorted((left, right) => left.localeCompare(right)).join(", ")}`,
+            ),
+          )
+          .join("\n") +
+        "</pre>\n</details>\n\n",
     );
   }
   appendFileSync(

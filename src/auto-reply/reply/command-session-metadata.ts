@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import type { MsgContext } from "../templating.js";
 
 export type CommandSessionMetadataChange = {
@@ -56,17 +57,9 @@ export function takeCommandSessionMetadataChanges(
 export function takeCommandSessionMetadataChangesFromTargets(
   targets: Iterable<object>,
 ): CommandSessionMetadataChange[] | undefined {
-  const changes: CommandSessionMetadataChange[] = [];
-  const seen = new Set<string>();
-  for (const target of new Set(targets)) {
-    for (const change of takeCommandSessionMetadataChanges(target) ?? []) {
-      const key = JSON.stringify([change.sessionKey, change.agentId ?? null, change.reason]);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      changes.push(change);
-    }
-  }
+  const changes = dedupeByKey(
+    [...new Set(targets)].flatMap((target) => takeCommandSessionMetadataChanges(target) ?? []),
+    (change) => JSON.stringify([change.sessionKey, change.agentId ?? null, change.reason]),
+  );
   return changes.length > 0 ? changes : undefined;
 }

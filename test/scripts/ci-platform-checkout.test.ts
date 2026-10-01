@@ -58,7 +58,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
           "/scripts/changed-lanes.mts",
           "/scripts/lib/merge-head-diff-base.mjs",
         ]
-      : ["/scripts/lib/swift-toolchain.sh"]),
+      : ["/scripts/lib/swift-toolchain.sh", "/scripts/lib/ci-ios-smoke-plan.mjs"]),
   ];
 }
 
@@ -406,6 +406,12 @@ it.concurrent.each([
     const preflightScripts = {
       "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
     };
+    const simulatorScripts = {
+      "scripts/lib/ci-ios-smoke-plan.mjs": readFileSync(
+        "scripts/lib/ci-ios-smoke-plan.mjs",
+        "utf8",
+      ),
+    };
     const releasePolicy = Object.fromEntries(
       [
         "scripts/lib/release-context.mjs",
@@ -478,6 +484,7 @@ it.concurrent.each([
           ...nodeSetupScripts,
           ...platformScripts,
           ...preflightScripts,
+          ...simulatorScripts,
           ...releasePolicy,
           ...candidateFiles,
         })) {
@@ -664,6 +671,15 @@ it.concurrent.each([
         for (const [name, contents] of Object.entries(preflightScripts)) {
           expect(existsSync(path.join(harness, name)), name).toBe(preflight);
           if (preflight) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
+        for (const [name, contents] of Object.entries(simulatorScripts)) {
+          const ownsSimulator = preflight || kind === "platform";
+          expect(existsSync(path.join(harness, name)), name).toBe(ownsSimulator);
+          if (ownsSimulator) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+            writeFileSync(path.join(workspace, name), "throw new Error('candidate planner');\n");
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
           }
         }

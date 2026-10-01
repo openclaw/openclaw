@@ -81,11 +81,12 @@ it.for([false, true].flatMap((evidence) => [0, 1].map((status) => ({ evidence, s
       expect(fs.readFileSync(summary, "utf8")).toContain(
         "Individual advisory annotations and static evidence were skipped",
       );
-      expect(fs.readdirSync(root).filter((name) => name !== ".artifacts")).toEqual([
-        ".git",
-        "config.json",
-        "summary.md",
-      ]);
+      expect(
+        fs
+          .readdirSync(root)
+          .filter((name) => name !== ".artifacts")
+          .toSorted(),
+      ).toEqual([".git", "config.json", "summary.md"]);
       expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "owner.json"))).toBe(false);
     } finally {
       writer.mockRestore();

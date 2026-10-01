@@ -52,7 +52,8 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
-/** Run only in an isolated process or after all source handles drain: raw close
+/** Run only in an isolated process, after all source handles drain, or under a
+ * schema-maintenance owner before live reads are admitted: raw close
  * can release this process's SQLite locks. Inspect only the supplied inventory. */
 export function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateDatabaseGenerations {
   return Object.fromEntries(
