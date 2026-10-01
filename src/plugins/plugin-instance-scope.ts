@@ -145,6 +145,11 @@ export function getPluginValueInstance(value: object): PluginInstanceHandle | un
   return pluginInstanceState.values.get(value);
 }
 
+/** Host metadata may follow an exact view only while retaining that view's admission. */
+export function getPluginValueView(value: object) {
+  return pluginInstanceState.values.getView(value);
+}
+
 /** Only a view's creating instance may restore the original passed back to it. */
 export function getPluginOriginalValue(
   value: object,

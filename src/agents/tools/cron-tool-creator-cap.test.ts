@@ -68,7 +68,7 @@ describe("cron tool creator cap", () => {
 
   it("caps explicit updates without loading the current job", () => {
     const input = {
-      payload: { kind: "agentTurn", toolsAllow: ["read", "exec"] },
+      payload: { kind: "agentTurn", toolsAllow: ["read"] },
     };
 
     const patch = readReadyPatch(
@@ -82,7 +82,7 @@ describe("cron tool creator cap", () => {
       payload: { kind: "agentTurn", toolsAllow: ["read"] },
     });
     expect(input).toEqual({
-      payload: { kind: "agentTurn", toolsAllow: ["read", "exec"] },
+      payload: { kind: "agentTurn", toolsAllow: ["read"] },
     });
   });
 
@@ -328,8 +328,44 @@ describe("cron tool creator cap", () => {
       trigger: { script: "return { fire: false }" },
       payload: { kind: "systemEvent", text: "wake", toolsAllow: ["write"] },
     };
-    capCronJobToolsAllowOnCreate(unrelated, creator);
-    expect(unrelated.payload.toolsAllow).toEqual([]);
+    expect(() => capCronJobToolsAllowOnCreate(unrelated, creator)).toThrow(
+      "Requested automation tools are not currently executable: write",
+    );
+  });
+
+  it("resolves both host aliases without granting absent or invented capabilities", () => {
+    const creator: CronCreatorToolAllowlistEntry[] = [];
+    replaceWithEffectiveCronCreatorToolAllowlist(creator, [
+      gatewayExecAlias(testTool("exec")),
+      createCronScheduledToolProjection(testTool("process"), () => {}, "process", {
+        kind: "process",
+        name: "gateway_process",
+        description: "Gateway process alias",
+      }),
+    ]);
+    const job = { payload: { kind: "agentTurn", toolsAllow: ["gateway_exec", "gateway_process"] } };
+    capCronJobToolsAllowOnCreate(job, creator);
+    expect(job.payload.toolsAllow).toEqual(["exec", "process"]);
+    const groupJob = { payload: { kind: "agentTurn", toolsAllow: ["group:runtime"] } };
+    capCronJobToolsAllowOnCreate(groupJob, creator);
+    expect(groupJob.payload.toolsAllow).toEqual(["exec", "process"]);
+    for (const names of [
+      ["missing"],
+      ["unavailable__*"],
+      ["exec", "missing"],
+      ["group:runtime", "missing"],
+      ["group:unknown"],
+    ]) {
+      expect(() =>
+        capCronJobToolsAllowOnCreate(
+          { payload: { kind: "agentTurn", toolsAllow: names } },
+          creator,
+        ),
+      ).toThrow("not currently executable");
+    }
+    expect(() =>
+      capCronJobToolsAllowOnCreate({ payload: { kind: "agentTurn", toolsAllow: ["exec"] } }, []),
+    ).toThrow("not currently executable: exec");
   });
 
   it("treats an alias-name finite request as already covered by creator authority", () => {

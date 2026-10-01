@@ -638,11 +638,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
             }
           }
           options?.signal?.throwIfAborted();
-          if (materialized?.diagnosticNotice) {
-            throw new Error(
-              `${materialized.diagnosticNotice} Sign in to the affected MCP server and retry, or provide an explicit finite toolsAllow list containing only currently visible tools. No automation changes were saved.`,
-            );
-          }
           // App-only projections gate view callbacks, never headless scheduled capability.
           const configuredTools = materialized
             ? projectCodexExecutableDynamicTools({
@@ -650,12 +645,20 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
                 hookContext,
               }).availableTools
             : [];
+          // Replace the interactive configured surface with the fresh unattended snapshot.
+          // An omitted tool must not survive through its earlier interactive binding.
+          const interactiveConfiguredNames = new Set(configuredMcp?.tools.map((tool) => tool.name));
           const authorityTools: typeof cronCreatorToolAllowlist = [];
           const captureRef: typeof cronCreatorToolAllowlistCaptureRef = {};
           await captureFinalCodexCronCreatorToolAllowlist(
             authorityTools,
             captureRef,
-            [...toolBridge.availableTools, ...configuredTools],
+            [
+              ...toolBridge.availableTools.filter(
+                (tool) => !interactiveConfiguredNames.has(tool.name),
+              ),
+              ...configuredTools,
+            ],
             { nativeToolSurfaceEnabled },
           );
           if (!captureRef.value) {
@@ -665,6 +668,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           return Object.freeze({
             tools: Object.freeze(authorityTools.map((entry) => Object.freeze(entry))),
             provenance: Object.freeze(captureRef.value),
+            ...(materialized?.diagnosticNotice
+              ? { diagnosticNotice: materialized.diagnosticNotice }
+              : {}),
             ...(runtimeAuthority ? { runtimeAuthority } : {}),
           });
         } finally {

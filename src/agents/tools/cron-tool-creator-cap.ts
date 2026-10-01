@@ -81,7 +81,7 @@ export function assertInheritedCronToolCaptureReady(
 export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
   target: CronCreatorToolAllowlistEntry[],
   tools: readonly T[],
-  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+  toolMeta?: (tool: T) => { pluginId?: string; mcp?: unknown } | undefined,
   options: CronCreatorCapCaptureOptions = {},
 ): void {
   target.length = 0;
@@ -96,8 +96,12 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
       continue;
     }
     const aliasName = projection ? normalizeToolPolicyName(tool.name) : undefined;
+    const meta = toolMeta?.(tool);
     const existing = captured.get(name);
     if (existing !== undefined) {
+      if (meta?.mcp) {
+        existing.requiresScheduledAuthority = true;
+      }
       // Merge duplicate grants of one canonical tool: alias names stay matchable,
       // and the restrict-only target survives only when every grantor pins it.
       if (aliasName && !existing.aliasName) {
@@ -113,12 +117,12 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
       }
       continue;
     }
-    const meta = toolMeta?.(tool);
     const pluginId =
       typeof meta?.pluginId === "string" ? normalizeToolPolicyName(meta.pluginId) : undefined;
     captured.set(name, {
       name,
       ...(pluginId ? { pluginId } : {}),
+      ...(meta?.mcp ? { requiresScheduledAuthority: true as const } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
       ...(projection?.execTarget ? { execTarget: { ...projection.execTarget } } : {}),
     });
@@ -147,7 +151,7 @@ export function captureFinalEffectiveCronCreatorToolAllowlist<T extends { name: 
   target: CronCreatorToolAllowlistEntry[],
   captureRef: CronToolsAllowCaptureRef,
   tools: readonly T[],
-  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+  toolMeta?: (tool: T) => { pluginId?: string; mcp?: unknown } | undefined,
   options: CronCreatorCapCaptureOptions = {},
 ): void {
   replaceWithEffectiveCronCreatorToolAllowlist(target, tools, toolMeta, options);
@@ -180,6 +184,7 @@ function normalizeCronCreatorToolsAllow(
     normalized.push({
       name,
       ...(pluginId ? { pluginId } : {}),
+      ...(tool.requiresScheduledAuthority ? { requiresScheduledAuthority: true as const } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
       ...(execTarget ? { execTarget } : {}),
     });
@@ -234,9 +239,9 @@ function explicitFiniteToolsNeedResolution(
     return false;
   }
   const creatorNames = new Set(
-    normalizeCronCreatorToolsAllow(creatorToolAllowlist ?? []).flatMap((tool) =>
-      tool.aliasName ? [tool.name, tool.aliasName] : [tool.name],
-    ),
+    normalizeCronCreatorToolsAllow(creatorToolAllowlist ?? [])
+      .filter((tool) => !tool.requiresScheduledAuthority)
+      .flatMap((tool) => (tool.aliasName ? [tool.name, tool.aliasName] : [tool.name])),
   );
   return expandToolGroups(
     toolsAllow.filter((entry): entry is string => typeof entry === "string"),
@@ -272,6 +277,7 @@ function capCronJobToolsAllow(params: {
   trigger?: unknown;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[];
   defaultToolsAllow?: unknown;
+  diagnosticNotice?: string;
 }): void {
   const writesToolsAllow = Object.hasOwn(params.payload, "toolsAllow");
   if (
@@ -292,15 +298,11 @@ function capCronJobToolsAllow(params: {
     return;
   }
 
-  const requestedToolsAllow = expandToolGroups(
-    requestedRaw.filter((entry): entry is string => typeof entry === "string"),
+  const requestedSelectors = requestedRaw.filter(
+    (entry): entry is string => typeof entry === "string",
   );
-  if (requestedToolsAllow.includes("*")) {
-    params.payload.toolsAllow = creatorToolNames;
-    params.payload.toolsAllowIsDefault = true;
-    return;
-  }
-  if (requestedToolsAllow.length === 0 || creatorToolsAllow.length === 0) {
+  const requestedToolsAllow = expandToolGroups(requestedSelectors);
+  if (requestedToolsAllow.length === 0) {
     params.payload.toolsAllow = [];
     delete params.payload.toolsAllowIsDefault;
     return;
@@ -310,6 +312,31 @@ function capCronJobToolsAllow(params: {
     tools: creatorToolsAllow,
     toolMeta: (tool) => (tool.pluginId ? { pluginId: tool.pluginId } : undefined),
   });
+  if (writesToolsAllow) {
+    const unavailable = requestedSelectors.map(normalizeToolPolicyName).filter((name) => {
+      if (name === "*") {
+        return false;
+      }
+      const matches = createToolPolicyMatcher(
+        expandPolicyWithPluginGroups({ allow: [name] }, pluginGroups),
+      );
+      return !creatorToolsAllow.some(
+        (tool) => matches(tool.name) || (tool.aliasName !== undefined && matches(tool.aliasName)),
+      );
+    });
+    if (unavailable.length > 0) {
+      throw new Error(
+        `Requested automation tools are not currently executable: ${unavailable.join(", ")}. ` +
+          "Authenticate or enable the required integration, or correct/remove these toolsAllow names and retry. " +
+          `${params.diagnosticNotice ? `${params.diagnosticNotice} ` : ""}No automation changes were saved.`,
+      );
+    }
+  }
+  if (requestedToolsAllow.includes("*")) {
+    params.payload.toolsAllow = creatorToolNames;
+    params.payload.toolsAllowIsDefault = true;
+    return;
+  }
   const requestedPolicy = expandPolicyWithPluginGroups(
     { allow: requestedToolsAllow },
     pluginGroups,
@@ -328,6 +355,7 @@ function capCronJobToolsAllow(params: {
 export function capCronJobToolsAllowOnCreate(
   value: unknown,
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined,
+  diagnosticNotice?: string,
 ): void {
   if (!isRecord(value) || !isRecord(value.payload) || !creatorToolAllowlist) {
     return;
@@ -336,6 +364,7 @@ export function capCronJobToolsAllowOnCreate(
     payload: value.payload,
     trigger: value.trigger,
     creatorToolAllowlist,
+    diagnosticNotice,
   });
 }
 
@@ -349,6 +378,7 @@ export function planCronJobUpdatePatch(params: {
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
   currentJob?: Record<string, unknown>;
   creatorAuthorityComplete?: boolean;
+  diagnosticNotice?: string;
 }): CronJobUpdatePatchPlan {
   const patch = structuredClone(params.patch);
   const payload = isRecord(patch.payload) ? patch.payload : undefined;
@@ -383,6 +413,7 @@ export function planCronJobUpdatePatch(params: {
       payload: payload!,
       trigger: patch.trigger,
       creatorToolAllowlist: params.creatorToolAllowlist,
+      diagnosticNotice: params.diagnosticNotice,
     });
     return { kind: "ready", patch };
   }
@@ -429,6 +460,7 @@ export function planCronJobUpdatePatch(params: {
       payload: payload!,
       trigger,
       creatorToolAllowlist: params.creatorToolAllowlist,
+      diagnosticNotice: params.diagnosticNotice,
     });
     return { kind: "ready", patch };
   }
@@ -445,6 +477,7 @@ export function planCronJobUpdatePatch(params: {
     payload: nextPayload,
     trigger,
     creatorToolAllowlist: params.creatorToolAllowlist,
+    diagnosticNotice: params.diagnosticNotice,
     defaultToolsAllow:
       existingPayloadRecord && existingPayloadRecord.toolsAllowIsDefault !== true
         ? existingPayloadRecord.toolsAllow

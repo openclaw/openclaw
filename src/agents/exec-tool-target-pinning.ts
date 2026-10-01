@@ -5,6 +5,7 @@
 // translate that alias back to its canonical tool name. The registry is
 // in-memory object identity only — nothing here is persisted.
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import { getPluginValueView } from "../plugins/plugin-instance-scope.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Canonical identity of a host-created scheduled tool alias. */
@@ -138,18 +139,37 @@ export function readCronScheduledToolProjection(tool: {
   return projection.info;
 }
 
-/** Preserves projection identity across shallow tool-object copies made by tool plumbing. */
+/** Preserves projection identity across copies and exact admission-fenced callable views. */
 export function copyCronScheduledToolProjection(source: AnyAgentTool, target: AnyAgentTool): void {
   const projection = scheduledToolProjections.get(source);
   if (
-    projection &&
-    source.name === projection.sourceToolName &&
-    target.name === projection.sourceToolName &&
-    source.execute === projection.execute &&
-    target.execute === projection.execute
+    !projection ||
+    source.name !== projection.sourceToolName ||
+    target.name !== projection.sourceToolName ||
+    source.execute !== projection.execute
   ) {
-    scheduledToolProjections.set(target, projection);
+    return;
   }
+  const execute = target.execute;
+  let original: object = execute;
+  const views: NonNullable<ReturnType<typeof getPluginValueView>>[] = [];
+  const seen = new Set<object>();
+  while (original !== projection.execute) {
+    const view = getPluginValueView(original);
+    if (!view || seen.has(original)) {
+      return;
+    }
+    seen.add(original);
+    views.push(view);
+    original = view.original;
+  }
+  // Follow private host provenance, never function names or plugin-supplied
+  // wrappers. Keep the exact fenced executor and every view's admission.
+  const assertActive = views.reduceRight(
+    (assertPrevious, view) => () => view.run(assertPrevious),
+    projection.assertActive,
+  );
+  scheduledToolProjections.set(target, Object.freeze({ ...projection, execute, assertActive }));
 }
 
 /** Restricts an exec tool to one host target even when callers submit broader arguments. */

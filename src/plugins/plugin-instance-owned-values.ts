@@ -2,6 +2,7 @@ type OwnedValueState<TInstance extends object> = {
   instance?: TInstance;
   originalInstance?: TInstance;
   original?: object;
+  admit?: <T>(run: () => T) => T;
 };
 
 // oxlint-disable-next-line typescript/no-extraneous-class -- Derived classes need a returning base constructor to stamp private fields on an existing object.
@@ -71,9 +72,17 @@ export function createPluginValueInstances<TInstance extends object>() {
       }
       return this;
     },
-    setHost(value: object, instance: TInstance) {
-      install(value).instance = instance;
+    setHost(value: object, instance: TInstance, admit?: <T>(run: () => T) => T) {
+      const state = install(value);
+      state.instance = instance;
+      state.admit = admit;
       return this;
+    },
+    getView(value: object) {
+      const state = OwnedValue.get(value);
+      return state?.admit && state.original && state.originalInstance === state.instance
+        ? { original: state.original, run: state.admit }
+        : undefined;
     },
     getOriginal(value: object, instance: TInstance): object | undefined {
       const owned = OwnedValue.get(value);

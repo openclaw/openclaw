@@ -11,6 +11,8 @@ export type CronCreatorToolAllowlistEntry =
       /** Canonical policy name persisted into toolsAllow caps. */
       name: string;
       pluginId?: string;
+      /** Interactive integration visibility requires a fresh unattended snapshot. */
+      requiresScheduledAuthority?: true;
       /** Runtime-specific alias the creator surface presented for this tool. */
       aliasName?: string;
       /** Restrict-only execution policy carried by a host-created alias projection. */
@@ -29,6 +31,8 @@ export type CronToolsAllowCaptureRef = {
 export type CronCreatorToolAuthorityMaterialization = {
   tools: readonly CronCreatorToolAllowlistEntry[];
   provenance: CronToolsAllowCaptureProvenance;
+  /** Excluded capabilities and recovery guidance; never part of the saved authority. */
+  diagnosticNotice?: string;
   /** Opaque runtime-owned authority captured with the same exact executable surface. */
   runtimeAuthority?: CronRuntimeAuthority;
 };

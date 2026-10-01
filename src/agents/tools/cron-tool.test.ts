@@ -153,7 +153,7 @@ describe("cron tool", () => {
   }
 
   beforeEach(() => {
-    callGatewayMock.mockClear();
+    callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({ ok: true });
     extractDeliveryInfoMock.mockReset();
     extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
@@ -880,24 +880,24 @@ describe("cron tool", () => {
 
   it("resolves an unknown finite add name and cannot pre-authorize a future tool", async () => {
     const resolveCreatorToolAuthority = vi.fn(async () => resolvedCreatorAuthority(["read"]));
-
-    await executeCron(
-      {
-        action: "add",
-        job: {
-          ...buildReminderAgentTurnJob(),
-          payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+    await expect(
+      executeCron(
+        {
+          action: "add",
+          job: {
+            ...buildReminderAgentTurnJob(),
+            payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+          },
         },
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        creatorToolAllowlist: ["read"],
-        resolveCreatorToolAuthority,
-      },
-    );
-
+        {
+          agentSessionKey: "agent:main:main",
+          creatorToolAllowlist: ["read"],
+          resolveCreatorToolAuthority,
+        },
+      ),
+    ).rejects.toThrow("Requested automation tools are not currently executable: future__tool");
     expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
-    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("resolves symbolic groups before persisting an add cap", async () => {
@@ -925,7 +925,7 @@ describe("cron tool", () => {
     });
   });
 
-  it("does not write a default add when configured MCP authentication fails", async () => {
+  it("does not write a default add when authority discovery fails", async () => {
     await expect(
       executeCron(
         {
@@ -1025,30 +1025,21 @@ describe("cron tool", () => {
     });
   });
 
-  it("caps dormant systemEvent toolsAllow updates without relying on trigger state", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    await executeCron(
-      {
-        action: "update",
-        id: "job-dormant",
-        job: {
-          payload: { kind: "systemEvent", toolsAllow: ["read", "exec"] },
+  it("rejects unavailable dormant systemEvent tools without relying on trigger state", async () => {
+    await expect(
+      executeCron(
+        {
+          action: "update",
+          id: "job-dormant",
+          job: { payload: { kind: "systemEvent", toolsAllow: ["read", "exec"] } },
         },
-      },
-      {
-        agentSessionKey: "agent:main:telegram:group:restricted-room",
-        creatorToolAllowlist: ["read", "cron"],
-      },
-    );
-
-    expect(readGatewayCall()).toEqual({
-      method: "cron.update",
-      params: {
-        id: "job-dormant",
-        patch: { payload: { kind: "systemEvent", toolsAllow: ["read"] } },
-      },
-    });
+        {
+          agentSessionKey: "agent:main:telegram:group:restricted-room",
+          creatorToolAllowlist: ["read", "cron"],
+        },
+      ),
+    ).rejects.toThrow("Requested automation tools are not currently executable: exec");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("expands plugin selectors against the creator tool surface on agentTurn adds", async () => {
@@ -1060,7 +1051,7 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             message: "hello",
-            toolsAllow: ["active-memory", "cron", "exec"],
+            toolsAllow: ["active-memory", "cron"],
           },
         },
       },

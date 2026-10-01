@@ -565,7 +565,7 @@ export function createPluginValueView(
     wrapped.set(object, result);
     void new MemberReader(result, { factory, source: object, derivedFields, read });
     setPluginOriginalValue(result, object, bindings.instance);
-    valueInstances.setHost(result, bindings.instance);
+    valueInstances.setHost(result, bindings.instance, admit);
     // SAFETY: The view retains the input prototype and routes each member to the original object.
     return result as T;
   };

@@ -71,6 +71,28 @@ describe("creator caller currentness", () => {
   });
 });
 
+it("carries subset diagnostics without retaining authority after run settlement", async () => {
+  const capability = createCronCreatorAuthorityCapability("partial-capture", { kind: "local" })!;
+  const diagnosticNotice = "unrelated: run openclaw mcp login unrelated";
+  let retained: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+  await runWithCronCreatorAuthorityCapability(capability, async () => {
+    retained = runWithCronCreatorAuthorityCapabilityResolver({
+      capability,
+      runId: capability.runId,
+      resolve: async () => ({
+        tools: ["read", "exec"],
+        provenance: { version: 1, source: "final-executable-surface" },
+        diagnosticNotice,
+      }),
+      run: () => bindActiveCronCreatorAuthorityResolver(capability.runId),
+    });
+    const snapshot = await retained!();
+    expect(snapshot).toMatchObject({ tools: ["read", "exec"], diagnosticNotice });
+    expect(() => consumeCronCreatorAuthorityGrant(snapshot.grant)).not.toThrow();
+  });
+  await expect(retained!()).rejects.toThrow();
+});
+
 describe("bindActiveOperatorTurnAuthority", () => {
   it("binds an explicit exact-run origin and expires retained authority", async () => {
     const capability = createCronCreatorAuthorityCapability("owner-run", {

@@ -52,6 +52,7 @@ import {
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";
 import {
+  appendCronCreatorAuthorityNotice,
   assertCronCreatorAuthorityResolutionAvailable,
   assertNoCronShellExecution,
   updateCronJobFromAgentTool,
@@ -216,7 +217,7 @@ TARGET+PAYLOAD:
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" = named session.
 - {kind:"agentTurn",message}; timeoutSeconds 0=none.
-- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.${scriptPayloadLine}
+- Inherited tools capture the currently executable authorized subset; warnings report excluded integrations. Later login cannot expand a saved cap. Explicit finite toolsAllow names must resolve to executable tools; unavailable names fail before saving. Interactive app-view-only capabilities are excluded.${scriptPayloadLine}
 
 PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least one). Inside its run, job calls next_check in:"<dur>" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.
 
@@ -488,7 +489,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             const creatorToolAllowlistCaptureRef = resolvedAuthority
               ? { value: resolvedAuthority.provenance }
               : opts?.creatorToolAllowlistCaptureRef;
-            capCronJobToolsAllowOnCreate(job, creatorToolAllowlist);
+            capCronJobToolsAllowOnCreate(
+              job,
+              creatorToolAllowlist,
+              resolvedAuthority?.diagnosticNotice,
+            );
             assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
             const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
             const resolvedSessionKey = opts?.agentSessionKey
@@ -564,8 +569,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               }
             }
             return jsonResult(
-              await withCreatorAuthorityProvenance(resolvedAuthority, () =>
-                callGateway("cron.add", gatewayOpts, job),
+              appendCronCreatorAuthorityNotice(
+                await withCreatorAuthorityProvenance(resolvedAuthority, () =>
+                  callGateway("cron.add", gatewayOpts, job),
+                ),
+                resolvedAuthority,
               ),
             );
           }

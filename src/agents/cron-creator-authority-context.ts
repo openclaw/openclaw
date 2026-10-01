@@ -393,6 +393,7 @@ function bindCronCreatorAuthorityResolver(params: {
     return Object.freeze({
       tools: snapshot.tools,
       provenance: snapshot.provenance,
+      ...(snapshot.diagnosticNotice ? { diagnosticNotice: snapshot.diagnosticNotice } : {}),
       grant: mintCronCreatorAuthorityGrant(authority, operationSignal, snapshot.runtimeAuthority),
     });
   };

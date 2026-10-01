@@ -88,6 +88,30 @@ describe("automations output contract", () => {
     );
   });
 
+  it.each([
+    {
+      name: "creation",
+      args: { action: "add", job: createJob },
+      reply: { ...job, warnings: ["unrelated: requires OAuth"] },
+    },
+    {
+      name: "declarative convergence",
+      args: { action: "add", job: { ...createJob, declarationKey: "invoices" } },
+      reply: { created: true, job, warnings: ["unrelated: requires OAuth"] },
+    },
+    {
+      name: "update",
+      args: { action: "update", jobId: job.id, job: { name: "Check invoices" } },
+      reply: { ...job, warnings: ["unrelated: requires OAuth"] },
+    },
+  ])("describes $name with excluded integrations", async ({ args, reply }) => {
+    const tool = createCronTool(undefined, { callGatewayTool: vi.fn().mockResolvedValue(reply) });
+    const result = await tool.execute("exclusions", args);
+    expect(Value.Errors(expectDefined(tool.outputSchema, "output schema"), result.details)).toEqual(
+      [],
+    );
+  });
+
   it.each(["current"] as const)(
     "accepts successful removal with pending %s session cleanup without retrying",
     async (sessionTarget) => {

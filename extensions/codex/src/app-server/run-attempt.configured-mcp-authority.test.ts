@@ -137,7 +137,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
     }
   });
 
-  it("offers explicit finite tools when inherited configured MCP discovery is incomplete", async () => {
+  it("captures the executable subset with exclusions when configured MCP is unavailable", async () => {
     const params = createMcpParams(true);
     admitLocalOperatorCronAuthority(params);
     mcpMocks.staticDiagnosticNotice =
@@ -145,11 +145,34 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
 
     const { finish } = await startMcpAttempt(params);
 
-    await expect(mcpMocks.authorityResolvers[0]!()).rejects.toThrow(
-      "provide an explicit finite toolsAllow list containing only currently visible tools",
-    );
+    const authority = await mcpMocks.authorityResolvers[0]!();
+    expect(authority).toMatchObject({
+      provenance: { version: 1, source: "final-executable-surface" },
+      diagnosticNotice: mcpMocks.staticDiagnosticNotice,
+    });
+    const names = authority.tools.map((tool) => (typeof tool === "string" ? tool : tool.name));
+    expect(names).toContain("automations");
+    expect(names).not.toContain("fake__show");
+    // Login/discovery later in this turn cannot silently widen the captured ceiling.
+    mcpMocks.staticDiagnosticNotice = undefined;
+    expect(await mcpMocks.authorityResolvers[0]!()).toBe(authority);
+    expect(mcpMocks.staticCalls).toHaveLength(1);
     expect(mcpMocks.dispose).toHaveBeenCalledOnce();
 
+    await finish();
+  });
+
+  it("does not retain an interactive configured tool omitted from the fresh scheduled snapshot", async () => {
+    const params = createMcpParams(true);
+    params.toolsAllow = ["automations", "fake__*"];
+    admitLocalOperatorCronAuthority(params);
+    const { finish } = await startMcpAttempt(params);
+    expect(mcpMocks.staticCalls.length).toBeGreaterThan(0);
+    mcpMocks.staticDiagnosticNotice = "fake: requires interactive approval";
+    const authority = await mcpMocks.authorityResolvers[0]!();
+    expect(
+      authority.tools.map((tool) => (typeof tool === "string" ? tool : tool.name)),
+    ).not.toContain("fake__show");
     await finish();
   });
 

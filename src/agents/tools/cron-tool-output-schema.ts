@@ -10,6 +10,10 @@ import { defineToolOutputSchema } from "../schema/tool-output-schema.js";
 const nullableNumber = Type.Union([Type.Number(), Type.Null()]);
 const nullableString = Type.Union([Type.String(), Type.Null()]);
 const job = CronJobSchema.properties;
+const CronJobOutputSchema = Type.Object(
+  { ...job, warnings: Type.Optional(Type.Array(Type.String())) },
+  { additionalProperties: false },
+);
 
 // The Gateway's compact projection omits payloads and event commands. Older
 // protocol-v4 Gateways return full jobs after the tool's compact fallback.
@@ -162,10 +166,17 @@ export const CronToolOutputSchema = defineToolOutputSchema({
   variants: {
     status: CronStatusOutputSchema,
     list: CronListOutputSchema,
-    get: CronJobSchema,
+    get: CronJobOutputSchema,
     // Add can return a direct job or the declarative convergence envelope.
-    add: CronAddResultSchema,
-    update: CronJobSchema,
+    add: Type.Union(
+      CronAddResultSchema.anyOf.map((schema) =>
+        Type.Object(
+          { ...schema.properties, warnings: Type.Optional(Type.Array(Type.String())) },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    update: CronJobOutputSchema,
     remove: Type.Union([
       Type.Object(
         {

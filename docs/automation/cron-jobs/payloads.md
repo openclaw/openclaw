@@ -64,6 +64,22 @@ unrestricted `*` policy; `automations edit --clear-tools` restores that explicit
 policy. Existing jobs that predate an explicit tool policy retain their current behavior
 until their tool policy is explicitly edited or the job is recreated.
 
+When a Codex turn inherits its tools, unavailable configured MCP integrations are
+excluded rather than blocking unrelated work. The scheduling result includes
+`warnings` with the exclusions and recovery guidance. The saved cap contains only
+the currently executable, authorized subset; signing in or discovering more MCP
+tools later does not expand it. Explicit `toolsAllow` selectors must resolve to
+executable tools (including trusted runtime aliases, stored under canonical names).
+Unavailable or unknown requests fail before saving, even alongside `*`, with the
+affected names and recovery guidance. The standalone `*` still captures only the
+available subset. Interactive MCP visibility alone does not authorize an
+unattended job; required integrations are checked in the fresh scheduled snapshot.
+Older releases could silently intersect finite lists; when creating a job or
+explicitly editing its tools, remove unavailable names or restore their access.
+Existing stored caps are not rewritten. Discovery failures that prevent a
+trustworthy capture still fail closed. Current permissions and approvals remain
+in force.
+
 Changing an account-bound job to a payload that does not run tools and later back
 to an agent turn preserves its account restriction. A payload conversion does not
 reauthorize that job as an operator-created job.

@@ -16,6 +16,16 @@ import type {
 } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
 
+/** Keep capture exclusions visible to direct and code-mode callers, not in stored job state. */
+export function appendCronCreatorAuthorityNotice(
+  result: unknown,
+  authority: CronCreatorToolAuthoritySnapshot | undefined,
+): unknown {
+  return authority?.diagnosticNotice && isRecord(result)
+    ? { ...result, warnings: [authority.diagnosticNotice] }
+    : result;
+}
+
 export function assertNoCronShellExecution(value: unknown): void {
   if (!isRecord(value)) {
     return;
@@ -111,6 +121,7 @@ async function prepareCronJobUpdateForGateway(
       creatorToolAllowlist: resolvedAuthority.tools,
       currentJob: existingRecord,
       creatorAuthorityComplete: true,
+      diagnosticNotice: resolvedAuthority.diagnosticNotice,
     });
   }
   if (finalPlan.kind !== "ready") {
@@ -190,9 +201,11 @@ export async function updateCronJobFromAgentTool(params: {
             : {}),
         });
       };
-      return prepared.resolvedAuthority && params.withCreatorAuthorityProvenance
-        ? await params.withCreatorAuthorityProvenance(prepared.resolvedAuthority, write)
-        : await write();
+      const result =
+        prepared.resolvedAuthority && params.withCreatorAuthorityProvenance
+          ? await params.withCreatorAuthorityProvenance(prepared.resolvedAuthority, write)
+          : await write();
+      return appendCronCreatorAuthorityNotice(result, prepared.resolvedAuthority);
     } catch (error) {
       if (attempt === 0 && isCronJobConfigRevisionConflict(error)) {
         continue;
