@@ -24,6 +24,7 @@ import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
 } from "../infra/state-migrations.exec-approvals.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import {
@@ -35,6 +36,12 @@ const fixture = vi.hoisted(() => ({
   admitted: new Error("node runtime preparation reached"),
   configure: vi.fn(async () => ({ version: 1, nodeId: "test-node" })),
   prepare: vi.fn(),
+  initializeSqlite: vi.fn<() => Promise<void>>().mockResolvedValue(),
+}));
+
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
+  initializeSqliteRuntimeCapabilities: fixture.initializeSqlite,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
@@ -109,6 +116,7 @@ describe.each([
   beforeEach(() => {
     vi.clearAllMocks();
     fixture.prepare.mockRejectedValue(fixture.admitted);
+    fixture.initializeSqlite.mockReset().mockResolvedValue();
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   });
 
@@ -125,6 +133,28 @@ describe.each([
     fs.writeFileSync(sourcePath, raw);
     return { sourcePath, raw };
   }
+
+  it("awaits SQLite runtime admission before opening native state", async () => {
+    const { stateDir } = useStateDir();
+    const entered = createDeferredCore();
+    const decided = createDeferredCore();
+    fixture.initializeSqlite.mockImplementationOnce(() => {
+      entered.resolve();
+      return decided.promise;
+    });
+    const starting = run();
+    const outcome = expect(starting).rejects.toBe(fixture.admitted);
+    try {
+      await Promise.race([entered.promise, starting]);
+      expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+      expect(fixture.configure).not.toHaveBeenCalled();
+      expect(fixture.prepare).not.toHaveBeenCalled();
+    } finally {
+      decided.resolve();
+      await outcome;
+    }
+    expect(fixture.prepare).toHaveBeenCalledOnce();
+  });
 
   it.each(retiredStores)("leaves $name for Doctor before preparing capabilities", async (store) => {
     const { env, stateDir } = useStateDir();

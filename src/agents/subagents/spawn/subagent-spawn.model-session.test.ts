@@ -142,6 +142,13 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       expected: false,
     },
     {
+      name: "explicit child Ultrafast",
+      model: "custom/model-b",
+      parentMode: true,
+      override: "ultrafast" as const,
+      expected: "ultrafast",
+    },
+    {
       name: "explicit child auto",
       model: "custom/model-b",
       parentMode: true,

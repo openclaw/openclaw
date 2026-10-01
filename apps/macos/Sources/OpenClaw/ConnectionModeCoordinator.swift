@@ -117,7 +117,6 @@ final class ConnectionModeCoordinator {
             // Finish persistence before readiness so a newer lifecycle cannot clear its repair marker.
             _ = await GatewayProcessManager.shared.waitForGatewayReady(
                 launchAgentInstalled: launchAgentInstalled)
-            guard self.transition.isCurrent(generation, mode: mode) else { return }
         } else {
             GatewayProcessManager.shared.stop()
             await GatewayProcessManager.shared.waitForStartupAttempt()

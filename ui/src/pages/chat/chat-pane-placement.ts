@@ -292,13 +292,11 @@ export function resolveChatPanePlacement(params: {
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
   const moveDisabledReason = moving
     ? t("common.loading")
-    : reclaiming
+    : reclaiming || placementState !== "active"
       ? t("sessionsView.actionUnavailable")
-      : placementState !== "active"
-        ? t("sessionsView.actionUnavailable")
-        : moveAccess.allowed
-          ? undefined
-          : moveAccess.reason;
+      : moveAccess.allowed
+        ? undefined
+        : moveAccess.reason;
   const recoveryDisabledReason = restarting
     ? t("common.loading")
     : moving || reclaiming || (!dispatchRequired && recoveryAction !== "restart")

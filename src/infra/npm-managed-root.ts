@@ -1,4 +1,3 @@
-// Manages private npm package roots for plugin install flows.
 import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -17,6 +16,7 @@ import { resolveNpmCommand } from "./npm-command.js";
 import { createManagedNpmPeerPlanArgs } from "./npm-managed-peer-plan.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { isPackageDependencyName } from "./package-json.js";
 import { createSafeNpmInstallEnv } from "./safe-package-install.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
@@ -66,18 +66,6 @@ type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-
 
 function readDependencyRecord(value: unknown): Record<string, string> {
   return filterStringRecord(value) ?? {};
-}
-
-function isSafePackageName(name: string): boolean {
-  if (name.startsWith("@")) {
-    const parts = name.split("/");
-    return (
-      parts.length === 2 && parts.every((part) => part.length > 0 && part !== "." && part !== "..")
-    );
-  }
-  return (
-    name.length > 0 && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".."
-  );
 }
 
 function readOverrideRecord(value: unknown): Record<string, unknown> {
@@ -504,7 +492,7 @@ async function isRequiredPlatformPackageComplete(params: {
     return false;
   }
   const packageName = readOptionalString(manifest.name);
-  if (!packageName || !isSafePackageName(packageName)) {
+  if (!packageName || !isPackageDependencyName(packageName)) {
     return false;
   }
   if (!Array.isArray(manifest.files) || !manifest.files.includes("vendor")) {
@@ -581,7 +569,12 @@ export async function listMissingRequiredPlatformPackages(params: {
     }
     const name = readLockPackageLocationName(location);
     const packagePath = resolveManagedNpmLockPackagePath({ npmRoot: params.npmRoot, location });
-    if (!name || !requiredPackageNames.has(name) || !isSafePackageName(name) || !packagePath) {
+    if (
+      !name ||
+      !requiredPackageNames.has(name) ||
+      !isPackageDependencyName(name) ||
+      !packagePath
+    ) {
       continue;
     }
     if (
@@ -637,7 +630,7 @@ function collectNpmLockPeerDependencyPins(params: {
     }
     const peerDependencies = readDependencyRecord(value.peerDependencies);
     for (const [peerName, peerRange] of Object.entries(peerDependencies)) {
-      if (peerName === "openclaw" || pins.has(peerName) || !isSafePackageName(peerName)) {
+      if (peerName === "openclaw" || pins.has(peerName) || !isPackageDependencyName(peerName)) {
         continue;
       }
       const version = findLockPackageVersion({ lockfile: params.lockfile, packageName: peerName });

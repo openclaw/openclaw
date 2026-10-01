@@ -1,5 +1,4 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-// Policy plugin evidence types.
 import type { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 
 /** Mutable during construction; collectors publish the readonly evidence contract. */
@@ -238,18 +237,6 @@ export type PolicyDataHandlingEvidence = {
   readonly explicit?: boolean;
 };
 
-export type SecretRefEvidence = {
-  readonly source: "env" | "file" | "exec" | "store";
-  readonly provider: string;
-  readonly id: string;
-};
-
 export type SecretRefDefaults = NonNullable<Parameters<typeof coerceSecretRef>[1]>;
 
 export const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
-
-export const NON_SLUG_CHARS = /[^a-z0-9-]+/g;
-
-export const COLLAPSE_HYPHENS = /-+/g;
-
-export const TRIM_HYPHENS = /^-+|-+$/g;

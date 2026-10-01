@@ -211,6 +211,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       runtimePlan: { auth: {} },
       sessionPromptState: {
         sessionFile: "/tmp/session.jsonl",
+        withSessionWriterContext: (run: () => Promise<unknown>) => run(),
+        recordOutputLimitNotice: vi.fn(async () => {}),
+        settleOwnedTranscriptProjection: vi.fn(async () => {}),
         markOwnedTranscriptRetry,
         continueFromCurrentTranscript,
       },

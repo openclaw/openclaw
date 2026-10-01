@@ -4,5 +4,5 @@ export { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runt
 export { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 export { fetchWithSsrFGuard } from "../runtime-api.js";
 export { resolveNextcloudTalkAccount } from "./accounts.js";
-export { getNextcloudTalkRuntime } from "./runtime.js";
+export { getOptionalNextcloudTalkRuntime } from "./runtime.js";
 export { generateNextcloudTalkSignature } from "./signature.js";

@@ -57,6 +57,7 @@ export type PackageUpdateStepRunner = (params: {
   cwd?: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  input?: string;
 }) => Promise<UpdateStepResult>;
 
 type PackageUpdateLifecycleResult =

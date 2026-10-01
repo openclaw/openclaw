@@ -117,7 +117,7 @@ const PACKAGE_UPDATE_CHUNKS = [
   "package-update-self-upgrade",
 ];
 
-const STABLE_DOCKER_CHUNKS = [
+const FULL_DOCKER_CHUNKS = [
   "core",
   ...PACKAGE_UPDATE_CHUNKS,
   "plugins-runtime-plugins",
@@ -145,12 +145,12 @@ const PROFILE_EXPECTATIONS = [
   },
   {
     profile: "stable",
-    dockerE2eChunks: STABLE_DOCKER_CHUNKS,
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: ["anthropic", "google", "minimax", "openai"],
   },
   {
     profile: "full",
-    dockerE2eChunks: STABLE_DOCKER_CHUNKS,
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: [
       "anthropic",
       "google",
@@ -622,7 +622,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         plan.dockerE2e.matrix.include.find(
           (entry: MatrixEntry) => entry.chunk_id === "package-update-self-upgrade",
         ),
-      ).toMatchObject({ timeout_minutes: 130 });
+      ).toMatchObject({ timeout_minutes: 210 });
       expect(
         plan.dockerE2e.matrix.include.find(
           (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",

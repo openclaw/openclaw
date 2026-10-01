@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import {
@@ -127,9 +128,7 @@ function validateSkillBundlePath(filePath: string): void {
         part === "." ||
         part === ".." ||
         /[\\<>:"|?*]/u.test(part) ||
-        Array.from(part).some(
-          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-        ) ||
+        containsAsciiControlCharacter(part) ||
         /[ .]$/u.test(part) ||
         part !== part.normalize("NFC") ||
         /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(part) ||

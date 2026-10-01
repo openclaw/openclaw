@@ -171,7 +171,7 @@ test("sessions.patch cancels active work and commits only after admission and te
     expect(await replacement).toBeInstanceOf(Error);
   }));
 
-test("sharing revocation fences archive before cancellation and forces fresh authorization", ({
+test("identity changes fence archive before cancellation and force fresh authorization", ({
   signal,
 }) =>
   withArchiveCleanup(signal, async ({ track, releaseOnAbort, dispose }) => {
@@ -180,7 +180,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     const sessionId = "session-archive-sharing-revocation";
     const runId = "run-archive-sharing-revocation";
     const owner = identifiedClient("archive-owner");
-    const viewer = identifiedClient("archive-viewer");
+    const archiver = identifiedClient("archive-owner");
     await writeSessionStore({
       entries: {
         [sessionKey]: sessionStoreEntry(sessionId, {
@@ -216,7 +216,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     requestContext.workerSessionPlacementService = placementReader(() => placement);
     requestContext.workerPlacementDispatchService = { dispatch: vi.fn(), reclaim };
     const authorized = resolveSessionMutationAuthorization({
-      client: viewer,
+      client: archiver,
       method: "sessions.patch",
       requestParams: { key: sessionKey, archived: true },
       context: requestContext,
@@ -264,12 +264,13 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     );
     expect(sharingSettled).toBe(false);
     expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
+    archiver.authenticatedUserProfile!.profileId = "archive-viewer";
 
     let archiveSettled = false;
     const archive = track(
       invokeArchiveHandler({
         authorization: authorized.authorization,
-        client: viewer,
+        client: archiver,
         context: requestContext,
         sessionKey,
         expectedSessionId: sessionId,
@@ -291,7 +292,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
 
     expect(await archive).toMatchObject({
       ok: false,
-      error: { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
+      error: { code: "FORBIDDEN" },
     });
     expect(interrupted).toBe(false);
     expect(active.controller.signal.aborted).toBe(false);
@@ -300,7 +301,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
   }));
 
-test.for(["owner", "viewer"] as const)(
+test.for(["creator", "changed identity"] as const)(
   "archive permits sharing during drain and revalidates the %s before commit",
   (archiveRole, { signal }) =>
     withArchiveCleanup(signal, async ({ track, releaseOnAbort, dispose }) => {
@@ -309,7 +310,7 @@ test.for(["owner", "viewer"] as const)(
       const sessionId = "session-archive-before-sharing";
       const runId = "run-archive-before-sharing";
       const owner = identifiedClient("archive-owner");
-      const archiver = archiveRole === "owner" ? owner : identifiedClient("archive-viewer");
+      const archiver = identifiedClient("archive-owner");
       await writeSessionStore({
         entries: {
           [sessionKey]: sessionStoreEntry(sessionId, {
@@ -327,6 +328,7 @@ test.for(["owner", "viewer"] as const)(
       });
       const persistence = createDeferredCore();
       const reclaimGate = createDeferredCore();
+      const reclaimEntered = createDeferredCore();
       releaseOnAbort(() => {
         admission.release();
         persistence.resolve();
@@ -337,6 +339,7 @@ test.for(["owner", "viewer"] as const)(
       const requestContext = await archiveLifecycleRequestContext(active.context);
       let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
       const reclaim = vi.fn(async () => {
+        reclaimEntered.resolve();
         await reclaimGate.promise;
         placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
         return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
@@ -377,19 +380,23 @@ test.for(["owner", "viewer"] as const)(
       expect(await sharing).toMatchObject({ ok: true });
       expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
       expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+      if (archiveRole === "changed identity") {
+        archiver.authenticatedUserProfile!.profileId = "archive-viewer";
+      }
 
       admission.release();
       persistence.resolve();
-      if (archiveRole === "viewer") {
+      if (archiveRole === "changed identity") {
         expect(await archive).toMatchObject({
           ok: false,
-          error: { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
+          error: { code: "FORBIDDEN" },
         });
         expect(reclaim).not.toHaveBeenCalled();
         expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
         return;
       }
-      await vi.waitFor(() => expect(reclaim).toHaveBeenCalledOnce());
+      await waitForArchivePhase(reclaimEntered.promise, archive, signal);
+      expect(reclaim).toHaveBeenCalledOnce();
       expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
       reclaimGate.resolve();
       expect(await archive).toMatchObject({ ok: true });

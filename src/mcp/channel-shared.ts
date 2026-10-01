@@ -1,4 +1,3 @@
-// Shared MCP channel helpers normalize channel tool payloads and responses.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString as toText,
@@ -128,7 +127,6 @@ export type QueueEvent =
       raw: Record<string, unknown>;
     };
 
-/** Cursor and optional session filter used by event polling and waiting. */
 export type WaitFilter = {
   afterCursor: number;
   sessionKey?: string;
@@ -220,7 +218,6 @@ export function toConversation(row: SessionRow): ConversationDescriptor | null {
   };
 }
 
-/** Check whether a queued event should be visible to a poll or wait call. */
 export function matchEventFilter(event: QueueEvent, filter: WaitFilter): boolean {
   if (event.cursor <= filter.afterCursor) {
     return false;

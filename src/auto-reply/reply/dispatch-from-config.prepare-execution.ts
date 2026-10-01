@@ -55,14 +55,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     payload: Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0],
   ) => {
     const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
-    const steps = (payload.steps ?? [])
-      .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
-      .filter((entry) => entry.step);
-    if (steps.length > 0) {
-      return formatPlanChecklistLines(steps, {
-        maxLines: steps.length,
-        maxLineChars: 120,
-      }).join("\n");
+    const lines = formatPlanChecklistLines(payload.steps ?? [], {
+      maxLines: payload.steps?.length ?? 0,
+      maxLineChars: 120,
+    });
+    if (lines.length > 0) {
+      return lines.join("\n");
     }
     // Generic notices retain their shipped receipt; prepared notes belong to literal-capable drafts.
     return payload.explanationFormat === "plain"
@@ -87,7 +85,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     markInboundDedupeReplayUnsafe();
     turnLedger.sendQueued("tool", replyPayload);
   };
-  // Track accumulated block text for TTS generation after streaming completes.
   // When block streaming succeeds, there's no final reply, so we need to generate
   // TTS audio separately from the accumulated block content.
   const progressState = {

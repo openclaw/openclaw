@@ -241,7 +241,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
       publication.onCommitted?.();
     },
     clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
+    countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: () => null,
     suppressAnnounceForSteerRestart: () => false,
     shouldEmitEndedHookForRun: () => false,
@@ -309,9 +309,11 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     runs,
     persist,
     persistOrThrow: persist,
-    restoreOnce: vi.fn(),
+    persistAsyncOrThrow: controller.options.persistAsyncOrThrow,
+    restoreOnce: vi.fn(async () => {}),
     startAnnounceCleanup: vi.fn(() => false),
     settleRequesterTurn: controller.settleRequesterTurnAfterSessionSpawns,
+    markRequesterYielded: controller.markRequesterTurnYielded,
   });
   steeringMocks.lease.mockImplementation(api.leasePendingAgentSteeringItems);
 

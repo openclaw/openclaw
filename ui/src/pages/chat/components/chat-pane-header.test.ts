@@ -11,6 +11,7 @@ import {
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
 import {
   activePlacementSession,
+  createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
@@ -22,7 +23,6 @@ import {
 } from "./chat-pane-header.test-support.ts";
 import { canRevealSessionWorkspace, resolveChatPaneParentSession } from "./chat-pane-header.ts";
 import { renderChatPanePlacement } from "./chat-pane-placement.ts";
-import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 const containers: HTMLElement[] = [];
 
@@ -73,7 +73,7 @@ function mountIntegratedPresenceHeader(params: {
   const renderHeader = () =>
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,
@@ -469,6 +469,39 @@ describe("chat pane header", () => {
     expect(facepile !== null).toBe(expectedViewers.length > 0);
   });
 
+  it("keeps header viewers settled until presence changes", async () => {
+    const presence: PresenceEntry[] = [
+      {
+        instanceId: "guest-instance",
+        ts: 1,
+        user: { id: "guest", identity: { type: "profile", id: "guest" }, name: "Guest" },
+        watchedSessions: ["agent:main:current"],
+      },
+    ];
+    const mounted = mountIntegratedPresenceHeader({ owners: [], presence });
+    const facepile = mounted.container.querySelector("openclaw-viewer-facepile")!;
+    await facepile.updateComplete;
+    const updates = vi.spyOn(facepile, "render");
+    mounted.renderHeader();
+    await facepile.updateComplete;
+    expect(updates).not.toHaveBeenCalled();
+    mounted.pane.presencePayload = {
+      presence: [
+        ...presence,
+        {
+          instanceId: "second-instance",
+          ts: 1,
+          user: { id: "second", identity: { type: "profile", id: "second" }, name: "Second" },
+          watchedSessions: ["agent:main:current"],
+        },
+      ],
+    };
+    mounted.renderHeader();
+    await facepile.updateComplete;
+    expect(updates).toHaveBeenCalledOnce();
+    expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
+  });
+
   it("updates the header owner vitality from live session presence", async () => {
     const sessionKey = "agent:main:current";
     const owners = [
@@ -570,6 +603,36 @@ describe("chat pane header", () => {
       expect(event.defaultPrevented).toBe(action !== null);
       expect(props.onCommitRename).toHaveBeenCalledTimes(action === "commit" ? 1 : 0);
       expect(props.onCancelRename).toHaveBeenCalledTimes(action === "cancel" ? 1 : 0);
+    },
+  );
+
+  it.each(["keyup", "timeout"])(
+    "keeps a Safari composition-confirm Enter from committing a session rename until %s",
+    (release) => {
+      const { container, props } = mountHeader({ editing: true, renameValue: "日本語" });
+      const input = container.querySelector<HTMLInputElement>(".chat-pane__session-title-input")!;
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+      input.dispatchEvent(end);
+      for (const offset of [1, 100]) {
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(enter, "timeStamp", {
+          value: end.timeStamp + (release === "timeout" ? offset : 1),
+        });
+        if (offset === 100 && release === "keyup") {
+          input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter" }));
+        }
+        input.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(offset === 100);
+        expect(props.onCommitRename).toHaveBeenCalledTimes(offset === 100 ? 1 : 0);
+        expect(props.onCancelRename).not.toHaveBeenCalled();
+        expect(input.value).toBe("日本語");
+      }
     },
   );
 

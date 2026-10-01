@@ -119,15 +119,15 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugLiveError = null;
     },
     invalidateRequests: () => {
-      void this.diagnosticsTask.run([null, null]);
+      this.invalidateDiagnostics();
       void this.liveTask.run([null]);
-      this.diagnosticsTaskActiveClient = null;
-      this.diagnosticsNeedsRefresh = true;
       this.callEpoch += 1;
     },
     onSnapshot: () => {
       this.syncPolling();
-      this.ensureInitialDebug();
+      if (this.diagnosticsNeedsRefresh) {
+        void this.loadDiagnostics();
+      }
     },
   });
   private readonly subscriptions = new SubscriptionsController(this)
@@ -138,9 +138,8 @@ class DebugPage extends OpenClawLightDomElement {
         this.eventLog = gateway.eventLog;
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
       (selection) => {
         const agentId = selection.state.selectedId;
         if (agentId === this.diagnosticsAgentId) {
@@ -148,20 +147,16 @@ class DebugPage extends OpenClawLightDomElement {
         }
         this.diagnosticsAgentId = agentId;
         this.debugModels = [];
-        void this.diagnosticsTask.run([null, null]);
-        this.diagnosticsTaskActiveClient = null;
-        this.diagnosticsNeedsRefresh = true;
+        this.invalidateDiagnostics();
         void this.loadDiagnostics();
       },
     );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    void this.diagnosticsTask.run([null, null]);
+    this.invalidateDiagnostics();
     void this.liveTask.run([null]);
-    this.diagnosticsTaskActiveClient = null;
     this.diagnosticsAgentId = null;
-    this.diagnosticsNeedsRefresh = true;
     this.callEpoch += 1;
     super.disconnectedCallback();
   }
@@ -174,16 +169,10 @@ class DebugPage extends OpenClawLightDomElement {
     this.polling.start();
   }
 
-  private ensureInitialDebug() {
-    if (
-      !this.gateway.connected ||
-      !this.gateway.client ||
-      !this.diagnosticsNeedsRefresh ||
-      this.diagnosticsTaskActiveClient
-    ) {
-      return;
-    }
-    void this.loadDiagnostics();
+  private invalidateDiagnostics() {
+    void this.diagnosticsTask.run([null, null]);
+    this.diagnosticsTaskActiveClient = null;
+    this.diagnosticsNeedsRefresh = true;
   }
 
   private loadDiagnostics(): Promise<void> {

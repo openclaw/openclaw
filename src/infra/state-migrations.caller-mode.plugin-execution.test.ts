@@ -100,6 +100,34 @@ describe("legacy state migration caller plugin execution", () => {
     });
   });
 
+  it("completes Doctor after archiving verified empty Telegram thread bindings", async () => {
+    const fixture = await makeFixture();
+    const sourcePath = path.join(fixture.stateDir, "telegram", "thread-bindings-default.json");
+    const source = '{"version":1,"bindings":[]}\n';
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, source);
+    clearPluginDoctorContractRegistryCache();
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+
+    expect(
+      result.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
+    ).toMatchObject({
+      outcome: "completed",
+      changes: [`Archived empty Telegram thread bindings legacy source -> ${sourcePath}.migrated`],
+      warnings: [],
+    });
+    expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.readFileSync(`${sourcePath}.migrated`, "utf8")).toBe(source);
+  });
+
   it.each([
     {
       name: "reordered exports with only the second action pending",

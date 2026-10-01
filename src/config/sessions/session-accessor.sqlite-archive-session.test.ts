@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as readonlyDatabase from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -35,8 +39,9 @@ import type {
 } from "./session-accessor.sqlite-archive-types.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
+import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
@@ -344,7 +349,7 @@ describe("SQLite transcript archive sessions", () => {
         [...observedWorkers].filter((observed) => observed.threadId !== -1).length,
       );
     });
-    const publicationWorkers = new Set<reclamationWorker.SqliteReclamationWorker>();
+    const publicationWorkers = new Set<SqliteReclamationWorker>();
     const withWorker = reclamationWorker.withSqliteReclamationWorker;
     const reclamationObserver = vi
       .spyOn(reclamationWorker, "withSqliteReclamationWorker")
@@ -424,7 +429,9 @@ describe("SQLite transcript archive sessions", () => {
     await expect(loadTranscriptEvents(second)).resolves.toEqual([]);
   });
 
-  it("retires queued archive work without waiting on the blocked global FIFO", async () => {
+  it("retires queued archive work without waiting on the blocked global FIFO", async ({
+    signal,
+  }) => {
     const sessionId = "queued-retirement";
     const sessionKey = "agent:main:queued-retirement";
     const scope = { sessionKey, sessionId, storePath };
@@ -436,11 +443,25 @@ describe("SQLite transcript archive sessions", () => {
     const blockerEntered = createDeferred();
     const releaseBlocker = createDeferred();
     const materializationQueued = createDeferred();
-    const blocker = runExclusiveSqliteTranscriptArchiveWorker(async () => {
-      blockerEntered.resolve();
-      await releaseBlocker.promise;
-    });
-    await blockerEntered.promise;
+    let blocker: Promise<void> | undefined;
+    const prepare = reclamation.runSessionDeletionPlanning;
+    const planning = vi
+      .spyOn(reclamation, "runSessionDeletionPlanning")
+      .mockImplementationOnce(async (...args) => {
+        const result = await prepare(...args);
+        if (result.operation !== "entry" || result.value.kind !== "ready") {
+          throw new Error("Expected entry planning before blocking archive materialization");
+        }
+        expect(result.value.value.targetSnapshot).toMatchObject([
+          { sessionKey, entry: { sessionId } },
+        ]);
+        blocker = runExclusiveSqliteTranscriptArchiveWorker(async () => {
+          blockerEntered.resolve();
+          await releaseBlocker.promise;
+        });
+        await blockerEntered.promise;
+        return result;
+      });
     archiveScopeHooks.afterMaterializeQueued = () => materializationQueued.resolve();
     const archiveWorkers = observeArchiveSessionWorkers();
     const deletion = deleteSessionEntryLifecycle({
@@ -450,14 +471,16 @@ describe("SQLite transcript archive sessions", () => {
     });
     let retirement: Promise<boolean> | undefined;
     try {
-      await Promise.race([
-        materializationQueued.promise,
-        deletion.then(() => {
-          throw new Error("deletion skipped archive materialization");
-        }),
-      ]);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          materializationQueued.promise,
+          deletion,
+          "deletion skipped archive materialization",
+        ),
+        signal,
+      );
       retirement = closeOpenClawAgentDatabaseByPathAsync(database.path);
-      await withTestTimeout(retirement, 5_000, "retirement waited on undispatched archive work");
+      await withinTest(retirement, signal);
       expect(archiveWorkers.replies).toEqual([]);
       releaseBlocker.resolve();
       await expect(deletion).rejects.toThrow(/revok/i);
@@ -465,6 +488,7 @@ describe("SQLite transcript archive sessions", () => {
     } finally {
       releaseBlocker.resolve();
       await Promise.allSettled([blocker, deletion, retirement]);
+      planning.mockRestore();
       archiveWorkers.stop();
     }
     expect(loadSessionEntry(scope)).toMatchObject({ sessionId });
@@ -524,7 +548,7 @@ describe("SQLite transcript archive sessions", () => {
     },
   );
 
-  it.each([
+  it.for([
     { phase: "file", owner: "agent" },
     { phase: "prepare", owner: "agent" },
     { phase: "record", owner: "agent" },
@@ -532,7 +556,7 @@ describe("SQLite transcript archive sessions", () => {
     { phase: "record", owner: "state" },
   ] as const)(
     "cancels queued $phase publication at $owner close without waiting on another queue owner",
-    async ({ phase, owner }) => {
+    async ({ phase, owner }, { signal }) => {
       const sessionId = "queued-publication";
       const sessionKey = "agent:main:queued-publication";
       await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
@@ -581,18 +605,18 @@ describe("SQLite transcript archive sessions", () => {
       );
       let close: Promise<boolean> | undefined;
       try {
-        await Promise.race([
-          queued.promise,
-          publication.then(() => {
-            throw new Error("Publication skipped its queue");
-          }),
-        ]);
+        await withinTest(
+          awaitGateBeforeSettlement(queued.promise, publication, "Publication skipped its queue"),
+          signal,
+        );
         close =
           owner === "agent"
             ? closeOpenClawAgentDatabaseByPathAsync(database.path)
             : closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(testState.env));
-        await withTestTimeout(close, 5_000, "close waited on an unrelated queue owner");
-        expect(await observed).toMatchObject({ message: expect.stringMatching(/revok/i) });
+        await withinTest(close, signal);
+        expect(await withinTest(observed, signal)).toMatchObject({
+          message: expect.stringMatching(/revok/i),
+        });
       } finally {
         release.resolve();
         await Promise.allSettled([publication, blocker, close]);

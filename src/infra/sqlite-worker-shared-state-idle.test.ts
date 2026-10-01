@@ -20,6 +20,7 @@ import {
   openOpenClawStateWorkerCleanupStore,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
@@ -353,7 +354,8 @@ it("replaces a failed idle actor after an enclosing callback settles", async () 
   }
 });
 
-const nodeIt = process.versions.bun ? it.skip : it;
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const read = {
   type: "deviceIdentity.read",
   input: { identityKey: "idle-fixture:idle-custody" },
@@ -373,7 +375,7 @@ async function openClient(context: OpenClawStateWorkerContext) {
   }
 }
 
-nodeIt("joins expiring idle-client maintenance without retiring a healthy co-user", async () => {
+poolIt("joins expiring idle-client maintenance without retiring a healthy co-user", async () => {
   const f = await fixture();
   const context = f.context;
   const env = context.environment;
@@ -435,7 +437,7 @@ nodeIt("joins expiring idle-client maintenance without retiring a healthy co-use
   }
 });
 
-nodeIt.each([undefined, "agent-resources", "shared-handles"] as const)(
+poolIt.each([undefined, "agent-resources", "shared-handles"] as const)(
   "joins a tracked maintenance callback before retiring its failed actor and idle co-user (during resource cleanup: %s)",
   async (duringCleanup) => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-maintenance-drain-") };
@@ -508,7 +510,7 @@ nodeIt.each([undefined, "agent-resources", "shared-handles"] as const)(
   },
 );
 
-nodeIt(
+poolIt(
   "reopens an idle failed actor without waiting for its other maintenance client to close",
   async () => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-reopen-") };
@@ -544,7 +546,7 @@ nodeIt(
   },
 );
 
-nodeIt("joins adopted actor custody instead of its earlier per-client failure", async () => {
+poolIt("joins adopted actor custody instead of its earlier per-client failure", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-adopted-retirement-") };
   const firstScope = createOpenClawDatabaseMaintenanceScope();
   const peerScope = createOpenClawDatabaseMaintenanceScope();

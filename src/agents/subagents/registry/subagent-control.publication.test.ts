@@ -16,6 +16,7 @@ import type { AgentWaitResult } from "../../run-wait.js";
 import * as killRuntime from "./subagent-control-kill-runtime.js";
 import * as killSession from "./subagent-control-session.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
+import * as registryHelpers from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import {
@@ -48,12 +49,13 @@ it.each(["replacement", "retirement"] as const)(
       cleanup: "keep",
     });
     const onResult = vi.fn();
-    const preparePublication = vi.fn(async () => {
+    const preparePublication = vi.fn(async (publish: () => void) => {
       if (transition === "replacement") {
         await writeSubagentSessionEntry({ ...target, sessionId: "successor-session" });
       } else {
         await removeSubagentSessionEntry(target);
       }
+      return publish();
     });
     const result = await killSubagentRunAdmin(
       {
@@ -65,7 +67,7 @@ it.each(["replacement", "retirement"] as const)(
       },
       {
         assertCurrent: () => {},
-        preparePublication: { prepare: preparePublication, needsPreparation: () => false },
+        preparePublication,
       },
     );
     expect(preparePublication).toHaveBeenCalledOnce();
@@ -122,24 +124,61 @@ it.each([
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
     const originalSettled = createDeferred();
-    fixture.persist.mockImplementation((...runIds) => {
-      persistSubagentRunsToDiskOrThrow(...runIds);
-      if (b0.execution.outcome) {
+    fixture.persist.mockImplementation((runs, runIds) => {
+      persistSubagentRunsToDiskOrThrow(runs, runIds);
+      const original = runs.get(b0.runId);
+      if (original?.execution.outcome) {
         originalSettled.resolve();
       }
-      if (b0.execution.outcome?.status === "ok") {
+      if (original?.execution.outcome?.status === "ok") {
         originalCompleted.resolve();
       }
-      if (subagentRuns.get("publication-b1")?.execution.outcome?.status === "ok") {
+      if (runs.get("publication-b1")?.execution.outcome?.status === "ok") {
         successorCompleted.resolve();
       }
     });
     const handoffOrder: string[] = [];
+    const originalTimingEntered = createDeferred();
+    const releaseOriginalTiming = createDeferred();
+    const firstChildCleanup = createDeferred();
+    const releaseFirstChildCleanup = createDeferred();
+    const persistTiming = registryHelpers.persistSubagentSessionTiming;
+    vi.spyOn(registryHelpers, "persistSubagentSessionTiming").mockImplementation(
+      async (entry, options) => {
+        if (entry === b0 && !completeDuringDrain && !provisional) {
+          originalTimingEntered.resolve();
+          await releaseOriginalTiming.promise;
+        }
+        if (priorChildKill && entry.runId === "publication-first") {
+          // The tombstone is committed; let successor admission overtake real cleanup.
+          firstChildCleanup.resolve();
+          await releaseFirstChildCleanup.promise;
+        }
+        await persistTiming(entry, options);
+      },
+    );
     if (!completeDuringDrain && !provisional) {
-      previousWait.resolve({ status: "error", error: "original run failed", endedAt: Date.now() });
-      await originalSettled.promise;
-      expect(b0.execution.status).toBe("terminal");
-      expect(b0.execution.outcome?.status).toBe("error");
+      const firstBoundary = Promise.race([
+        originalSettled.promise.then(() => "terminal-publication"),
+        originalTimingEntered.promise.then(() => "session-cleanup"),
+      ]);
+      try {
+        previousWait.resolve({
+          status: "error",
+          error: "original run failed",
+          endedAt: Date.now(),
+        });
+        await originalTimingEntered.promise;
+        expect(b0.execution.status).toBe("terminal");
+        expect(b0.execution.outcome?.status).toBe("error");
+        expect(
+          await firstBoundary,
+          "terminal publication must not wait for post-commit session cleanup",
+        ).toBe("terminal-publication");
+      } finally {
+        releaseOriginalTiming.resolve();
+      }
+      await fixture.settle();
     }
 
     const children: Array<readonly [string, string]> = [
@@ -284,11 +323,8 @@ it.each([
         }
       }
       if (priorChildKill) {
-        await vi.waitFor(() => {
-          expect(resolveSubagentSessionStatus(subagentRuns.get("publication-first"))).toBe(
-            "killed",
-          );
-        });
+        await firstChildCleanup.promise;
+        expect(resolveSubagentSessionStatus(subagentRuns.get("publication-first"))).toBe("killed");
       }
       if (replace) {
         // The root lifecycle lock and any marker write have finished before follow-up admission.
@@ -319,6 +355,7 @@ it.each([
       }
       childAdmission.release();
       releaseMarker.resolve();
+      releaseFirstChildCleanup.resolve();
       await pending;
       if (handoff) {
         expect(observedTarget, "admin resolved its root outcome").toBe(true);
@@ -360,6 +397,7 @@ it.each([
     } finally {
       cancellationClock?.mockRestore();
       releaseMarker.resolve();
+      releaseFirstChildCleanup.resolve();
       childAdmission.release();
       followup?.release();
       await pending;

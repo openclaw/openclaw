@@ -230,7 +230,6 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               rememberUnifiedTalkSession(handoff.id, {
                 kind: "managed-room",
                 handoffId: handoff.id,
-                token: handoff.token,
                 roomId: handoff.roomId,
               });
               return respondOk(respond, {

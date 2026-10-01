@@ -115,22 +115,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     return this.voiceStateCache.takeTransition(state);
   }
 
-  get heartbeatInterval(): NodeJS.Timeout | undefined {
-    return this.heartbeatTimers.heartbeatInterval;
-  }
-
-  set heartbeatInterval(timer: NodeJS.Timeout | undefined) {
-    this.heartbeatTimers.heartbeatInterval = timer;
-  }
-
-  get firstHeartbeatTimeout(): NodeJS.Timeout | undefined {
-    return this.heartbeatTimers.firstHeartbeatTimeout;
-  }
-
-  set firstHeartbeatTimeout(timer: NodeJS.Timeout | undefined) {
-    this.heartbeatTimers.firstHeartbeatTimeout = timer;
-  }
-
   override async registerClient(client: Client): Promise<void> {
     this.client = client;
     if (this.options.shard) {

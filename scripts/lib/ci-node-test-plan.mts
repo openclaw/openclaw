@@ -1,6 +1,6 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
 import { statSync } from "node:fs";
-import { matchesGlob, relative, resolve } from "node:path";
+import { isAbsolute, matchesGlob, relative, resolve } from "node:path";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -43,6 +43,7 @@ import {
 } from "../../test/vitest/vitest.unit-paths.mjs";
 import {
   buildVitestRunPlans,
+  hasImportGraphImpactOnTargets,
   isTestFileTarget,
   isToolingTestOwnerPath,
   resolveAffectedTestsFromImportGraph,
@@ -86,6 +87,7 @@ import {
   readToolingFileTimings,
   resolveRuntimePlacementSeconds,
 } from "./ci-test-timings.mts";
+import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 import { isExclusiveCiTestConfig } from "./local-check-runtime.mts";
 import { readPositiveEnvInt } from "./numeric-options.mjs";
@@ -843,6 +845,7 @@ const EXCLUSIVE_COMPACT_GROUP_RE =
 // An indivisible file above this budget must not acquire additional work.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 const COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS = 250;
+const COMPACT_SERIAL_CLI_GROUP_NAME_RE = /^agentic-cli(?:(?:-process)?-hosted-\d+)?$/u;
 
 export function isExclusiveCompactShardName(shardName: string): boolean {
   return EXCLUSIVE_COMPACT_GROUP_RE.test(shardName);
@@ -1106,7 +1109,8 @@ function applyCompactGroupWorkerPins(
       ...timedGroup,
       ...(MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(timedGroup.shard_name)
         ? {
-            env: { ...timedGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "8" },
+            // Leave cold Gateway startup room within the existing test deadlines.
+            env: { ...timedGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "2" },
             minTotalMemoryBytes: 28 * 1024 ** 3,
           }
         : {}),
@@ -1569,14 +1573,7 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
 const RELEASE_ONLY_UI_TEST_FILES = new Set([
-  "ui/src/e2e/board-fixture.e2e.test.ts",
-  "ui/src/e2e/chat-attachment-menu.e2e.test.ts",
-  "ui/src/e2e/chat-mobile-bubble-margin.e2e.test.ts",
-  "ui/src/e2e/github-link-hovercard.e2e.test.ts",
-  "ui/src/e2e/settings-layout.e2e.test.ts",
-  "ui/src/e2e/theme-muted-contrast.e2e.test.ts",
-  "ui/src/e2e/native-embed-settings.e2e.test.ts",
-  "ui/src/e2e/chat-session-entry.e2e.test.ts",
+  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/components/app-sidebar.stress.browser.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
@@ -1591,8 +1588,106 @@ const RELEASE_ONLY_UI_TEST_FILES = new Set([
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
 ]);
 
+const sharedUiE2eInputs = [
+  "ui/{package.json,tsconfig.json,index.html,vite.config.ts}",
+  "ui/config/control-ui-{boot-preloads,chunking,locales,hover-guard,web-awesome-page-rule}.ts",
+  "ui/config/control-ui-boot-modules.json",
+  "ui/src/main.ts",
+  "ui/src/app/{app-host,app-root,bootstrap,router-outlet,router-outlet-controller}.ts",
+  "ui/src/app/app-shell-{view,chrome,navigation,gateway}.ts",
+  "ui/src/test-helpers/control-ui-e2e.ts",
+  "ui/src/test-helpers/control-ui-e2e-{build-publication,contract,controls,defaults,port,readiness,shared-preview}.ts",
+  "ui/src/e2e/control-ui-e2e-suite.test-support.ts",
+  "test/vitest/vitest.ui-e2e{.config,.global-setup,.bundled.global-setup,.setup,.sequencer,-preflight,-prebuilt.config,-prebuilt.global-setup}.ts",
+] as const;
+
+/** These inputs own every served UI, rather than one route or feature fixture. */
+export function hasSharedUiE2eInput(changedPaths: readonly string[]): boolean {
+  return changedPaths.some(
+    (file) =>
+      !file.endsWith(".test.ts") && sharedUiE2eInputs.some((glob) => matchesGlob(file, glob)),
+  );
+}
+
+/** Project the existing PR-exempt policy through browser route and component owners. */
+export function resolveUiE2ePrTestSelection(
+  changedPaths: readonly string[] | null,
+  options: { cwd?: string; forceFull?: boolean } = {},
+): { mode: "owners" | "full"; files: string[]; reasons: Record<string, string[]> } {
+  const cwd = options.cwd ?? process.cwd();
+  const inventory = listTrackedTestFiles(cwd)
+    .map((file) => (isAbsolute(file) ? relative(cwd, file) : file))
+    .filter(
+      (file) =>
+        controlUiE2eTestGlobs.some((glob) => matchesGlob(file, glob)) &&
+        !uiE2eRealGatewayTestFiles.includes(file),
+    );
+  const full = (reason: string) => ({
+    mode: "full" as const,
+    files: inventory,
+    reasons: Object.fromEntries(inventory.map((file) => [file, [reason]])),
+  });
+  if (options.forceFull) {
+    return full("full validation or PR kill switch");
+  }
+  if (!changedPaths?.length) {
+    return full("changed paths unavailable");
+  }
+  if (hasSharedUiE2eInput(changedPaths)) {
+    return full("core E2E harness, UI bundle configuration, or global app shell");
+  }
+  const paths = [...changedPaths];
+  const graphOptions = { tooling: true, resolveAliases: true, runtimeOnly: true };
+  const roots = [...new Set(UI_E2E_OWNER_WATCHES.flatMap(({ ownerRoots }) => ownerRoots))];
+  const policyTargets = new Set(resolvePolicyTestTargets(paths));
+  const importedTargets = new Set(
+    resolveAffectedTestsFromImportGraph(paths, cwd, { ...graphOptions, forceFull: true }),
+  );
+  const impactedRoots = new Set(
+    // Served routes share shell/store cycles. Following those transitively makes a
+    // leaf change select every route; declared owners and their direct imports
+    // supply PR coverage, while the complete composition runs hourly.
+    roots.filter((root) =>
+      hasImportGraphImpactOnTargets(paths, [root], cwd, { ...graphOptions, direct: true }),
+    ),
+  );
+  const watches = new Map(UI_E2E_OWNER_WATCHES.map((watch) => [watch.testFile, watch]));
+  const smoke = new Set<string>(UI_E2E_SMOKE_TEST_FILES);
+  const reasons: Record<string, string[]> = {};
+  const files = inventory.filter((file) => {
+    const selected: string[] = [];
+    if (paths.includes(file)) {
+      selected.push("edited test");
+    }
+    if (smoke.has(file)) {
+      selected.push("fixed cross-cutting smoke");
+    }
+    const watch = watches.get(file);
+    if (policyTargets.has(file)) {
+      selected.push("explicit source-owner watch");
+    }
+    if (importedTargets.has(file)) {
+      selected.push("test or fixture import dependency");
+    }
+    const matchedRoots = watch?.ownerRoots.filter((root) => impactedRoots.has(root));
+    if (matchedRoots?.length) {
+      selected.push(`direct route/component dependency: ${matchedRoots.join(", ")}`);
+    }
+    if (selected.length) {
+      reasons[file] = selected;
+      return true;
+    }
+    return false;
+  });
+  return { mode: "owners", files, reasons };
+}
+
 export function createUiTestShardGroups(
-  options: RuntimeTestSelection & { includeReleaseOnlyTests?: boolean } = {},
+  options: RuntimeTestSelection & {
+    includeReleaseOnlyTests?: boolean;
+    includeReleaseOnlyE2eTests?: boolean;
+    uiE2eFiles?: readonly string[];
+  } = {},
 ) {
   const includeReleaseOnlyTests = options.includeReleaseOnlyTests ?? true;
   const changedPaths = new Set(options.changedPaths ?? []);
@@ -1613,14 +1708,26 @@ export function createUiTestShardGroups(
       ...(files ? { includePatterns: files.filter(ownsFile) } : {}),
     },
   ];
+  const e2eGroups = group(
+    "test/vitest/vitest.ui-e2e.config.ts",
+    (file) =>
+      controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)) ||
+      uiE2eRealGatewayTestFiles.includes(file),
+  );
+  if (options.uiE2eFiles) {
+    const retained = (files ?? listTrackedTestFiles(".")).filter((file) =>
+      uiE2eRealGatewayTestFiles.includes(file),
+    );
+    e2eGroups[0]!.includePatterns = [
+      ...new Set([
+        ...options.uiE2eFiles,
+        ...(options.includeReleaseOnlyE2eTests ? uiE2eRealGatewayTestFiles : retained),
+      ]),
+    ].toSorted();
+  }
   return {
     ui: group("ui/vitest.config.ts", isUiTestTarget),
-    e2e: group(
-      "test/vitest/vitest.ui-e2e.config.ts",
-      (file) =>
-        controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)) ||
-        uiE2eRealGatewayTestFiles.includes(file),
-    ),
+    e2e: e2eGroups,
   };
 }
 
@@ -2792,6 +2899,7 @@ function createNodeTestShardsForOwners(
   owners: readonly (typeof fullSuiteVitestShards)[number][],
   options: NodeTestPlanOptions,
   toolingOnly = false,
+  preparedChangedTestPlans?: ReturnType<typeof buildVitestRunPlans>,
 ): NodeTestShard[] {
   const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
   const includeProofTests =
@@ -2804,14 +2912,15 @@ function createNodeTestShardsForOwners(
     isRuntimeTestFileIncluded(file, options);
   const changedTestPlans = includeReleaseOnlyPluginShards
     ? []
-    : (options.changedPaths ?? [])
+    : (preparedChangedTestPlans ??
+      (options.changedPaths ?? [])
         .filter(
           (file) =>
             isTestFileTarget(file) &&
             !file.endsWith(".live.test.ts") &&
             statSync(file, { throwIfNoEntry: false })?.isFile(),
         )
-        .flatMap((file) => buildVitestRunPlans([file]));
+        .flatMap((file) => buildVitestRunPlans([file])));
 
   return owners.flatMap((shard) => {
     if (
@@ -3846,8 +3955,24 @@ function splitOversizedCompactGroup(
         stripes,
       })
     : undefined;
+  // Former eight-worker Gateway measurements remain floors, not two-worker samples.
+  const previousGatewayWorkerGeneration =
+    previousWorkerEnv && MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name)
+      ? createCompactSplitTimingGeneration({
+          configs: group.configs,
+          env: { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "8" },
+          parentShardName: splitTimingParent,
+          stripes,
+        })
+      : undefined;
   const selectors = (
-    isTooling ? [] : [timingGeneration.selectorKey, previousWorkerGeneration?.selectorKey]
+    isTooling
+      ? []
+      : [
+          timingGeneration.selectorKey,
+          previousWorkerGeneration?.selectorKey,
+          previousGatewayWorkerGeneration?.selectorKey,
+        ]
   ).filter((selector): selector is string => selector !== undefined);
   const completeBlacksmithSeconds = Math.max(
     splitParentSeconds.blacksmith,
@@ -4127,7 +4252,10 @@ export function packNodeTestGroups<Group>(
 export function createSelectedNodeTestShardBundles(
   targets: readonly string[],
   options: Pick<NodeTestPlanOptions, "runnerBackend"> &
-    RuntimeTestSelection & { onFallback?: (reason: string) => void } = {},
+    RuntimeTestSelection & {
+      onFallback?: (reason: string) => void;
+      preparedTestPlans?: ReadonlyMap<string, ReturnType<typeof buildVitestRunPlans>>;
+    } = {},
 ): CompactNodeTestShard[] | null {
   if (options.runnerBackend === "runson") {
     const selected = createSelectedNodeTestShardBundles(targets, {
@@ -4140,8 +4268,9 @@ export function createSelectedNodeTestShardBundles(
     targets.filter((file) => !isCiProofTestFile(file) && isRuntimeTestFileIncluded(file, options)),
   );
   const configs = new Map<string, string>();
+  const changedTestPlans: ReturnType<typeof buildVitestRunPlans> = [];
   for (const target of selected) {
-    const plans = buildVitestRunPlans([target]);
+    const plans = options.preparedTestPlans?.get(target) ?? buildVitestRunPlans([target]);
     const exactFilter =
       plans.length === 1 &&
       plans[0]!.forwardedArgs.length === 1 &&
@@ -4167,6 +4296,9 @@ export function createSelectedNodeTestShardBundles(
       return null;
     }
     configs.set(target, config);
+    if (!target.endsWith(".live.test.ts")) {
+      changedTestPlans.push(...plans);
+    }
   }
   if (selected.size === 0) {
     return targets.length > 0 ? [] : null;
@@ -4182,6 +4314,7 @@ export function createSelectedNodeTestShardBundles(
       includeProofTests: false,
     },
     tooling.size === selected.size,
+    changedTestPlans,
   );
   const owners = new Set<NodeTestShard>();
   for (const target of tooling) {
@@ -4400,7 +4533,7 @@ function packSelectedNodeTestJobs(
       return runnerBackend === "hybrid" &&
         !first.pretestBuildMode &&
         bin.every((job) => job.predictedSeconds! <= COMPACT_EXCLUSIVE_JOB_SECONDS) &&
-        groups.every((group) => /^agentic-cli(?:-process-hosted-\d+)?$/u.test(group.shard_name))
+        groups.every((group) => COMPACT_SERIAL_CLI_GROUP_NAME_RE.test(group.shard_name))
         ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
         : COMPACT_EXCLUSIVE_JOB_SECONDS;
     }
@@ -4528,6 +4661,7 @@ function createCompactNodeTestShardBundles(
   splitHostedToolingTails = false,
   hostedToolingTailBudgets?: ReadonlyMap<string, number>,
   hostedToolingTailDonation?: HostedToolingTailDonation,
+  prioritizeSerialGateway = false,
 ): CompactNodeTestShard[] {
   if (options.runnerBackend === "runson") {
     // Hybrid owns placement and measured serial packing; RunsOn only extracts cron.
@@ -4540,6 +4674,7 @@ function createCompactNodeTestShardBundles(
         splitHostedToolingTails,
         hostedToolingTailBudgets,
         hostedToolingTailDonation,
+        prioritizeSerialGateway,
       ),
       options.compactNodeJobCap ?? COMPACT_NODE_TEST_JOB_CAP,
     );
@@ -4824,10 +4959,16 @@ function createCompactNodeTestShardBundles(
     const usesBlacksmithRunner = usesBlacksmithCapacity(groups[0].runner);
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
+    // Retry over-cap hybrid plans with Gateway first; leave successful cost-first
+    // placement and its runtime recipients intact.
     const sortedGroups = groups
       .flatMap((group) => expandCompactGroup(group, options.runnerBackend))
       .toSorted(
         (a, b) =>
+          (prioritizeSerialGateway
+            ? Number(b.configs.some(isExclusiveCiTestConfig)) -
+              Number(a.configs.some(isExclusiveCiTestConfig))
+            : 0) ||
           estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
           runnerRank(b) - runnerRank(a) ||
           a.shard_name.localeCompare(b.shard_name),
@@ -4870,7 +5011,7 @@ function createCompactNodeTestShardBundles(
           (entry) =>
             !entry.requiresDist &&
             !entry.pretestBuildMode &&
-            /^agentic-cli(?:-process-hosted-\d+)?$/u.test(entry.shard_name) &&
+            COMPACT_SERIAL_CLI_GROUP_NAME_RE.test(entry.shard_name) &&
             estimateBinSeconds([entry]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
         );
       // Hosted preparation exceeds the exclusive test budget by itself. Share
@@ -5340,6 +5481,20 @@ function createCompactNodeTestShardBundles(
         )
       : finalJobs;
   if (measuredJobs.length > compactJobCap) {
+    if (options.runnerBackend === "hybrid" && !prioritizeSerialGateway) {
+      // Rebuild from source so the alternate order passes every admission and
+      // runtime-placement check before any rows are published.
+      return createCompactNodeTestShardBundles(
+        sourceShards,
+        options,
+        compactMode,
+        selectedToolingFiles,
+        splitHostedToolingTails,
+        hostedToolingTailBudgets,
+        hostedToolingTailDonation,
+        true,
+      );
+    }
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
     );

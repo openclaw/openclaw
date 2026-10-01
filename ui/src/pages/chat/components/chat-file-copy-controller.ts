@@ -1,14 +1,12 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import {
-  emptyCopyFeedback,
-  type FileCopyAction,
-  type FileViewControls,
-} from "./chat-sidebar-file-view.ts";
+
+export type FileCopyAction = "path" | "contents";
+export type FileCopyFeedback = Partial<Record<FileCopyAction, "copied" | "failed">>;
 
 export class FileCopyController implements ReactiveController {
-  feedback: FileViewControls["copyFeedback"] = emptyCopyFeedback;
+  feedback: FileCopyFeedback = {};
   private readonly attempts = new Map<FileCopyAction, number>();
   private readonly timers = new Map<FileCopyAction, ReturnType<typeof globalThis.setTimeout>>();
 
@@ -28,7 +26,7 @@ export class FileCopyController implements ReactiveController {
     for (const [action, attempt] of this.attempts) {
       this.attempts.set(action, attempt + 1);
     }
-    this.feedback = emptyCopyFeedback;
+    this.feedback = {};
     if (this.host.isConnected) {
       this.host.requestUpdate();
     }

@@ -5,6 +5,7 @@ type ToolDefinition = Pick<AnyAgentTool, "name" | "parameters" | "description">;
 
 export type AgentToolAvailabilityBinding = {
   prepare: (tool: ToolDefinition, callableTools: ReadonlyMap<string, ToolDefinition>) => void;
+  prepareBeforeNormalization?: true;
   executionSchema?: (schema: unknown) => unknown;
 };
 
@@ -50,7 +51,11 @@ export function markAgentToolExecutionUnavailable<T extends object>(tool: T): T 
 /** Finalize owner-controlled affordances after filtering; never rebind or grant tools. */
 export function finalizeAgentToolAvailability<T extends ToolDefinition>(
   tools: readonly T[],
-  options?: { toolExecutionAllow?: readonly string[]; onPrepared?: (tool: T) => void },
+  options?: {
+    toolExecutionAllow?: readonly string[];
+    onPrepared?: (tool: T) => void;
+    beforeNormalization?: true;
+  },
 ): T[] {
   // The caller supplies its winning definitions, including non-native shadows.
   // A missing, quarantined, or execution-denied dependency cannot enable a mode.
@@ -68,7 +73,7 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
   }
   for (const tool of tools) {
     const binding = availabilityBindings.get(tool)?.binding;
-    if (binding) {
+    if (binding && (!options?.beforeNormalization || binding.prepareBeforeNormalization)) {
       binding.prepare(tool, callableTools);
       options?.onPrepared?.(tool);
     }

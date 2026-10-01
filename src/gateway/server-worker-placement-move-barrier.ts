@@ -1,4 +1,4 @@
-import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
@@ -48,7 +48,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       identities: lifecycleIdentities,
       signal,
       prepare: async () => {
-        resolveWorkerPlacementSessionTarget({
+        const resolved = await resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
           sessionId,
@@ -57,6 +57,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
           expectedTarget: target,
           errorMessage: `Session ${sessionKey} changed before placement move. Retry.`,
         });
+        resolved.assertCurrent(getRuntimeConfig());
         authorize?.();
         begun = await begin(async (runId) => {
           if (params.persistAbandonedPartial) {
@@ -66,7 +67,14 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
             authorize?.();
           }
         });
-        clearSessionQueues(lifecycleIdentities);
+        clearSessionLifecycleQueues({
+          keys: lifecycleIdentities,
+          agentId: resolved.target.agentId,
+          sessionKey: resolved.target.canonicalKey,
+          sessionId,
+          // The move committed; settling its source queues must survive authority changes.
+          assertCurrent: () => {},
+        });
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
         if (sourceDisposition === "abandon") {
           // Explicit abandonment revokes the old owner locally; its unreachable

@@ -1,4 +1,3 @@
-// Linux OOM score helpers adjust child process OOM priority when supported.
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { parseBooleanValue } from "../utils/boolean.js";
@@ -155,9 +154,7 @@ function prepareOomScoreAdjustedSpawnWithExecEnvPolicy(
     env: options?.env,
     wrapped: false,
   };
-  // POSIX sh implementations such as dash do not support `exec --`. A command
-  // starting with "-" could be parsed as an exec option, so keep that rare
-  // shape on the original direct-spawn path instead of wrapping it.
+  // POSIX sh lacks `exec --`; a leading dash would become an exec option.
   if (
     !command ||
     command.startsWith("-") ||

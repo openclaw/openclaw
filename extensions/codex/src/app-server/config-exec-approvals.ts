@@ -11,7 +11,6 @@ import {
 import type {
   OpenClawExecApprovalFloorsForCodexAppServer,
   OpenClawExecMode,
-  OpenClawExecPolicy,
   OpenClawExecPolicyForCodexAppServer,
 } from "./config-contracts.js";
 import { readExecAsk, readExecSecurity, readRecord } from "./config-utils.js";
@@ -19,7 +18,7 @@ import { readExecAsk, readExecSecurity, readRecord } from "./config-utils.js";
 function resolveOpenClawExecPolicyFromConfig(params: {
   config?: OpenClawConfig;
   agentId?: string;
-}): OpenClawExecPolicy {
+}): OpenClawExecPolicyForCodexAppServer {
   const globalExec = readRecord(params.config?.tools?.exec);
   const globalPolicy = applyOpenClawExecPolicyLayer(
     { ...resolveOpenClawExecPolicyForMode("full"), touched: false },
@@ -62,9 +61,9 @@ export function resolveOpenClawExecPolicyForCodexAppServer(params: {
 }
 
 function applyOpenClawExecPolicyLayer(
-  base: OpenClawExecPolicy,
+  base: OpenClawExecPolicyForCodexAppServer,
   exec?: { mode?: unknown; security?: unknown; ask?: unknown },
-): OpenClawExecPolicy {
+): OpenClawExecPolicyForCodexAppServer {
   if (!exec) {
     return base;
   }
@@ -91,9 +90,9 @@ function applyOpenClawExecPolicyLayer(
 }
 
 function applyOpenClawExecApprovalFloors(
-  base: OpenClawExecPolicy,
+  base: OpenClawExecPolicyForCodexAppServer,
   approvalFloors?: OpenClawExecApprovalFloorsForCodexAppServer,
-): OpenClawExecPolicy {
+): OpenClawExecPolicyForCodexAppServer {
   if (!approvalFloors) {
     return base;
   }
@@ -114,7 +113,7 @@ function applyOpenClawExecApprovalFloors(
 
 function resolveOpenClawExecPolicyForMode(
   mode: OpenClawExecMode,
-): Omit<OpenClawExecPolicy, "touched"> {
+): Omit<OpenClawExecPolicyForCodexAppServer, "touched"> {
   const { security, ask } = execPolicy.resolveExecModePolicy({
     mode,
     security: "full",

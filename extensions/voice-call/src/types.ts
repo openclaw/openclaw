@@ -73,7 +73,6 @@ const TranscriptEntrySchema = z.object({
   text: z.string(),
   isFinal: z.boolean().default(true),
 });
-export type TranscriptEntry = z.infer<typeof TranscriptEntrySchema>;
 
 export const CallRecordSchema = z.object({
   callId: z.string(),
@@ -119,6 +118,11 @@ export type WebhookContext = {
   method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   query?: Record<string, string | string[] | undefined>;
   remoteAddress?: string;
+};
+
+export type ToolHandlerContext = {
+  partialUserTranscript?: string;
+  abortSignal?: AbortSignal;
 };
 
 export type ProviderWebhookParseResult = {

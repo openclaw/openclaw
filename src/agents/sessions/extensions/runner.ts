@@ -81,7 +81,7 @@ const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
 
 const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
-  const builtinKeybindings = {} as BuiltInKeyBindings;
+  const builtinKeybindings: BuiltInKeyBindings = {};
   for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
     if (keys === undefined) {
       continue;
@@ -722,12 +722,7 @@ export class ExtensionRunner {
     let result: ToolCallEventResult | undefined;
 
     for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("tool_call");
-      if (!handlers || handlers.length === 0) {
-        continue;
-      }
-
-      for (const handler of handlers) {
+      for (const handler of ext.handlers.get("tool_call") ?? []) {
         ctx ??= this.createContext();
         const handlerResult = await handler(event, ctx);
 

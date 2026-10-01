@@ -2,11 +2,14 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import type { StartupDeferredJob } from "../store/runtime-worker.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -15,7 +18,6 @@ import type {
   CronNextCheckProposal,
   CronResolvedDeliveryState,
   CronRunOutcome,
-  CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
 import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
@@ -58,6 +60,7 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   activeJobMarker?: CronActiveJobMarker;
   reservationIdentity?: object;
   runReceipt?: CronRunReceiptHandle;
+  runReceiptContext?: OpenClawStateWorkerContext;
   receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
   startedAt: number;
   endedAt: number;
@@ -98,18 +101,6 @@ export type StartupCatchupCandidate = {
   reservationIdentity: object;
 };
 
-export type StartupDeferredJob = {
-  jobId: string;
-  delayMs?: number;
-  scheduleIdentity: string | undefined;
-  createdAtMs: number;
-  payloadKind: CronJob["payload"]["kind"];
-  scheduleActivatedAtMs: number | undefined;
-  nextRunAtMs: number | undefined;
-  lastRunAtMs: number | undefined;
-  lastRunStatus: CronRunStatus | undefined;
-};
-
 export type StartupCatchupPlan = {
   lifecycleGeneration: number;
   candidates: StartupCatchupCandidate[];
@@ -121,6 +112,7 @@ export type StartupCatchupExecution =
   | { ok: false; outcomes: TimedCronRunOutcome[]; error: unknown };
 
 export type ExecuteJobCoreOptions = {
+  deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   onPayloadExecutionStarted?: () => void;
@@ -135,7 +127,7 @@ export type ExecuteJobCoreOptions = {
     | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
-  assertRunCurrent?: () => void;
+  assertRunCurrent?: () => Promise<void>;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
   // The key catches edits; the identity catches disable→re-enable and A→B→A.

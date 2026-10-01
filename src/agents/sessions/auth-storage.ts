@@ -493,16 +493,10 @@ export class AuthStorage {
   }
 
   reload(): void {
-    let content: string | undefined;
     try {
-      if (this.storage.read) {
-        content = this.storage.read();
-      } else {
-        this.storage.withLock((current) => {
-          content = current;
-          return { result: undefined };
-        });
-      }
+      const content = this.storage.read
+        ? this.storage.read()
+        : this.storage.withLock((current) => ({ result: current }));
       this.setData(this.parseStorageData(content));
       this.loadError = null;
     } catch (error) {

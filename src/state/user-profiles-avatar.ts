@@ -13,7 +13,7 @@ import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-ev
 import { profileCatalogPath } from "./user-profile-identity.read.js";
 import {
   readResidentUserProfileRevision,
-  retainUserProfilePublication,
+  retainUserProfileMutationPublication,
 } from "./user-profile-list.js";
 import {
   isUserProfileAvatarAdmission,
@@ -325,16 +325,15 @@ export async function adoptTailscaleProfileAvatar(
               if (request.stage !== "transaction" || !isUserProfileAvatarAdmission(request.facts)) {
                 throw new Error("Unexpected profile avatar transaction admission");
               }
-              const publication = retainUserProfilePublication(
-                context.admission.identity,
-                request.facts.before.id,
-                request.facts.before,
-              );
+              const beforeProfile = request.facts.before;
+              const publication = retainUserProfileMutationPublication(context.admission.identity, [
+                [beforeProfile.id, beforeProfile],
+              ]);
               try {
                 settlementRead.bind(
-                  { type: "userProfiles.reconcile", profileId: request.facts.before.id },
+                  { type: "userProfiles.reconcile", profileId: beforeProfile.id },
                   retained.settled,
-                  publication.reconcile,
+                  (observed) => publication.reconcile([[beforeProfile.id, observed]]),
                   publication.release,
                 );
               } catch (error) {

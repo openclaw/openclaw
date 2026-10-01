@@ -84,14 +84,14 @@ function cellStatus(
   return status === "pass" || status === "skip" ? status : "fail";
 }
 
-function toolIdsForScenario(scenario: QaSeedScenarioWithSource): string[] {
+function toolIdForScenario(scenario: QaSeedScenarioWithSource): string | undefined {
   const toolCoverage = readRuntimeToolCoverageConfig(scenario.execution.config);
-  const family =
+  return (
     readString(toolCoverage?.family) ??
     readString(toolCoverage?.tool) ??
     readString(toolCoverage?.actualTool) ??
-    readString(scenario.execution.config?.toolName);
-  return family ? [family] : [];
+    readString(scenario.execution.config?.toolName)
+  );
 }
 
 function groupToolFixtures(scenarios: readonly QaSeedScenarioWithSource[]): ToolFixtureGroup[] {
@@ -100,7 +100,8 @@ function groupToolFixtures(scenarios: readonly QaSeedScenarioWithSource[]): Tool
     if (!scenario.sourcePath.startsWith("qa/scenarios/runtime/tools/")) {
       continue;
     }
-    for (const tool of toolIdsForScenario(scenario)) {
+    const tool = toolIdForScenario(scenario);
+    if (tool) {
       const entries = byTool.get(tool) ?? [];
       entries.push(scenario);
       byTool.set(tool, entries);
@@ -154,9 +155,6 @@ function mergeScenarioResults(
   const scenarioResults = scenarios
     .map((scenario) => results.get(scenario.id))
     .filter((result): result is RuntimeParityResult => Boolean(result));
-  if (scenarioResults.length === 0) {
-    return undefined;
-  }
   return scenarioResults.find((result) => !PASSING_DRIFTS.has(result.drift)) ?? scenarioResults[0];
 }
 
@@ -181,15 +179,12 @@ function buildRow(params: {
 }): QaToolCoverageRow {
   const result = mergeScenarioResults(params.group.scenarios, params.results);
   const tracking = params.group.scenarios.map(readScenarioTracking).find(Boolean);
-  const metadata = params.group.scenarios
-    .map(readScenarioRuntimeToolCoverageMetadata)
-    .find((entry) => entry.required);
-  const firstScenario = expectDefined(
-    params.group.scenarios[0],
+  const metadata = params.group.scenarios.map(readScenarioRuntimeToolCoverageMetadata);
+  const fallbackMetadata = expectDefined(
+    metadata[0],
     `QA tool fixture group ${params.group.tool} scenario`,
   );
-  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(firstScenario);
-  const rowMetadata = metadata ?? fallbackMetadata;
+  const rowMetadata = metadata.find((entry) => entry.required) ?? fallbackMetadata;
   const runtimeToolName = params.group.scenarios.map(readScenarioRuntimeToolName).find(Boolean);
   const openclawCalls = summarizeRuntimeToolCalls(result, "openclaw", runtimeToolName);
   const codexCalls = summarizeRuntimeToolCalls(result, "codex", runtimeToolName);
@@ -259,13 +254,14 @@ export function buildQaToolCoverageReport(params: {
   const failures = evaluated
     ? rows.map(coverageFailureForRow).filter((failure): failure is string => Boolean(failure))
     : [];
+  const requiredTools = rows.filter((row) => row.required).length;
   return {
     runtimePair: normalizeRuntimePair(params.runtimePair ?? params.summary?.run?.runtimePair),
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     evaluated,
     totalTools: rows.length,
-    requiredTools: rows.filter((row) => row.required).length,
-    reportOnlyTools: rows.filter((row) => !row.required).length,
+    requiredTools,
+    reportOnlyTools: rows.length - requiredTools,
     trackedTools: rows.filter((row) => Boolean(row.tracking)).length,
     nativeWorkspaceTools: rows.filter((row) => row.bucket === "codex-native-workspace").length,
     dynamicIntegrationTools: rows.filter((row) => row.bucket === "openclaw-dynamic-integration")
@@ -274,9 +270,7 @@ export function buildQaToolCoverageReport(params: {
       (row) => row.capabilityLayer === "openclaw-dynamic-searchable",
     ).length,
     optionalTools: rows.filter((row) => row.bucket === "optional-profile-or-plugin").length,
-    passingTools: evaluated
-      ? rows.filter((row) => row.required && !coverageFailureForRow(row)).length
-      : 0,
+    passingTools: evaluated ? requiredTools - failures.length : 0,
     failingTools: failures.length,
     rows,
     pass: failures.length === 0,

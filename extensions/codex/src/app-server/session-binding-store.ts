@@ -1,9 +1,7 @@
-/** Synchronous binding reads with lazy mutation, lease, and auth machinery. */
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+/** Binding reads with lazy mutation, lease, and auth machinery. */
 import {
   createCodexManagedThreadStore,
   type CodexManagedThreadStore,
-  type StoredCodexManagedThread,
 } from "./managed-thread-store.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -15,11 +13,7 @@ import {
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
 } from "./session-binding-record.js";
-import type {
-  CodexAppServerBindingIdentity,
-  CodexAppServerBindingStore,
-  CodexBindingStateStore,
-} from "./session-binding.js";
+import type { CodexAppServerBindingStore, CodexBindingStateStore } from "./session-binding.js";
 
 export { CODEX_APP_SERVER_BINDING_MAX_ENTRIES, CODEX_APP_SERVER_BINDING_NAMESPACE };
 export type { StoredCodexAppServerBinding } from "./session-binding.js";
@@ -27,10 +21,7 @@ export type { StoredCodexAppServerBinding } from "./session-binding.js";
 /** Keeps lifecycle/auth loading behind mutations while sharing the canonical read codec. */
 export function createLazyCodexAppServerBindingStore(
   state: CodexBindingStateStore,
-  managedThreadState?: Pick<
-    PluginStateKeyedStore<StoredCodexManagedThread>,
-    "entries" | "lookup" | "registerIfAbsent"
-  >,
+  managedThreadState?: Parameters<typeof createCodexManagedThreadStore>[0],
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;
   const store = () =>
@@ -43,13 +34,7 @@ export function createLazyCodexAppServerBindingStore(
   return {
     ...(managedThreads ? { managedThreads } : {}),
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
-    // Capability discovery can open plugin state; keep it out of registration.
-    get readMany() {
-      return state.lookupMany
-        ? (identities: readonly CodexAppServerBindingIdentity[]) =>
-            readCurrentCodexAppServerBindings(state, identities)
-        : undefined;
-    },
+    readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
     readNativeSubagentAssignments: (identity, owner) =>
       readCurrentNativePendingAssignments(state, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>

@@ -8,6 +8,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import * as databaseCache from "../../../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
+import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
   captureSubagentRunMutationSnapshot,
@@ -40,6 +41,15 @@ vi.mock("../../../state/openclaw-state-worker-context.js", () => ({
 }));
 vi.mock("../../../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: mocks.runWorker,
+}));
+vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
+  getActiveOpenClawStateDatabaseReadSnapshot: () => undefined,
+  executeExistingOpenClawStateRead: vi.fn<
+    typeof import("../../../state/openclaw-state-db-readonly.js").executeExistingOpenClawStateRead
+  >(async (_options, command) => {
+    expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+    return { ok: true, type: "subagents.runs", sourceAdmitted: true, runs: new Map() };
+  }),
 }));
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: () => new Map(),
@@ -117,7 +127,7 @@ describe("queued registry worker publication", () => {
   });
   afterEach(async () => {
     await databaseCache.closeOpenClawStateDatabaseAsync();
-    restoreSubagentRunsFromDisk({ runs: new Map() });
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
     clearSubagentRunsReadCacheForTest();
     vi.restoreAllMocks();
     if (previous === undefined) {
@@ -238,6 +248,69 @@ describe("queued registry worker publication", () => {
       stopSession();
     }
   });
+
+  it.each([false, true])(
+    "keeps staged terminal rows private while metadata publication holds admission (replaced=%s)",
+    async (replaced) => {
+      const entry = run();
+      const entries = new Map([[entry.runId, entry]]);
+      const preimage = captureSubagentRunMutationSnapshot(entry);
+      const execution = entry.execution;
+      const metadataPublished = createDeferredCore();
+      const workerStarted = createDeferredCore();
+      const worker = expectDefined(mocks.runWorker.getMockImplementation(), "worker owner");
+      mocks.runWorker.mockImplementation(async (...args) => {
+        workerStarted.resolve();
+        return await worker(...args);
+      });
+      const attempts = mocks.runWorker.mock.calls.length;
+      entry.execution = { status: "terminal", endedAt: 2 };
+      const pending = publishSubagentRunPostimages({
+        runs: entries,
+        previous: new Map([[entry, preimage]]),
+        context: original,
+        assertCurrent: () => {},
+        withPublication: async (publish) => {
+          await metadataPublished.promise;
+          await publish();
+        },
+        persist: (stateContext, callbacks, ...ids) =>
+          persistSubagentRunsToDiskAsyncOrThrow(entries, ids, {
+            context: stateContext,
+            ...callbacks,
+          }),
+      });
+      const settled = pending.then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(entry.execution).toBe(execution);
+        expect(mocks.runWorker.mock.calls).toHaveLength(attempts);
+        if (replaced) {
+          entries.set(entry.runId, { ...run(), task: "replacement owner" });
+        }
+        metadataPublished.resolve();
+        await workerStarted.promise;
+        if (replaced) {
+          expect(await settled).toMatchObject({ error: { outcome: "not-committed" } });
+          expect(entries.get(entry.runId)?.task).toBe("replacement owner");
+        } else {
+          expect(await request("transaction")).toBe(true);
+          expect(await request("commit")).toBe(true);
+          reply.resolve({ writeId: command.writeId });
+          expect(await settled).toEqual({
+            result: { outcome: "committed", publication: "published" },
+          });
+          expect(entry.execution).toEqual({ status: "terminal", endedAt: 2 });
+        }
+      } finally {
+        metadataPublished.resolve();
+        reply.resolve({ writeId: command?.writeId ?? "unstarted" });
+        await settled;
+      }
+    },
+  );
 
   it("keeps a publication failure after acknowledgement known committed without undo or replay", async () => {
     const entry = run();
@@ -404,7 +477,7 @@ describe("queued registry worker publication", () => {
             () => assertSubagentRegistryWriteOutcomeKnown([entry.runId], original.admission),
             "close alone cannot replay a stale preimage",
           ).toThrow();
-          restoreSubagentRunsFromDisk({ runs: new Map() });
+          await restoreSubagentRunsFromDisk({ runs: new Map() });
           expect(() =>
             assertSubagentRegistryWriteOutcomeKnown([entry.runId], original.admission),
           ).not.toThrow();
@@ -559,6 +632,65 @@ describe("queued registry worker publication", () => {
       }
     },
   );
+
+  it("keeps a prepared announcement current while an unrelated registry write settles", async () => {
+    const entry = run();
+    entry.execution = {
+      status: "terminal",
+      endedAt: 2,
+      outcome: { status: "ok" },
+      transcriptTarget: {
+        agentId: "child",
+        sessionId: "child-session",
+        sessionKey: entry.childSessionKey,
+        storePath: "/synthetic/child/sessions",
+      },
+    };
+    entry.completion = {
+      required: true,
+      terminalReply: { disposition: "visible", text: "child result" },
+    };
+    const announcement = await readSubagentRunAnnounceResultUsing(entry, {
+      getRuntimeConfig: () => ({}),
+      readSubagentSessionEntry: () => undefined,
+      resolveAgentIdFromSessionKey: () => "child",
+      resolveSessionStorePathCore: () => "/synthetic/child/sessions",
+      findTranscriptEvent: async () => ({
+        event: {
+          message: { role: "assistant", content: [{ type: "text", text: "child result" }] },
+        },
+      }),
+      findSessionTranscriptArchiveEventReadOnly: async () => undefined,
+    });
+    expect(announcement.text).toBe("child result");
+    const entries = new Map([[entry.runId, entry]]);
+    const preimage = captureSubagentRunMutationSnapshot(entry);
+    entry.completion.capturedAt = 2;
+    const pending = publishSubagentRunPostimages({
+      runs: entries,
+      previous: new Map([[entry, preimage]]),
+      context: original,
+      persist: (stateContext, callbacks, ...ids) =>
+        persistSubagentRunsToDiskAsyncOrThrow(entries, ids, {
+          context: stateContext,
+          ...callbacks,
+        }),
+      assertCurrent: () => {},
+    });
+    const currentWhilePending = announcement.isCurrent();
+    const capturedAtWhilePending = entry.completion.capturedAt;
+    expect(await request("transaction")).toBe(true);
+    expect(await request("commit")).toBe(true);
+    reply.resolve({ writeId: command.writeId });
+    await pending;
+
+    expect(capturedAtWhilePending).toBeUndefined();
+    expect(entry.completion.capturedAt).toBe(2);
+    expect(currentWhilePending).toBe(true);
+    expect(announcement.isCurrent()).toBe(true);
+    entry.completion.terminalReply = { disposition: "silent" };
+    expect(announcement.isCurrent()).toBe(false);
+  });
 
   it("does not publish a known commit into a successor database", async () => {
     const entry = run();

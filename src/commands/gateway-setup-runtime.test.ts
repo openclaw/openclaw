@@ -2,8 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { DaemonRuntimePinSnapshot } from "../daemon/runtime-pin-types.js";
-import type { WizardSelectParams } from "../wizard/prompts.js";
-import { resolveOnboardingGatewayRuntime } from "../wizard/setup.service-runtime.js";
 import { resolveDaemonInstallRuntimeInputs } from "./daemon-install-plan.shared.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 
@@ -74,30 +72,19 @@ describe("setup runtime intent", () => {
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
         nodeSharedSqlite: false,
       });
-      const prompter = {
-        async select<T>({ initialValue }: WizardSelectParams<T>): Promise<T> {
-          if (initialValue === undefined) {
-            throw new Error("Missing runtime suggestion");
-          }
-          return initialValue;
-        },
-      };
-      const select = vi.spyOn(prompter, "select");
+      const select = vi.fn(async (runtime: "node" | "bun") => runtime);
       try {
-        const selection = await resolveOnboardingGatewayRuntime({
+        const selection = await resolveGatewaySetupRuntime({
           env: {},
           existingCommand: null,
-          flow,
-          prompter,
+          selectRuntime: flow === "advanced" ? select : undefined,
         });
         expect(selection.runtime).toBe(suggested);
         expect(selection.runtimeExplicit).toBe(flow === "advanced");
         expect(selection.runtimePath).toBe(suggested === "bun" ? process.execPath : undefined);
         expect(selection.runtimePinUpdate.pin).toBeUndefined();
         if (flow === "advanced") {
-          expect(select).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ initialValue: suggested }),
-          );
+          expect(select).toHaveBeenCalledExactlyOnceWith(suggested);
         } else {
           expect(select).not.toHaveBeenCalled();
           await expect(resolveDaemonInstallRuntimeInputs(selection)).resolves.toMatchObject({

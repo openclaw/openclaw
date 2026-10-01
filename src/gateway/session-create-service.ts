@@ -98,6 +98,7 @@ import type {
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
 import { readSessionCreateTarget } from "./session-create-target.js";
+import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
   projectPreparedSessionWorkspace,
@@ -109,7 +110,6 @@ import {
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { invalidSessionRequest, sessionCreationFailure } from "./session-request-error.js";
-import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
 import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
@@ -746,21 +746,9 @@ export async function createGatewaySession(
         if (spawnToolPolicy && existingEntry !== undefined) {
           return invalidSessionRequest("spawn tool policy requires a new session");
         }
-        if (
-          params.visibility &&
-          existingEntry === undefined &&
-          !isSessionVisibilityAllowed(params.cfg, params.visibility)
-        ) {
-          return invalidSessionRequest(`session visibility is disabled: ${params.visibility}`, {
-            details: { code: "SESSION_VISIBILITY_DISABLED", visibility: params.visibility },
-          });
-        }
-        if (
-          params.visibility &&
-          existingEntry !== undefined &&
-          resolveSessionVisibility(existingEntry) !== params.visibility
-        ) {
-          return invalidSessionRequest("sessions.create visibility requires a new session");
+        const visibility = resolveSessionCreateVisibility(params, existingEntry);
+        if (!visibility.ok) {
+          return visibility;
         }
         // Adoption of an existing key must not stamp provenance or emit a
         // `created` event; only a genuinely new row is a node creation.
@@ -909,7 +897,7 @@ export async function createGatewaySession(
             ? buildSessionCreationStamp({ ...creation, sandbox: creationSandbox, incognito })
             : {}),
           ...(createdNewEntry && inheritedSpawnOwner ? { owner: inheritedSpawnOwner } : {}),
-          ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
+          ...(visibility.value && createdNewEntry ? { visibility: visibility.value } : {}),
           ...projectPreparedSessionWorkspace(existingEntry, {
             projectId,
             pendingProjectGitUrl,
@@ -971,7 +959,6 @@ export async function createGatewaySession(
           ...(existingEntry === undefined ? spawnToolPolicy : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
-        const initialized = { ...patched, entry: initializedEntry };
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
         const storedParentSessionKey = explicitParentSessionKey ?? dashboardParentSessionKey;
@@ -1055,7 +1042,7 @@ export async function createGatewaySession(
         }
         validateRuntimeSelection = runtimeSelection.validate;
         if (params.fork !== true) {
-          return { ...initialized, entry };
+          return { ...patched, entry };
         }
         const forkParentSessionKey = canonicalParentSessionKey;
         if (!forkParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
@@ -1114,7 +1101,7 @@ export async function createGatewaySession(
           };
         }
         return {
-          ...initialized,
+          ...patched,
           transcriptEvents: forkResult.events,
           entry: buildForkedGatewaySessionEntry(
             entry,

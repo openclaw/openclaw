@@ -1,4 +1,3 @@
-// Nostr plugin module implements setup adapter behavior.
 import {
   defineChannelSetupContract,
   type ChannelSetupAdapter,

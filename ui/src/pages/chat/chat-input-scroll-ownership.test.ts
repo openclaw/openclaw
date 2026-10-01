@@ -88,7 +88,7 @@ describe("sender-local scroll intent", () => {
   });
   it("keeps following when this browser's spoken input is persisted", () => {
     const state = setup();
-    state.realtimeTalkConversation = [
+    state.realtimeTalkConversationState.entries = [
       {
         id: "rt-1",
         role: "user",

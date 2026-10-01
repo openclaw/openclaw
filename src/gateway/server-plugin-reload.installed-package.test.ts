@@ -390,7 +390,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           port: 0,
           log,
           loadGatewayPluginBootstrapModule: async () => bootstrap,
-          prepareAttachedPluginRuntime: async (candidate) => {
+          prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             loaded.push(candidate);
             beforeAttachment?.(candidate);
             return {
@@ -401,6 +401,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
                   "gateway-bindable",
                   workspaceDir,
                   runtime.pluginRuntime.registry,
+                  trackActivationCleanup,
                 );
                 registryOwner.publish(candidate.pluginRegistry);
               },

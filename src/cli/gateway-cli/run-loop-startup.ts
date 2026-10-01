@@ -2,11 +2,13 @@ import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { SqliteIntegrityWorkerInterruptedError } from "../../infra/sqlite-integrity-worker-error.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { formatCliCommand } from "../command-format.js";
 
 export type GatewayRunLoopStartOptions = Pick<
   GatewayServerOptions,
@@ -16,6 +18,90 @@ export type GatewayRunLoopStartOptions = Pick<
   | "startupOperation"
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
+
+export type GatewayRestartStartupFailureHandler = (
+  error: unknown,
+  signal: AbortSignal,
+) => Promise<"completed" | "failed" | void>;
+
+export function createGatewayRestartRecovery(
+  {
+    onRestartStartupFailure: onFailure,
+  }: {
+    onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
+  },
+  logger: Pick<SubsystemLogger, "info" | "error">,
+  supervisor: GatewayOwnerSupervisor | null,
+) {
+  let work:
+    | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
+    | undefined;
+  return {
+    reportStartupFailure(error: unknown, retryFailed: boolean) {
+      const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
+      logger.error(
+        `gateway startup failed: ${formatErrorMessage(error)}. ` +
+          `${onFailure && !retryFailed ? "Attempting automatic triage before recovery." : "Automatic recovery is unavailable."}${stack}`,
+      );
+    },
+    reportManualRecovery() {
+      const resume =
+        supervisor?.kind === "external"
+          ? "use your external supervisor to restart the Gateway"
+          : process.platform === "win32"
+            ? supervisor
+              ? `restart with: ${formatCliCommand("openclaw gateway restart")}`
+              : "press Ctrl+C, then rerun your original Gateway command"
+            : `reload with: kill -USR2 ${process.pid}`;
+      logger.error(
+        `Process will stay alive for manual recovery. Fix the startup refusal above, run ${formatCliCommand("openclaw doctor --fix")}, then ${resume}`,
+      );
+    },
+    abort() {
+      work?.controller.abort();
+    },
+    async waitForCleanup() {
+      await work?.settled;
+    },
+    async attempt(error: unknown): Promise<boolean> {
+      if (!onFailure) {
+        return false;
+      }
+      const controller = new AbortController();
+      work = {
+        controller,
+        settled: Promise.resolve().then(() => onFailure(error, controller.signal)),
+      };
+      try {
+        const completion = await work.settled;
+        if (controller.signal.aborted) {
+          return false;
+        }
+        if (completion === "failed") {
+          throw error;
+        }
+        if (completion !== "completed") {
+          logger.info("Automatic triage did not complete a repair; awaiting manual recovery.");
+          return false;
+        }
+        // Completion proves triage cleanup, not Gateway health. Startup owns that proof.
+        logger.info("Automatic triage completed; retrying Gateway startup once.");
+        return true;
+      } catch (triageError) {
+        if (controller.signal.aborted) {
+          return false;
+        }
+        logger.error(`Automatic triage failed: ${formatErrorMessage(triageError)}`);
+        if (supervisor) {
+          throw triageError;
+        }
+        return false;
+      } finally {
+        work = undefined;
+      }
+    },
+  };
+}
 
 export function createGatewayStartupOperations(): {
   run: GatewayStartupOperation;

@@ -9,10 +9,6 @@ import "./config/sessions/paths.js";
 import "./config/sessions/session-key.js";
 import type { ensureBinary as ensureBinaryRuntime } from "./infra/binaries.js";
 import "./infra/ports.js";
-import {
-  saveLegacySessionStore,
-  type LegacySessionStoreSaveOptions,
-} from "./infra/state-migrations.legacy-session-store.js";
 import type { monitorWebChannel as monitorWebChannelRuntime } from "./plugins/runtime/runtime-web-channel-plugin.js";
 import type {
   runCommandWithTimeout as runCommandWithTimeoutRuntime,
@@ -59,18 +55,3 @@ export const runCommandWithTimeout: RunCommandWithTimeout = async (...args) =>
   (await loadExecRuntime()).runCommandWithTimeout(...args);
 export const monitorWebChannel: MonitorWebChannel = async (...args) =>
   (await loadWebChannelRuntime()).monitorWebChannel(...args);
-
-export { loadLegacySessionStore as loadSessionStore } from "./infra/state-migrations.legacy-session-store.js";
-
-/**
- * @deprecated Legacy sessions.json compatibility for package-root consumers.
- * Use SQLite-backed session APIs. Remove after 2026-10-12, once the v2026.7.x
- * upgrade window no longer requires the legacy doctor importer.
- */
-export async function saveSessionStore(
-  storePath: string,
-  store: Parameters<typeof saveLegacySessionStore>[1],
-  options?: LegacySessionStoreSaveOptions,
-): Promise<void> {
-  await saveLegacySessionStore(storePath, store, options);
-}

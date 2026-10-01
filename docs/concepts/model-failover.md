@@ -401,6 +401,10 @@ does not establish that the user violated a policy. OpenClaw preserves available
 provider findings and holds queued messages instead of retrying the conversation.
 Already-accepted results can still finish recording.
 
+Older saved errors that retain the policy code also display a safety precaution,
+even without the newer refusal diagnostics. Displaying that historical error does
+not create review findings or authorize continuation.
+
 In the Control UI, choose **Review findings**. When a supported Codex or ChatGPT
 Responses runtime supplies a continuation, the dialog shows its exact message
 before offering **Acknowledge findings and continue**. Confirmation applies only

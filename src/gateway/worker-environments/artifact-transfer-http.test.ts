@@ -205,7 +205,7 @@ describe("artifact transfer response settlement", () => {
     expect((await serve({ range: `bytes=${offset + body.length}-` })).res.statusCode).toBe(404);
   });
 
-  it("counts interrupted serves and keeps retries exclusive through descriptor settlement", async () => {
+  it("allows five interrupted resumes and keeps retries exclusive through descriptor settlement", async () => {
     rateLimiter = createGatewayAuthRateLimiter(
       { maxAttempts: 1, exemptLoopback: false, pruneIntervalMs: 0 },
       { scheduler: createTestGatewayScheduler() },
@@ -213,11 +213,15 @@ describe("artifact transfer response settlement", () => {
     const closing = createDeferredCore();
     const release = createDeferredCore();
     const open = service.openFile.bind(service);
-    vi.spyOn(service, "openFile").mockImplementationOnce(async (authorization) => {
+    vi.spyOn(service, "openFile").mockImplementation(async (authorization) => {
       const file = await open(authorization);
       if (!file) {
         throw new Error("Expected an authorized artifact");
       }
+      const createReadStream = file.handle.createReadStream.bind(file.handle);
+      vi.spyOn(file.handle, "createReadStream").mockImplementation((options) =>
+        createReadStream({ ...options, highWaterMark: 1 }),
+      );
       const close = file.handle.close.bind(file.handle);
       vi.spyOn(file.handle, "close").mockImplementationOnce(async () => {
         closing.resolve();
@@ -235,24 +239,37 @@ describe("artifact transfer response settlement", () => {
       await interrupted;
     }
     expect((await interrupted).res.writableFinished).toBe(false);
-    for (let attempt = 2; attempt <= 3; attempt++) {
-      const completed = await serve({ range: "bytes=4-" });
-      expect(completed.res.statusCode).toBe(206);
-      expect(completed.res.writableFinished).toBe(true);
-      expect(completed.body).toBe(contents.slice(4));
+    let received = (await interrupted).body;
+    for (let attempt = 2; attempt <= 5; attempt++) {
+      const resumed = await serve({
+        range: `bytes=${received.length}-`,
+        writeError: new Error("synthetic connection reset"),
+      });
+      expect(resumed.res.statusCode).toBe(206);
+      expect(resumed.res.writableFinished).toBe(false);
+      expect(resumed.body).toBe(contents.slice(received.length, received.length + 1));
+      received += resumed.body;
     }
-    expect((await serve({ range: "bytes=4-" })).res.statusCode).toBe(404);
+    const completed = await serve({ range: `bytes=${received.length}-` });
+    expect(completed.res.statusCode).toBe(206);
+    expect(completed.res.writableFinished).toBe(true);
+    expect(received + completed.body).toBe(contents);
   });
 
-  it("allows three completed serves for buffering proxies, then rejects the token", async () => {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const completed = await serve();
-      expect(completed.res.statusCode).toBe(200);
-      expect(completed.res.writableFinished).toBe(true);
-      expect(completed.wire.endsWith(contents)).toBe(true);
-    }
-    expect((await serve()).res.statusCode).toBe(404);
-  });
+  it.each([undefined, "bytes=4-"])(
+    "allows 256 serial serves (Range: %s), then returns opaque 404",
+    async (range) => {
+      for (let attempt = 1; attempt <= 256; attempt++) {
+        const completed = await serve({ range });
+        expect(completed.res.statusCode).toBe(range ? 206 : 200);
+        expect(completed.res.writableFinished).toBe(true);
+        expect(completed.body).toBe(range ? contents.slice(4) : contents);
+      }
+      const rejected = await serve({ range });
+      expect(rejected.res.statusCode).toBe(404);
+      expect(JSON.parse(rejected.body)).toEqual({ error: "not_found" });
+    },
+  );
 
   it("fences stale attempts and retains the original retry deadline", async () => {
     const request = { token, artifactKey: artifact.tarballSha256 };

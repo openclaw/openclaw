@@ -3,14 +3,17 @@ import {
   canonicalizeBase64,
   normalizeRealtimeVoiceResponseOutcome,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  isRecord,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRealtimeErrorDetail } from "./realtime-provider-shared.js";
 import { OpenAIRealtimeProtocol } from "./realtime-voice-protocol.js";
 import {
   OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
   OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
   isOpenAIRealtimeMaxSessionDurationError,
-  readRealtimeErrorEventId,
   type RealtimeEvent,
 } from "./realtime-voice-session-policy.js";
 
@@ -175,7 +178,7 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         // Validation errors can omit event_id. The response parameter still belongs
         // to our single pending create; an explicit id always overrides that evidence.
         const rejectedEventId =
-          readRealtimeErrorEventId(event.error) ??
+          readStringField(asOptionalObjectRecord(event.error), "event_id") ??
           (this.responseCreateState === "in-flight" &&
           error?.type === "invalid_request_error" &&
           typeof error.param === "string" &&
@@ -199,7 +202,8 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         }
         const rejectsManualResponseCancel =
           this.manualResponseCancelEventId !== null &&
-          readRealtimeErrorEventId(event.error) === this.manualResponseCancelEventId;
+          readStringField(asOptionalObjectRecord(event.error), "event_id") ===
+            this.manualResponseCancelEventId;
         if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
           if (!rejectsManualResponseCancel) {
             return;

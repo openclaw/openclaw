@@ -598,6 +598,36 @@ export function hasUnindexedVisibleMessages(
   );
 }
 
+/** Classify oversized messages from navigation metadata without decoding their payloads. */
+export function hasOversizedVisibleMessages(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+  maxBytes: number,
+  roles: readonly string[],
+): boolean {
+  return selectVisibleMessageRanges(projection, start, endExclusive).some(
+    (range) =>
+      executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        selectMessageRows(projection.database, projection.resolved.sessionId, range)
+          .select("active.event_seq")
+          .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
+          .where((eb) =>
+            eb(
+              eb.fn<string>("json_extract", [
+                transcriptEventNavigationSql("event"),
+                eb.val("$.message.role"),
+              ]),
+              "in",
+              roles,
+            ),
+          )
+          .limit(1),
+      ) !== undefined,
+  );
+}
+
 /** Validate the whole selected history without materializing ordinary payloads in JavaScript. */
 export function assertVisibleMessageRangeJson(
   projection: CurrentTranscriptProjection,

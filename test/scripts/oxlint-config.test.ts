@@ -1,4 +1,3 @@
-// Oxlint Config tests cover oxlint config script behavior.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -228,6 +227,7 @@ describe("oxlint config", () => {
     writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const fixtures = {
+      "test/types/vitest-codex-attempt-runtime.d.ts": "export {};\n",
       "src/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
       "src/unrelated.ts": "export const unrelated = 1;",
       "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",
@@ -1380,6 +1380,8 @@ describe("oxlint config", () => {
 
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
+    // Keep transient-config ownership inside this synthetic checkout.
+    fs.mkdirSync(path.join(root, ".git"));
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     fs.writeFileSync(
       path.join(root, ".oxlintrc.json"),
@@ -1545,6 +1547,7 @@ describe("oxlint config", () => {
 
   it("matches changed paths literally and keeps inherited config limits strict", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-changed-paths-"));
+    fs.mkdirSync(path.join(root, ".git"));
     const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
     fs.writeFileSync(path.join(root, ".oxlintrc.json"), JSON.stringify(config));
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
@@ -1616,6 +1619,7 @@ describe("oxlint config", () => {
 
   it("preserves native config validation locally and in Actions", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-invalid-limit-"));
+    fs.mkdirSync(path.join(root, ".git"));
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     fs.writeFileSync(path.join(root, "fixture.ts"), "console.log(1);\n");
     const invalidConfigs = [

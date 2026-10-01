@@ -48,20 +48,27 @@ export type ToolCallView = {
 };
 
 const COMMAND_TOOL_NAMES = new Set(["bash", "exec", "shell", "run_command", "run_terminal_cmd"]);
-const READ_TOOL_NAMES = new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"]);
-const EDIT_TOOL_NAMES = new Set([
-  "edit",
-  "edit_file",
-  "multiedit",
-  "multi_edit",
-  "notebookedit",
-  "notebook_edit",
-]);
 const TEXT_EDITOR_TOOL_NAMES = new Set(["str_replace_editor", "str_replace_based_edit_tool"]);
-const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
-const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codebase_search"]);
-const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
+const TOOL_KINDS: ReadonlyArray<readonly [ToolCallKind, ReadonlySet<string>]> = [
+  ["command", COMMAND_TOOL_NAMES],
+  ["read", new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"])],
+  [
+    "edit",
+    new Set([
+      "edit",
+      "edit_file",
+      "multiedit",
+      "multi_edit",
+      "notebookedit",
+      "notebook_edit",
+      ...PATCH_TOOL_NAMES,
+    ]),
+  ],
+  ["write", new Set(["write", "write_file", "create_file"])],
+  ["search", new Set(["grep", "find", "glob", "ls", "list", "codebase_search"])],
+  ["fetch", new Set(["web_fetch", "webfetch", "fetch"])],
+];
 
 function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
   return (
@@ -217,23 +224,10 @@ function resolveToolCallKind(
         return "generic";
     }
   }
-  if (COMMAND_TOOL_NAMES.has(key)) {
-    return "command";
-  }
-  if (READ_TOOL_NAMES.has(key)) {
-    return "read";
-  }
-  if (EDIT_TOOL_NAMES.has(key) || PATCH_TOOL_NAMES.has(key)) {
-    return "edit";
-  }
-  if (WRITE_TOOL_NAMES.has(key)) {
-    return "write";
-  }
-  if (SEARCH_TOOL_NAMES.has(key)) {
-    return "search";
-  }
-  if (FETCH_TOOL_NAMES.has(key)) {
-    return "fetch";
+  for (const [kind, names] of TOOL_KINDS) {
+    if (names.has(key)) {
+      return kind;
+    }
   }
   // Arg-shape fallback for harness-specific command tools.
   if (args && typeof args.command === "string" && Object.keys(args).length <= 3) {

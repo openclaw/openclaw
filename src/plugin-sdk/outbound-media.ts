@@ -120,14 +120,6 @@ const DEFAULT_HOSTED_OUTBOUND_MEDIA_MAX_ENTRIES = 64;
 const DEFAULT_HOSTED_OUTBOUND_MEDIA_CHUNK_ROWS_PER_ENTRY_BUDGET = 512;
 const HOSTED_OUTBOUND_MEDIA_METADATA_TTL_GRACE_MS = 60_000;
 
-function createHostedOutboundMediaId(): string {
-  return randomBytes(12).toString("hex");
-}
-
-function createHostedOutboundMediaToken(): string {
-  return randomBytes(24).toString("hex");
-}
-
 function buildHostedOutboundMediaMetaKey(id: string): string {
   return `media:${id}:meta`;
 }
@@ -160,28 +152,6 @@ function isRetainedHostedOutboundMediaExpiry(
     Number.isSafeInteger(expiresAt) &&
     (expiresAt > nowMs || nowMs - expiresAt < postExpiryRetentionMs)
   );
-}
-
-function createHostedOutboundMediaMetaRecord(params: {
-  id: string;
-  routePath: string;
-  token: string;
-  contentType?: string;
-  fileName?: string;
-  expiresAt: number;
-  chunkCount: number;
-  byteLength: number;
-}): HostedOutboundMediaMetaRecord {
-  return {
-    id: params.id,
-    routePath: params.routePath,
-    token: params.token,
-    ...(params.contentType ? { contentType: params.contentType } : {}),
-    ...(params.fileName ? { fileName: params.fileName } : {}),
-    expiresAt: params.expiresAt,
-    chunkCount: params.chunkCount,
-    byteLength: params.byteLength,
-  };
 }
 
 function createHostedOutboundMediaMetadata(
@@ -244,8 +214,8 @@ export function createHostedOutboundMediaStore(
   if (overflowPolicy !== "evict-oldest" && overflowPolicy !== "reject-new") {
     throw new Error("hosted outbound media overflowPolicy must be evict-oldest or reject-new");
   }
-  const createId = options.createId ?? createHostedOutboundMediaId;
-  const createToken = options.createToken ?? createHostedOutboundMediaToken;
+  const createId = options.createId ?? (() => randomBytes(12).toString("hex"));
+  const createToken = options.createToken ?? (() => randomBytes(24).toString("hex"));
   const chunkPhysicalTtlMs = options.ttlMs + postExpiryRetentionMs;
   const metadataPhysicalTtlMs =
     options.ttlMs +
@@ -503,16 +473,16 @@ export function createHostedOutboundMediaStore(
           }
           await options.metadataStore.register(
             buildHostedOutboundMediaMetaKey(id),
-            createHostedOutboundMediaMetaRecord({
+            {
               id,
               routePath: params.routePath,
               token,
-              contentType: media.contentType,
-              fileName: media.fileName,
+              ...(media.contentType ? { contentType: media.contentType } : {}),
+              ...(media.fileName ? { fileName: media.fileName } : {}),
               expiresAt,
               chunkCount,
               byteLength: media.buffer.byteLength,
-            }),
+            },
             { ttlMs: metadataPhysicalTtlMs },
           );
         } catch (error) {
@@ -631,8 +601,7 @@ export function buildHostedOutboundMediaResponseHeaders(
   metadata: Pick<HostedOutboundMediaMetadata, "byteLength" | "contentType" | "fileName">,
   options: { fallbackFileName?: string } = {},
 ): Record<string, string> {
-  const contentType =
-    normalizeMimeType(metadata.contentType?.split(";", 1)[0]?.trim()) ?? "application/octet-stream";
+  const contentType = normalizeMimeType(metadata.contentType) ?? "application/octet-stream";
   const fileName = sanitizeUntrustedFileName(
     metadata.fileName ?? options.fallbackFileName ?? "attachment.bin",
     "attachment.bin",

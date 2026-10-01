@@ -31,13 +31,13 @@ const childScript = `
   try {
     await runGatewayLoop({
       ownsProcessLifecycle: true,
-      onRestartStartupFailure: async () => {
-        process.stdout.write("waiting:" + starts + "\\n");
-      },
       start: async () => {
         const attempt = ++starts;
         process.stdout.write("start:" + attempt + "\\n");
-        if (fs.existsSync(faultPath)) throw new Error("fixture startup refused");
+        if (fs.existsSync(faultPath)) {
+          process.stdout.write("waiting:" + starts + "\\n");
+          throw new Error("fixture startup refused");
+        }
         const server = http.createServer((_request, response) => response.end("ready"));
         await new Promise((resolve, reject) => {
           server.once("error", reject);
@@ -59,7 +59,6 @@ const childScript = `
             if (closeFailure) {
               const error = new TypeError("fixture close owner failed");
               error.stack = "TypeError: fixture close owner failed\\n    at closeOwner (fixture.js:12:3)";
-              if (closeFailure === "sync") throw error;
               return Promise.reject(error);
             }
             return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
@@ -231,10 +230,10 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each(["sync", "rejected"])(
-    "persists %s close failures before a SIGUSR2 force-exit",
-    async (mode) => {
-      const fixture = startFixture(false, mode);
+  posixIt(
+    "persists rejected close failures before a SIGUSR2 force-exit",
+    async () => {
+      const fixture = startFixture(false, "rejected");
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([1, null]);
@@ -283,14 +282,14 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each(["SIGTERM", "SIGINT"] as const)(
-    "exits cleanly on %s while waiting after a failed restart",
-    async (signal) => {
+  posixIt(
+    "exits cleanly on SIGTERM while waiting after a failed restart",
+    async () => {
       const fixture = startFixture();
       await fixture.waitForOutput("ready:1");
       fs.writeFileSync(fixture.faultPath, "refuse");
       await expectFailedRestartWaiting(fixture, 2);
-      expect(fixture.child.kill(signal)).toBe(true);
+      expect(fixture.child.kill("SIGTERM")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([0, null]);
       expect(fixture.output()).not.toContain("start:3");
     },

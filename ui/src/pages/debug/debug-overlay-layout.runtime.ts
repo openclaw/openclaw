@@ -25,6 +25,10 @@ function readPosition(): Position | undefined {
   return undefined;
 }
 
+function sameBox(a: DOMRect, b: DOMRect | undefined): boolean {
+  return a.x === b?.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
 export class DebugOverlayLayout {
   constructor(private readonly element: HTMLElement) {}
   private mode?: Mode;
@@ -32,6 +36,7 @@ export class DebugOverlayLayout {
   private frame = 0;
   private transitionFrom?: DOMRect;
   private animation?: Animation;
+  private animationTarget?: DOMRect;
   private observer?: ResizeObserver;
   private drag?: {
     id: number;
@@ -43,7 +48,7 @@ export class DebugOverlayLayout {
 
   update(mode: Mode): void {
     const element = this.element;
-    if (this.mode && (this.mode !== mode || this.animation)) {
+    if (this.mode && this.mode !== mode) {
       this.transitionFrom ??= element.getBoundingClientRect();
       this.cancelAnimation();
     }
@@ -59,31 +64,68 @@ export class DebugOverlayLayout {
         return;
       }
       this.connect();
+      const running = this.animation;
+      if (running) {
+        // Unrelated shell renders repeat the mode mid-flight and must not restart it;
+        // retarget only when the committed body moved the settled box (e.g. loading
+        // content swapped for live content).
+        const current = element.getBoundingClientRect();
+        const target = this.measureSettled(running);
+        if (!sameBox(target, this.animationTarget)) {
+          this.cancelAnimation();
+          this.animate(current, target);
+        }
+        return;
+      }
       this.place();
       const before = this.transitionFrom;
       this.transitionFrom = undefined;
-      if (!before || matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        return;
+      if (before) {
+        this.animate(before, element.getBoundingClientRect());
       }
-      const after = element.getBoundingClientRect();
-      const keyframe = (box: DOMRect) => ({
-        left: box.x + "px",
-        top: box.y + "px",
-        width: box.width + "px",
-        height: box.height + "px",
-        right: "auto",
-        bottom: "auto",
-        maxHeight: "none",
-      });
-      this.animation = element.animate([keyframe(before), keyframe(after)], {
-        duration: 160,
-        easing: "cubic-bezier(0.2, 0, 0, 1)",
-      });
-      this.animation.onfinish = () => {
-        this.animation = undefined;
-        this.place();
-      };
     });
+  }
+
+  private animate(before: DOMRect, after: DOMRect): void {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    const keyframe = (box: DOMRect) => ({
+      left: box.x + "px",
+      top: box.y + "px",
+      width: box.width + "px",
+      height: box.height + "px",
+      right: "auto",
+      bottom: "auto",
+      maxHeight: "none",
+    });
+    this.animationTarget = after;
+    const animation = this.element.animate([keyframe(before), keyframe(after)], {
+      duration: 160,
+      easing: "cubic-bezier(0.2, 0, 0, 1)",
+    });
+    this.animation = animation;
+    animation.onfinish = () => {
+      this.animation = undefined;
+      this.place();
+    };
+  }
+
+  // The running effect overrides the frame box; lift it so placement and measurement
+  // see the settled layout. Synchronous, so no frame is painted without it.
+  private measureSettled(animation: Animation): DOMRect {
+    const effect = animation.effect instanceof KeyframeEffect ? animation.effect : undefined;
+    if (effect) {
+      effect.target = null;
+    }
+    try {
+      this.place();
+      return this.element.getBoundingClientRect();
+    } finally {
+      if (effect) {
+        effect.target = this.element;
+      }
+    }
   }
 
   private connect(): void {

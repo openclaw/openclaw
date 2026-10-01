@@ -1,5 +1,3 @@
-// Offline-indicator grace timer and lifecycle-unavailability deadlines, split
-// out of gateway-store.ts to keep that module inside the TS LOC ratchet.
 import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
 import type { ApplicationGatewaySnapshot } from "./context.ts";
 

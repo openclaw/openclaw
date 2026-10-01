@@ -23,13 +23,14 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.nonBlankString
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
-import ai.openclaw.app.ui.chat.chatModelSendBlocked
 import ai.openclaw.app.ui.chat.providerQualifiedRef
+import ai.openclaw.app.ui.chat.selectedChatModelSendBlockingReason
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -1110,7 +1111,7 @@ class ChatController internal constructor(
     val key = normalizeRequestedSessionKey(sessionKey)
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     if (key == _sessionKey.value && owner == _sessionOwnerAgentId.value) {
-      if (hasCurrentLiveHistory(key)) return
+      if (hasCurrentHistorySnapshot(key) && _healthOk.value) return
       refreshHistoryForRecovery(forceHealth = true)
       return
     }
@@ -1195,22 +1196,18 @@ class ChatController internal constructor(
   ) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
-    val nextState =
-      applyMainSessionKey(
-        currentSessionKey = normalizeRequestedSessionKey(_sessionKey.value),
-        appliedMainSessionKey = appliedMainSessionKey,
-        nextMainSessionKey = trimmed,
-      )
-    appliedMainSessionKey = nextState.appliedMainSessionKey
-    if (_sessionKey.value == nextState.currentSessionKey) return
+    val currentKey = normalizeRequestedSessionKey(_sessionKey.value)
+    val nextKey = if (currentKey == appliedMainSessionKey) trimmed else currentKey
+    appliedMainSessionKey = trimmed
+    if (_sessionKey.value == nextKey) return
     val generation =
       beginHistoryLoad(
-        nextState.currentSessionKey,
-        ownerAgentId = resolveAgentIdFromMainSessionKey(nextState.currentSessionKey),
+        nextKey,
+        ownerAgentId = resolveAgentIdFromMainSessionKey(nextKey),
         refreshHealth = loadHistory,
       )
     if (!loadHistory) return
-    bootstrap(sessionKey = nextState.currentSessionKey, generation = generation)
+    bootstrap(sessionKey = nextKey, generation = generation)
   }
 
   /** Refreshes chat history, sessions, and model choices without clearing optimistic messages first. */
@@ -1237,6 +1234,8 @@ class ChatController internal constructor(
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    snoozedUntil: Long? = null,
+    clearSnooze: Boolean = false,
     color: String? = null,
     clearColor: Boolean = false,
     pinned: Boolean? = null,
@@ -1255,6 +1254,8 @@ class ChatController internal constructor(
         label != null ||
         clearCategory ||
         category != null ||
+        clearSnooze ||
+        snoozedUntil != null ||
         clearColor ||
         color != null ||
         pinned != null ||
@@ -1262,7 +1263,7 @@ class ChatController internal constructor(
         unread != null
     if (!hasPatch) return false
     val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
-    if (archived != null && lifecycleSessionId == null) {
+    if ((archived != null || snoozedUntil != null || clearSnooze) && lifecycleSessionId == null) {
       updateErrorText("Session lifecycle action requires a durable session identity.")
       return false
     }
@@ -1281,6 +1282,11 @@ class ChatController internal constructor(
             put("category", JsonNull)
           } else if (category != null) {
             put("category", JsonPrimitive(category))
+          }
+          if (clearSnooze) {
+            put("snoozedUntil", JsonNull)
+          } else if (snoozedUntil != null) {
+            put("snoozedUntil", JsonPrimitive(snoozedUntil))
           }
           if (clearColor) {
             put("color", JsonNull)
@@ -3123,8 +3129,6 @@ class ChatController internal constructor(
     return generation
   }
 
-  private fun hasCurrentLiveHistory(sessionKey: String): Boolean = hasCurrentHistorySnapshot(sessionKey) && _healthOk.value
-
   private fun hasCurrentHistorySnapshot(sessionKey: String): Boolean {
     val marker = liveHistoryMarker ?: return false
     // Same-session load may skip refresh only for the exact live snapshot that
@@ -3230,7 +3234,7 @@ class ChatController internal constructor(
     // must not leave with stale model or thinking state while sessions.patch is in flight.
     if (!waitForPendingSessionSettings(sessionSettingsKey(sessionKey))) return false
     if (!canAdmit() || !ownsCapturedUi()) return false
-    if (chatModelSendBlocked(_healthOk.value, _selectedModelRef.value, _modelCatalog.value)) return false
+    if (selectedChatModelSendBlockingReason(_healthOk.value, _selectedModelRef.value, _modelCatalog.value) != null) return false
     // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
     // Applied at enqueue time too so durable rows never persist a level the selected model
     // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
@@ -4938,6 +4942,12 @@ class ChatController internal constructor(
   private suspend fun fetchChatMetadata(requestSequence: Long = chatMetadataRequestSequence.incrementAndGet()) {
     val requestCacheScope = currentCacheScope()
     val metadataScope = currentChatMetadataScope() ?: return
+
+    fun isCurrent(): Boolean =
+      requestSequence == chatMetadataRequestSequence.get() &&
+        requestCacheScope == currentCacheScope() &&
+        metadataScope == currentChatMetadataScope()
+
     val requestSelection =
       synchronized(gatewayScopeApplyLock) {
         if (requestSequence != chatMetadataRequestSequence.get()) return
@@ -4959,8 +4969,8 @@ class ChatController internal constructor(
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val metadataSwarmEnabled = root?.get("swarmEnabled").asBooleanOrNull() == true
       synchronized(gatewayScopeApplyLock) {
-        if (requestSequence != chatMetadataRequestSequence.get() || requestCacheScope != currentCacheScope() || metadataScope != currentChatMetadataScope()) return
-        _commands.value = parseChatCommands(json, res)
+        if (!isCurrent()) return
+        _commands.value = parseChatCommands(root)
         synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
         shouldRefreshSwarm = metadataSwarmEnabled
         shouldDisableSwarm = !metadataSwarmEnabled
@@ -4983,11 +4993,7 @@ class ChatController internal constructor(
           null
         }
       synchronized(gatewayScopeApplyLock) {
-        if (
-          requestSequence == chatMetadataRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          metadataScope == currentChatMetadataScope()
-        ) {
+        if (isCurrent()) {
           val catalog = parseGatewayModelCatalog(catalogResult)
           _modelCatalog.value = catalog.models
           val refreshFailed = catalog.refreshFailed
@@ -5009,9 +5015,7 @@ class ChatController internal constructor(
     } catch (_: Throwable) {
       synchronized(gatewayScopeApplyLock) {
         if (
-          requestSequence == chatMetadataRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          metadataScope == currentChatMetadataScope() &&
+          isCurrent() &&
           requestSelection != null &&
           isCurrentSessionAction(requestSelection) &&
           _errorText.value == null
@@ -5020,7 +5024,7 @@ class ChatController internal constructor(
         }
       }
     }
-    if (requestSequence != chatMetadataRequestSequence.get() || requestCacheScope != currentCacheScope() || metadataScope != currentChatMetadataScope()) return
+    if (!isCurrent()) return
     when {
       shouldRefreshSwarm -> refreshSwarmSessions()
       shouldDisableSwarm -> resetSwarmProgress()
@@ -7386,6 +7390,7 @@ class ChatController internal constructor(
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
     val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
+    val defaults = root["defaults"].asObjectOrNull()
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val activity = root["activity"]?.let { json.decodeFromJsonElement<List<ChatHistoryActivity>>(it) }?.associate { it.messageId to it.items }
@@ -7401,13 +7406,8 @@ class ChatController internal constructor(
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
-      defaultModelRef = parseDefaultModelRef(root),
+      defaultModelRef = providerQualifiedModelRef(defaults?.get("model").asStringOrNull(), defaults?.get("modelProvider").asStringOrNull()),
     )
-  }
-
-  private fun parseDefaultModelRef(root: JsonObject): String? {
-    val defaults = root["defaults"].asObjectOrNull() ?: return null
-    return providerQualifiedModelRef(defaults["model"].asStringOrNull(), defaults["modelProvider"].asStringOrNull())
   }
 
   private fun parseMessage(
@@ -7578,6 +7578,10 @@ class ChatController internal constructor(
       lastReadAt = obj["lastReadAt"].asLongOrNull(),
       markedUnreadAt = obj["markedUnreadAt"].asLongOrNull(),
       hasMarkedUnreadMetadata = "markedUnreadAt" in obj,
+      snoozedUntil = obj["snoozedUntil"].asLongOrNull(),
+      snoozedAt = obj["snoozedAt"].asLongOrNull(),
+      hasSnoozedUntilMetadata = "snoozedUntil" in obj,
+      hasSnoozedAtMetadata = "snoozedAt" in obj,
       agentStatus = parseSessionAgentStatus(obj["agentStatus"]),
       hasAgentStatusMetadata = "agentStatus" in obj,
       observerDigest =
@@ -8511,12 +8515,8 @@ private fun parseCreatedSessionKey(
     }
 }
 
-internal fun parseChatCommands(
-  json: Json,
-  commandsJson: String,
-): List<ChatCommandEntry> {
-  val root = json.parseToJsonElement(commandsJson).asObjectOrNull() ?: return emptyList()
-  val commands = root["commands"].asArrayOrNull() ?: return emptyList()
+internal fun parseChatCommands(root: JsonObject?): List<ChatCommandEntry> {
+  val commands = root?.get("commands").asArrayOrNull() ?: return emptyList()
   return commands.mapNotNull { item -> parseChatCommandEntry(item.asObjectOrNull()) }
 }
 
@@ -8544,24 +8544,6 @@ private fun parseChatCommandEntry(obj: JsonObject?): ChatCommandEntry? {
     acceptsArgs = obj["acceptsArgs"].asBooleanOrNull() ?: false,
   )
 }
-
-internal data class MainSessionState(
-  val currentSessionKey: String,
-  val appliedMainSessionKey: String,
-)
-
-/**
- * Rewrite only the active "main" alias when the gateway publishes a new canonical main session key.
- */
-internal fun applyMainSessionKey(
-  currentSessionKey: String,
-  appliedMainSessionKey: String,
-  nextMainSessionKey: String,
-): MainSessionState =
-  MainSessionState(
-    currentSessionKey = if (currentSessionKey == appliedMainSessionKey) nextMainSessionKey else currentSessionKey,
-    appliedMainSessionKey = nextMainSessionKey,
-  )
 
 /**
  * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
@@ -8703,8 +8685,6 @@ private fun messageContentIdentityKey(message: ChatMessage): String? {
 
   return listOf(role, contentFingerprint).joinToString(separator = "|")
 }
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun parseSessionEditorAttachments(value: JsonElement?): List<SessionEditorAttachment> =
   value.asArrayOrNull()?.mapNotNull { element ->
@@ -8889,6 +8869,10 @@ internal fun mergeChatSessionEntry(
       if (next.hasMarkedUnreadMetadata) next.markedUnreadAt else existing.markedUnreadAt,
     hasMarkedUnreadMetadata =
       existing.hasMarkedUnreadMetadata || next.hasMarkedUnreadMetadata,
+    snoozedUntil = if (next.hasSnoozedUntilMetadata) next.snoozedUntil else existing.snoozedUntil,
+    snoozedAt = if (next.hasSnoozedAtMetadata) next.snoozedAt else existing.snoozedAt,
+    hasSnoozedUntilMetadata = existing.hasSnoozedUntilMetadata || next.hasSnoozedUntilMetadata,
+    hasSnoozedAtMetadata = existing.hasSnoozedAtMetadata || next.hasSnoozedAtMetadata,
     agentStatus = if (next.hasAgentStatusMetadata) next.agentStatus else existing.agentStatus,
     hasAgentStatusMetadata = existing.hasAgentStatusMetadata || next.hasAgentStatusMetadata,
     observerDigest = observerDigest,
@@ -9086,11 +9070,10 @@ private fun ChatSessionEntry.carriesSessionSettings(): Boolean =
     hasEffectiveFastModeMetadata
 
 private fun sameSessionSettings(
-  previous: ChatSessionEntry?,
+  previous: ChatSessionEntry,
   next: ChatSessionEntry,
 ): Boolean =
-  previous != null &&
-    previous.modelProvider == next.modelProvider &&
+  previous.modelProvider == next.modelProvider &&
     previous.model == next.model &&
     (previous.modelSelectionLocked == true) == (next.modelSelectionLocked == true) &&
     previous.agentRuntimeId == next.agentRuntimeId &&

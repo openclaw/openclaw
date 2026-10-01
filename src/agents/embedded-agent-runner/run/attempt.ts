@@ -6,6 +6,7 @@ import { resolveContextEngineOwnerPluginId } from "../../../context-engine/regis
 import { runWithAsyncWorkResources } from "../../../shared/async-work-resources.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import { clearToolActivityRun } from "../../../shared/tool-activity-heartbeat.js";
 import {
   bindOperatorModelExecution,
   readRunOperatorAuthority,
@@ -21,6 +22,7 @@ import {
 import { resolveAgentDir } from "../../agent-scope.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
+import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
   clearToolSearchCatalog,
   type ToolSearchCatalogRef,
@@ -54,7 +56,6 @@ import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
-import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type {
   EmbeddedAttemptExecutionState,
   EmbeddedRunAttemptParams,
@@ -328,7 +329,7 @@ async function runEmbeddedAttemptOwned(
     // diagnostics, so arm cleanup before either can fail and leak the catalog.
     toolSearchCatalogApplied = toolSearchCatalogRef !== undefined;
     const preparedToolCatalog = await prepare("attempt.tool-catalog", () =>
-      prepStages.measureSync("tool-catalog", () =>
+      prepStages.measure("tool-catalog", () =>
         prepareEmbeddedAttemptToolCatalog({
           attempt: params,
           setup,
@@ -369,6 +370,7 @@ async function runEmbeddedAttemptOwned(
     const sessionLock = await prepare("attempt.transcript-lifecycle", () =>
       prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: params,
+        runAbortController,
         externalAbortController,
       }),
     );
@@ -440,23 +442,24 @@ async function runEmbeddedAttemptOwned(
         diagnostics: { diagnosticTrace, runTrace },
         state: executionState,
         lifecycle: {
-          applyPermissionMode: (mode, revokeApprovals) => {
-            preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
-            preparedBundleTools.refreshTools();
-            preparedToolCatalog.refreshTools();
-            preparedSessionRuntime.agentSession.refreshTools();
-            promptToolPolicy.refresh();
-            const prepareToolPrompt = preparedSystemPrompt.prepareToolPrompt;
-            preparedSessionRuntime.agentSession.setPermissionPromptPreparation(
-              prepareToolPrompt
-                ? () =>
-                    prepareToolPrompt(promptToolPolicy.current.effectiveTools, {
-                      permissionChanged: true,
-                    })
-                : undefined,
-            );
-            params.permissionChange?.recordApplied(mode);
-          },
+          applyPermissionMode: (mode, revokeApprovals) =>
+            withRuntimeToolSchemaQuarantine((recordQuarantine) => {
+              preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
+              preparedBundleTools.refreshTools(recordQuarantine);
+              preparedToolCatalog.refreshTools(recordQuarantine);
+              preparedSessionRuntime.agentSession.refreshTools();
+              promptToolPolicy.refresh();
+              const prepareToolPrompt = preparedSystemPrompt.prepareToolPrompt;
+              preparedSessionRuntime.agentSession.setPermissionPromptPreparation(
+                prepareToolPrompt
+                  ? () =>
+                      prepareToolPrompt(promptToolPolicy.current.effectiveTools, {
+                        permissionChanged: true,
+                      })
+                  : undefined,
+              );
+              params.permissionChange?.recordApplied(mode);
+            }),
           readYieldState: () => ({
             yieldAbortSettled,
             yieldDetected,

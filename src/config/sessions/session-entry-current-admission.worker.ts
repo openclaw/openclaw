@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   requestSqliteWorkerOperationAdmission,
@@ -13,12 +14,11 @@ import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
-import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
-  cacheValidityTokensEqual,
-  createSessionEntryRevisionGuard,
-  readSessionEntryCacheValidityToken,
-} from "./session-accessor.sqlite-entry-revision.js";
+  readExactSessionEntryRow,
+  readSessionEntryRow,
+} from "./session-accessor.sqlite-entry-read.js";
+import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import {
   assertCanonicalSessionKeyWrite,
   readWithCanonicalSessionAdmission,
@@ -29,13 +29,21 @@ import type {
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
 
-// One last-key projection per native handle; the existing revision owner invalidates its facts.
+// One last-key/read-policy projection per native handle; the revision owner invalidates its facts.
 const currentEntryReads = new WeakMap<
   DatabaseSync,
-  { sessionKey: string; read: () => SessionEntryCurrentFacts | undefined }
+  {
+    sessionKey: string;
+    lookup: "exact" | "logical";
+    read: () => SessionEntryCurrentFacts | undefined;
+  }
 >();
 
-function createCurrentEntryRead(database: OpenClawAgentReadOnlyDatabase, sessionKey: string) {
+function createCurrentEntryRead(
+  database: OpenClawAgentReadOnlyDatabase,
+  sessionKey: string,
+  lookup: "exact" | "logical",
+) {
   let entry: SessionEntryCurrentFacts | undefined;
   const guard = createSessionEntryRevisionGuard(
     database.db,
@@ -45,10 +53,17 @@ function createCurrentEntryRead(database: OpenClawAgentReadOnlyDatabase, session
       }
     },
     () => {
-      const current = readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
+      const current =
+        lookup === "logical"
+          ? readSessionEntryRow(database, sessionKey, "full")?.entry
+          : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
       entry = current
         ? {
             sessionId: current.sessionId,
+            ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
+            ...(current.repositoryWorkspaceId === undefined
+              ? {}
+              : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
             lifecycleRevision: current.lifecycleRevision,
             lifecycleRunId: current.lifecycleRunId,
             activeWriterRunId: current.activeWriterRunId,
@@ -74,11 +89,12 @@ function createCurrentEntryRead(database: OpenClawAgentReadOnlyDatabase, session
 export function readSessionEntryCurrentFactsInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   sessionKey: string,
+  lookup: "exact" | "logical" = "exact",
 ): SessionEntryCurrentFacts | undefined {
   assertCanonicalSessionKeyWrite(sessionKey);
   let cached = currentEntryReads.get(database.db);
-  if (cached?.sessionKey !== sessionKey) {
-    cached = { sessionKey, read: createCurrentEntryRead(database, sessionKey) };
+  if (cached?.sessionKey !== sessionKey || cached.lookup !== lookup) {
+    cached = { sessionKey, lookup, read: createCurrentEntryRead(database, sessionKey, lookup) };
     currentEntryReads.set(database.db, cached);
   }
   return readWithCanonicalSessionAdmission(database, cached.read);
@@ -111,7 +127,7 @@ export function assertSessionEntryCurrentNativeSource(
 export function requestSessionEntryCurrentAdmission(
   source: SessionEntryCurrentSource | undefined,
   request: SqliteWorkerAdmissionRequest,
-  borrowedDatabase?: OpenClawAgentReadOnlyDatabase,
+  options: { database?: OpenClawAgentReadOnlyDatabase; lookup?: "exact" | "logical" } = {},
   requestAdmission = requestSqliteWorkerOperationAdmission,
 ): void {
   if (!source) {
@@ -121,12 +137,11 @@ export function requestSessionEntryCurrentAdmission(
   assertSessionEntryCurrentNativeSource(source);
   const admit = (database: OpenClawAgentReadOnlyDatabase) => {
     assertSessionEntryCurrentNativeSource(source, database);
-    const before = readSessionEntryCacheValidityToken(database.db);
-    const entry = readSessionEntryCurrentFactsInDatabase(database, source.sessionKey);
-    const afterRead = readSessionEntryCacheValidityToken(database.db);
-    if (!cacheValidityTokensEqual(before, afterRead)) {
-      throw new Error("Session currency changed during native admission preparation");
-    }
+    const entry = readSessionEntryCurrentFactsInDatabase(
+      database,
+      source.sessionKey,
+      options.lookup,
+    );
     const facts: SessionEntryCurrentAdmissionFacts = {
       kind: "session-entry-current",
       source,
@@ -135,12 +150,18 @@ export function requestSessionEntryCurrentAdmission(
     };
     requestAdmission({ ...request, facts });
     assertSessionEntryCurrentNativeSource(source, database);
-    if (!cacheValidityTokensEqual(afterRead, readSessionEntryCacheValidityToken(database.db))) {
+    // A foreign commit invalidates cached facts, not necessarily this session's ownership.
+    if (
+      !isDeepStrictEqual(
+        entry,
+        readSessionEntryCurrentFactsInDatabase(database, source.sessionKey, options.lookup),
+      )
+    ) {
       throw new Error("Session currency changed while awaiting its native grant");
     }
   };
-  if (borrowedDatabase?.path === source.path) {
-    admit(borrowedDatabase);
+  if (options.database?.path === source.path) {
+    admit(options.database);
     return;
   }
   const read = withOpenClawAgentDatabaseReadOnly(admit, {

@@ -4,6 +4,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
+import { startEmptySessionsBoardService } from "./test/sessions-board.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
@@ -32,6 +33,42 @@ function createGatewayMethodCapture() {
 }
 
 describe("workboard gateway methods", () => {
+  it("refuses a Sessions board edit after the Gateway caller loses authority", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionsBoard = await startEmptySessionsBoardService(store);
+    const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
+    const { api, methods } = createGatewayMethodCapture();
+    registerWorkboardGatewayMethods({ api, store, sessionsBoard });
+    const respond = vi.fn();
+    await methods.get("workboard.sessionsBoard.update")!.handler({
+      params: { boardId: "sessions", patch: { instructions: "Revoked edit" } },
+      hasCurrentClientAuthority: () => false,
+      respond,
+    } as never);
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "workboard_error",
+      message: "Caller authority is no longer active.",
+    });
+    expect(await store.getSessionsBoard("sessions")).toEqual(board);
+    // Role/scope/profile authorization is rechecked too, not just transport currentness.
+    const revokedRole = vi.fn();
+    await methods.get("workboard.sessionsBoard.update")!.handler({
+      params: { boardId: "sessions", patch: { instructions: "Scope revoked" } },
+      hasCurrentClientAuthority: () => true,
+      sessionMutationAuthorization: {
+        assertCurrent: () => {
+          throw new Error("operator scope revoked");
+        },
+      },
+      respond: revokedRole,
+    } as never);
+    expect(revokedRole).toHaveBeenCalledWith(false, undefined, {
+      code: "workboard_error",
+      message: "operator scope revoked",
+    });
+    expect(await store.getSessionsBoard("sessions")).toEqual(board);
+  });
+
   it("rejects new client attachment bytes after disabling uploads without blocking agent output or reads", async () => {
     const { api, methods } = createGatewayMethodCapture();
     let config: OpenClawPluginApi["config"] = {};
@@ -247,6 +284,10 @@ describe("workboard gateway methods", () => {
       "workboard.cards.dispatchWithOptions",
       "workboard.boards.list",
       "workboard.boards.upsert",
+      "workboard.sessionsBoard.read",
+      "workboard.sessionsBoard.update",
+      "workboard.sessionsBoard.move",
+      "workboard.sessionsBoard.refresh",
       "workboard.boards.archive",
       "workboard.boards.delete",
       "workboard.cards.stats",
@@ -358,6 +399,140 @@ describe("workboard gateway methods", () => {
     } as never);
     expect(eventsRespond.mock.calls[0]?.[0]).toBe(false);
     expect(eventsRespond.mock.calls[0]?.[2]?.message).toContain("workboard.notifications.advance");
+  });
+
+  it("validates Sessions board RPC input and keeps card writes out of Sessions boards", async () => {
+    vi.useFakeTimers();
+    const store = createWorkboardSqliteTestStore();
+    const sessionsBoard = await startEmptySessionsBoardService(store);
+    try {
+      const { api, methods } = createGatewayMethodCapture();
+      registerWorkboardGatewayMethods({ api, store, sessionsBoard });
+      const invoke = async (name: string, params: Record<string, unknown>) => {
+        const method = methods.get(name);
+        if (!method) {
+          throw new Error(`Missing Gateway method: ${name}`);
+        }
+        const respond = vi.fn();
+        await method.handler({ params, respond } as never);
+        return respond;
+      };
+      const created = await invoke("workboard.boards.upsert", {
+        id: "sessions",
+        kind: "sessions",
+      });
+      expect(created.mock.calls[0]?.[1]).toMatchObject({
+        board: { id: "sessions", kind: "sessions", sessions: { columns: expect.any(Array) } },
+      });
+      for (const action of ["read", "update", "move", "refresh"]) {
+        expect(methods.get(`workboard.sessionsBoard.${action}`)?.opts).toEqual({
+          scope: action === "read" ? "operator.read" : "operator.write",
+        });
+      }
+      const read = await invoke("workboard.sessionsBoard.read", { boardId: "sessions" });
+      expect(read.mock.calls[0]?.[1]).toMatchObject({
+        board: { id: "sessions", kind: "sessions" },
+        columns: expect.any(Array),
+        sessions: [],
+      });
+      using readSpy = vi.spyOn(sessionsBoard, "read");
+      for (const view of [
+        {},
+        { involvingMe: true, includePeople: true },
+        { involvingProfileId: "profile-one", includePeople: true },
+        { involvingMe: false, includePeople: false },
+      ]) {
+        const response = await invoke("workboard.sessionsBoard.read", {
+          boardId: "sessions",
+          view,
+        });
+        expect(response.mock.calls[0]?.[0]).toBe(true);
+        expect(readSpy).toHaveBeenLastCalledWith("sessions", view);
+      }
+      const updated = await invoke("workboard.sessionsBoard.update", {
+        boardId: "sessions",
+        patch: { instructions: "Keep approval requests in Needs input." },
+      });
+      expect(updated.mock.calls[0]?.[1]).toMatchObject({
+        board: { sessions: { instructions: "Keep approval requests in Needs input." } },
+      });
+      const beforeInvalid = await store.getSessionsBoard("sessions");
+      const invalidRequests = [
+        ["workboard.sessionsBoard.read", {}, /boardId required/],
+        [
+          "workboard.sessionsBoard.read",
+          { boardId: "sessions", junk: true },
+          /Unknown Sessions board read field: junk/,
+        ],
+        ...[null, [], true, "everyone"].map(
+          (view) =>
+            [
+              "workboard.sessionsBoard.read",
+              { boardId: "sessions", view },
+              /view must be an object/,
+            ] as const,
+        ),
+        ...(
+          [
+            [{ involvingMe: "true" }, /view.involvingMe must be a boolean/],
+            [{ includePeople: 1 }, /view.includePeople must be a boolean/],
+            [{ involvingProfileId: false }, /view.involvingProfileId must be a string/],
+            [{ junk: true }, /Unknown Sessions board view field: junk/],
+          ] as const
+        ).map(
+          ([view, message]) =>
+            ["workboard.sessionsBoard.read", { boardId: "sessions", view }, message] as const,
+        ),
+        [
+          "workboard.sessionsBoard.update",
+          { boardId: "sessions", patch: [] },
+          /patch must be an object/,
+        ],
+        [
+          "workboard.sessionsBoard.update",
+          { boardId: "sessions", patch: { columns: [] } },
+          /2\.\.12 columns/,
+        ],
+        [
+          "workboard.sessionsBoard.update",
+          { boardId: "sessions", patch: { scope: { maxAgeHours: -1 } } },
+          /maxAgeHours must be a positive finite number/,
+        ],
+        [
+          "workboard.sessionsBoard.update",
+          { boardId: "sessions", patch: { kind: "cards" } },
+          /Unknown.*field: kind/,
+        ],
+        [
+          "workboard.sessionsBoard.move",
+          { boardId: "sessions", columnId: "working" },
+          /sessionKey required/,
+        ],
+        [
+          "workboard.sessionsBoard.move",
+          { boardId: "sessions", sessionKey: "agent:main:a", columnId: 2 },
+          /columnId required/,
+        ],
+        ["workboard.sessionsBoard.refresh", { boardId: "" }, /boardId required/],
+        ["workboard.boards.upsert", { id: "sessions", kind: "cards" }, /kind cannot be changed/],
+      ] as const;
+      for (const [name, input, message] of invalidRequests) {
+        const response = await invoke(name, input);
+        expect(response.mock.calls[0]?.[0], name).toBe(false);
+        expect(response.mock.calls[0]?.[2]?.code, name).toBe("workboard_error");
+        expect(response.mock.calls[0]?.[2]?.message, name).toMatch(message);
+      }
+      await expect(store.getSessionsBoard("sessions")).resolves.toEqual(beforeInvalid);
+      const rejectedCard = await invoke("workboard.cards.create", {
+        title: "Wrong destination",
+        boardId: "sessions",
+      });
+      expect(rejectedCard.mock.calls[0]?.[2]?.message).toBe("Sessions boards do not hold cards");
+      await expect(store.list()).resolves.toEqual([]);
+    } finally {
+      await sessionsBoard.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("applies connected client workspace access when accepting card paths", async () => {

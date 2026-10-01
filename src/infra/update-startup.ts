@@ -11,12 +11,7 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
-import { checkRemoteModelCatalogUpdate } from "../model-catalog/remote-overlay.js";
-import {
-  refreshRemoteModelCatalog,
-  REMOTE_MODEL_CATALOG_TTL_MS,
-} from "../model-catalog/remote-refresh.js";
+import type { RemoteCatalogPublicationResult } from "../model-catalog/remote-overlay.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
@@ -42,11 +37,16 @@ import {
   currentUpdateCheckLifecycle,
   type UpdateCheckLifecycle,
 } from "./update-check-lifecycle.js";
-import { compareSemverStrings, resolveNpmChannelTag } from "./update-check.js";
+import {
+  compareSemverStrings,
+  resolveNpmChannelTag,
+  type UpdateCheckResult,
+} from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import { resolveDevGitCommits } from "./update-git-metadata.js";
 import { resolveStartupInstallStatus, withUpdateInstallStatus } from "./update-install-status.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
+import { scheduleGatewayRemoteCatalogChecks } from "./update-startup-catalog.js";
 import {
   getUpdateSchedule,
   resetUpdateStatusState,
@@ -95,7 +95,7 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
 
 function resolveCheckIntervalMs(
   cfg: OpenClawConfig,
-  installKind?: "package" | "git" | "unknown",
+  installKind?: UpdateCheckResult["installKind"],
 ): number {
   const channel = normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   return cfg.update?.auto?.enabled &&
@@ -324,6 +324,12 @@ async function runGatewayUpdateCheckOwned(
     installKind: initializedInstallStatus.status.installKind,
     git: initializedInstallStatus.status.git,
   }).channel;
+  if (initializedInstallStatus.status.installKind === "host") {
+    updateCampaign.clear();
+    setAvailable(null);
+    setSchedule({ channel: potentialChannel, autoEnabled: false });
+    return;
+  }
   let installStatus = initializedInstallStatus;
   if (potentialChannel === "dev" && installStatus.status.installKind === "git") {
     installStatus = await resolveStartupInstallStatus(true, params.signal);
@@ -714,6 +720,7 @@ async function runGatewayUpdateCheckOwned(
 export function createGatewayUpdateCheck(params: {
   lifecycle: UpdateCheckLifecycle;
   getConfig: () => OpenClawConfig;
+  applyRemoteCatalogUpdate: (signal: AbortSignal) => Promise<RemoteCatalogPublicationResult>;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
@@ -727,7 +734,6 @@ export function createGatewayUpdateCheck(params: {
 } {
   const { lifecycle } = params;
   let started = false;
-  let observedCatalog: { sourceUrl: string; generatedAt: number } | undefined;
   return {
     initialize: lifecycle.initialize,
     stop: lifecycle.stop,
@@ -744,49 +750,7 @@ export function createGatewayUpdateCheck(params: {
         }
         return resolveCheckIntervalMs(params.getConfig(), getUpdateSchedule()?.install?.kind);
       });
-      lifecycle.schedule("update.remote-model-catalog", async () => {
-        let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
-        try {
-          const config = params.getConfig();
-          const sourceUrl = resolveRemoteCatalogUrl(config);
-          const result = await refreshRemoteModelCatalog({
-            config,
-            signal: lifecycle.signal,
-          });
-          if (lifecycle.signal.aborted) {
-            return REMOTE_MODEL_CATALOG_TTL_MS;
-          }
-          nextCheckInMs =
-            result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
-          if (result.status === "error") {
-            params.log.info("remote model catalog refresh failed", { error: result.error });
-          } else if (
-            result.status !== "disabled" &&
-            (observedCatalog?.sourceUrl !== sourceUrl ||
-              observedCatalog.generatedAt !== result.generatedAt)
-          ) {
-            const expected = { sourceUrl, generatedAt: result.generatedAt };
-            const state = checkRemoteModelCatalogUpdate(params.getConfig(), expected);
-            if (state !== "superseded") {
-              observedCatalog = expected;
-            }
-            if (state === "restart-required") {
-              params.log.info("remote model catalog downloaded; restart the Gateway to apply it", {
-                providers: result.providers,
-                models: result.models,
-                generatedAt: result.generatedAt,
-              });
-            } else if (state === "superseded") {
-              params.log.info("remote model catalog check superseded; deferred to the next check");
-            }
-          }
-        } catch (error) {
-          if (!lifecycle.signal.aborted) {
-            params.log.info("remote model catalog check failed", { error: String(error) });
-          }
-        }
-        return nextCheckInMs;
-      });
+      scheduleGatewayRemoteCatalogChecks(params);
     },
   };
 }

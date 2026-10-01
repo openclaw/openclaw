@@ -121,9 +121,9 @@ export async function applyWorkspace(params: {
   stagingRoot: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
-  begin?: (journal: WorkerWorkspaceReconciliationJournal) => void;
-  commit?: (manifestRef: string) => void;
-  abort?: () => void;
+  begin?: (journal: WorkerWorkspaceReconciliationJournal) => void | Promise<void>;
+  commit?: (manifestRef: string) => void | Promise<void>;
+  abort?: () => void | Promise<void>;
   publishAcceptedManifest?: (accepted: {
     manifestRef: string;
     manifest: WorkerWorkspaceManifest;
@@ -138,17 +138,17 @@ export async function applyWorkspace(params: {
     currentManifestRef: `sha256:${"b".repeat(64)}`,
     acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     journal: {
-      load: () => pending,
-      begin: (journal) => {
+      load: async () => pending,
+      begin: async (journal) => {
         pending = journal;
-        params.begin?.(journal);
+        await params.begin?.(journal);
       },
-      commit: (manifestRef) => {
-        params.commit?.(manifestRef);
+      commit: async (manifestRef) => {
+        await params.commit?.(manifestRef);
         pending = undefined;
       },
-      abort: () => {
-        params.abort?.();
+      abort: async () => {
+        await params.abort?.();
         pending = undefined;
       },
     },

@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import {
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
   SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
@@ -17,10 +18,28 @@ export function buildRequesterSettleWakeMessage(params: {
   findings?: string;
   requireVisibleReply: boolean;
   parentOnly?: boolean;
+  /** A yield handed the conversation back; private results stay input, the final is delivered. */
+  yieldedFinalDeliverable?: boolean;
   children: readonly SubagentRunRecord[];
   recoveryChildren: readonly SubagentRunRecord[];
   preserveModelRouteNotice: boolean;
 }): string {
+  const child = params.children.length === 1 ? params.children[0] : undefined;
+  const pauseNotice =
+    child?.pauseReason === "sessions_yield" ? child.requesterSettleWake?.pauseNotice : undefined;
+  if (child && pauseNotice) {
+    return [
+      "[Subagent Context] A child is paused awaiting a continuation; this is not a completion.",
+      JSON.stringify({
+        state: "paused",
+        childSessionKey: child.childSessionKey,
+        runId: child.runId,
+        label: child.label ?? null,
+      }),
+      `The child will resume only through sessions_send to ${child.childSessionKey}. Do not wait for its completion without sending the needed continuation.`,
+      wrapPromptDataBlock({ label: "Acknowledgment", text: pauseNotice.acknowledgment }),
+    ].join("\n");
+  }
   // The scheduling row need not be the rerouted child. Keep every current
   // child's producer-owned notice, with stable bytes and one batch-wide cap.
   const routeNotices = [
@@ -50,9 +69,11 @@ export function buildRequesterSettleWakeMessage(params: {
       : []),
     params.parentOnly
       ? `[Subagent Context] ${SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION}`
-      : params.requireVisibleReply
-        ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer only after the requested outcome is complete or genuinely blocked."
-        : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
+      : params.yieldedFinalDeliverable
+        ? `[Subagent Context] Child results are internal input. Answer the original conversation under its normal reply rules: if replies there must go through the message tool, send your answer with it. Reply ONLY: ${SILENT_REPLY_TOKEN} when no user-facing update is owed or you already sent it.`
+        : params.requireVisibleReply
+          ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer only after the requested outcome is complete or genuinely blocked."
+          : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
     ...(modelRouteChange
       ? [
           modelRouteChange,

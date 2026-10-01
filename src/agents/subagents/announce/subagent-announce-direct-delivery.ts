@@ -73,7 +73,6 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 export type SubagentAnnounceDirectParams = {
   requesterSessionKey: string;
   requesterAgentId?: string;
-  requesterRunTimeoutSeconds?: number;
   targetRequesterSessionKey: string;
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
@@ -200,8 +199,13 @@ export async function sendSubagentAnnounceDirectly(
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     );
+    // Private findings bind to the requester incarnation that produced them,
+    // including a deliverable settle continuation that is no longer parentOnly.
+    const requesterSessionBound =
+      parentOnly ||
+      (sourceToolId === "subagent_settle" && params.completionRequesterSessionId !== undefined);
     if (
-      parentOnly &&
+      requesterSessionBound &&
       (!params.completionRequesterSessionId ||
         requesterActivity.sessionId !== params.completionRequesterSessionId)
     ) {
@@ -278,14 +282,14 @@ export async function sendSubagentAnnounceDirectly(
         onDeliveryResult: params.onDeliveryResult,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
-    // Synthetic requester-settle turns must not inherit a tool-only mode that suppresses the final.
+    // A private settle turn never delivers; automatic only keeps a tool-only mode from
+    // suppressing its internal final. A deliverable yielded turn omits the mode so the
+    // conversation's configured reply policy decides, as for any other requester turn.
     const completionSourceReplyDeliveryMode = parentOnly
       ? "automatic"
       : requiresMessageToolDelivery
         ? "message_tool_only"
-        : params.requireVisibleReply && deliveryTarget.deliver
-          ? "automatic"
-          : undefined;
+        : undefined;
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
@@ -373,9 +377,10 @@ export async function sendSubagentAnnounceDirectly(
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
     const directAgentParams: Record<string, unknown> = {
-      ...(parentOnly ? { expectedExistingSessionId: params.completionRequesterSessionId } : {}),
+      ...(requesterSessionBound
+        ? { expectedExistingSessionId: params.completionRequesterSessionId }
+        : {}),
       sessionKey: canonicalRequesterSessionKey,
-      timeout: params.requesterRunTimeoutSeconds,
       message: params.triggerMessage,
       deliver: shouldDeliverAgentFinal,
       bestEffortDeliver: params.bestEffortDeliver,
@@ -398,6 +403,7 @@ export async function sendSubagentAnnounceDirectly(
     const classifyResponse = createDirectAnnounceResponseClassifier({
       params,
       parentOnly,
+      requesterSessionBound,
       deliveryTarget,
       shouldDeliverAgentFinal,
       requiresMessageToolDelivery,

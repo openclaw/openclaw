@@ -28,7 +28,7 @@ import {
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -252,11 +252,10 @@ export function installEmbeddedAttemptContextGuards(input: {
     : null;
   if (cacheTtlSettings) {
     activeSession.agent.transformContext = async (messages, signal) => {
-      const transformed = previousCacheTtlTransform
+      const sourceMessages = previousCacheTtlTransform
         ? await previousCacheTtlTransform.call(activeSession.agent, messages, signal)
         : messages;
-      const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-      const projected = pruneExpiredCacheTtlToolResults({
+      return pruneExpiredCacheTtlToolResults({
         messages: sourceMessages,
         settings: cacheTtlSettings,
         contextWindowTokens: contextTokenBudget,
@@ -271,7 +270,6 @@ export function installEmbeddedAttemptContextGuards(input: {
           lastCacheTouchAt = Date.now();
         },
       });
-      return projected;
     };
   }
 
@@ -367,10 +365,9 @@ export function installEmbeddedAttemptContextGuards(input: {
   );
   const previousComputerFrameTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
-    const transformed = previousComputerFrameTransform
+    const modelContext = previousComputerFrameTransform
       ? await previousComputerFrameTransform.call(activeSession.agent, messages, signal)
       : messages;
-    const modelContext = Array.isArray(transformed) ? transformed : messages;
     invalidateComputerFrameIfMissing({
       contextEpoch: input.computerContextEpoch,
       messages: modelContext,

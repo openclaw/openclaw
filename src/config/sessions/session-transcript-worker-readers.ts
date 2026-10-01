@@ -9,6 +9,7 @@ import {
   type SessionHistoryWorkerPreparedInput,
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type SessionHistoryWorkerRequestRunner = <TResult>(
   prepare: () => SessionHistoryWorkerPreparedInput,
@@ -112,6 +113,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-title-fields", ...input }),
       (value) => value.fields,
     ),
+    readActivitySummarySource: reader(
+      "session-activity-summary-source",
+      "an Activity recap source",
+      (input) => ({ kind: "session-activity-summary-source", ...input }),
+      (value) => value.source,
+    ),
     readRowBackfill: reader(
       "session-row-backfill",
       "transcript fields",
@@ -123,7 +130,9 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "transcript-binding" &&
+          (value.kind !== "reactions" &&
+            value.kind !== "conversation-binding" &&
+            value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
             value.kind !== "message-page" &&
             value.kind !== "around-id" &&
@@ -231,12 +240,18 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
-    readExactEntries: reader(
-      "session-exact-entries",
-      "exact entries",
-      (input) => ({ kind: "session-exact-entries", ...input }),
-      (value) => value,
-    ),
+    readExactEntries: async (input, signal) => {
+      const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
+      return runRequest(
+        () => ({ kind: "session-exact-entries", ...captured }),
+        JSON.stringify(captured).length * 2,
+        (value) => {
+          assertResultKind(value, "session-exact-entries", "exact entries");
+          return value;
+        },
+        signal,
+      );
+    },
     readRowFacts: async (input) => {
       if (input.sessionKeys.length > MAX_SESSION_ROW_FACTS_KEYS) {
         throw new Error(`Session row facts support at most ${MAX_SESSION_ROW_FACTS_KEYS} keys`);
@@ -288,12 +303,15 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-diagnostic-text", ...input }),
       (value) => value.text,
     ),
-    readEntries: reader(
-      "session-entry-list",
-      "entries",
-      (scope) => ({ kind: "session-entry-list", scope }),
-      (value) => value.entries,
-    ),
+    readEntries: async (scope, continuation) =>
+      runRequest(
+        () => ({ kind: "session-entry-list", scope, continuation }),
+        JSON.stringify({ scope, continuation }).length * 2,
+        (value) => {
+          assertResultKind(value, "session-entry-list", "entries");
+          return value.entries;
+        },
+      ),
     readIdentityEvidence: reader(
       "session-identity-evidence",
       "identity evidence",

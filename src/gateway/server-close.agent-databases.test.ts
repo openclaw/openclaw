@@ -13,11 +13,9 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import * as reclamationWorker from "../config/sessions/session-accessor.sqlite-reclamation-worker.js";
-import {
-  createSessionMaintenanceStatisticsOperation,
-  runSqliteSessionReclamation,
-} from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
+import { SqliteReclamationWorker } from "../config/sessions/session-accessor.sqlite-reclamation-worker-lifetime.js";
+import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -265,10 +263,7 @@ it.skipIf(process.platform !== "linux")(
             },
           }),
       );
-      const reclamationClose = vi.spyOn(
-        reclamationWorker.SqliteReclamationWorker.prototype,
-        "close",
-      );
+      const reclamationClose = vi.spyOn(SqliteReclamationWorker.prototype, "close");
       await runSqliteSessionReclamation({
         forceInProcess: false,
         plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),

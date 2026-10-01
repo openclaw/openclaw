@@ -1,4 +1,3 @@
-// Setup gateway config helpers build gateway config from onboarding answers.
 import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatPortRangeHint } from "../cli/error-format.js";
@@ -18,13 +17,13 @@ import {
 import { provisionGatewayTokenStoreRef } from "../gateway/auth-token-store-ref.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
+  validateGatewayPortInput,
   TAILSCALE_EXPOSURE_OPTIONS,
 } from "../gateway/gateway-config-prompts.shared.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
@@ -38,11 +37,9 @@ type ConfigureGatewayOptions = {
   flow: WizardFlow;
   baseConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
-  localPort: number;
   quickstartGateway: QuickstartGatewayDefaults;
   secretInputMode?: SecretInputMode;
   prompter: WizardPrompter;
-  runtime: RuntimeEnv;
 };
 
 type ConfigureGatewayResult = {
@@ -58,17 +55,10 @@ function getLocalizedTailscaleExposureOptions() {
   }));
 }
 
-function validateGatewayPortInput(value: unknown): string | undefined {
-  if (parseTcpPort(value) === null) {
-    return formatPortRangeHint();
-  }
-  return undefined;
-}
-
 export async function configureGatewayForSetup(
   opts: ConfigureGatewayOptions,
 ): Promise<ConfigureGatewayResult> {
-  const { flow, localPort, quickstartGateway, prompter } = opts;
+  const { flow, quickstartGateway, prompter } = opts;
   let { nextConfig } = opts;
 
   const port =
@@ -77,7 +67,7 @@ export async function configureGatewayForSetup(
       : parseTcpPort(
           await prompter.text({
             message: t("wizard.gateway.port"),
-            initialValue: String(localPort),
+            initialValue: String(quickstartGateway.port),
             validate: validateGatewayPortInput,
           }),
         );

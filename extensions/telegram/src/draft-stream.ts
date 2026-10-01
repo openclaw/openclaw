@@ -231,15 +231,15 @@ export function createTelegramDraftStream(params: {
   // Unfinished previews are superseded by the next update: under flood pressure the
   // account limiter skips them so final replies keep Telegram's budget. Only the
   // Bot API calls are marked; cleanup and observation keep normal priority.
-  // Final sends can wait out a flood inside the API call, so they carry the
-  // send-authority check for the limiter to re-run before each attempt.
+  // Previews and final sends carry authority through scheduler and flood waits
+  // so the limiter rechecks the current writer before each network attempt.
   const previewRequest = <T>(
     assertCurrent: (() => void) | undefined,
     run: () => Promise<T>,
   ): Promise<T> =>
-    streamState.final
-      ? runAuthorizedTelegramRequest(assertCurrent, run)
-      : runReplaceableTelegramRequest(run);
+    runAuthorizedTelegramRequest(assertCurrent, () =>
+      streamState.final ? run() : runReplaceableTelegramRequest(run),
+    );
   const scheduleProviderMessageObservation = (message: Message | undefined) => {
     if (!message) {
       return;
@@ -661,13 +661,6 @@ export function createTelegramDraftStream(params: {
     updateDraft(text);
   };
 
-  const requestLazyDraftUpdate = (resolveText: () => string | undefined) => {
-    if (streamState.stopped || streamState.final) {
-      return;
-    }
-    updateDraft({ resolveText });
-  };
-
   const updatePreview = (preview: TelegramDraftPreview) => {
     const text = preview.text.trimEnd();
     if (!text) {
@@ -813,7 +806,6 @@ export function createTelegramDraftStream(params: {
   };
 
   const clear = async () => {
-    // Capture before the stop; takeMessageIdAfterStop resets streamVisibleSinceMs.
     const visibleSince = streamVisibleSinceMs;
     const messageId = await takeMessageIdAfterStop({
       stopForClear,
@@ -862,7 +854,7 @@ export function createTelegramDraftStream(params: {
         options?.onPlatformSendDispatch,
         options?.assertPlatformSendAuthorized,
       ),
-    updateLazy: requestLazyDraftUpdate,
+    updateLazy: (resolveText) => updateDraft({ resolveText }),
     updatePreview,
     flush,
     waitForInFlight,

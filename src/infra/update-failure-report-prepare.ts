@@ -26,10 +26,8 @@ import {
   selectUpdateFailureReportSteps,
 } from "./update-failure-facts-format.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
-import {
-  isPublicUpdateFailureCode,
-  projectPublicUpdateFailureIdentifiers,
-} from "./update-failure-public-identifiers.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
+import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { formatNpmFailureFacts } from "./update-npm-failure.js";
 import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 import {

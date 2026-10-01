@@ -10,7 +10,6 @@ import {
 } from "./driver-result.js";
 import type { CuaExecutionResources } from "./execution-resources.js";
 import {
-  clearDialogRef,
   invalidateBrowserObservation,
   resolveBrowserObservation,
   resolveDialogRef,
@@ -163,7 +162,7 @@ export async function handleBrowserAct(
         signal,
       );
       if (input.dialogAction !== "inspect") {
-        clearDialogRef(state);
+        state.dialog = undefined;
       }
       return JSON.stringify(browserDialogEnvelope(result, state, target));
     }

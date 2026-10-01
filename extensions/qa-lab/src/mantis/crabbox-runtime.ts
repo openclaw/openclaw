@@ -3,7 +3,8 @@ import {
   ensureManagedCrabboxBinary,
   resolveCrabboxBinary,
 } from "@openclaw/crabbox-provider/cli-runtime-api.js";
-import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isTruthyOptIn } from "../mantis-options.runtime.js";
 
 export type MantisCrabboxLeaseOptions = {
   idleTimeout?: string;
@@ -108,13 +109,12 @@ export async function defaultCommandRunner(
 
 export async function resolveCrabboxBin(params: {
   env: NodeJS.ProcessEnv;
-  envName: string;
   explicit?: string;
   repoRoot: string;
 }) {
   const candidate = resolveCrabboxBinary({
     cwd: params.repoRoot,
-    explicit: trimToValue(params.explicit) ?? trimToValue(params.env[params.envName]),
+    explicit: trimToValue(params.explicit) ?? trimToValue(params.env.OPENCLAW_MANTIS_CRABBOX_BIN),
     openclawRoot: params.repoRoot,
     pathEnv: params.env.PATH,
   });

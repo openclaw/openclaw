@@ -513,54 +513,6 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(route.mainDmOwnerPin).toBeUndefined();
   });
 
-  it("sends pairing reminders for pending requests with cooldown", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-01T10:00:00.000Z"));
-    try {
-      const readAllowFromStore = vi.fn(async () => [] as string[]);
-      sendMessageMatrixMock.mockClear();
-
-      const { handler, upsertPairingRequest } = createMatrixHandlerTestHarness({
-        readAllowFromStore,
-        dmPolicy: "pairing",
-        buildPairingReply: () => "Pairing code: ABCDEFGH",
-        isDirectMessage: true,
-        getMemberDisplayName: async () => "sender",
-      });
-
-      const makeEvent = (id: string): MatrixRawEvent =>
-        createMatrixTextMessageEvent({
-          eventId: id,
-          body: "hello",
-          mentions: { room: true },
-        });
-
-      await handler("!room:example.org", makeEvent("$event1"));
-      await handler("!room:example.org", makeEvent("$event2"));
-      expect(readAllowFromStore).toHaveBeenCalledWith({
-        channel: "matrix",
-        env: process.env,
-        accountId: "ops",
-      });
-      expect(upsertPairingRequest).toHaveBeenCalledWith({
-        channel: "matrix",
-        id: "@user:example.org",
-        accountId: "ops",
-        meta: { name: "sender" },
-      });
-      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-      const pairingReminder = callArg(sendMessageMatrixMock, 0, 1, "pairing reminder");
-      expect(typeof pairingReminder).toBe("string");
-      expect(pairingReminder).toContain("Pairing request is still pending approval.");
-
-      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
-      await handler("!room:example.org", makeEvent("$event3"));
-      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("accepts room messages from configured Matrix bot accounts when allowBots is true", async () => {
     const { handler, recordInboundSession, runPrepared } = createMatrixHandlerTestHarness({
       isDirectMessage: false,

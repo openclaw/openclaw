@@ -1,6 +1,3 @@
-// Builds the status summary used by human and JSON status output.
-// It aggregates sessions, heartbeat, channel summary, and model/runtime metadata.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
@@ -94,8 +91,8 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
-  if (entry?.fastMode === "auto") {
-    flags.push("fast:auto");
+  if (entry?.fastMode === "auto" || entry?.fastMode === "ultrafast") {
+    flags.push(`fast:${entry.fastMode}`);
   } else if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
@@ -113,7 +110,7 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (entry?.abortedLastRun) {
     flags.push("aborted");
   }
-  const sessionId = entry?.sessionId as unknown;
+  const sessionId = entry.sessionId;
   if (typeof sessionId === "string" && sessionId.length > 0) {
     flags.push(`id:${sessionId}`);
   }
@@ -220,7 +217,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
         const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
         const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
         const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
-        const model = resolvedModel.model ?? configuredSessionModel ?? null;
+        const model = resolvedModel.model ?? configuredSessionModel;
         const lookupModel =
           resolveStatusModelLookupRef({
             provider: resolvedModel.provider,
@@ -268,7 +265,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           provider: lookupModel.provider,
           model: lookupModelId,
           ...modelContext,
-          fallbackContextTokens: configContextTokens ?? undefined,
+          fallbackContextTokens: configContextTokens,
           allowAsyncLoad: false,
         });
         const runtime = resolveSessionRuntime({
@@ -535,17 +532,14 @@ export async function getStatusSummary(
     installationReplacementWarning: getGatewayInstallationReplacement()?.message,
     secretEgressProxy: await getSecretEgressCertificateStatus(),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
-      ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
-        const redactedReason: string = redactSecretDegradationReason(reason);
-        return {
-          ownerKind,
-          ownerId,
-          state,
-          degradationState: degradationState ?? "cold",
-          paths: ownerPaths,
-          reason: redactedReason,
-        };
-      },
+      ({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({
+        ownerKind,
+        ownerId,
+        state,
+        degradationState: degradationState ?? "cold",
+        paths,
+        reason: redactSecretDegradationReason(reason),
+      }),
     ),
     degradedPlugins: listActiveDegradedPlugins().map(({ pluginId, state, diagnostic }) => ({
       pluginId,

@@ -564,32 +564,25 @@ enum GatewaySettingsStore {
     {
         guard let stableID = GatewayStableIdentifier.exact(entry.stableID) else { return nil }
         let name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalized = entry
+        normalized.stableID = stableID
         if entry.kind == .manual {
             let host = entry.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !host.isEmpty, let port = entry.port, (1...65535).contains(port) else { return nil }
-            let contextPath = GatewayConnectEndpoint(
+            normalized.name = name.isEmpty ? "\(host):\(port)" : name
+            normalized.host = host
+            normalized.contextPath = GatewayConnectEndpoint(
                 host: host,
                 port: port,
                 tls: entry.useTLS,
                 contextPath: entry.contextPath).contextPath
-            return GatewayRegistryEntry(
-                stableID: stableID,
-                kind: .manual,
-                name: name.isEmpty ? "\(host):\(port)" : name,
-                host: host,
-                port: port,
-                useTLS: entry.useTLS,
-                contextPath: contextPath,
-                lastConnectedAtMs: entry.lastConnectedAtMs)
+        } else {
+            normalized.name = name.isEmpty ? stableID : name
+            normalized.host = nil
+            normalized.port = nil
+            normalized.contextPath = nil
         }
-        return GatewayRegistryEntry(
-            stableID: stableID,
-            kind: .discovered,
-            name: name.isEmpty ? stableID : name,
-            host: nil,
-            port: nil,
-            useTLS: entry.useTLS,
-            lastConnectedAtMs: entry.lastConnectedAtMs)
+        return normalized
     }
 
     private static func migrateGatewayRegistryIfNeeded(defaults: UserDefaults = .standard) {

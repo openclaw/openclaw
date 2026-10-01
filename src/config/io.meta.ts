@@ -35,9 +35,6 @@ export function stampConfigWriteMetadata(
 }
 
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */
-export function recordConfigWriteMetadata(
-  now: string = new Date().toISOString(),
-  _version: string = VERSION,
-): void {
+export function recordConfigWriteMetadata(now: string = new Date().toISOString()): void {
   writeConfigMachineState("config.lastTouchedAt", now);
 }

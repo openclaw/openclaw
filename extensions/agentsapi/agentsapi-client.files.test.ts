@@ -1,10 +1,10 @@
-import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentsApiClient,
   type AgentsApiArtifact,
   type AgentsApiInputFile,
 } from "./agentsapi-client.js";
+import { createTurn } from "./agentsapi.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
@@ -18,6 +18,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
 });
+
+const dormantUploadMessage =
+  "the hosted environment is dormant; submit new input to start a fresh sandbox";
 
 describe("Agents API file upload transport", () => {
   it("includes inline binary files in the hosted session creation request", async () => {
@@ -47,7 +50,7 @@ describe("Agents API file upload transport", () => {
 
     await expect(
       createClient().uploadFile("session-fixture", inputFile, new AbortController().signal),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ status: "uploaded" });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
     expect([requestAt(0), requestAt(1)].map((request) => new URL(request.url).pathname)).toEqual([
@@ -67,7 +70,14 @@ describe("Agents API file upload transport", () => {
 
   it.each([
     { name: "another environment", patch: { id: "environment-other" } },
-    { name: "a disconnected environment", patch: { status: "disconnected" } },
+    {
+      name: "another disconnected environment",
+      patch: { id: "environment-other", status: "disconnected" },
+    },
+    { name: "a pending environment", patch: { status: "pending" } },
+    { name: "an expired environment", patch: { status: "expired" } },
+    { name: "a failed environment", patch: { status: "failed" } },
+    { name: "an unknown environment status", patch: { status: "unknown" } },
   ])("refuses an upload to $name", async ({ patch }) => {
     queueUploadContext(patch);
 
@@ -77,6 +87,112 @@ describe("Agents API file upload transport", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
     expect([requestAt(0).method, requestAt(1).method]).toEqual(["GET", "GET"]);
   });
+
+  it("reports unavailable when a connected environment becomes dormant before upload", async () => {
+    queueUploadContext();
+    queueResponse(
+      Response.json(
+        { error: { type: "conflict_error", message: dormantUploadMessage } },
+        { status: 409 },
+      ),
+    );
+
+    await expect(
+      createClient().uploadFile("session-fixture", inputFile, new AbortController().signal),
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
+    expect(requestAt(2).method).toBe("POST");
+    expect(new URL(requestAt(2).url).pathname).toBe(
+      "/v1/agents/environments/environment-fixture/files",
+    );
+  });
+
+  it.each([
+    { name: "different conflict", status: 409, type: "conflict_error", message: "Upload is busy" },
+    {
+      name: "wrong error type",
+      status: 409,
+      type: "invalid_request_error",
+      message: dormantUploadMessage,
+    },
+    {
+      name: "permission failure",
+      status: 403,
+      type: "conflict_error",
+      message: dormantUploadMessage,
+    },
+    { name: "server failure", status: 500, type: "conflict_error", message: dormantUploadMessage },
+    {
+      name: "malformed error",
+      status: 409,
+      type: "conflict_error",
+      message: [dormantUploadMessage],
+    },
+  ])("preserves an upload $name", async ({ status, type, message }) => {
+    queueUploadContext();
+    queueResponse(Response.json({ error: { type, message } }, { status }));
+
+    await expect(
+      createClient().uploadFile("session-fixture", inputFile, new AbortController().signal),
+    ).rejects.toMatchObject({ status, type, error: { type, message } });
+  });
+
+  it("preserves the dormant conflict when it comes from session lookup", async () => {
+    queueResponse(
+      Response.json(
+        { error: { type: "conflict_error", message: dormantUploadMessage } },
+        { status: 409 },
+      ),
+    );
+
+    await expect(
+      createClient().uploadFile("session-fixture", inputFile, new AbortController().signal),
+    ).rejects.toMatchObject({ status: 409, type: "conflict_error" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a transport failure instead of accepting its dormant error wording", async () => {
+    queueUploadContext();
+    const failure = new Error(dormantUploadMessage);
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      createClient().uploadFile("session-fixture", inputFile, new AbortController().signal),
+    ).rejects.toMatchObject({ cause: failure });
+  });
+
+  it.each(["abort", "authority revocation"])(
+    "rejects a dormant upload result after %s during response consumption",
+    async (interruption) => {
+      queueUploadContext();
+      const controller = new AbortController();
+      const interrupted = new Error("File upload authority ended");
+      let current = true;
+      const release = queueResponse(
+        Response.json(
+          { error: { type: "conflict_error", message: dormantUploadMessage } },
+          { status: 409 },
+        ),
+      );
+      release.mockImplementation(async () => {
+        if (interruption === "abort") {
+          controller.abort(interrupted);
+        } else {
+          current = false;
+        }
+      });
+      const client = createClient(() => {
+        if (!current) {
+          throw interrupted;
+        }
+      });
+
+      await expect(
+        client.uploadFile("session-fixture", inputFile, controller.signal),
+      ).rejects.toThrow(interrupted.message);
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     { name: "environment", patch: { environment_id: "environment-other" } },
@@ -136,12 +252,11 @@ describe("Agents API immutable artifact metadata", () => {
   });
 
   it.each([
-    { name: "requested root turn", patch: {}, accepted: true },
-    { name: "different turn", patch: { id: "turn-other" }, accepted: false },
-    { name: "different session", patch: { session_id: "session-other" }, accepted: false },
-    { name: "subagent turn", patch: { subagent_id: "subagent-fixture" }, accepted: false },
-  ])("checks a $name before accepting its output metadata", async ({ patch, accepted }) => {
-    const savedTurn = turn(patch);
+    { name: "different turn", patch: { id: "turn-other" } },
+    { name: "different session", patch: { session_id: "session-other" } },
+    { name: "subagent turn", patch: { subagent_id: "subagent-fixture" } },
+  ])("rejects a $name before accepting its output metadata", async ({ patch }) => {
+    const savedTurn = createTurn(patch);
     queueResponse(Response.json(savedTurn));
     const result = createClient().turn(
       "session-fixture",
@@ -149,14 +264,7 @@ describe("Agents API immutable artifact metadata", () => {
       new AbortController().signal,
     );
 
-    if (accepted) {
-      await expect(result).resolves.toEqual(savedTurn);
-      expect(new URL(requestAt(0).url).pathname).toBe(
-        "/v1/agents/sessions/session-fixture/turns/turn-fixture",
-      );
-    } else {
-      await expect(result).rejects.toThrow("turn outside the requested root session");
-    }
+    await expect(result).rejects.toThrow("turn outside the requested root session");
   });
 });
 
@@ -338,23 +446,6 @@ function artifact(overrides: Partial<AgentsApiArtifact> = {}): AgentsApiArtifact
     turn_id: "turn-fixture",
     path: "/workspace/outputs/fixture.bin",
     size_bytes: 4,
-    ...overrides,
-  };
-}
-
-function turn(overrides: Partial<Turn> = {}): Turn {
-  return {
-    id: "turn-fixture",
-    object: "agent.session.turn",
-    session_id: "session-fixture",
-    agent_id: "agent-fixture",
-    subagent_id: null,
-    created_at: 1,
-    started_at: 1,
-    completed_at: 2,
-    status: "completed",
-    error: null,
-    usage: null,
     ...overrides,
   };
 }

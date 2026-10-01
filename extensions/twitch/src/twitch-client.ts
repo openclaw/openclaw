@@ -46,14 +46,11 @@ export class TwitchClientManager {
   private async createAuthProvider(
     account: TwitchAccountConfig,
     normalizedToken: string,
+    clientId: string,
   ): Promise<StaticAuthProvider | RefreshingAuthProvider> {
-    if (!account.clientId) {
-      throw new Error("Missing Twitch client ID");
-    }
-
     if (account.clientSecret) {
       const authProvider = new RefreshingAuthProvider({
-        clientId: account.clientId,
+        clientId,
         clientSecret: account.clientSecret,
       });
 
@@ -96,7 +93,7 @@ export class TwitchClientManager {
     }
 
     this.logger.info(`Using StaticAuthProvider for ${account.username} (no clientSecret provided)`);
-    return new StaticAuthProvider(account.clientId, normalizedToken);
+    return new StaticAuthProvider(clientId, normalizedToken);
   }
 
   async getClient(
@@ -162,7 +159,7 @@ export class TwitchClientManager {
 
     const normalizedToken = normalizeToken(tokenResolution.token);
 
-    const authProvider = await this.createAuthProvider(account, normalizedToken);
+    const authProvider = await this.createAuthProvider(account, normalizedToken, account.clientId);
     if (!ownsConnection()) {
       throw new Error(`Twitch connection cancelled for ${account.username}`);
     }
@@ -228,9 +225,7 @@ export class TwitchClientManager {
           return;
         }
         settled = true;
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearTimeout(timeout);
         for (const listener of listeners) {
           listener.unbind();
         }
@@ -277,7 +272,7 @@ export class TwitchClientManager {
           );
         }),
       );
-      const timeout: NodeJS.Timeout | undefined = setTimeout(
+      const timeout = setTimeout(
         () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
         connectTimeoutMs,
       );

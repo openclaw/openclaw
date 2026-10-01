@@ -434,7 +434,7 @@ describe("cold dynamic-model effective inventory", () => {
     "retires a copied registry view on %s while its donor stays authoritative",
     async (retirement) => {
       await withColdFixture(async (fixture) => {
-        const donor = loadAndActivateRootPluginRegistry({
+        const donor = await loadAndActivateRootPluginRegistry({
           config: fixture.config,
           workspaceDir: fixture.input.workspaceDir,
           onlyPluginIds: [pluginId],
@@ -484,7 +484,7 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("retains SDK provider resources through a copied view without preserving its authority", async () => {
     await withColdFixture(async (fixture) => {
-      const donor = loadAndActivateRootPluginRegistry({
+      const donor = await loadAndActivateRootPluginRegistry({
         config: fixture.config,
         workspaceDir: fixture.input.workspaceDir,
         onlyPluginIds: [pluginId],

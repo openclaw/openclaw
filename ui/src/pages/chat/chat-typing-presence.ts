@@ -36,6 +36,5 @@ export function typingActorIdForSessionMessage(
   const identity = readTranscriptSenderIdentity(
     recordOrNull(message?.["__openclaw"])?.senderIdentity,
   );
-  const actorId = identity?.type === "profile" ? identity.id : undefined;
-  return actorId;
+  return identity?.type === "profile" ? identity.id : undefined;
 }

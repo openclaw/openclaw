@@ -21,19 +21,19 @@ import {
   retainPluginCache,
   withPluginCache,
 } from "../../plugins/plugin-cache.js";
-import { PluginLruCache } from "../../plugins/plugin-lru-cache.js";
 import { resolvePluginMetadataEnvFingerprint } from "../../plugins/plugin-metadata-env.js";
 import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { LruCache } from "../lru-cache.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
 const MAX_BOOTSTRAP_CHANNEL_OUTCOMES_PER_CONFIG = 64;
-type BootstrapRegistries = PluginLruCache<PluginRegistry | null>;
+type BootstrapRegistries = LruCache<PluginRegistry | null>;
 let bootstrapRegistriesByScope = new WeakMap<
   object,
-  { metadata: object; version: number; configs: PluginLruCache<BootstrapRegistries> }
+  { metadata: object; version: number; configs: LruCache<BootstrapRegistries> }
 >();
 
 function resolveBootstrapRegistries(
@@ -56,7 +56,7 @@ function resolveBootstrapRegistries(
   const scope = snapshot ?? metadata;
   let state = bootstrapRegistriesByScope.get(scope);
   if (!state || state.metadata !== metadata || state.version !== version) {
-    state = { metadata, version, configs: new PluginLruCache(MAX_BOOTSTRAP_CONFIG_GENERATIONS) };
+    state = { metadata, version, configs: new LruCache(MAX_BOOTSTRAP_CONFIG_GENERATIONS) };
     bootstrapRegistriesByScope.set(scope, state);
   }
   const configKey = resolveRuntimeConfigCacheKey(cfg);
@@ -65,7 +65,7 @@ function resolveBootstrapRegistries(
     : JSON.stringify([configKey, resolvePluginMetadataEnvFingerprint(env)]);
   let registries = state.configs.get(key);
   if (!registries) {
-    registries = new PluginLruCache(MAX_BOOTSTRAP_CHANNEL_OUTCOMES_PER_CONFIG);
+    registries = new LruCache(MAX_BOOTSTRAP_CHANNEL_OUTCOMES_PER_CONFIG);
     state.configs.set(key, registries);
   }
   return registries;

@@ -29,7 +29,7 @@ import {
 } from "./system-events.js";
 
 describe("exec-completion reply on a WebChat-internal session (#147387)", () => {
-  it("tells the model to relay the completion instead of suppressing it", async () => {
+  it("allows a useful completion update instead of disabling delivery", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
       const cfg: OpenClawConfig = {
@@ -65,7 +65,8 @@ describe("exec-completion reply on a WebChat-internal session (#147387)", () => 
       expect(result.status).toBe("ran");
       expect(getReplyFromConfig).toHaveBeenCalledOnce();
       const [ctx] = getReplyFromConfig.mock.calls[0] as [Record<string, unknown>];
-      expect(ctx.Body).toContain("Please relay the command output to the user");
+      expect(ctx.Body).toContain("requested result not yet delivered");
+      expect(ctx.Body).toContain("duplicate or superseded results");
       expect(ctx.Body).not.toContain("user delivery is disabled");
     });
   });
@@ -152,7 +153,7 @@ describe("exec-completion reply on a WebChat-internal session (#147387)", () => 
       expect(result.status).toBe("ran");
       expect(getReplyFromConfig).toHaveBeenCalledOnce();
       const [ctx] = getReplyFromConfig.mock.calls[0] as [Record<string, unknown>];
-      expect(ctx.Body).not.toContain("Please relay the command output to the user");
+      expect(ctx.Body).not.toContain("requested result not yet delivered");
       expect(ctx.Body).toContain("user delivery is disabled");
     });
   });
@@ -310,6 +311,42 @@ async function readProjectionMessages(scenario: ProjectionScenario) {
   return events.map(readTranscriptEventMessage).filter((message) => message?.role === "assistant");
 }
 
+it.each(["automatic", "message_tool"] as const)(
+  "settles an unneeded completion silently in %s mode",
+  async (visibleReplies) => {
+    await withProjectionScenario(async (scenario) => {
+      scenario.cfg.messages = { visibleReplies };
+      enqueueSystemEvent("Exec completed (already-handled, code 0) :: Previously reported output", {
+        sessionKey: scenario.sessionKey,
+      });
+      const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
+        visibleReplies === "automatic"
+          ? { text: "NO_REPLY" }
+          : createHeartbeatToolResponsePayload({
+              outcome: "done",
+              notify: false,
+              summary: "Result already handled; no new user-facing information.",
+            }),
+      );
+
+      // The runner must offer silence and retire the event without publishing a recap.
+      expect((await runProjectionWake(scenario, reply)).status).toBe("ran");
+      const prompt = reply.mock.calls[0]?.[0].Body;
+      expect(prompt).toContain("duplicate or superseded results");
+      expect(prompt).toContain(
+        visibleReplies === "automatic" ? "reply NO_REPLY only" : "notify=false",
+      );
+      expect(await readProjectionMessages(scenario)).toEqual([]);
+      expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
+      expect(getLastHeartbeatEvent()?.silent).toBe(true);
+
+      expect((await runProjectionWake(scenario, reply)).status).toBe("skipped");
+      expect(reply).toHaveBeenCalledOnce();
+      expect(await readProjectionMessages(scenario)).toEqual([]);
+    });
+  },
+);
+
 it("preserves explicit target:none before target:last delivers in the same WebChat session", async () => {
   await withProjectionScenario(async (scenario) => {
     const heartbeat = scenario.cfg.agents?.defaults?.heartbeat;
@@ -340,7 +377,7 @@ it("preserves explicit target:none before target:last delivers in the same WebCh
       } else {
         expect(messages).toHaveLength(1);
         expect(JSON.stringify(messages[0]?.content)).toContain(marker);
-        expect(context?.Body).toContain("Please relay the command output to the user");
+        expect(context?.Body).toContain("requested result not yet delivered");
       }
     }
   });

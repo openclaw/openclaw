@@ -28,6 +28,7 @@ vi.mock("../cli/runtime-cleanup-scope.js", () => ({
   withCliProcessScope: async (run: () => Promise<void>) => run(),
 }));
 vi.mock("../cli/update-cli/update-command-executor.js", () => ({
+  captureUpdateCommandExecutorAuthority: () => ({ installKey: "/synthetic" }),
   withDelegatedUpdateCommandExecutor: async (
     _executor: unknown,
     _runId: string,
@@ -83,8 +84,8 @@ vi.mock("./update-requester-authority.js", () => ({
 vi.mock("./update-run-ledger.js", () => ({
   adoptUpdateRun: vi.fn(),
   getUpdateRun: fixture.terminal,
-  recordUpdateRunStep: fixture.recordStep,
 }));
+vi.mock("./update-run-write.async.js", () => ({ recordUpdateRunStepAsync: fixture.recordStep }));
 
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
@@ -539,7 +540,7 @@ it.each([
   const doctor = vi.fn();
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
   fixture.ownerLease.mockReturnValue(owner);
-  fixture.recordStep.mockImplementation((runId: string, step: unknown) => ({
+  fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
     runId,
     status: "running",
     steps: [step],
@@ -586,7 +587,7 @@ it.each([
   if (uncertain) {
     expect(doctor).not.toHaveBeenCalled();
   } else {
-    expect(doctor).toHaveBeenCalledExactlyOnceWith(
+    expect(doctor, stderr.join("\n")).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
@@ -598,11 +599,15 @@ it.each([
     );
     // The receipt is a retained `finalize:` step whose key carries the identity,
     // so published parents' detail compaction cannot erase it.
-    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith("synthetic-run", {
-      step: "finalize:predecessor-stop:7:1000:631:f",
-      status: "completed",
-      endedAtMs: 7,
-    });
+    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
+      "synthetic-run",
+      {
+        step: "finalize:predecessor-stop:7:1000:631:f",
+        status: "completed",
+        endedAtMs: 7,
+      },
+      expect.objectContaining({ assertCurrent: expect.any(Function) }),
+    );
     if (!uncertain) {
       expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
         doctor.mock.invocationCallOrder[0] ?? 0,

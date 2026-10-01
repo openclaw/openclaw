@@ -366,6 +366,7 @@ export async function runCommandInvocation(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let terminationError: Error | undefined;
     let settled = false;
     const startedAt = Date.now();
     let killWaitTimer: NodeJS.Timeout | null = null;
@@ -415,24 +416,26 @@ export async function runCommandInvocation(
     };
 
     const requestKill = () => {
-      if (process.platform === "win32" && child.pid) {
+      if (process.platform === "win32") {
         try {
-          const killer = spawn(
-            resolveWindowsTaskkillPath(),
-            ["/PID", String(child.pid), "/T", "/F"],
-            {
-              stdio: "ignore",
-              windowsHide: true,
-            },
+          // This helper joins taskkill /T /F. Leader close alone cannot prove
+          // npm descendants released the prefix before a fallback install.
+          const termination = terminateManagedChild(child, "SIGKILL");
+          if (termination?.processTreeState !== "terminated") {
+            throw termination?.error ?? new Error("Windows process tree exit is unverified");
+          }
+          logStream.write(
+            `${new Date().toISOString()} timeout process-tree=terminated pid=${child.pid}\n`,
           );
-          killer.on("error", () => {
-            child.kill();
+        } catch (error) {
+          terminationError = new Error(`Command timeout cleanup failed: ${commandLabel}`, {
+            cause: error,
           });
-          return;
-        } catch {
-          child.kill();
-          return;
+          logStream.write(
+            `${new Date().toISOString()} timeout process-tree=unverified ${formatError(error)}\n`,
+          );
         }
+        return;
       }
       activeChildTree.killChildTree("SIGKILL");
     };
@@ -446,9 +449,10 @@ export async function runCommandInvocation(
             killWaitTimer = setTimeout(() => {
               finalize(() => {
                 rejectPromise(
-                  new Error(
-                    `Command timed out and could not be terminated cleanly: ${commandLabel}`,
-                  ),
+                  terminationError ??
+                    new Error(
+                      `Command timed out and could not be terminated cleanly: ${commandLabel}`,
+                    ),
                 );
               });
             }, 15_000);
@@ -502,6 +506,9 @@ export async function runCommandInvocation(
         return;
       }
       activeChildTree.unregister();
+      if (settled) {
+        return;
+      }
       stdout = appendBoundedCommandOutput(stdout, stdoutDecoder.end(), maxCapturedOutputBytes);
       stderr = appendBoundedCommandOutput(stderr, stderrDecoder.end(), maxCapturedOutputBytes);
       finalize(() => {
@@ -511,7 +518,7 @@ export async function runCommandInvocation(
           stderr,
         };
         if (timedOut) {
-          rejectPromise(new Error(`Command timed out: ${commandLabel}`));
+          rejectPromise(terminationError ?? new Error(`Command timed out: ${commandLabel}`));
           return;
         }
         if ((options.check ?? true) && result.exitCode !== 0) {

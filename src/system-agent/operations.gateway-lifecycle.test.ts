@@ -144,70 +144,34 @@ describe("SystemAgent hosted gateway lifecycle", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { kind: "gateway-start", fault: "service inspection failure" },
-    { kind: "gateway-stop", fault: "service inspection failure" },
-    { kind: "gateway-stop", fault: "native stop refusal" },
-  ] as const)("keeps $kind in the host after $fault", async ({ kind, fault }) => {
-    const serviceError = new Error(fault);
-    if (fault === "service inspection failure") {
-      service.isLoaded.mockRejectedValue(serviceError);
-    } else {
-      service.stop.mockRejectedValue(serviceError);
-    }
+  it.each(["gateway-start", "gateway-stop"] as const)(
+    "rejects $kind without a host lifecycle before reaching the exiting native CLI",
+    async (kind) => {
+      service.isLoaded.mockRejectedValue(new Error("service inspection failure"));
+      await expect(
+        kind === "gateway-start" ? runDaemonStart() : runDaemonStop({ force: true }),
+      ).rejects.toBe(exitSentinel);
+      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("service inspection failure"),
+      );
+      vi.clearAllMocks();
 
-    // This control proves the fault reaches the exiting CLI boundary and preserves CLI semantics.
-    const native = kind === "gateway-start" ? runDaemonStart() : runDaemonStop({ force: true });
-    await expect(native).rejects.toBe(exitSentinel);
-    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(fault));
-    vi.clearAllMocks();
-
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const captureExit = vi.spyOn(runtime, "exit");
-    const [outcome] = await Promise.allSettled([
-      executeSystemAgentOperation({ kind }, runtime, {
-        approved: true,
-        deps: { setupSurface: "gateway" },
-      }),
-    ]);
-
-    // A thrown sentinel keeps Vitest alive but must never count as a recoverable host error.
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(captureExit).not.toHaveBeenCalled();
-    expect(service.isLoaded).not.toHaveBeenCalled();
-    expect(service.start).not.toHaveBeenCalled();
-    expect(service.stop).not.toHaveBeenCalled();
-    expect(appendAudit).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        summary: kind === "gateway-start" ? "Started Gateway" : "Stopped Gateway",
-      }),
-    );
-
-    if (outcome.status === "rejected") {
-      // No hosted owner is installed here. Its unavailability may be an ordinary domain error.
-      expect(outcome.reason).toBeInstanceOf(Error);
-      expect(outcome.reason).not.toBe(exitSentinel);
-      expect(outcome.reason).toMatchObject({ message: expect.stringMatching(/gateway|host/i) });
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const captureExit = vi.spyOn(runtime, "exit");
+      await expect(
+        executeSystemAgentOperation({ kind }, runtime, {
+          approved: true,
+          deps: { setupSurface: "gateway" },
+        }),
+      ).rejects.toThrow("Gateway host lifecycle is unavailable");
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(captureExit).not.toHaveBeenCalled();
+      expect(service.isLoaded).not.toHaveBeenCalled();
+      expect(service.start).not.toHaveBeenCalled();
+      expect(service.stop).not.toHaveBeenCalled();
       expect(appendAudit).not.toHaveBeenCalled();
       expect(lines.join("\n")).not.toContain("[openclaw] done:");
-      return;
-    }
-
-    expect(outcome.value.exitsInteractive).not.toBe(true);
-    const report = [...lines, outcome.value.message ?? ""].join("\n");
-    if (outcome.value.applied) {
-      expect(report).toMatch(
-        kind === "gateway-start" ? /already running/i : /scheduled|requested|accepted/i,
-      );
-      return;
-    }
-    expect(report).toMatch(
-      kind === "gateway-start"
-        ? /already running|unavailable|not available|cannot/i
-        : /scheduled|requested|accepted|unavailable|not available|cannot/i,
-    );
-    expect(appendAudit).not.toHaveBeenCalled();
-    expect(report).not.toContain("[openclaw] done:");
-  });
+    },
+  );
 });

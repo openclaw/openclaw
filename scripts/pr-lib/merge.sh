@@ -30,48 +30,40 @@ print_file_list_with_limit() {
   fi
 }
 
-record_crabbox_landing_parent_audit() {
-  local landed_sha="$1"
-  local expected_parent_sha="$2"
-  local commit_file=".local/merge-crabbox-landed-commit.json"
-  local audit_file=".local/merge-crabbox-parent-audit.json"
-  local audit_tmp
-  if ! rm -f "$audit_file" ||
-    ! audit_tmp=$(mktemp .local/merge-crabbox-parent-audit.XXXXXX); then
-    echo "merge completed; post-merge audit failed: unable to prepare the landing parent artifact." >&2
-    return 1
-  fi
-  if ! pr_gh_plain api "repos/$MERGE_REPO_NAME/commits/$landed_sha" >"$commit_file"; then
-    rm -f "$audit_tmp"
+read_admin_landing_parent_audit() {
+  local landed_sha="$1" expected_parent_sha="$2" commit_file="${3:-}" response actual_parent_sha
+  if ! response=$(pr_gh_plain api "repos/$MERGE_REPO_NAME/commits/$landed_sha"); then
     echo "Admin landing parent audit failed after merge: unable to read landed commit $landed_sha." >&2
     return 1
   fi
-
-  local actual_parent_sha
-  actual_parent_sha=$(jq -er '
-    .parents
-    | select(type == "array" and length > 0)
-    | .[0].sha
-    | select(type == "string" and test("^[0-9a-f]{40}$"))
-  ' "$commit_file") || {
-    rm -f "$audit_tmp"
+  [ -z "$commit_file" ] || printf '%s\n' "$response" >"$commit_file" || return 1
+  actual_parent_sha=$(printf '%s\n' "$response" | jq -er '
+    .parents | select(type == "array" and length > 0) | .[0].sha |
+    select(type == "string" and test("^[0-9a-f]{40}$"))
+  ') || {
     echo "Admin landing parent audit failed after merge: landed commit has no valid first parent." >&2
     return 1
   }
-
-  local status="match"
-  if [ "$actual_parent_sha" != "$expected_parent_sha" ]; then
-    status="drift"
-  fi
-  if ! jq -n \
-    --arg actualParentSha "$actual_parent_sha" \
-    --arg expectedParentSha "$expected_parent_sha" \
+  [ "$actual_parent_sha" = "$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$landed_sha^1")" ] || {
+    echo "Admin landing parent audit differs from the verified historical commit." >&2
+    return 1
+  }
+  jq -n --arg actualParentSha "$actual_parent_sha" --arg expectedParentSha "$expected_parent_sha" \
     --arg landedSha "$landed_sha" \
-    --arg status "$status" \
-    '{status: $status, landedSha: $landedSha, expectedParentSha: $expectedParentSha, actualParentSha: $actualParentSha}' \
-    >"$audit_tmp"; then
+    '{status:(if $actualParentSha == $expectedParentSha then "match" else "drift" end),
+      landedSha:$landedSha,expectedParentSha:$expectedParentSha,actualParentSha:$actualParentSha}'
+}
+
+record_crabbox_landing_parent_audit() {
+  local landed_sha="$1" expected_parent_sha="$2"
+  local commit_file=".local/merge-crabbox-landed-commit.json"
+  local audit_file=".local/merge-crabbox-parent-audit.json" audit_tmp
+  if ! rm -f "$audit_file" || ! audit_tmp=$(mktemp .local/merge-crabbox-parent-audit.XXXXXX); then
+    echo "merge completed; post-merge audit failed: unable to prepare the landing parent artifact." >&2
+    return 1
+  fi
+  if ! read_admin_landing_parent_audit "$landed_sha" "$expected_parent_sha" "$commit_file" >"$audit_tmp"; then
     rm -f "$audit_tmp"
-    echo "merge completed; post-merge audit failed: unable to serialize landing parent evidence." >&2
     return 1
   fi
   if ! mv "$audit_tmp" "$audit_file"; then
@@ -79,8 +71,9 @@ record_crabbox_landing_parent_audit() {
     echo "merge completed; post-merge audit failed: unable to publish the landing parent artifact." >&2
     return 1
   fi
-
-  if [ "$status" = "match" ]; then
+  local actual_parent_sha
+  actual_parent_sha=$(jq -er .actualParentSha "$audit_file") || return 1
+  if [ "$actual_parent_sha" = "$expected_parent_sha" ]; then
     echo "Admin landing parent audit matched: landed=$landed_sha parent=$actual_parent_sha"
   else
     echo "Admin landing parent audit drift: landed=$landed_sha expected_parent=$expected_parent_sha actual_parent=$actual_parent_sha"
@@ -94,7 +87,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/crabbox-merge-bypass.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh"
 
 verify_prior_ci_admin() {
-  local pr="$1" head="$2" actor proof review_ci
+  local pr="$1" head="$2" expected_proof="${3:-$MERGE_PRIOR_CI_PROOF}" actor proof review_ci
   [ "${MERGE_REPO_HOST:-}" = github.com ] || { echo "Prior-CI admin admission currently requires github.com." >&2; return 1; }
   actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
   proof=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" verify "$MERGE_ADMIN_EVIDENCE" "$MERGE_REPO_NAME" "$pr" "$head" "$actor" "$PR_MAIN_SHA") || return 1
@@ -108,7 +101,7 @@ verify_prior_ci_admin() {
     echo "A failing review cannot use the prior-success conflict-resolution exception." >&2
     return 1
   fi
-  if [ -n "$MERGE_PRIOR_CI_PROOF" ] && [ "$MERGE_PRIOR_CI_PROOF" != "$proof" ]; then
+  if [ -n "$expected_proof" ] && [ "$expected_proof" != "$proof" ]; then
     echo "Prior-CI admin evidence or authority changed during admission; no merge requested." >&2
     return 1
   fi
@@ -602,6 +595,8 @@ merge_run() {
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
   local MERGE_PRIOR_CI_REST_OBSERVATION=false
+  local MERGE_PRIOR_CI_RECALCULATED=false
+  local MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
       [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
@@ -633,13 +628,13 @@ merge_run() {
       ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" --arg replacement "$replacement_head" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
         .phase == "intent" and
         (if $admin then .method == "squash" and
-          (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed" and .head != $replacement
+          (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed"
            else .accepted == false and .route == "admin" and .priorCiAdmin.dispatchTransport == "rest" end)
          else (.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
           (.route == "auto" and .cancellation.state == "confirmed") end)
       ' >/dev/null; then
       if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-        merge_outcome_stop "operator admin recovery requires an exact rejected prior-CI intent or a confirmed auto cancellation with an explicit different replacement; no attempt was authorized"
+        merge_outcome_stop "operator admin recovery requires an exact rejected prior-CI intent or a confirmed auto cancellation with an explicit selected head; no attempt was authorized"
       else
         merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
       fi
@@ -1028,15 +1023,35 @@ merge_run() {
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    # Materialize forward main before the last live authority verification.
-    merge_outcome_stable "$pr" || return 1
-    verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
-    # A later main may reuse local objects, never start another lazy/explicit fetch.
-    GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
-    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
-      # Complete REST snapshots read policy/checks too; revalidate live authority after that work.
-      verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
-    fi
+    local authority_round authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF"
+    for authority_round in 1 2 3; do
+      # Retain only the equality fingerprint, never a prior live authority decision.
+      MERGE_PRIOR_CI_PROOF=""
+      merge_outcome_stable "$pr" false requalify-prior-ci || return 1
+      verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" "$expected_prior_ci_proof" || return 1
+      [ "$MERGE_PRIOR_CI_REST_OBSERVATION" != true ] || break
+      # GraphQL retains its post-authority stability check without fetching.
+      # REST already brackets policy and main before the final authority check.
+      MERGE_PRIOR_CI_RECALCULATED=false
+      authority_result=0
+      GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true requalify-prior-ci || authority_result=$?
+      if [ "$authority_result" -eq 75 ] && [ -n "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" ]; then
+        MERGE_PRIOR_CI_PROOF=""
+        if [ "$authority_round" -eq 3 ]; then
+          merge_outcome_stop "prior-CI main kept advancing after 3 authority rounds; stopped before intent/dispatch"
+          return 1
+        fi
+        echo "Requalifying prior-CI admission after main $MERGE_PRIOR_CI_REMATERIALIZE_MAIN (round $((authority_round + 1))/3)."
+        # The previous authority decision is discarded before any materialization.
+        verify_prior_ci_main_advance "$MERGE_PRIOR_CI_OBSERVED_MAIN" "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" || return 1
+        continue
+      fi
+      [ "$authority_result" -eq 0 ] || return 1
+      if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ] || [ "$MERGE_PRIOR_CI_RECALCULATED" = true ]; then
+        verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+      fi
+      break
+    done
     # No awaited operation may replace the operator's bytes after validation.
     node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
       "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
@@ -1123,15 +1138,7 @@ merge_run() {
   fi
   local comment_body MERGE_COMPLETION_COMMENT_URL
   comment_body=$(merge_outcome_comment_body "$pr") || return 1
-  if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    if [ "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .changeKind)" = pre-existing-failure ]; then
-      printf -v comment_body '%s\n- CI with explicitly attributed pre-existing failures: %s\n- Exact prepared head: `%s`; source attribution and independent qualification retained as operator evidence. Cancelled jobs remain unrun coverage. No current-head CI success is claimed.' \
-        "$comment_body" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .ciUrl)" "$PREP_HEAD_SHA"
-    else
-      printf -v comment_body '%s\n- Prior successful CI: %s\n- Subsequent conflict changes: reviewed at `%s`; scoped validation retained as operator evidence. No current-head CI success is claimed.' \
-        "$comment_body" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .ciUrl)" "$PREP_HEAD_SHA"
-    fi
-  elif [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
+  if [ "$MERGE_USE_PRIOR_CI_ADMIN" != true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
     local crabbox_check_url
     local ci_gate_url
     crabbox_check_url=$(jq -r .crabboxCheckUrl .local/merge-crabbox-bypass.json)

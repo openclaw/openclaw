@@ -1,4 +1,3 @@
-// Builds documentation baselines from config schema metadata.
 import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -426,26 +425,6 @@ function dedupeConfigDocBaselineEntries(
   );
 }
 
-function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
-  coreEntries: ConfigDocBaselineEntry[];
-  channelEntries: ConfigDocBaselineEntry[];
-  pluginEntries: ConfigDocBaselineEntry[];
-} {
-  const byKind: Record<ConfigDocBaselineKind, ConfigDocBaselineEntry[]> = {
-    core: [],
-    channel: [],
-    plugin: [],
-  };
-  for (const entry of entries) {
-    byKind[entry.kind].push(entry);
-  }
-  return {
-    coreEntries: byKind.core,
-    channelEntries: byKind.channel,
-    pluginEntries: byKind.plugin,
-  };
-}
-
 async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   if (cachedConfigDocBaselinePromise) {
     return await cachedConfigDocBaselinePromise;
@@ -459,13 +438,16 @@ async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
     const entries = dedupeConfigDocBaselineEntries(
       collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
     );
-    const { coreEntries, channelEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
-    return {
+    const baseline: ConfigDocBaseline = {
       generatedBy: GENERATED_BY,
-      coreEntries,
-      channelEntries,
-      pluginEntries,
+      coreEntries: [],
+      channelEntries: [],
+      pluginEntries: [],
     };
+    for (const entry of entries) {
+      baseline[`${entry.kind}Entries`].push(entry);
+    }
+    return baseline;
   })();
   try {
     return await cachedConfigDocBaselinePromise;
@@ -628,35 +610,22 @@ export async function writeConfigDocBaselineArtifacts(
   }
   const changed = hashChanged || countBudgetError !== undefined || countViolations.length > 0;
 
-  if (params?.check) {
-    return {
-      changed,
-      hashChanged,
-      wrote: false,
-      jsonPaths,
-      hashPath,
-      countsPath,
-      countViolations,
-      ...(countBudgetError ? { countBudgetError } : {}),
-    };
-  }
-
-  // Write tracked drift-detection artifacts.
-  writeFileAtomic(hashPath, nextHashContent);
-  writeFileAtomic(countsPath, nextCountsContent);
-
-  // Write full JSON artifacts locally (gitignored, useful for inspection)
-  for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
-    writeFileAtomic(jsonPaths[key], rendered.json[key]);
+  if (!params?.check) {
+    writeFileAtomic(hashPath, nextHashContent);
+    writeFileAtomic(countsPath, nextCountsContent);
+    for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
+      writeFileAtomic(jsonPaths[key], rendered.json[key]);
+    }
   }
 
   return {
     changed,
     hashChanged,
-    wrote: true,
+    wrote: !params?.check,
     jsonPaths,
     hashPath,
     countsPath,
-    countViolations: [],
+    countViolations: params?.check ? countViolations : [],
+    ...(params?.check && countBudgetError ? { countBudgetError } : {}),
   };
 }

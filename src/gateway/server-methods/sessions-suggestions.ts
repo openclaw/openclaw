@@ -7,7 +7,6 @@ import {
   validateSessionSuggestionsResolveParams,
   validateSessionTypingParams,
   type SessionSuggestion,
-  type SessionSuggestionResolution,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -30,7 +29,10 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
   canManageSessionSharing,
@@ -82,10 +84,6 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
-}
-
-function resolutionState(resolution: SessionSuggestionResolution): "accepted" | "dismissed" {
-  return resolution === "dismiss" ? "dismissed" : "accepted";
 }
 
 function respondSessionSuggestionSessionChanged(respond: RespondFn, sessionKey: string): void {
@@ -171,9 +169,7 @@ async function dispatchSuggestion(params: {
     agentId: params.target.agentId,
     sessionId: params.target.entry.sessionId,
     message: params.suggestion.text,
-    ...(params.resolution === "queue"
-      ? { queueMode: "followup" as const }
-      : { queueMode: "steer" as const }),
+    queueMode: params.resolution === "queue" ? ("followup" as const) : ("steer" as const),
     idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   await handleChatSend({
@@ -331,7 +327,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       if (role === null) {
         return;
       }
-      if (role !== "owner" && role !== "admin") {
+      if (!canManageSessionSharing(role)) {
         respond(
           false,
           undefined,
@@ -468,7 +464,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           finalizeSessionSuggestionClaim(scope, {
             id: claim.suggestion.id,
             token: claim.token,
-            state: resolutionState(resolution),
+            state: resolution === "dismiss" ? "dismissed" : "accepted",
             expectedSessionId: target.entry.sessionId,
           }),
       });
@@ -512,10 +508,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     while (projection.needsMembershipPreparation()) {
       await projection.prepareMembership();
     }

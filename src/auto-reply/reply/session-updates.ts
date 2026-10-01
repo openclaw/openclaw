@@ -1,4 +1,3 @@
-/** Session update helpers for skill snapshots and completed compaction accounting. */
 import crypto from "node:crypto";
 import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
@@ -95,10 +94,7 @@ async function persistSkillSnapshot(params: {
     },
   );
   publishSessionEntry(params, persistedEntry ?? undefined);
-  if (persistedEntry) {
-    return { entry: persistedEntry, updated };
-  }
-  return { entry: undefined, updated: false };
+  return { entry: persistedEntry ?? undefined, updated: Boolean(persistedEntry) && updated };
 }
 
 /** Ensures a session entry has the reusable skill snapshot needed for reply runs. */

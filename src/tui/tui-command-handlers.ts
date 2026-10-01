@@ -13,6 +13,7 @@ import {
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
+import { formatFastModeValue } from "../shared/fast-mode.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
@@ -50,10 +51,6 @@ import {
   type TuiChatSubmitSnapshot,
 } from "./tui-submit-state.js";
 import type { AgentSummary, GatewayStatusSummary } from "./tui-types.js";
-
-function formatTuiFastMode(mode: unknown): "auto" | "on" | "off" {
-  return mode === "auto" ? "auto" : mode === true ? "on" : "off";
-}
 
 function isBtwCommand(text: string): boolean {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
@@ -522,7 +519,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await setAgent(args);
       }
     },
-    agents: async () => await openAgentSelector(),
+    agents: openAgentSelector,
     context: async (args, raw) => {
       if (opts.local) {
         addUnsupportedLocalCommand("context");
@@ -584,7 +581,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await setSession(args);
       }
     },
-    sessions: async () => await openSessionSelector(),
+    sessions: openSessionSelector,
     model: async (args, raw) => {
       if (shouldForwardModelCommandToServer(args)) {
         await sendMessage(raw);
@@ -607,7 +604,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         );
       }
     },
-    models: () => openModelSelector(),
+    models: openModelSelector,
     think: async (args) => {
       const { thinkingLevels, modelProvider, model, agentRuntime } = state.sessionInfo;
       const levels = thinkingLevels?.length
@@ -653,7 +650,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     },
     fast: async (args) => {
       if (!args || args === "status") {
-        chatLog.addSystem(`fast mode: ${formatTuiFastMode(state.sessionInfo.fastMode)}`);
+        chatLog.addSystem(`fast mode: ${formatFastModeValue(state.sessionInfo.fastMode)}`);
         return;
       }
       const reset = isSessionDefaultDirectiveValue(args);
@@ -838,7 +835,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       // local run ids are not a complete stop target inventory.
       await abortActive({ preferActive: true });
     },
-    settings: () => openSettings(),
+    settings: openSettings,
     question: async () => {
       if (context.reopenQuestion) {
         await context.reopenQuestion();
@@ -879,6 +876,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
+    const forgetRunId = isBtw ? forgetLocalBtwRunId : forgetLocalRunId;
     if (isSlashStopCommand(text) || (hasTrackedAbortTarget() && isChatStopCommandText(text))) {
       await abortActive({ preferActive: true });
       return;
@@ -932,16 +930,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const terminalAckFailure = terminalAckStatus === "timeout" || terminalAckStatus === "error";
       const terminalAck = terminalAckStatus !== undefined;
       if (!isCurrentSendViewport()) {
-        if (isBtw) {
-          forgetLocalBtwRunId?.(runId);
-          if (acceptedRunId !== runId) {
-            forgetLocalBtwRunId?.(acceptedRunId);
-          }
-        } else {
-          forgetLocalRunId?.(runId);
-          if (acceptedRunId !== runId) {
-            forgetLocalRunId?.(acceptedRunId);
-          }
+        forgetRunId?.(runId);
+        if (acceptedRunId !== runId) {
+          forgetRunId?.(acceptedRunId);
+        }
+        if (!isBtw) {
           clearPendingSubmit(state, runId);
           clearPendingSubmit(state, acceptedRunId);
           consumeCompletedRunForPendingSend?.(acceptedRunId);
@@ -1038,11 +1031,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
       }
     } catch (err) {
-      if (isBtw) {
-        forgetLocalBtwRunId?.(runId);
-      } else {
-        forgetLocalRunId?.(runId);
-      }
+      forgetRunId?.(runId);
       if (!isCurrentSendViewport()) {
         clearPendingSubmit(state, runId);
         return;

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import { decodeNodeInvokeParams } from "./invoke-payload.js";
 
 const MAX_ARG_COUNT = 128;
 const MAX_ARG_BYTES = 1024 * 1024;
@@ -130,17 +131,6 @@ export type ClaudeCliNodeRunResult = {
   timeoutKind?: "hard" | "idle";
 };
 
-function decodeJson(raw?: string | null): unknown {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
-  }
-}
-
 function requireBoundedString(value: unknown, label: string, maxBytes: number): string {
   if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maxBytes) {
     throw new Error(`INVALID_REQUEST: ${label} must be a bounded string`);
@@ -174,37 +164,25 @@ function validateArgs(value: unknown): string[] {
     if (!VALUE_ARGS.has(name)) {
       throw new Error(`INVALID_REQUEST: unsupported Claude CLI argument: ${arg || "<empty>"}`);
     }
-    if (equalsIndex > 0) {
-      const inlineValue = arg.slice(equalsIndex + 1);
-      if (!inlineValue || inlineValue.startsWith("-")) {
-        throw new Error(
-          `INVALID_REQUEST: Claude CLI argument requires a non-option value: ${name}`,
-        );
-      }
-      if (name === "--permission-mode" && inlineValue === "bypassPermissions") {
-        throw new Error("INVALID_REQUEST: bypassPermissions is not allowed for node agent runs");
-      }
-      continue;
-    }
-    if (index + 1 >= args.length) {
+    if (equalsIndex < 0 && index + 1 >= args.length) {
       throw new Error(`INVALID_REQUEST: Claude CLI argument requires a value: ${name}`);
     }
-    if (args[index + 1]?.startsWith("-")) {
+    const argumentValue = equalsIndex > 0 ? arg.slice(equalsIndex + 1) : args[++index]!;
+    if ((equalsIndex > 0 && !argumentValue) || argumentValue.startsWith("-")) {
       throw new Error(`INVALID_REQUEST: Claude CLI argument requires a non-option value: ${name}`);
     }
-    if (name === "--permission-mode" && args[index + 1] === "bypassPermissions") {
+    if (name === "--permission-mode" && argumentValue === "bypassPermissions") {
       throw new Error("INVALID_REQUEST: bypassPermissions is not allowed for node agent runs");
     }
-    index += 1;
   }
   return args;
 }
 
 function validateTimeout(value: unknown, label: string, min: number, max: number): number {
-  if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
     throw new Error(`INVALID_REQUEST: ${label} must be an integer from ${min} to ${max}`);
   }
-  return value as number;
+  return value;
 }
 
 /** Select framing before the command handler validates the complete narrow request. */
@@ -226,7 +204,7 @@ export async function decodeClaudeCliNodeRunParams(
   if (Buffer.byteLength(raw ?? "", "utf8") > MAX_REQUEST_BYTES) {
     throw new Error("INVALID_REQUEST: Claude CLI request is too large");
   }
-  const value = asRecord(decodeJson(raw));
+  const value = asRecord(decodeNodeInvokeParams<unknown>(raw));
   if (!value) {
     throw new Error("INVALID_REQUEST: Claude CLI params must be an object");
   }

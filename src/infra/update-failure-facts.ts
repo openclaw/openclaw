@@ -21,7 +21,7 @@ import {
   readErrorName,
 } from "./errors.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { isPublicUpdateFailureCode } from "./update-failure-public-identifiers.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import {
   UpdateDestinationFailureSchema,
   type UpdateFailureFactSchema,

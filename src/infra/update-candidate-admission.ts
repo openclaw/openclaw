@@ -152,7 +152,7 @@ export async function runUpdateCandidateAdmission(params: {
         } finally {
           await terminateCanary(running.child, running.closed, deadline);
         }
-        const diagnostic = running.firstStderrLine();
+        const diagnostic = running.stderrDiagnostic();
         if (outcome.status !== "completed") {
           return fallback("timeout", diagnostic);
         }

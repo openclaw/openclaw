@@ -29,23 +29,22 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
 export type CodexBootstrapFile = Awaited<
   ReturnType<typeof prepareAgentWorkspaceContext>
 >["bootstrapFiles"][number];
-type CodexBootstrapContext = {
+export type CodexWorkspaceBootstrapContext = {
   bootstrapFiles: CodexBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
-};
-export type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
-  turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
+  personaFiles?: EmbeddedContextFile[];
   memoryReferenceFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolNames?: string[];
   memoryToolRouted?: boolean;
   promptContext?: string;
   threadDeveloperInstructions?: string;
-  turnScopedDeveloperInstructions?: string;
-  memoryCollaborationInstructions?: string;
+  personaInstructions?: string;
+  sharedPersonaInstructions?: string;
+  memoryInstructions?: string;
 };
 
 /** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
@@ -57,7 +56,7 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
   workspaceDir: string;
   cwd: string;
 }): Promise<string | undefined> {
-  if (isSameCodexWorkspacePath(params.workspaceDir, params.cwd)) {
+  if (path.resolve(params.workspaceDir) === path.resolve(params.cwd)) {
     return undefined;
   }
   const files = await resolveBootstrapFilesForPreparation(params);
@@ -149,14 +148,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const threadDeveloperInstructionFiles = includeAgentWorkspaceInstructions
       ? prepared.instructionSnapshot.files
       : [];
-    const turnScopedDeveloperInstructionFiles = injectOpenClawContext ? prepared.personaFiles : [];
+    const personaFiles = injectOpenClawContext ? prepared.personaFiles : [];
     return {
       bootstrapFiles,
       contextFiles,
       inheritsAgentWorkspace,
       promptContextFiles,
       threadDeveloperInstructionFiles,
-      turnScopedDeveloperInstructionFiles,
+      personaFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
       memoryToolNames,
@@ -166,11 +165,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
         : undefined,
-      turnScopedDeveloperInstructions: injectOpenClawContext
-        ? prepared.personaInstructions
+      personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
+      sharedPersonaInstructions: injectOpenClawContext
+        ? prepared.sharedPersonaInstructions
         : undefined,
-      memoryCollaborationInstructions: injectOpenClawContext
-        ? renderCodexWorkspaceMemoryCollaborationInstructions({
+      memoryInstructions: injectOpenClawContext
+        ? renderCodexWorkspaceMemoryInstructions({
             files: memoryReferenceFiles,
             toolNames: memoryToolNames,
             memoryRecallInstructions: prepared.memoryRecallInstructions,
@@ -232,7 +232,7 @@ function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+function renderCodexWorkspaceMemoryInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryRecallInstructions?: string;
@@ -257,10 +257,6 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
     return undefined;
   }
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
-}
-
-function isSameCodexWorkspacePath(left: string, right: string): boolean {
-  return path.resolve(left) === path.resolve(right);
 }
 
 /**

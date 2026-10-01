@@ -539,7 +539,7 @@ describe("Windows startup fallback", () => {
     expect(startupScript).toContain("gateway.cmd");
     expectStartupFallbackSpawn();
     expect(childUnref).toHaveBeenCalled();
-    const printed = String(stdout.read());
+    const printed = String(stdout.read(stdout.readableLength));
     expect(printed).toContain("Installed Windows login item");
   });
 
@@ -575,7 +575,7 @@ describe("Windows startup fallback", () => {
 
     await expect(fs.access(startupEntryPath)).rejects.toThrow();
     await expect(fs.access(hiddenStartupEntryPath)).rejects.toThrow();
-    const printed = String(stdout.read());
+    const printed = String(stdout.read(stdout.readableLength));
     expect(printed).toContain("Installed Scheduled Task");
     expect(printed).toContain("Removed Windows login item");
   });
@@ -609,7 +609,7 @@ describe("Windows startup fallback", () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(schtasksResponses).toEqual([]);
     expect(sleepMock.mock.calls).toEqual([[250], [250]]);
-    const printed = String(stdout.read());
+    const printed = String(stdout.read(stdout.readableLength));
     expect(printed).toContain("Restarted Scheduled Task");
     expect(printed).not.toContain("Removed Windows login item");
     await expect(fs.access(startupEntryPath)).rejects.toThrow();

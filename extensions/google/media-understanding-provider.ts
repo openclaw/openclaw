@@ -16,10 +16,8 @@ import {
   createGoogleMediaUnderstandingProviderMetadata,
   GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS,
 } from "./generation-provider-metadata.js";
-import {
-  normalizeGoogleModelId,
-  resolveGoogleGenerativeAiHttpRequestConfig,
-} from "./runtime-api.js";
+import { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
+import { normalizeGoogleModelId } from "./model-id.js";
 
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
 const DEFAULT_GOOGLE_VIDEO_PROMPT = "Describe the video.";

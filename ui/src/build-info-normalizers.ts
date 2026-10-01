@@ -45,15 +45,9 @@ function normalizeControlUiBuildId(value: unknown): string {
 }
 
 function deriveControlUiBuildId(info: ControlUiBuildMetadata): string {
-  const identity = [
-    info.version,
-    info.release ? "release" : null,
-    info.commit?.slice(0, 12),
-    info.builtAt,
-  ]
+  return [info.version, info.release ? "release" : null, info.commit?.slice(0, 12), info.builtAt]
     .filter((value): value is string => Boolean(value))
     .join("-");
-  return normalizeControlUiBuildId(identity);
 }
 
 export function normalizeControlUiBuildInfo(value: unknown): ControlUiBuildInfo {

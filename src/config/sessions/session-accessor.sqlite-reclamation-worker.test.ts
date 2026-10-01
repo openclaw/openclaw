@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -10,6 +12,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.j
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -25,12 +28,11 @@ import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
-import {
-  createSessionEntryReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { createSessionEntryReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -138,6 +140,53 @@ test("retains one Worker across twenty admission refusals and interleaved reclam
     }
   });
 });
+
+test.each(["path", "root"] as const)(
+  "retires a retained Worker by the symlinked %s its requester used",
+  async (retirement) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const link = path.join(state.root, "state-link");
+      const stateDir = expectDefined(state.env.OPENCLAW_STATE_DIR, "test state directory");
+      await fs.symlink(stateDir, link, process.platform === "win32" ? "junction" : "dir");
+      // The Worker runs at the physical path; cleanup selects the lexical path the caller used.
+      const options = { agentId: "main", env: { ...state.env, OPENCLAW_STATE_DIR: link } };
+      const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
+      const scope = { ...options, sessionId: "linked", sessionKey: "agent:main:linked" };
+      ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const entry = loadSessionEntry(scope);
+      assert.ok(entry);
+      const spawned: Worker[] = [];
+      const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
+        const worker = create(data);
+        spawned.push(worker);
+        return worker;
+      });
+      try {
+        await runSqliteSessionReclamation({
+          forceInProcess: false,
+          plan: createSessionEntryReclamationPlan({
+            databaseOptions,
+            deleteParams: {
+              archiveTranscript: false,
+              storePath: databaseOptions.path,
+              target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+            },
+            preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
+            materializedPlans: [],
+          }),
+        });
+        expect(spawned).toHaveLength(1);
+        await (retirement === "path"
+          ? closeOpenClawAgentDatabaseByPathAsync(databaseOptions.path)
+          : closeOpenClawAgentDatabasesAsync(link));
+        expect(spawned[0]?.threadId).toBe(-1);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+  },
+);
 
 test("binds first shared-state creation without host SQL and reuses reclamation until thirty idle minutes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -438,8 +487,8 @@ test.each(["active key", "provider"] as const)(
         const runs: Promise<unknown>[] = [];
         const firstRun = createDeferredCore();
         let armed = false;
-        const run = reclamation.runSqliteSessionReclamation;
-        vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) => {
+        const run = reclamationRun.runSqliteSessionReclamation;
+        vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) => {
           armed =
             params.plan.kind === "maintenance-plan" && params.plan.input.preservation !== null;
           const operation = run(params);

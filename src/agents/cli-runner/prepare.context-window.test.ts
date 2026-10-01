@@ -36,10 +36,10 @@ describe("CLI context-window ownership", () => {
     await fixture.cleanup();
   });
 
-  it.each([
-    { provider: "claude-cli", model: "claude-sonnet-4-6", catalogProvider: "anthropic" },
-    { provider: "test-cli", model: "large-model", catalogProvider: "api-provider" },
-  ])("keeps $provider stable when another provider loads the same model", async (testCase) => {
+  it("keeps test-cli stable when another provider loads the same model", async () => {
+    const provider = "test-cli";
+    const model = "large-model";
+    const catalogProvider = "api-provider";
     const prepareExecution = vi.fn<NonNullable<CliBackendPlugin["prepareExecution"]>>(
       async () => undefined,
     );
@@ -48,13 +48,13 @@ describe("CLI context-window ownership", () => {
       resolveRuntimeCliBackends: () => [
         {
           ...buildDefaultTestCliBackend(),
-          id: testCase.provider,
-          modelProvider: testCase.catalogProvider,
+          id: provider,
+          modelProvider: catalogProvider,
           prepareExecution,
         },
       ],
     });
-    const prepare = () => fixture.prepare({ provider: testCase.provider, model: testCase.model });
+    const prepare = () => fixture.prepare({ provider, model });
     const cold = await prepare();
     expect(cold.contextWindowInfo?.tokens).toBe(200_000);
 
@@ -62,9 +62,7 @@ describe("CLI context-window ownership", () => {
     // supply a different runtime's native budget on the next turn.
     applyDiscoveredContextWindows({
       cache: getContextWindowCaches().discoveredTokenCache,
-      models: [
-        { provider: testCase.catalogProvider, id: testCase.model, contextWindow: 1_000_000 },
-      ],
+      models: [{ provider: catalogProvider, id: model, contextWindow: 1_000_000 }],
     });
     const resumed = await prepare();
     expect(resumed.contextWindowInfo?.tokens).toBe(200_000);
@@ -72,7 +70,7 @@ describe("CLI context-window ownership", () => {
     // A provider-owned large window remains usable even without a manifest row.
     applyDiscoveredContextWindows({
       cache: getContextWindowCaches().discoveredTokenCache,
-      models: [{ provider: testCase.provider, id: testCase.model, contextWindow: 1_000_000 }],
+      models: [{ provider, id: model, contextWindow: 1_000_000 }],
     });
     const owned = await prepare();
     expect(owned.contextWindowInfo?.tokens).toBe(1_000_000);

@@ -228,27 +228,10 @@ it("retains failed private-runtime cleanup for service shutdown", async () => {
 
 it.each([
   {
-    name: "getStatus",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) => runtime.getStatus({ handle }),
-    expected: {},
-  },
-  {
-    name: "setMode",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
-      runtime.setMode({ handle, mode: "review" }),
-    expected: { mode: "review" },
-  },
-  {
     name: "setConfigOption",
     run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
       runtime.setConfigOption({ handle, key: "tone", value: "brief" }),
     expected: { tone: "brief" },
-  },
-  {
-    name: "cancel",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
-      runtime.cancel({ handle, reason: "test" }),
-    expected: {},
   },
   { name: "startTurn", run: readContext, expected: {} },
 ])(

@@ -1,4 +1,3 @@
-// Featherless model catalog helpers derive their values from the plugin manifest.
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelCompatConfig,

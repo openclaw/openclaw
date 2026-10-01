@@ -67,9 +67,6 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
-  if (!relative || relative === "") {
-    return { resolved, relative: "" };
-  }
   if (
     relative === ".." ||
     relative.startsWith("../") ||
@@ -370,9 +367,6 @@ function mapContainerWorkspacePath(params: {
     return undefined;
   }
   const rel = normalized.slice(prefix.length);
-  if (!rel) {
-    return path.resolve(params.sandboxRoot);
-  }
   return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
 }
 

@@ -227,60 +227,24 @@ const structuralContextLabelValues = [NEEDS_PR_CONTEXT_LABEL, skillCloseLabel];
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
-const candidateActionRules = [
-  {
-    label: candidateLabels.needsPrContext,
-    close: true,
-    message:
-      "Closing this PR because its body lacks a clear problem statement or evidence. Please reopen or resubmit with the user, product, or operational problem and the most useful validation evidence, such as a focused test, CI result, screenshot, recording, terminal output, log, or artifact.",
-  },
-  {
-    label: candidateLabels.dirtyCandidate,
-    close: true,
-    message: noisyPrMessage,
-  },
-  {
-    label: candidateLabels.externalPluginCandidate,
-    close: true,
-    message: thirdPartyExtensionMessage,
-  },
-  {
-    label: candidateLabels.riskyInfra,
-    close: true,
-    message:
-      "Closing this PR because it changes infra/CI/release/ops plumbing without maintainer context and validation. That surface is high-blast-radius; open an issue/RFC or get owner approval before sending a patch.",
-  },
-  {
-    label: candidateLabels.docsDiscoverability,
-    close: true,
-    message:
-      "Closing this PR because docs discoverability and community-plugin listing changes should go through ClawHub or a maintainer-owned docs plan, not drive-by core churn.",
-  },
-  {
-    label: candidateLabels.lowSignalDocs,
-    close: true,
-    message:
-      "Closing this PR because the docs-only change is too low-signal for the core repo. Please reopen or resubmit with a concrete OpenClaw docs gap and linked context.",
-  },
-  {
-    label: candidateLabels.testOnlyNoBug,
-    close: true,
-    message:
-      "Closing this PR because it only changes tests without a linked bug, owner request, or behavior change. Test-only PRs need a concrete regression or maintainer-requested gap.",
-  },
-  {
-    label: candidateLabels.refactorOnly,
-    close: true,
-    message:
-      "Closing this PR because it is refactor/cleanup-only without maintainer context. We avoid churn in core unless it unlocks a concrete fix, architecture change, or owned cleanup.",
-  },
-  {
-    label: candidateLabels.blankTemplate,
-    close: true,
-    message:
-      "Closing this PR because the template is mostly blank and does not describe a concrete OpenClaw problem, fix, or test plan. Please reopen or resubmit with the missing context filled in.",
-  },
-];
+const candidateActionRules = Object.entries({
+  [candidateLabels.needsPrContext]:
+    "Closing this PR because its body lacks a clear problem statement or evidence. Please reopen or resubmit with the user, product, or operational problem and the most useful validation evidence, such as a focused test, CI result, screenshot, recording, terminal output, log, or artifact.",
+  [candidateLabels.dirtyCandidate]: noisyPrMessage,
+  [candidateLabels.externalPluginCandidate]: thirdPartyExtensionMessage,
+  [candidateLabels.riskyInfra]:
+    "Closing this PR because it changes infra/CI/release/ops plumbing without maintainer context and validation. That surface is high-blast-radius; open an issue/RFC or get owner approval before sending a patch.",
+  [candidateLabels.docsDiscoverability]:
+    "Closing this PR because docs discoverability and community-plugin listing changes should go through ClawHub or a maintainer-owned docs plan, not drive-by core churn.",
+  [candidateLabels.lowSignalDocs]:
+    "Closing this PR because the docs-only change is too low-signal for the core repo. Please reopen or resubmit with a concrete OpenClaw docs gap and linked context.",
+  [candidateLabels.testOnlyNoBug]:
+    "Closing this PR because it only changes tests without a linked bug, owner request, or behavior change. Test-only PRs need a concrete regression or maintainer-requested gap.",
+  [candidateLabels.refactorOnly]:
+    "Closing this PR because it is refactor/cleanup-only without maintainer context. We avoid churn in core unless it unlocks a concrete fix, architecture change, or owned cleanup.",
+  [candidateLabels.blankTemplate]:
+    "Closing this PR because the template is mostly blank and does not describe a concrete OpenClaw problem, fix, or test plan. Please reopen or resubmit with the missing context filled in.",
+}).map(([label, message]) => ({ label, message, close: true }));
 
 const normalizeLogin = (login) => login.toLowerCase();
 const automationPrHeadPrefixes = ["clawsweeper/", "clownfish/"];
@@ -462,30 +426,17 @@ function isStandaloneSkillSubmission(files) {
 }
 
 function surfacesForFile(filename) {
-  const surfaces = new Set();
-  if (/\.generated\/|generated|\.snap$/i.test(filename)) {
-    surfaces.add("generated");
-  }
-  if (filename.startsWith("ui/")) {
-    surfaces.add("ui");
-  } else if (filename.startsWith("src/gateway/")) {
-    surfaces.add("src/gateway");
-  } else if (filename.startsWith("src/plugins/")) {
-    surfaces.add("src/plugins");
-  } else if (filename.startsWith("extensions/")) {
-    surfaces.add("extensions");
-  } else if (filename.startsWith("apps/")) {
-    surfaces.add("apps");
-  } else if (filename.startsWith(".github/")) {
-    surfaces.add(".github");
-  } else if (filename.startsWith("docs/") || /\.mdx?$/i.test(filename)) {
-    surfaces.add("docs");
-  } else if (filename.startsWith("scripts/")) {
-    surfaces.add("scripts");
-  } else {
-    surfaces.add("other");
-  }
-  return [...surfaces];
+  const prefix = ["ui", "src/gateway", "src/plugins", "extensions", "apps", ".github"].find(
+    (surface) => filename.startsWith(`${surface}/`),
+  );
+  const surface =
+    prefix ??
+    (filename.startsWith("docs/") || /\.mdx?$/i.test(filename)
+      ? "docs"
+      : filename.startsWith("scripts/")
+        ? "scripts"
+        : "other");
+  return /\.generated\/|generated|\.snap$/i.test(filename) ? ["generated", surface] : [surface];
 }
 
 export function classifyPullRequestCandidateLabels(pullRequest, files) {

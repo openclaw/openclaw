@@ -34,6 +34,7 @@ export function nextApnsRegistrationVersion(
 export function clearApnsRegistrationFromDatabase(
   db: OpenClawStateDatabase["db"],
   nodeId: string,
+  nowMs = Date.now(),
 ): boolean {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
@@ -57,7 +58,7 @@ export function clearApnsRegistrationFromDatabase(
   const previousVersions = [currentRow?.updated_at_ms, tombstone?.deleted_at_ms].filter(
     (version): version is number => version !== undefined,
   );
-  const deletedAtMs = nextApnsRegistrationVersion(normalizedNodeId, previousVersions);
+  const deletedAtMs = nextApnsRegistrationVersion(normalizedNodeId, previousVersions, nowMs);
   // Tombstone even an empty row so a retired source cannot restore ownership.
   executeSqliteQuerySync(
     db,

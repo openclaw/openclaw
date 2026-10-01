@@ -10,6 +10,7 @@ import {
   stringFlag,
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
+import { sleep as delay } from "./lib/sleep.mjs";
 
 type Options = {
   beta: string;
@@ -300,12 +301,7 @@ export async function pollRun(
   const started = (options.now ?? Date.now)();
   const timeoutMs = Math.max(1, options.timeoutMs ?? TELEGRAM_POLL_TIMEOUT_MS);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? TELEGRAM_POLL_INTERVAL_MS);
-  const sleep =
-    options.sleep ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = options.sleep ?? delay;
   const readRun =
     options.readRun ??
     ((currentRepo: string, currentRunId: string) =>

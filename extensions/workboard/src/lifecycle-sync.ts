@@ -442,6 +442,7 @@ export function createWorkboardLifecycleService(params: {
   readSessions: (
     options: WorkboardLifecycleSessionReadOptions,
   ) => Promise<WorkboardLifecycleSessionSnapshot>;
+  onSweep?: () => void;
   now?: () => number;
 }): WorkboardLifecycleService {
   let generation = 0;
@@ -510,6 +511,9 @@ export function createWorkboardLifecycleService(params: {
       const reconcile = async () => {
         try {
           await params.store.runOperation(async () => {
+            if (generation === owner) {
+              params.onSweep?.();
+            }
             let cards = await params.store.list();
             if (generation !== owner) {
               return;

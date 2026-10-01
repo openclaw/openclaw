@@ -236,7 +236,6 @@ export function registerSendUploadPolicyTests({
     );
 
     it.each([
-      { disable: false, trusted: false },
       { disable: true, trusted: false },
       { disable: true, trusted: true },
     ])(

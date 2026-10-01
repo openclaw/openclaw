@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { toQaError } from "../errors.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import {
   type CommandRunner,
   type CrabboxInspect,
@@ -92,7 +92,6 @@ const DEFAULT_PROVIDER = "hetzner";
 const DEFAULT_DURATION = "180s";
 const DEFAULT_SETTLE_MS = 8000;
 const DEFAULT_VISION_TIMEOUT_MS = 120000;
-const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
 const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 
@@ -391,7 +390,6 @@ export async function runMantisVisualDriver(
   const screenshotPath = path.join(outputDir, "visual-task.png");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });
@@ -538,7 +536,6 @@ export async function runMantisVisualTask(
   const videoPath = path.join(outputDir, "visual-task.mp4");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });
@@ -564,7 +561,25 @@ export async function runMantisVisualTask(
     runner,
   });
   let inspected: CrabboxInspect = {};
-  let summary: MantisVisualTaskSummary | undefined;
+  const summary: MantisVisualTaskSummary = {
+    artifacts: {
+      driverResultPath,
+      reportPath,
+      screenshotPath: undefined,
+      summaryPath,
+      videoPath: undefined,
+    },
+    browserUrl,
+    crabbox: session.describe(inspected),
+    driver: undefined,
+    error: undefined,
+    finishedAt: startedAt.toISOString(),
+    outputDir,
+    recording: { error: undefined, required: true },
+    startedAt: startedAt.toISOString(),
+    status: "fail",
+    visionMode,
+  };
 
   try {
     const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
@@ -624,73 +639,35 @@ export async function runMantisVisualTask(
       recordingError ??
       (copiedVideo ? undefined : "Mantis visual task recording did not produce visual-task.mp4.");
     const status = driver.status === "pass" && !recordingFailure ? "pass" : "fail";
-    summary = {
-      artifacts: {
-        driverResultPath,
-        reportPath,
-        screenshotPath: copiedScreenshot,
-        summaryPath,
-        videoPath: copiedVideo,
-      },
-      browserUrl,
-      crabbox: session.describe(inspected),
-      driver,
-      error: recordingFailure,
-      finishedAt: new Date().toISOString(),
-      outputDir,
-      recording: {
-        error: recordingFailure,
-        required: true,
-      },
-      startedAt: startedAt.toISOString(),
-      status,
-      visionMode,
-    };
-    return {
-      outputDir,
-      reportPath,
-      screenshotPath: copiedScreenshot,
-      status,
-      summaryPath,
-      videoPath: copiedVideo,
-    };
+    summary.artifacts.screenshotPath = copiedScreenshot;
+    summary.artifacts.videoPath = copiedVideo;
+    summary.crabbox = session.describe(inspected);
+    summary.driver = driver;
+    summary.error = recordingFailure;
+    summary.recording.error = recordingFailure;
+    summary.status = status;
   } catch (error) {
-    summary = {
-      artifacts: {
-        driverResultPath,
-        reportPath,
-        summaryPath,
-        videoPath: (await pathExists(videoPath)) ? videoPath : undefined,
-      },
-      browserUrl,
-      crabbox: session.describe(inspected),
-      error: formatErrorMessage(error),
-      finishedAt: new Date().toISOString(),
-      outputDir,
-      recording: {
-        error: (await nonEmptyFileExists(videoPath)) ? undefined : "visual-task.mp4 missing",
-        required: true,
-      },
-      startedAt: startedAt.toISOString(),
-      status: "fail",
-      visionMode,
-    };
+    summary.artifacts.videoPath = (await pathExists(videoPath)) ? videoPath : undefined;
+    summary.crabbox = session.describe(inspected);
+    summary.error = formatErrorMessage(error);
+    summary.recording.error = (await nonEmptyFileExists(videoPath))
+      ? undefined
+      : "visual-task.mp4 missing";
     await fs.writeFile(path.join(outputDir, "error.txt"), `${summary.error}\n`, "utf8");
-    return {
-      outputDir,
-      reportPath,
-      status: "fail",
-      summaryPath,
-      videoPath: summary.artifacts.videoPath,
-    };
   } finally {
-    if (summary) {
-      summary.finishedAt = new Date().toISOString();
-      await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-      await fs.writeFile(reportPath, renderReport(summary), "utf8");
-    }
-    if (summary?.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
+    summary.finishedAt = new Date().toISOString();
+    await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+    await fs.writeFile(reportPath, renderReport(summary), "utf8");
+    if (summary.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
       await session.stop();
     }
   }
+  return {
+    outputDir,
+    reportPath,
+    ...(summary.driver !== undefined ? { screenshotPath: summary.artifacts.screenshotPath } : {}),
+    status: summary.status,
+    summaryPath,
+    videoPath: summary.artifacts.videoPath,
+  };
 }

@@ -3,7 +3,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createChromeMcpSession,
   setChromeMcpSessionFactoryForTest,
-  waitForChromeMcpPendingSession,
+  waitForChromeMcpOperation,
   waitForChromeMcpReady,
 } from "./chrome-mcp-connect.js";
 import type {
@@ -231,7 +231,7 @@ class ChromeMcpSessionOwner {
       abort();
     }
     try {
-      const session = await waitForChromeMcpPendingSession(pending.promise, options.signal);
+      const session = await waitForChromeMcpOperation(pending.promise, options.signal);
       await waitForChromeMcpReady(session, this.profileName, options.timeoutMs, options.signal);
       return session;
     } catch (error) {

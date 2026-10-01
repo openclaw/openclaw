@@ -1,4 +1,3 @@
-// Install output helpers format skill installation results for CLI callers.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 

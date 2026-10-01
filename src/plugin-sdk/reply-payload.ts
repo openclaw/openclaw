@@ -407,6 +407,21 @@ export async function sendTextMediaPayload(params: {
   // Reply fanout may be single-use for implicit replies, so resolve it exactly
   // once per platform send rather than copying the initial id into every part.
   const nextReplyToId = createReplyToFanout(params.ctx);
+  const sendAndReport = async (
+    send: (
+      onDeliveryResult: NonNullable<SendPayloadContext["onDeliveryResult"]>,
+    ) => Promise<SendPayloadResult>,
+  ) => {
+    let childReported = false;
+    const result = await send(async (deliveryResult) => {
+      childReported = true;
+      await params.ctx.onDeliveryResult?.(deliveryResult);
+    });
+    if (!childReported) {
+      await params.ctx.onDeliveryResult?.(result);
+    }
+    return result;
+  };
   if (urls.length > 0) {
     const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;
     let hasSent = false;
@@ -414,21 +429,16 @@ export async function sendTextMediaPayload(params: {
       text,
       mediaUrls: urls,
       send: async ({ text: textLocal, mediaUrl }) => {
-        let childReported = false;
-        const result = await params.adapter.sendMedia!({
-          ...params.ctx,
-          text: textLocal,
-          mediaUrl,
-          ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
-          replyToId: nextReplyToId(),
-          onDeliveryResult: async (deliveryResult) => {
-            childReported = true;
-            await params.ctx.onDeliveryResult?.(deliveryResult);
-          },
-        });
-        if (!childReported) {
-          await params.ctx.onDeliveryResult?.(result);
-        }
+        const result = await sendAndReport((onDeliveryResult) =>
+          params.adapter.sendMedia!({
+            ...params.ctx,
+            text: textLocal,
+            mediaUrl,
+            ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
+            replyToId: nextReplyToId(),
+            onDeliveryResult,
+          }),
+        );
         hasSent = true;
         return result;
       },
@@ -448,30 +458,21 @@ export async function sendTextMediaPayload(params: {
   const chunks = resolveTextChunksWithFallback(text, chunkedText);
   let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
   for (const chunk of chunks) {
-    let childReported = false;
-    lastResult = await params.adapter.sendText!({
-      ...params.ctx,
-      text: chunk,
-      replyToId: nextReplyToId(),
-      onDeliveryResult: async (deliveryResult) => {
-        childReported = true;
-        await params.ctx.onDeliveryResult?.(deliveryResult);
-      },
-    });
-    if (!childReported) {
-      await params.ctx.onDeliveryResult?.(lastResult);
-    }
+    lastResult = await sendAndReport((onDeliveryResult) =>
+      params.adapter.sendText!({
+        ...params.ctx,
+        text: chunk,
+        replyToId: nextReplyToId(),
+        onDeliveryResult,
+      }),
+    );
   }
   return lastResult!;
 }
 
 /** Detect numeric-looking target ids for channels that distinguish ids from handles. */
 export function isNumericTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^\d{3,}$/.test(trimmed);
+  return /^\d{3,}$/.test(raw.trim());
 }
 
 /** Append attachment links to plain text when the channel cannot send media inline. */

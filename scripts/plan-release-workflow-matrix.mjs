@@ -38,9 +38,10 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-self-upgrade",
     label: "package/update self-upgrade",
-    // Six 3500s first-hop lanes need two waves at npm weight limit 5; the 20m
-    // survivor (weight 3) overlaps. 2 x 3500s + 10m setup/artifacts ~= 127m => 130m.
-    timeout_minutes: 130,
+    // Each lane runs multiple updates measured at 540-720s each; retain its 3500s budget.
+    // Six weight-2 lanes need three waves at npm limit 5. Budget the weight-3 survivor
+    // separately despite overlap: 3 x 3500s + 20m survivor + 10m setup/artifacts = 205m.
+    timeout_minutes: 210,
     profiles: "beta minimum stable full",
   },
   {

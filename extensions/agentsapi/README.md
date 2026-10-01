@@ -1,8 +1,16 @@
 # Agents API harness
 
-The `agentsapi` harness uses API-key authentication and defaults to an OpenAI-hosted
-Linux environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
-`agentRuntime.id`. See the [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
+The `agentsapi` harness runs commands and file operations in an OpenAI-hosted Linux
+VM by default, while OpenClaw handles channel messaging and configured Gateway
+tools. It uses OpenAI API-key authentication.
+
+Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
+Enable the `agentsapi` plugin and select it for the model through
+`agents.defaults.models["openai/<model>"].agentRuntime.id: "agentsapi"`.
+Replace `<model>` with a model available to your Agents API project. Enabling the
+plugin alone does not select the runtime. Provider-scoped and per-agent model
+overrides are covered in the
+[harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
@@ -157,10 +165,47 @@ an executor. Input submission has a 60-second HTTP deadline, including any wait
 for the executor to connect. Configure the controller to connect promptly;
 the API's longer connection window does not extend this deadline. Session
 connection events remain visible while it connects.
-Hosted environments support input
-attachments and output file transfers. Self-hosted environments do not support
-file transfers. Gateway function availability follows the configured OpenClaw
-tool policy. Native Agents API apps and connectors are not configured by this
+Hosted environments support input attachments and output file transfers. Each
+turn transfers its admitted original files, including images, to unique hosted
+paths, so later uploads with the same filename keep their own bytes and mapping.
+Inline image preparation does not replace this original-file transfer.
+Hosted input transfer examines at most 50 attachments, with a 5 MiB per-file
+limit and a 10 MiB total limit. Files exceeding these limits are omitted with
+per-turn feedback; supplied text and accepted files still reach the model.
+The model can use available tools that can access the originals or ask for a
+smaller attachment or relevant text when needed content remains inaccessible.
+When a reused hosted environment is disconnected or an upload receives the API's
+explicit dormant-environment conflict, the harness submits the actual user input
+to the same native session with attachment-availability feedback. It omits the
+entire current batch's execution paths, including partial uploads, because native
+recovery can replace the workspace. Earlier files do not establish the contents
+of new attachments. The native service owns recovery; OpenClaw does not send a
+wake-up message or create a replacement session. Other upload errors still fail
+the attempt.
+Self-hosted input attachments use the
+registered workspace provider's existing staging service. It prepares admitted
+originals on the executor workspace and returns execution-only paths without
+changing their Gateway media references or transcript provenance. Admission
+requires a completed preparation result for every attachment; one unavailable
+file stops the request with an error. The harness does not infer availability
+from a path in the prompt. Repeated preparation reuses the same owned staging
+files. A self-hosted deployment without this provider must configure it or use
+an OpenAI-hosted environment for attachments. This does not add native image
+input or automatic self-hosted output transfer. See the
+[official files guide](https://developers.openai.com/api/docs/guides/agents-api/environments/files).
+Inline images, including rendered document pages, do not abort the turn. The
+harness tells the model that inline images were omitted so it can use supplied
+text or inspect prepared original attachments with its tools. If no originals
+have confirmed execution paths, the notice says so. Image-bearing steering follows the existing
+queue policy and is handled as a follow-up turn with its complete input.
+New native sessions also receive a system instruction describing the inline-image
+restriction and alternatives. Existing sessions retain their original system
+instructions, so the per-turn feedback remains necessary. System instructions
+guide model planning; they do not prevent host-side attachment preprocessing.
+Gateway sandbox placement is a separate unsupported configuration and produces
+a specific preflight error without retrying other models on the same harness.
+Gateway function availability follows the configured OpenClaw tool policy.
+Native Agents API apps and connectors are not configured by this
 plugin, and the Gateway image-generation tool is not exposed.
 
 For self-hosted sessions, `hostExecutorSkillDirectories` lists absolute paths on

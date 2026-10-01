@@ -13,6 +13,7 @@ import {
   createUpdateFailureFact,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
+import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -42,6 +43,7 @@ import {
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
 } from "./update-command-result.js";
+import type { ManagedGatewayUpdateVerdict } from "./update-command-service-context-types.js";
 import { UpdateFinalizationOutput } from "./update-finalization-output.js";
 import { inspectUpdateFinalizationChildren } from "./update-finalization-processes.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
@@ -71,6 +73,8 @@ export class UpdateFinalizationLifecycle {
     outcome: Outcome;
   }[] = [];
   root?: string;
+  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
+  handoff?: ManagedHandoffRepair;
   private runId?: string;
   private driver?: UpdateRunDriver;
   private ledgerOptions?: { env: NodeJS.ProcessEnv };
@@ -78,7 +82,7 @@ export class UpdateFinalizationLifecycle {
   private warnedHeartbeat = false;
   private deferredExitWatch?: () => void;
   completed = false;
-  private active?: { phase: Phase; step: string; startedAtMs: number };
+  private active?: { step: string; startedAtMs: number };
   private stateBudgetMs: number | undefined;
   private reportTimeout?: () => void;
   private failureObservation?: UpdateRunResult;
@@ -104,6 +108,7 @@ export class UpdateFinalizationLifecycle {
     ).runId;
     this.ownsRun = !inherited;
     adoptUpdateRun(this.runId, admissionOptions);
+    this.handoff?.bindRun(this.runId);
     if (repair && this.ownsRun) {
       recordUpdateRunRepairContinuation(this.runId, this.runId, admissionOptions);
     }
@@ -142,7 +147,7 @@ export class UpdateFinalizationLifecycle {
   }
 
   private record(
-    active: { phase: Phase; step: string },
+    name: string,
     status: "in_progress" | "completed" | "failed" | "skipped",
     at: number,
     detail?: string,
@@ -150,7 +155,7 @@ export class UpdateFinalizationLifecycle {
     exitCode?: number | null,
   ): void {
     const step = {
-      step: active.step,
+      step: name,
       status,
       ...(detail ? { detail } : {}),
       ...(failureFacts?.length ? { failureFacts } : {}),
@@ -159,7 +164,7 @@ export class UpdateFinalizationLifecycle {
         ? {
             reason:
               failureFacts?.find((fact) => fact.code.trim() && fact.code !== "finalization-failed")
-                ?.code ?? active.step,
+                ?.code ?? name,
           }
         : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
@@ -176,12 +181,7 @@ export class UpdateFinalizationLifecycle {
 
   recordWarnings(warnings: readonly string[], phase: "doctor" | "plugins" = "doctor"): void {
     warnings.forEach((detail, index) => {
-      this.record(
-        { phase, step: `warning:finalize:${phase}:${index}` },
-        "completed",
-        Date.now(),
-        detail,
-      );
+      this.record(`warning:finalize:${phase}:${index}`, "completed", Date.now(), detail);
     });
   }
 
@@ -222,9 +222,9 @@ export class UpdateFinalizationLifecycle {
     // Serial plugin operations keep their own deadlines; their total is not one step.
     const budgetMs =
       phase === "plugins" && this.timeoutMs === undefined ? undefined : this.budget(phase);
-    const active = { phase, step: `finalize:${phase}`, startedAtMs };
+    const active = { step: `finalize:${phase}`, startedAtMs };
     this.active = active;
-    this.record(active, "in_progress", startedAtMs);
+    this.record(active.step, "in_progress", startedAtMs);
     const output = new UpdateFinalizationOutput();
     // Doctor holds the state-lifecycle coordinator while repairing shared state.
     // Keep its parent out of that database; recorded driver liveness still
@@ -260,7 +260,7 @@ export class UpdateFinalizationLifecycle {
         outcome: result,
       });
       this.record(
-        active,
+        active.step,
         result === "failed" ? "failed" : result === "deferred" ? "skipped" : "completed",
         Date.now(),
         detail,
@@ -314,6 +314,7 @@ export class UpdateFinalizationLifecycle {
     const scope: UpdateFinalizationPhase = {
       signal: resolveCommandProcessSignal(deadline.signal) ?? deadline.signal,
       assertCurrent: () => {
+        this.handoff?.assertCurrent();
         deadline.assertCurrent();
         scope.signal.throwIfAborted();
       },
@@ -321,6 +322,7 @@ export class UpdateFinalizationLifecycle {
     try {
       // Service custody must be acquired before cancellation, and restored outside it.
       await withCommandProcessScope(async () => {
+        this.handoff?.assertCurrent();
         await custody?.enter?.();
       });
       // Borrowed invocations do not take over their host's lifetime.
@@ -356,12 +358,7 @@ export class UpdateFinalizationLifecycle {
     } catch (error) {
       const failure = deadline.failure;
       if (failure) {
-        this.record(
-          { phase, step: `warning:finalize:${phase}:deadline` },
-          "completed",
-          Date.now(),
-          failure.message,
-        );
+        this.record(`warning:finalize:${phase}:deadline`, "completed", Date.now(), failure.message);
       }
       const facts = failure
         ? [
@@ -426,6 +423,9 @@ export class UpdateFinalizationLifecycle {
         opts: { json: this.json, run: { runId: this.runId, env } },
         env,
         timeoutMs: this.timeoutMs,
+        serviceUpdateVerdict: this.serviceUpdateVerdict,
+        // Source preparation cannot start a Gateway; only Doctor enters service custody.
+        waitForStartup: this.phaseTimings.some(({ phase }) => phase === "doctor"),
       });
       return this.failureObservation;
     } catch (recoveryError) {

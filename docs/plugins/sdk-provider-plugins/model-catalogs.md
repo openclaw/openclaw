@@ -17,6 +17,8 @@ For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
+Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
+model-version and local quantization suffixes.
 
 ## Live model discovery
 
@@ -75,6 +77,16 @@ successful-observation lifetime as nonempty results. After expiry, ordinary
 catalog reads return retained rows while the existing inventory owner refreshes
 the provider in the background. `ttlMs: 0` still disables response caching and
 does not record an expiry for this renewal path.
+
+A successful authenticated outcome may include private `modelServiceTiers`
+observations: `{ modelId, runtimeId, api, baseUrl, serviceTiers }` rows bound to
+that outcome's `profileId`. Supply only tier IDs explicitly advertised by the
+account's successful response; never copy them from static seeds or native
+fallback catalogs. The host matches the selected profile, model, route, and
+runtime before projecting `serviceTiers` on a public model choice. Account tier
+maps never appear in public `providerOutcomes`. Missing, failed, stale, or
+mismatched observations leave support unknown. This metadata does not authorize
+execution or guarantee upstream fulfillment.
 
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;
@@ -462,3 +474,8 @@ takes precedence over another provider's live key; fields are never mixed
 across accounts. It returns `undefined` when no provider has auth and
 propagates lookup failures. Official plugin releases using this host export
 must require a host version that provides it in their `compat.pluginApi`.
+
+`findNormalizedProviderKey(entries, providerId)` from the private-local
+`openclaw/plugin-sdk/provider-model-metadata` surface returns the first configured
+key whose trimmed, lowercase spelling matches the provider ID. Callers that
+prefer an exact authored key must check that key first.

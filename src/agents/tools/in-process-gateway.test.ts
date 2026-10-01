@@ -33,7 +33,11 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
 vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
 vi.mock("../../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
 
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import {
   bindAgentToolGatewayRequest,
@@ -558,27 +562,52 @@ describe("request-shaped in-process Gateway dispatch", () => {
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
-  it("composes supplied dispatch authority with the caller commit fence", async () => {
-    let current = true;
-    const assertDispatchCurrent = () => {
-      if (!current) {
-        throw new Error("source authority retired");
+  it.each([false, true])(
+    "composes dispatch custody with an admitted caller before child I/O (caller=%s)",
+    async (withCaller) => {
+      let current = true;
+      const childIo = vi.fn();
+      const assertDispatchCurrent = () => {
+        if (!current) {
+          throw new Error("source authority retired");
+        }
+      };
+      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+        current = false;
+        options.sessionMutationCommitGuard();
+        childIo();
+        return { ok: true };
+      });
+      const admission = withCaller
+        ? prepareSystemAgentRunAdmission({}, "dispatch-requester", "main", "dispatch-guard-proof")
+        : undefined;
+      try {
+        const run = () =>
+          callAgentToolGatewayRequest({
+            method: withCaller ? "agent" : "sessions.patch",
+            params: withCaller
+              ? { sessionKey: "agent:main:child", message: "Continue the child task" }
+              : { key: "target", pinned: true },
+            assertDispatchCurrent,
+          });
+        const pending = admission
+          ? withGatewayToolCallerIdentity(
+              createAdmittedGatewayToolCallerIdentity({
+                admittedRunContext: await admission.admit("embedded"),
+                agentId: "main",
+                sessionKey: "agent:main:requester",
+              }),
+              run,
+            )
+          : run();
+        await expect(pending).rejects.toThrow("source authority retired");
+        expect(childIo).not.toHaveBeenCalled();
+        expect(mocks.callGateway).not.toHaveBeenCalled();
+      } finally {
+        admission?.close();
       }
-    };
-    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-      current = false;
-      options.sessionMutationCommitGuard();
-      return { ok: true };
-    });
-    await expect(
-      callAgentToolGatewayRequest({
-        method: "sessions.patch",
-        params: { key: "target", pinned: true },
-        assertDispatchCurrent,
-      }),
-    ).rejects.toThrow("source authority retired");
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it("falls back to the original Gateway request outside the Gateway process", async () => {
     mocks.hasContext = false;

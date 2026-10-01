@@ -32,6 +32,7 @@ import {
   buildConfigureCandidatesForScope,
   buildSecretsConfigurePlan,
   collectConfigureProviderChanges,
+  getSecretProviders,
   hasConfigurePlanChanges,
   type ConfigureCandidate,
 } from "./configure-plan.js";
@@ -84,13 +85,6 @@ function parseOptionalPositiveInt(value: string, max: number): number | undefine
   return parsed;
 }
 
-function getSecretProviders(config: OpenClawConfig): Record<string, SecretProviderConfig> {
-  if (!isRecord(config.secrets?.providers)) {
-    return {};
-  }
-  return config.secrets.providers;
-}
-
 function setSecretProvider(
   config: OpenClawConfig,
   providerAlias: string,
@@ -118,25 +112,13 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
 
   if (isRecord(config.secrets?.defaults)) {
     const defaults = config.secrets.defaults;
-    if (defaults?.env === providerAlias) {
-      delete defaults.env;
+    const sources = ["env", "file", "exec", "store"] as const;
+    for (const source of sources) {
+      if (defaults[source] === providerAlias) {
+        delete defaults[source];
+      }
     }
-    if (defaults?.file === providerAlias) {
-      delete defaults.file;
-    }
-    if (defaults?.exec === providerAlias) {
-      delete defaults.exec;
-    }
-    if (defaults?.store === providerAlias) {
-      delete defaults.store;
-    }
-    if (
-      defaults &&
-      defaults.env === undefined &&
-      defaults.file === undefined &&
-      defaults.exec === undefined &&
-      defaults.store === undefined
-    ) {
+    if (sources.every((source) => defaults[source] === undefined)) {
       delete config.secrets?.defaults;
     }
   }

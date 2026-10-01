@@ -66,6 +66,7 @@ export function isRunnableJob(params: {
   nowMs: number;
   skipAtIfAlreadyRan?: boolean;
   allowCronMissedRunByLastRun?: boolean;
+  activeInProcess?: boolean;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
@@ -74,7 +75,7 @@ export function isRunnableJob(params: {
   if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
     return false;
   }
-  if (hasActiveCronRun(job)) {
+  if (hasActiveCronRun(job, params.activeInProcess)) {
     return false;
   }
   const next = job.state.nextRunAtMs;

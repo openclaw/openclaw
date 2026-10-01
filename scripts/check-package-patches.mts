@@ -4,10 +4,10 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import YAML from "yaml";
 import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
+import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["@openclaw/proxyline@0.3.12", "patches/@openclaw__proxyline@0.3.12.patch"],
@@ -121,9 +121,6 @@ function collectPatchFileViolations(cwd: string, violations: PackagePatchViolati
   }
 }
 
-/**
- * Collects disallowed package patch declarations and patch files.
- */
 export function collectPackagePatchViolations(cwd = process.cwd()) {
   const violations: PackagePatchViolation[] = [];
   collectWorkspacePatchViolations(cwd, violations);
@@ -133,9 +130,6 @@ export function collectPackagePatchViolations(cwd = process.cwd()) {
   return violations;
 }
 
-/**
- * Runs the package patch guard.
- */
 export async function main() {
   const violations = collectPackagePatchViolations();
   if (violations.length === 0) {
@@ -154,9 +148,4 @@ export async function main() {
   process.exitCode = 1;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error: unknown) => {
-    console.error(error);
-    process.exit(1);
-  });
-}
+runAsScript(import.meta.url, main);

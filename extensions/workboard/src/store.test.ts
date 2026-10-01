@@ -270,17 +270,11 @@ describe("WorkboardStore", () => {
     const writerStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
     try {
       const reader = new WorkboardStore(readerStores.cards, {
-        boards: readerStores.boards,
-        subscriptions: readerStores.subscriptions,
-        attachments: readerStores.attachments,
-        ready: readerStores.ready,
+        ...sqliteTestAuxStores(readerStores),
         dataVersion: readerStores.dataVersion,
       });
       const writer = new WorkboardStore(writerStores.cards, {
-        boards: writerStores.boards,
-        subscriptions: writerStores.subscriptions,
-        attachments: writerStores.attachments,
-        ready: writerStores.ready,
+        ...sqliteTestAuxStores(writerStores),
         dataVersion: writerStores.dataVersion,
       });
       const changes = vi.fn();
@@ -470,16 +464,8 @@ describe("WorkboardStore", () => {
       const firstStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
       const secondStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
       const paused = createPausedCardStore(firstStores.cards);
-      const first = new WorkboardStore(paused.store, {
-        boards: firstStores.boards,
-        subscriptions: firstStores.subscriptions,
-        attachments: firstStores.attachments,
-      });
-      const second = new WorkboardStore(secondStores.cards, {
-        boards: secondStores.boards,
-        subscriptions: secondStores.subscriptions,
-        attachments: secondStores.attachments,
-      });
+      const first = new WorkboardStore(paused.store, sqliteTestAuxStores(firstStores));
+      const second = new WorkboardStore(secondStores.cards, sqliteTestAuxStores(secondStores));
       try {
         const sessionKey = "agent:main:dashboard:cas-race";
         const base = await first.create({
@@ -674,11 +660,7 @@ describe("WorkboardStore", () => {
     }
     try {
       const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-      const store = new WorkboardStore(stores.cards, {
-        boards: stores.boards,
-        subscriptions: stores.subscriptions,
-        attachments: stores.attachments,
-      });
+      const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
       const board = await store.upsertBoard({
         id: "planning",
         name: "Planning",
@@ -768,11 +750,10 @@ describe("WorkboardStore", () => {
       rawDb.close();
 
       const reopenedStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-      const reopened = new WorkboardStore(reopenedStores.cards, {
-        boards: reopenedStores.boards,
-        subscriptions: reopenedStores.subscriptions,
-        attachments: reopenedStores.attachments,
-      });
+      const reopened = new WorkboardStore(
+        reopenedStores.cards,
+        sqliteTestAuxStores(reopenedStores),
+      );
 
       expect(await reopened.listBoards()).toMatchObject({
         boards: [
@@ -828,11 +809,7 @@ describe("WorkboardStore", () => {
       let cardId = "";
       const initialStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
       try {
-        const initial = new WorkboardStore(initialStores.cards, {
-          boards: initialStores.boards,
-          subscriptions: initialStores.subscriptions,
-          attachments: initialStores.attachments,
-        });
+        const initial = new WorkboardStore(initialStores.cards, sqliteTestAuxStores(initialStores));
         await initial.upsertBoard({ id: "ops", name: "Ops" });
         const card = await initial.create({ title: "Summarize me", boardId: "ops" });
         cardId = card.id;
@@ -856,11 +833,10 @@ describe("WorkboardStore", () => {
 
       const reopenedStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
       try {
-        const reopened = new WorkboardStore(reopenedStores.cards, {
-          boards: reopenedStores.boards,
-          subscriptions: reopenedStores.subscriptions,
-          attachments: reopenedStores.attachments,
-        });
+        const reopened = new WorkboardStore(
+          reopenedStores.cards,
+          sqliteTestAuxStores(reopenedStores),
+        );
         await expect(reopened.get(cardId)).rejects.toThrow(/missing body/);
         await expect(reopened.listBoards()).resolves.toMatchObject({
           boards: expect.arrayContaining([

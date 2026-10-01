@@ -197,30 +197,16 @@ export async function relocateRuntimeEntry(
   relocations: RuntimeRelocations,
   assertBeforeMutation?: () => void,
 ): Promise<void> {
+  let relocate: typeof relocateRuntimeSymlink | undefined;
   if (kind === "symlink") {
-    await relocateRuntimeSymlink(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
+    relocate = relocateRuntimeSymlink;
   } else if (path.basename(file) === ".modules.yaml") {
-    await relocateModulesManifest(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
+    relocate = relocateModulesManifest;
   } else if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
-    await relocateRuntimeLauncher(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
+    relocate = relocateRuntimeLauncher;
+  }
+  if (relocate) {
+    await relocate(file, sourceFile, destinationFile, relocations, assertBeforeMutation);
   }
 }
 

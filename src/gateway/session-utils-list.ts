@@ -11,7 +11,10 @@ import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-sto
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
+import {
+  SESSIONS_LIST_OWNER_LIMIT,
+  SESSIONS_LIST_TRANSCRIPT_LIMIT,
+} from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
@@ -114,7 +117,9 @@ function buildSessionsListResult(
   // the requested agent when scoped, otherwise the legacy compatibility agent.
   // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
-  const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, opts.agentId);
+  const defaultsAgentId = normalizeAgentId(
+    opts.agentId || (tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID),
+  );
   const preparedDefaultsCatalog =
     modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
   const defaultsCatalog =
@@ -156,15 +161,6 @@ function buildSessionsListResult(
     defaults: policy ? policy.defaults(defaults) : defaults,
     sessions,
   };
-}
-
-function resolveSessionsListDefaultsAgentId(
-  cfg: OpenClawConfig,
-  requestedAgentId?: string,
-): string {
-  return requestedAgentId
-    ? normalizeAgentId(requestedAgentId)
-    : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
 }
 
 type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
@@ -548,7 +544,8 @@ export async function listProjectedSessions(params: {
           if (!record) {
             return [];
           }
-          const includeTranscriptFields = index < 100 + selection.ownerCount;
+          const includeTranscriptFields =
+            index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
           const row = presentation.present(record, {
             includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
             includeLastMessage: opts.includeLastMessage && includeTranscriptFields,

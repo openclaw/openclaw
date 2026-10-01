@@ -1,26 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEventAsync } from "../proxy-capture/runtime.js";
+import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCallbacks,
 } from "./provider-types.js";
 
-// The installed receiver enforces maxPayload; Bun's built-in ws adapter ignores it.
-const require = createRequire(import.meta.url);
-let webSocketConstructor: Promise<typeof WebSocket> | undefined;
-function loadWebSocket(): Promise<typeof WebSocket> {
-  return (webSocketConstructor ??= import(
-    pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href
-  ).then((module: typeof import("ws")) => module.default));
-}
+const loadWebSocket = createLazyRuntimeNamedExport(
+  () => import("../../packages/gateway-client/src/websocket.js"),
+  "WebSocket",
+);
 const WEBSOCKET_OPEN = 1;
 
 // Generic websocket-backed realtime transcription session. Providers supply URL,

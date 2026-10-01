@@ -1,4 +1,3 @@
-// Identifies wrapper commands that can carry hidden command payloads.
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
@@ -100,10 +99,6 @@ export function isEnvAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
 }
 
-function optionName(token: string): string {
-  return parseInlineOptionToken(token).name;
-}
-
 type ParsedCarrierOption = {
   name: string;
   hasInlineValue: boolean;
@@ -191,13 +186,6 @@ function stripSudoEnvAssignmentsFromCommandArgv(
   return index < argv.length ? argv.slice(index) : null;
 }
 
-function findParsedCarrierOption(
-  options: readonly ParsedCarrierOption[],
-  names: ReadonlySet<string>,
-): ParsedCarrierOption | undefined {
-  return options.find((option) => names.has(option.name));
-}
-
 function resolveEnvSplitPayload(
   payload: string,
   trailingArgv: string[],
@@ -254,7 +242,7 @@ export function parseEnvInvocationPrelude(
         return null;
       }
       usesModifiers = true;
-      const splitStringOption = findParsedCarrierOption(option, ENV_SPLIT_STRING_OPTIONS);
+      const splitStringOption = option.find((entry) => ENV_SPLIT_STRING_OPTIONS.has(entry.name));
       if (splitStringOption) {
         const payloadIndex = splitStringOption.inlineValue === undefined ? index + 1 : index;
         const payload = splitStringOption.inlineValue ?? argv[payloadIndex];
@@ -290,8 +278,7 @@ export function envInvocationUsesModifiers(argv: string[]): boolean {
 
 /** Return the argv carried by `env`, including argv reconstructed from `env -S`. */
 export function unwrapEnvInvocation(argv: string[]): string[] | null {
-  const parsed = parseEnvInvocationPrelude(argv);
-  return parsed ? (parsed.splitArgv ?? argv.slice(parsed.commandIndex)) : null;
+  return resolveEnvCarriedArgv(argv);
 }
 
 /** Resolve the command argv behind an `env` carrier, honoring bounded `env -S` recursion. */
@@ -313,7 +300,7 @@ function resolveCommandBuiltinCarriedArgv(argv: string[]): string[] | null {
     if (!token.startsWith("-")) {
       return argv.slice(index);
     }
-    const normalized = optionName(token);
+    const normalized = parseInlineOptionToken(token).name;
     if (COMMAND_QUERY_OPTIONS.has(normalized)) {
       return null;
     }

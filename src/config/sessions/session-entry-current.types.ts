@@ -2,6 +2,8 @@ import type { CapturedSessionEntryReadSource } from "./session-entry-read-source
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  archivedAt?: unknown;
+  repositoryWorkspaceId?: unknown;
   lifecycleRevision?: unknown;
   lifecycleRunId?: unknown;
   activeWriterRunId?: unknown;
@@ -33,3 +35,17 @@ export type SessionEntryCurrentAdmissionFacts = {
   entry: SessionEntryCurrentFacts | undefined;
   domainFacts: unknown;
 };
+
+export type CapturedSessionEntryCurrentRead =
+  | {
+      kind: "file";
+      source: SessionEntryCurrentSource;
+      assertSourceCurrent(this: void): void;
+      readCurrent(): Promise<SessionEntryCurrentFacts | undefined>;
+    }
+  | {
+      kind: "native" | "missing";
+      source?: undefined;
+      assertSourceCurrent(this: void): void;
+      readCurrent(): SessionEntryCurrentFacts | undefined;
+    };

@@ -52,6 +52,7 @@ describe("cronRunEntryMatchesLink", () => {
   const entry = {
     jobId: "job-1",
     runId: "manual:job-1:1787732891668:1",
+    sessionId: "session-1",
     runAtMs: 1_787_732_891_692,
   };
 
@@ -61,6 +62,8 @@ describe("cronRunEntryMatchesLink", () => {
       linked: "manual:job-1:1787732891668:1",
       matches: true,
     },
+    { scenario: "the recorded session id", linked: "session-1", matches: true },
+    { scenario: "a different session id", linked: "session-2", matches: false },
     {
       scenario: "the execution id via the recorded run start",
       linked: "cron:job-1:1787732891692",

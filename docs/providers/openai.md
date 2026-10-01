@@ -135,6 +135,9 @@ working. Each entry points at the page that now holds the content.
 
 ## Related
 
+For hosted execution, file handling, and connected tools in chat, see the
+[Agents API guide](/plugins/agentsapi).
+
 <CardGroup cols={2}>
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.

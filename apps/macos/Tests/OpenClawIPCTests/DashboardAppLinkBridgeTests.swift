@@ -17,39 +17,10 @@ private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// Resumes after WebKit finishes the dashboard load. WebKit publishes `isLoading`
-/// and calls the controller's `didFinish` in the same main-thread turn, so the
-/// controller has settled before the waiting task resumes. No wall-clock deadline:
-/// shared main-actor load in the native suite cannot fail this wait.
-@MainActor
-private final class DashboardLoadCompletion {
-    private let finished = AsyncTestGate()
-    private var sawLoading = false
-
-    func wait(for webView: WKWebView, _ start: () -> Void) async throws {
-        let observation = webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
-            MainActor.assumeIsolated { self?.update(isLoading: webView.isLoading) }
-        }
-        defer { observation.invalidate() }
-        start()
-        await self.finished.wait()
-        try Task.checkCancellation()
-    }
-
-    private func update(isLoading: Bool) {
-        if isLoading {
-            self.sawLoading = true
-        } else if self.sawLoading {
-            self.finished.open()
-        }
-    }
-}
-
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardAppLinkBridgeTests {
-    // Event waits have no deadline of their own; the limit only bounds a lost event.
-    @Test(.timeLimit(.minutes(2)), arguments: ["_self", "_blank"])
+    @Test(arguments: ["_self", "_blank"])
     func `native app-link activation is isolated from page scripts`(_ target: String) async throws {
         let server = try await DashboardHTTPFixture.start(
             html: "<html><body><a id='launch' href='openclaw://dashboard' target='\(target)'>Open</a></body></html>")
@@ -70,9 +41,8 @@ struct DashboardAppLinkBridgeTests {
             recorder,
             contentWorld: DashboardAppLinkMessageHandler.world,
             name: DashboardAppLinkMessageHandler.name)
-        try await DashboardLoadCompletion().wait(for: controller.webView) {
-            controller.show(url: server.url(), auth: auth)
-        }
+        controller.show(url: server.url(), auth: auth)
+        try await DashboardTestWait.document(controller, "app-link document")
         #expect(controller.canDeliverNativeCommands)
         let pageHasHandler = try await controller.webView.callAsyncJavaScript(
             "return typeof window.webkit.messageHandlers.openclawAppLink !== 'undefined';",
