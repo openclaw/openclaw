@@ -64,6 +64,7 @@ function writeJson(name, value) {
 
 function run(name, command, args, allowFailure = false) {
   const started = Date.now();
+  fs.writeFileSync(path.join(artifacts, "phase.txt"), `${name}\n`);
   const out = fs.openSync(path.join(artifacts, `${name}.stdout`), "w");
   const err = fs.openSync(path.join(artifacts, `${name}.stderr`), "w");
   let result;

@@ -918,14 +918,15 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const runBuildArtifacts =
-  runNodeFull &&
-  (changedScopeHasBuildImpact ||
-    runSqliteSessionLifecycle ||
-    runBrowserNativeHost ||
-    runDoctorPluginIndex ||
-    runDiscordComponentProof ||
-    runGatewayWatch ||
-    selectedTuiPty);
+  publishedDriverUpdate ||
+  (runNodeFull &&
+    (changedScopeHasBuildImpact ||
+      runSqliteSessionLifecycle ||
+      runBrowserNativeHost ||
+      runDoctorPluginIndex ||
+      runDiscordComponentProof ||
+      runGatewayWatch ||
+      selectedTuiPty));
 const runControlUiPerformance =
   !releaseFastLane &&
   (runNodeFull || runUiTests) &&

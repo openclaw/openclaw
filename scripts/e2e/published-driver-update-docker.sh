@@ -15,8 +15,10 @@ ARTIFACT_DIR="${2:-$ROOT_DIR/.artifacts/published-driver-update}"
 DRIVER_TAG="${3:-latest}"
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
+printf 'prepare-container\n' > "$ARTIFACT_DIR/phase.txt"
 # The shared image's disposable account owns these synthetic diagnostics.
 chmod a+rwx "$ARTIFACT_DIR"
+chmod a+rw "$ARTIFACT_DIR/phase.txt"
 IMAGE_NAME="$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare

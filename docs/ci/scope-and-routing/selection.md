@@ -37,9 +37,17 @@ in the CI gate summary; they do not provide published-driver proof for that targ
 
 The reusable workflow checks out only `github.sha`, with credentials disabled,
 read-only contents permission, no inherited secrets, and caching off. It cannot
-accept a caller-selected checkout ref in a different cache scope. It builds the
-candidate package with the existing CI artifact profile and validates its tarball.
-The shared bare Docker runner installs the latest stable npm package as the driver and supplies
+accept a caller-selected checkout ref in a different cache scope. The selected
+`build-artifacts` job packages its existing build with the canonical integrity
+check and publishes one candidate tarball. The cell downloads that same-run
+artifact by its immutable ID, verifies its SHA-256, and skips host dependency
+installation and candidate compilation. Successful producer artifacts can be
+reused when only the failed consumer job is rerun.
+
+The cell reserves termination and diagnostic time within its ten-minute budget.
+Its command deadline returns a failed step with the active phase recorded,
+instead of cancelling the workflow through a job-level timeout. The shared bare
+Docker runner installs the latest stable npm package as the driver and supplies
 a disposable OS account for managed-service ownership. It performs one
 managed update with two synthetic agents and isolated state, requiring a
 finished update, the running candidate version, HTTP 200 from `/readyz`, no
