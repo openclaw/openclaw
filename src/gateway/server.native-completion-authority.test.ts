@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
@@ -20,8 +21,24 @@ import {
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "../agents/sessions/agent-session-loop-resource-loader.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { deliverSubagentAnnouncement } from "../agents/subagents/announce/subagent-announce-delivery.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import {
+  prepareRequesterCronAuthority,
+  promoteRequesterCronAuthority,
+  admitRequesterCronAuthorityUserTurn,
+  withRequesterCronAuthority,
+} from "../agents/subagents/requester-cron-authority.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  registerAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+  clearAgentRunContext,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   captureAgentHarnessCompletionCustody,
@@ -32,6 +49,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import * as userTurnTranscript from "../sessions/user-turn-transcript.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -44,7 +62,7 @@ import {
 
 type OwnerChange = "live" | "operator-revoked" | "requester-replaced";
 
-async function createCompletion(context: GatewayRequestContext) {
+async function createCompletion(context: GatewayRequestContext, yieldedFollowup = false) {
   const id = randomUUID();
   const requesterSessionKey = `agent:main:native-completion:${id}`;
   const sessionId = `requester-${id}`;
@@ -83,6 +101,7 @@ async function createCompletion(context: GatewayRequestContext) {
   const root = tryBeginGatewayRootWorkAdmission("test:native-completion")!;
   let custody: AgentHarnessCompletionCustody | undefined;
   const dispose = () => {
+    admitRequesterCronAuthorityUserTurn({ sessionKey: requesterSessionKey });
     custody?.release();
     source.release();
     root.release();
@@ -103,6 +122,97 @@ async function createCompletion(context: GatewayRequestContext) {
       "Expected native completion custody",
     );
     custody = retainedCustody;
+    const originalRunId = `yielded-owner-${id}`;
+    const child: SubagentRunRecord = {
+      runId: `yielded-child-${id}`,
+      childSessionKey,
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: requesterSessionKey,
+      requesterTurnRunId: originalRunId,
+      task: "retained native result",
+      cleanup: "keep",
+      createdAt: 1,
+      execution: { status: "terminal", endedAt: 2 },
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+        batchRunIds: [`yielded-child-${id}`],
+      },
+    };
+    if (yieldedFollowup) {
+      const { operationalRunInstance } = createTestAdmittedRunContext(originalRunId);
+      const approvalAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      registerAgentRunContext(originalRunId, {
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId,
+      });
+      try {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: requesterSessionKey,
+            operationalRunInstance,
+            approvalAuthority,
+            receiptAuthority: () => validateAgentRunDelegatedAuthority(approvalAuthority),
+            operatorAuthority: source.authority,
+          },
+          async () => {
+            const prepared = expectDefined(
+              prepareRequesterCronAuthority({
+                requesterSessionKey,
+                requesterAgentId: "main",
+                requesterTurnRunId: originalRunId,
+              }),
+              "original yielded requester capture",
+            );
+            try {
+              const bound = expectDefined(
+                await prepared.bind({ batch: [child], runs: new Map([[child.runId, child]]) }),
+                "yielded cohort binding",
+              );
+              bound.commit();
+            } finally {
+              await prepared.release();
+            }
+          },
+        );
+        promoteRequesterCronAuthority({
+          requesterTurnRunId: originalRunId,
+          batch: [child],
+          rearmGeneration: 1,
+        });
+      } finally {
+        releaseAgentRunDelegatedAuthority(approvalAuthority);
+        clearAgentRunContext(originalRunId);
+      }
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        // SAFETY: The real Gateway dispatcher supplies AgentCommandOpts at this boundary.
+        const command = input as AgentCommandOpts;
+        expect(await command.userTurnTranscriptRecorder?.persistApproved()).toMatchObject({
+          appended: true,
+        });
+        return { payloads: [{ text: "Still working", mediaUrl: null }], meta: { durationMs: 1 } };
+      });
+      expect(
+        await dispatchGatewayRequestInProcessRaw(
+          "agent",
+          {
+            sessionKey: requesterSessionKey,
+            message: "Is the child done?",
+            idempotencyKey: `same-owner-${id}`,
+            deliver: false,
+          },
+          { client, context, expectFinal: true },
+        ),
+      ).toMatchObject({ ok: true });
+      agentCommandMock.mockClear();
+    }
     retainedCustody.settleExecution();
     // The original request has ended. Only its retained completion owns the handoff.
     source.release();
@@ -121,16 +231,46 @@ async function createCompletion(context: GatewayRequestContext) {
         }
       },
       deliver: () =>
-        deliverAgentHarnessCompletion({
-          scope,
-          completionCustody: retainedCustody,
-          childSessionKey,
-          childSessionId: `child-${id}`,
-          announceId,
-          status: "succeeded",
-          result: "Retained child result",
-          isSourceSessionAdmissionAllowed: () => retainedCustody.isCurrent(),
-        }),
+        yieldedFollowup
+          ? withRequesterCronAuthority(
+              {
+                requesterSessionKey,
+                requesterSessionId: sessionId,
+                requesterAgentId: "main",
+                batch: [child],
+                rearmGeneration: 1,
+                runId: idempotencyKey,
+                isCurrent: () => retainedCustody.isCurrent(),
+              },
+              () =>
+                deliverSubagentAnnouncement({
+                  requesterSessionKey,
+                  requesterAgentId: "main",
+                  targetRequesterSessionKey: requesterSessionKey,
+                  triggerMessage: "Retained child result",
+                  steerMessage: "Retained child result",
+                  sourceSessionKey: childSessionKey,
+                  settleWakeSourceSessionKeys: [childSessionKey],
+                  sourceTool: "subagent_settle",
+                  requesterIsSubagent: false,
+                  expectsCompletionMessage: true,
+                  requireDirectDelivery: true,
+                  directIdempotencyKey: idempotencyKey,
+                  resolveGatewayContext: context.resolveGatewayContext,
+                  isSourceSessionEffectsAllowed: () => retainedCustody.isCurrent(),
+                  isSourceSessionAdmissionAllowed: () => retainedCustody.isCurrent(),
+                }),
+            )
+          : deliverAgentHarnessCompletion({
+              scope,
+              completionCustody: retainedCustody,
+              childSessionKey,
+              childSessionId: `child-${id}`,
+              announceId,
+              status: "succeeded",
+              result: "Retained child result",
+              isSourceSessionAdmissionAllowed: () => retainedCustody.isCurrent(),
+            }),
       [Symbol.dispose]: dispose,
     };
   } catch (error) {
@@ -261,17 +401,20 @@ describe("native completion final-effect authority", () => {
 
   it.for([
     { boundary: "recorder", change: "live" },
+    { boundary: "recorder", change: "live", yieldedFollowup: true },
+    { boundary: "recorder", change: "operator-revoked", yieldedFollowup: true },
     { boundary: "recorder", change: "operator-revoked" },
     { boundary: "recorder", change: "requester-replaced" },
     { boundary: "automatic compaction", change: "live" },
     { boundary: "automatic compaction", change: "operator-revoked" },
     { boundary: "automatic compaction", change: "requester-replaced" },
   ] as const)(
-    "revalidates $change authority after real $boundary",
-    async ({ boundary, change }, { signal }) => {
+    "revalidates $change authority after real $boundary (yielded followup: $yieldedFollowup)",
+    async (testCase, { signal }) => {
+      const { boundary, change } = testCase;
       await prepareGatewayReplyRuntimeForTest();
       const context = kernel.gatewayRequestContext;
-      using completion = await createCompletion(context);
+      using completion = await createCompletion(context, "yieldedFollowup" in testCase);
       const actualRuns = await vi.importActual<typeof embeddedRuns>(
         "../agents/embedded-agent-runner/runs.js",
       );
@@ -425,7 +568,15 @@ describe("native completion final-effect authority", () => {
             }),
           );
         } else {
-          expect((await delivery).delivered).toBe(false);
+          if ("yieldedFollowup" in testCase) {
+            const outcome = await delivery.catch((error: unknown) => {
+              expect(error).toHaveProperty("name", "RequesterAuthorityError");
+              return { delivered: false };
+            });
+            expect(outcome.delivered).toBe(false);
+          } else {
+            expect((await delivery).delivered).toBe(false);
+          }
           await Promise.allSettled([steering]);
           resumeCompaction.resolve();
           if (boundary === "automatic compaction") {

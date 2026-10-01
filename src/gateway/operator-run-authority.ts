@@ -39,12 +39,43 @@ type OperatorSource = {
     invocation: object | undefined,
   ];
   membership: string | undefined;
+  principal: object;
   token: object;
   references: number;
 };
 
 // Comparison records live only while captured work retains their original authority.
 const operatorSources = new WeakMap<GatewayClient, Set<OperatorSource>>();
+const sourceIdentities = new WeakMap<object, OperatorSource>();
+/** Compare provenance, not invocation identity; neither turn lends the other its rights. */
+export function haveSameOperatorRunSource(
+  original: AdmittedRunOperatorAuthority,
+  incoming: AdmittedRunOperatorAuthority,
+): boolean {
+  assertAdmittedRunOperatorAuthority(original);
+  assertAdmittedRunOperatorAuthority(incoming);
+  original.assertCurrent();
+  incoming.assertCurrent();
+  if (
+    original.profileId !== incoming.profileId ||
+    !isDeepStrictEqual([...original.scopes].toSorted(), [...incoming.scopes].toSorted()) ||
+    !isDeepStrictEqual(original.rolePolicy, incoming.rolePolicy) ||
+    !isDeepStrictEqual(original.gatewayAccessGrant, incoming.gatewayAccessGrant)
+  ) {
+    return false;
+  }
+  const left = original.source && sourceIdentities.get(original.source);
+  const right = incoming.source && sourceIdentities.get(incoming.source);
+  // The last owner is the per-invocation lifetime. Keep validating that original
+  // lifetime, but do not mistake another invocation for a changed access source.
+  return Boolean(
+    left &&
+    right &&
+    left.principal === right.principal &&
+    left.membership === right.membership &&
+    left.owners.slice(0, -1).every((owner, index) => owner === right.owners[index]),
+  );
+}
 
 function getOperatorSources(client: GatewayClient): Set<OperatorSource> {
   let sources = operatorSources.get(client);
@@ -78,8 +109,9 @@ function retainOperatorSource(
             entry.owners.every((owner, index) => owner === owners[index]),
         );
   if (!source) {
-    source = { owners, membership, token: Object.freeze({}), references: 0 };
+    source = { owners, membership, principal: sources, token: Object.freeze({}), references: 0 };
     sources.add(source);
+    sourceIdentities.set(source.token, source);
   }
   const retained = source;
   const bucket = sources;

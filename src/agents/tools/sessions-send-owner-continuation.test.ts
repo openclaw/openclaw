@@ -18,7 +18,7 @@ import { SessionFollowupCompletion } from "../subagents/completion/session-follo
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import {
   consumeRequesterCronAuthorityAdmission,
-  revokeRequesterCronAuthority,
+  admitRequesterCronAuthorityUserTurn,
 } from "../subagents/requester-cron-authority.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
@@ -125,7 +125,7 @@ async function inRun<T>(runId: string, work: () => Promise<T>) {
   }
 }
 afterEach(() => {
-  revokeRequesterCronAuthority(SESSION);
+  admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
   vi.clearAllMocks();
 });
 
@@ -181,7 +181,7 @@ describe("child followup requester continuation", () => {
       });
     }
     if (outcome === "new user turn") {
-      revokeRequesterCronAuthority(SESSION);
+      admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
     }
     const invoked = vi.fn();
     const callGateway = vi.fn();

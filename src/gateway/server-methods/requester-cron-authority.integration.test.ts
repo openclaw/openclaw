@@ -17,7 +17,7 @@ import {
 import { createRequesterInitialTransferFixture } from "../../agents/subagents/registry/subagent-registry-requester-yield.test-support.js";
 import { persistSubagentRunsToDiskAsyncOrThrow } from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
-  revokeRequesterCronAuthority,
+  admitRequesterCronAuthorityUserTurn,
   withRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
@@ -316,7 +316,7 @@ describe("requester continuation persisted automation management", () => {
                 await originalWriteHostFile(...args);
                 if (args[0] === committedPath) {
                   // Retire only Cron management after the owned file has actually committed.
-                  revokeRequesterCronAuthority(SESSION);
+                  admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
                   revokedAcrossWrite = true;
                 }
               });

@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { RequesterAuthorityError } from "../requester-authority-error.js";
 import {
   promoteRequesterFinalAttachment,
   registerRequesterFinalAttachment,
@@ -629,6 +630,36 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     } finally {
       vi.useRealTimers();
       deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
+    }
+  });
+
+  it("retains revoked requester results without replaying the completion", async () => {
+    const children = ["run-a", "run-b"].map((runId) =>
+      makeSettledChild({
+        runId,
+        completion: { required: true, resultText: "retained synthetic report" },
+      }),
+    );
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    const error = "Requester operator authority is no longer current";
+    deliverSpy.mockRejectedValueOnce(
+      new RequesterAuthorityError(error, {
+        cause: new Error("gateway timeout"),
+      }),
+    );
+
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: false,
+      path: "none",
+      disposition: "permanent_failure",
+      error,
+    });
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    for (const child of children) {
+      expect(child.completion?.resultText).toBe("retained synthetic report");
+      expect(child.requesterSettleWake?.replayCount).toBeUndefined();
     }
   });
 

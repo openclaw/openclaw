@@ -25,6 +25,11 @@ import {
 } from "../tools/gateway-caller-context.js";
 import type { FollowupRequesterAuthority } from "./completion/session-followup-completion.types.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
+import { RequesterAuthorityError } from "./requester-authority-error.js";
+import {
+  haveSameRequesterUserTurnSource,
+  type RequesterUserTurnSource,
+} from "./requester-cron-authority-source.js";
 
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
@@ -413,10 +418,14 @@ export function replaceRequesterCronAuthorityEntry(params: {
   }
 }
 
-/** A new direct user turn cannot lend its identity to an older pending batch. */
-export function revokeRequesterCronAuthority(sessionKey: string): void {
-  for (const authority of state.bySession.get(sessionKey) ?? []) {
-    discard(authority);
+/** A followup can preserve only the still-live source that accepted each pending cohort. */
+export function admitRequesterCronAuthorityUserTurn(
+  params: RequesterUserTurnSource & { sessionKey: string },
+): void {
+  for (const authority of state.bySession.get(params.sessionKey) ?? []) {
+    if (!isCurrent(authority) || !haveSameRequesterUserTurnSource(authority, params)) {
+      discard(authority);
+    }
   }
 }
 
@@ -482,7 +491,9 @@ export async function withRequesterCronAuthority<T>(
     !(pause ? authority.batch.includes(pause.entry) : sameBatch(authority.batch, params.batch))
   ) {
     if (authority?.operatorAuthority) {
-      throw new Error("Requester operator authority does not own this continuation");
+      throw new RequesterAuthorityError(
+        "Requester operator authority does not own this continuation",
+      );
     }
     return await run();
   }
@@ -499,7 +510,7 @@ export async function withRequesterCronAuthority<T>(
   if (!current()) {
     discard(authority);
     if (authority.operatorAuthority) {
-      throw new Error("Requester operator authority is no longer current");
+      throw new RequesterAuthorityError("Requester operator authority is no longer current");
     }
     return await run();
   }
@@ -517,7 +528,7 @@ export async function withRequesterCronAuthority<T>(
     const { withOperatorToolGatewayAuthority } =
       await import("../../gateway/server-plugin-in-process-dispatch.js");
     if (!current()) {
-      throw new Error("Requester operator authority is no longer current");
+      throw new RequesterAuthorityError("Requester operator authority is no longer current");
     }
     return await withOperatorToolGatewayAuthority(
       {
@@ -525,12 +536,19 @@ export async function withRequesterCronAuthority<T>(
         scopes: authority.operatorAuthority.scopes,
         assertCurrent: () => {
           if (!current()) {
-            throw new Error("Requester operator authority is no longer current");
+            throw new RequesterAuthorityError("Requester operator authority is no longer current");
           }
         },
       },
       () => activeDispatch.run(dispatch, run),
     );
+  } catch (error) {
+    if (!current()) {
+      throw new RequesterAuthorityError("Requester operator authority is no longer current", {
+        cause: error,
+      });
+    }
+    throw error;
   } finally {
     // The committed settlement owner retires this cohort. A returned delivery
     // failure can still need a retry, just like a thrown transport error.
@@ -581,7 +599,7 @@ export function captureRequesterFollowupAuthority(params: {
     },
     async run<T>(runId: string, run: () => Promise<T>): Promise<T> {
       if (!isCurrent(authority) || authority.admittedRunId !== undefined) {
-        throw new Error("Requester followup authority is no longer current");
+        throw new RequesterAuthorityError("Requester followup authority is no longer current");
       }
       // The followup owner retains caller restrictions separately. This scope
       // supplies only the captured channel identity to the returning parent.
@@ -626,12 +644,12 @@ export function captureRequesterCronAuthorityAdmissionAssertion(params: Requeste
     return undefined;
   }
   if (!matchesAdmissionTarget(dispatch, params)) {
-    throw new Error("Requester authority does not own this continuation");
+    throw new RequesterAuthorityError("Requester authority does not own this continuation");
   }
   // Storage can invoke the pre-commit guard outside this dispatch's async context.
   return () => {
     if (!dispatch.consumed && !dispatch.isCurrent()) {
-      throw new Error("Requester authority is no longer current");
+      throw new RequesterAuthorityError("Requester authority is no longer current");
     }
   };
 }

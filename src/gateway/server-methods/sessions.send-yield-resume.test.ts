@@ -41,7 +41,7 @@ vi.mock("./chat-send-external-entry.js", () => ({ handleDirectExternalChatSend: 
 
 const fixture = useSubagentControlFixture();
 afterEach(() => {
-  requesterAuthority.revokeRequesterCronAuthority("agent:main:main");
+  requesterAuthority.admitRequesterCronAuthorityUserTurn({ sessionKey: "agent:main:main" });
   setSubagentAnnounceDeliveryDepsForTest();
   vi.useRealTimers();
 });

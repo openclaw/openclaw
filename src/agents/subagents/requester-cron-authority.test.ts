@@ -34,8 +34,8 @@ import { createRequesterInitialTransferFixture } from "./registry/subagent-regis
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   consumeRequesterCronAuthorityAdmission,
+  admitRequesterCronAuthorityUserTurn,
   replaceRequesterCronAuthorityEntry,
-  revokeRequesterCronAuthority,
   revokeRequesterCronAuthorityBatch,
   withRequesterCronAuthority,
 } from "./requester-cron-authority.js";
@@ -81,7 +81,7 @@ const SESSION = "agent:main:control-ui";
 const runs = new Map<string, SubagentRunRecord>();
 
 afterEach(() => {
-  revokeRequesterCronAuthority(SESSION);
+  admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
   runs.clear();
   fixture.session = {
     sessionId: "requester-session",
@@ -227,6 +227,74 @@ function consume(batch: SubagentRunRecord[], runId = "continuation") {
 }
 
 describe("requester cron authority lifetime", () => {
+  it.each([
+    "unproven matching source",
+    "different principal",
+    "narrowed scopes",
+    "different source",
+    "revoked matching profile",
+  ] as const)(
+    "does not lend unproven or narrowed %s followup rights to frozen cohorts",
+    async (change) => {
+      let revoked = false;
+      const source = Object.freeze({});
+      const original = createAdmittedRunOperatorAuthority({
+        profileId: "accepted-owner",
+        scopes: ["operator.read", "operator.write"],
+        source,
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("original source revoked");
+          }
+        },
+      });
+      const cohorts = [
+        { turnRunId: "first-turn", batch: createBatch("first-turn", 2) },
+        { turnRunId: "second-turn", batch: createBatch("second-turn") },
+      ];
+      const batches = cohorts.map(({ batch }) => batch);
+      for (const { turnRunId, batch } of cohorts) {
+        await inAdminRun(
+          turnRunId,
+          async () => {
+            expect(await mark(batch)).toBe(batch.length);
+          },
+          undefined,
+          undefined,
+          undefined,
+          original,
+          false,
+        );
+        expect(await settle(batch)).toBe(true);
+      }
+      const incoming = createAdmittedRunOperatorAuthority({
+        profileId: change === "different principal" ? "another-owner" : original.profileId,
+        scopes: change === "narrowed scopes" ? ["operator.read"] : original.scopes,
+        source: change === "different source" ? Object.freeze({}) : source,
+        assertCurrent: () => {},
+      });
+      if (change === "revoked matching profile") {
+        revoked = true;
+      }
+      admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION, operatorAuthority: incoming });
+      const received: string[] = [];
+      // The newer cohort can arrive first; each still carries its exact original source.
+      for (const { turnRunId, batch } of cohorts.toReversed()) {
+        const work = async () => {
+          expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBe(original);
+          expect(consume(batch)).toBeUndefined(); // operator-only capture cannot grant Cron rights
+          received.push(turnRunId);
+        };
+        await expect(dispatch(batch, work)).rejects.toThrow("no longer current");
+      }
+      expect(received).toEqual([]);
+      // Restoring an apparent matching source cannot forget the revoked entry binding.
+      revoked = false;
+      admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION, operatorAuthority: original });
+      await expect(dispatch(batches[0]!, async () => {})).rejects.toThrow("no longer current");
+    },
+  );
+
   it.each(["completion", "scope ended", "reset"] as const)(
     "retains the full cohort's authority across a scoped child pause until %s",
     async (outcome) => {
@@ -398,7 +466,7 @@ describe("requester cron authority lifetime", () => {
       if (outcome === "complete") {
         await dispatch(batch, work);
         expect(work).toHaveBeenCalledOnce();
-        revokeRequesterCronAuthority(SESSION);
+        admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
       } else {
         await expect(dispatch(batch, work)).rejects.toThrow("no longer current");
         await expect(dispatch(batch, work)).rejects.toThrow("no longer current");
@@ -609,7 +677,7 @@ describe("requester cron authority lifetime", () => {
   );
 
   it.each([
-    ["fresh user turn", () => revokeRequesterCronAuthority(SESSION)],
+    ["explicit revocation", () => admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION })],
     [
       "reset",
       () => {
@@ -738,7 +806,7 @@ describe("requester cron authority lifetime", () => {
     expect(admitted!.isCurrent()).toBe(true);
     await dispatch(batch, async () => expect(consume(batch)).toBeUndefined());
     expect(admitted!.isCurrent()).toBe(true);
-    revokeRequesterCronAuthority(SESSION);
+    admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
     expect(admitted!.isCurrent()).toBe(false);
   });
 
@@ -751,7 +819,7 @@ describe("requester cron authority lifetime", () => {
           if (kind === "failed persistence") {
             throw new Error("write failed");
           }
-          revokeRequesterCronAuthority(SESSION);
+          admitRequesterCronAuthorityUserTurn({ sessionKey: SESSION });
         };
         if (kind === "failed persistence") {
           await expect(mark(batch, persist)).rejects.toThrow("write failed");

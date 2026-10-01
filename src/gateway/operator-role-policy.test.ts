@@ -23,7 +23,10 @@ import {
   resolveOperatorRolePolicyForAssignment,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  captureGatewayOperatorRunAuthority,
+  haveSameOperatorRunSource,
+} from "./operator-run-authority.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
@@ -137,6 +140,9 @@ describe("operator role policy", () => {
           expect(resolveReplyOperatorAuthorityKey(independent)).not.toBe(
             resolveReplyOperatorAuthorityKey(original),
           );
+          expect(haveSameOperatorRunSource(original, independent)).toBe(
+            dependencyKind === "invocation",
+          );
           const narrowed = await capture({
             client: {
               ...client,
@@ -147,6 +153,7 @@ describe("operator role policy", () => {
           });
           expect(narrowed.source).toBe(original.source);
           expect(narrowed.scopes).toEqual([]);
+          expect(haveSameOperatorRunSource(original, narrowed)).toBe(false);
           expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(
             resolveReplyOperatorAuthorityKey(original),
           );
@@ -163,6 +170,7 @@ describe("operator role policy", () => {
           }
           expect(independent.signal?.aborted).toBe(false);
           expect(independent.assertCurrent).not.toThrow();
+          expect(() => haveSameOperatorRunSource(original, independent)).toThrow();
         } finally {
           for (const captured of captures) {
             captured.release();

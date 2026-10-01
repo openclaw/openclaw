@@ -9,7 +9,7 @@ import {
   prepareRequesterCronAuthority,
   promoteRequesterCronAuthority,
   consumeRequesterCronAuthorityAdmission,
-  revokeRequesterCronAuthority,
+  admitRequesterCronAuthorityUserTurn,
   withRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -20,6 +20,7 @@ import {
   clearAgentRunContext,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { baseParams, createInboundTurn, createSessionTurn } from "./get-reply-run.test-support.js";
@@ -33,8 +34,15 @@ export function registerPendingRequesterAuthorityCases({
   ) => ReturnType<typeof runPreparedReply>;
   loadSessionEntryMock: { mockReturnValue(value: SessionEntry): unknown };
 }): void {
-  it.each(["fresh-non-owner", "fresh-owner", "inter-session", "heartbeat", "replay"] as const)(
-    "retires pending owner task authority only for new channel input: %s",
+  it.each([
+    "fresh-non-owner",
+    "fresh-owner",
+    "fresh-bound-owner",
+    "inter-session",
+    "heartbeat",
+    "replay",
+  ] as const)(
+    "revokes unproven channel ingress continuity but preserves internal handoffs: %s",
     async (kind) => {
       const sessionKey = "agent:default:discord:channel:123";
       const sessionId = "pending-owner-session";
@@ -105,7 +113,15 @@ export function registerPendingRequesterAuthorityCases({
             ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
             : undefined;
         const params = baseParams();
-        params.command.senderIsOwner = kind === "fresh-owner";
+        params.command.senderIsOwner = kind === "fresh-owner" || kind === "fresh-bound-owner";
+        const sessionCtx = {
+          ...createSessionTurn("new request", "discord", "group"),
+          SenderId: "sender",
+          InputProvenance: provenance,
+        };
+        if (kind === "fresh-bound-owner") {
+          bindCommandOwnerAuthority(sessionCtx, { isCurrent: () => true });
+        }
         await runPrepared({
           ...params,
           conversation: undefined,
@@ -117,11 +133,7 @@ export function registerPendingRequesterAuthorityCases({
             SenderId: "sender",
             InputProvenance: provenance,
           },
-          sessionCtx: {
-            ...createSessionTurn("new request", "discord", "group"),
-            SenderId: "sender",
-            InputProvenance: provenance,
-          },
+          sessionCtx,
           opts: {
             isHeartbeat: kind === "heartbeat",
             suppressNextUserMessagePersistence: kind === "replay",
@@ -149,14 +161,16 @@ export function registerPendingRequesterAuthorityCases({
                 sourceSessionKey: child.childSessionKey,
               },
             });
-            expect(Boolean(admission)).toBe(kind !== "fresh-non-owner" && kind !== "fresh-owner");
+            expect(Boolean(admission)).toBe(
+              kind !== "fresh-non-owner" && kind !== "fresh-owner" && kind !== "fresh-bound-owner",
+            );
             if (admission) {
               expect(admission.callerOrigin).toEqual({ kind: "unknown" });
             }
           },
         );
       } finally {
-        revokeRequesterCronAuthority(sessionKey);
+        admitRequesterCronAuthorityUserTurn({ sessionKey });
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(originalRunId);
       }

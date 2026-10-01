@@ -12,7 +12,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../agents/cron-creator-authority-context.js";
-import { revokeRequesterCronAuthority } from "../agents/subagents/requester-cron-authority.js";
+import { admitRequesterCronAuthorityUserTurn } from "../agents/subagents/requester-cron-authority.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -335,7 +335,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
           commands: { ownerAllowFrom: outcome === "owner revoked" ? [] : ["discord:new-owner"] },
         });
       } else if (outcome === "new user turn") {
-        revokeRequesterCronAuthority(parent);
+        admitRequesterCronAuthorityUserTurn({ sessionKey: parent });
       }
       effectMayFinish.resolve();
       await parentFinished.promise;
@@ -350,7 +350,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       }
     } finally {
       unblock();
-      revokeRequesterCronAuthority(parent);
+      admitRequesterCronAuthorityUserTurn({ sessionKey: parent });
       await waitForGatewayActiveWork(10_000);
       signal.removeEventListener("abort", unblock);
       await disposePluginRegistryInstances(builder.registry);

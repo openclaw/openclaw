@@ -613,6 +613,7 @@ export async function prepareAgentRunDispatch(
       sessionId: params.getAdmittedSessionId(),
       spawnedBy: params.sessionEntry?.spawnedBy,
       client: params.client,
+      operatorAuthority: capturedOperator.authority,
       request: params.request,
       isCurrent: params.hasCurrentClientAuthority,
       inputProvenance: userTurn.inputProvenance,

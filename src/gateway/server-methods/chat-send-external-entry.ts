@@ -28,6 +28,7 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
       resolvedSessionKey: params.sessionKey,
       spawnedBy: params.spawnedBy,
       client: params.client,
+      operatorAuthority: params.operatorAuthority,
       isCurrent: params.isCurrent,
       inputProvenance: params.inputProvenance,
       hasExplicitOrigin: params.hasExplicitOrigin,
