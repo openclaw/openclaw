@@ -74,6 +74,16 @@ export function hasStoredComposerDraftInput(session: {
   return Boolean(session.draft || session.goalMode || session.replyTarget);
 }
 
+/** Content-only edits stay silent so projection subscribers cannot re-persist a stale pane. */
+export function notifyDraftPresence(
+  before: Parameters<typeof hasStoredComposerDraftInput>[0],
+  after: Parameters<typeof hasStoredComposerDraftInput>[0],
+): void {
+  if (hasStoredComposerDraftInput(before) !== hasStoredComposerDraftInput(after)) {
+    notifyStoredChatOutboxChanges();
+  }
+}
+
 export function clearStoredComposerDraftInput(session: {
   draft?: unknown;
   draftMentions?: unknown;
