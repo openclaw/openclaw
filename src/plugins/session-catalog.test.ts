@@ -17,14 +17,13 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
       appendMessage: (params: {
         message: Record<string, unknown>;
         idempotencyLookup?: string;
-        beforeCommitInTransaction?: () => void;
+        beforeFreshMessageCommit?: () => void;
       }) => Promise<void>;
     }) => Promise<void>,
   ) => {
     transcript.lockCalls += 1;
     await run({
-      appendMessage: async ({ message, idempotencyLookup, beforeCommitInTransaction }) => {
-        beforeCommitInTransaction?.();
+      appendMessage: async ({ message, idempotencyLookup, beforeFreshMessageCommit }) => {
         const key = message.idempotencyKey;
         if (
           idempotencyLookup === "scan" &&
@@ -33,6 +32,7 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
         ) {
           return;
         }
+        beforeFreshMessageCommit?.();
         transcript.messages.push(message);
       },
     });
@@ -300,6 +300,6 @@ describe("importSessionCatalogHistory", () => {
       model: "session-catalog",
       idempotencyKey: "pi-catalog:thread-1:continuation-notice",
     });
-    expect(commitGuard).toHaveBeenCalledTimes(4);
+    expect(commitGuard).toHaveBeenCalledTimes(2);
   });
 });
