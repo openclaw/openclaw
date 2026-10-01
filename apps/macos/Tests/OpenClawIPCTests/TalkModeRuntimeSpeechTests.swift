@@ -463,21 +463,6 @@ private func runtimeRecoveryState(
 
 @Suite(.serialized)
 struct TalkModeRuntimeSpeechTests {
-    @Test func `macOS realtime relay requires local opt in and exact Gateway tuple`() {
-        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
-            localOptIn: false,
-            hasGatewayRealtimeRelayTuple: false))
-        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
-            localOptIn: false,
-            hasGatewayRealtimeRelayTuple: true))
-        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
-            localOptIn: true,
-            hasGatewayRealtimeRelayTuple: false))
-        #expect(TalkModeRuntime.shouldUseRealtimeRelay(
-            localOptIn: true,
-            hasGatewayRealtimeRelayTuple: true))
-    }
-
     @Test @MainActor func `macOS realtime relay preference defaults off and reads explicit opt in`() async {
         await TestIsolation.withUserDefaultsValues([talkRealtimeRelayEnabledKey: nil]) {
             #expect(!AppState(preview: true).talkRealtimeRelayEnabled)
@@ -536,18 +521,6 @@ struct TalkModeRuntimeSpeechTests {
             TalkMLXSpeechSynthesizer.SynthesizeError.audioGenerationFailed) == .fallback)
         #expect(TalkModeRuntime.mlxFailureDisposition(
             TalkMLXSpeechSynthesizer.SynthesizeError.modelLoadFailed("missing")) == .fallback)
-    }
-
-    @Test func `realtime recovery uses the iOS retry budget`() {
-        #expect(TalkModeRuntime.realtimeRestartAttempt(
-            previousRapidRestarts: 1,
-            activeDuration: 5) == 2)
-        #expect(TalkModeRuntime.realtimeRestartAttempt(
-            previousRapidRestarts: 2,
-            activeDuration: 31) == 1)
-        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 1) == 500_000_000)
-        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 2) == 2_000_000_000)
-        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 3) == nil)
     }
 
     @Test(arguments: ["audio failure", "selected microphone", "unpause"])

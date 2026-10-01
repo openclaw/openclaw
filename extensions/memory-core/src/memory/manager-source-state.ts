@@ -13,7 +13,6 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { readMemorySourceHash } from "./manager-source-index-kernel.js";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -110,16 +109,4 @@ export function loadMemorySourceFileState(params: {
     query = query.where("path", "in", sqliteStringSet(params.paths));
   }
   return executeSqliteQuerySync(params.db, query).rows;
-}
-
-export function resolveMemorySourceExistingHash(params: {
-  db: DatabaseSync;
-  source: MemorySource;
-  path: string;
-  existingHashes?: Map<string, string> | null;
-}): string | undefined {
-  if (params.existingHashes) {
-    return params.existingHashes.get(params.path);
-  }
-  return readMemorySourceHash(params.db, params.source, params.path);
 }

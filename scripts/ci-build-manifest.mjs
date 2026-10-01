@@ -637,7 +637,12 @@ if (uiE2eSelection) {
   // Selection also applies to UI-only plans without a Node target inventory.
   runControlUiE2e = uiE2eSelection.files.length > 0;
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-  uiE2eJobCount = Math.min(uiE2eJobCount - 1, uiE2eSelection.files.length) + 1;
+  // Narrow PR selections share a runner instead of repeating setup across eight rows.
+  const controlUiRows =
+    uiE2eSelection.mode === "owners"
+      ? Math.ceil(uiE2eSelection.files.length / 30)
+      : uiE2eSelection.files.length;
+  uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlUiRows) + 1;
 }
 if (selectedTestTargets && runWindows && !windowsTestPlan) {
   throw new Error("Current PR CI requires a target-owned Windows planner");

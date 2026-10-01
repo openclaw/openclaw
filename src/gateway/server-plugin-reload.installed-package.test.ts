@@ -413,7 +413,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           nextConfig,
           sourceConfig,
           changedPaths: [],
-          prepareConfigEffects: () => async () => {},
+          prepareConfigEffects: () => ({ retire: () => {}, rollback: async () => {} }),
           assertInvokerOwned,
           pluginLifecycle: {
             reason,

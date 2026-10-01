@@ -1,5 +1,5 @@
+import OpenClawChatUI
 import Testing
-@testable import OpenClaw
 
 struct ChatSendStatusTests {
     @Test(arguments: ["ok", " OK ", "\nok\t"])
