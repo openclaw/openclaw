@@ -3219,6 +3219,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__effort-trigger--ultrafast,
+.agent-chat__input .chat-controls__model-settings .chat-controls__effort-trigger--ultrafast,
 .chat-controls__effort-trigger--ultrafast:hover,
 .chat-controls__effort-picker[open] > .chat-controls__effort-trigger--ultrafast {
   --chat-effort-tint: color-mix(
@@ -3229,6 +3230,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
   background: var(--chat-effort-tint);
   color: color-mix(in srgb, var(--accent) 12%, var(--text-strong));
+}
+
+.chat-controls__effort-trigger--ultrafast .chat-controls__inline-select-chevron {
+  color: color-mix(in srgb, var(--text-strong) 75%, var(--chat-effort-tint));
 }
 
 .chat-controls__reasoning-option {
