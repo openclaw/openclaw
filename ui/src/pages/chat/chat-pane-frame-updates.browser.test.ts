@@ -1,24 +1,27 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { VirtualizerController } from "@tanstack/lit-virtual";
-import { html, render } from "lit";
+import { html } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { ChatSessionVirtualizerHost } from "./components/chat-transcript-virtualizer-host.ts";
-import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "./sidebar-layout.ts";
 
 // MessageChannel supplies distinct browser tasks without a timer or a real-frame race.
 async function task(action: () => void) {
   const channel = new MessageChannel();
   try {
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       channel.port1.addEventListener(
         "message",
         () => {
-          action();
-          resolve();
+          try {
+            action();
+            resolve();
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
         },
         { once: true },
       );
@@ -94,63 +97,56 @@ it("coalesces six separate tasks and includes their property changes in updateCo
 it.each(["scroll", "measurement"] as const)(
   "commits a virtualizer %s while a pane update waits for a frame",
   async (change) => {
-    frameClock();
+    const frame = frameClock();
     const { pane, updates } = await mountPane();
     const getVirtualizer = vi.spyOn(VirtualizerController.prototype, "getVirtualizer");
     const session = new ChatSessionVirtualizerHost(pane, 0, undefined, {
       requestImmediateUpdate: () => ChatPaneBase.prototype.requestImmediateUpdate.call(pane),
     });
-    const scroller = document.body.appendChild(document.createElement("div"));
-    scroller.style.cssText = "height: 200px; width: 600px; overflow: auto";
+    const virtualizer = expectDefined(getVirtualizer.mock.results[0]?.value, "session virtualizer");
+    // Exercise TanStack's measurement notification with explicit geometry, without
+    // ResizeObserver delivery or a mounted row's platform-dependent layout.
+    virtualizer.setOptions({
+      ...virtualizer.options,
+      count: 100,
+      getItemKey: (index: number) => `row-${index}`,
+      initialRect: { width: 600, height: 200 },
+    });
+    Object.assign(pane, {
+      render: () =>
+        html`<output>${virtualizer.getTotalSize()}</output><span>${pane.presentationTitle}</span>`,
+    });
     try {
-      session.connect();
-      render(
-        session.render(
-          Array.from({ length: 100 }, (_, index) => ({
-            kind: "content" as const,
-            key: `row-${index}`,
-            content: html`<div style="height:120px">Row ${index}</div>`,
-          })),
-          (row) => (row.kind === "content" ? row.content : null),
-          null,
-          false,
-        ),
-        scroller,
-      );
-      session.update();
-      await task(() => {});
       pane.requestUpdate();
-      await task(() => {});
-      const before = updates.mock.calls.length;
-      const virtualizer = expectDefined(
-        getVirtualizer.mock.results[0]?.value,
-        "session virtualizer",
-      );
-      const notification = vi.spyOn(virtualizer.options, "onChange");
-      await task(() => {
-        if (change === "scroll") {
-          scroller.scrollTop = 1200;
-          scroller.dispatchEvent(new Event("scroll"));
-        } else {
-          const row = expectDefined(
-            scroller.querySelector<HTMLElement>('[data-virtual-row-key="row-0"] > div'),
-            "measured row",
-          );
-          row.style.height = "180px";
-          // The committed geometry owner measures DOM rows through resizeItem.
-          // At offset zero this changes geometry with onChange(instance, false).
-          pane.dispatchEvent(new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT));
-          expect(virtualizer.itemSizeCache.get("row-0")).toBe(180);
-        }
+      frame();
+      await pane.updateComplete;
+      expect(pane.querySelector("output")?.textContent).toBe("12000");
+      updates.mockClear();
+      pane.presentationTitle = "committed notification";
+      let completed = false;
+      const completion = pane.updateComplete.then(() => {
+        completed = true;
       });
       await task(() => {});
-      expect(notification).toHaveBeenCalledWith(virtualizer, change === "scroll");
-      expect(updates.mock.calls.length).toBeGreaterThan(before);
-      await pane.updateComplete;
+      expect(updates).not.toHaveBeenCalled();
+      expect(completed).toBe(false);
+      const notification = vi.spyOn(virtualizer.options, "onChange");
+      if (change === "measurement") {
+        virtualizer.resizeItem(0, 180);
+      } else {
+        virtualizer.options.onChange?.(virtualizer, true);
+      }
+      await task(() => {});
+      expect(notification).toHaveBeenCalledExactlyOnceWith(virtualizer, change === "scroll");
+      expect(updates).toHaveBeenCalledTimes(1);
+      expect(completed).toBe(true);
+      await completion;
+      expect(pane.querySelector("output")?.textContent).toBe(
+        change === "measurement" ? "12060" : "12000",
+      );
+      expect(pane.querySelector("span")?.textContent).toBe("committed notification");
     } finally {
       session.dispose();
-      render(null, scroller);
-      scroller.remove();
     }
   },
 );
