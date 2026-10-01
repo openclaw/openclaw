@@ -35,7 +35,7 @@ beforeEach(async () => {
 afterEach(() => resetPendingAskUserQuestionsForTest());
 
 describe("credential prompt dispatch boundary", () => {
-  it.each<
+  it.for<
     [
       name: string,
       link: boolean,
@@ -53,7 +53,7 @@ describe("credential prompt dispatch boundary", () => {
     ["explicit send-policy denial", true, false, false, false, true],
   ])(
     "settles the producer's %s without plaintext controls",
-    async (_name, link, route, failure, terminal, deny) => {
+    async ([_name, link, route, failure, terminal, deny], { signal }) => {
       setNoAbort();
       hookMocks.runner.hasHooks.mockReturnValue(false);
       installThreadingTestPlugin({ id: "telegram" });
@@ -174,9 +174,14 @@ describe("credential prompt dispatch boundary", () => {
         (result) => ({ result }),
         (error: unknown) => ({ error }),
       );
+      // A Vitest timeout aborts the context signal, so a stuck wait still reaches `finally`.
+      const testAborted = new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
       try {
         await Promise.race([
           producerCalled.promise,
+          testAborted,
           dispatch.then((outcome) => {
             throw new Error(`dispatch settled before the producer ran: ${JSON.stringify(outcome)}`);
           }),
@@ -191,6 +196,7 @@ describe("credential prompt dispatch boundary", () => {
           const payload = asNullableRecord(
             await Promise.race([
               received.promise,
+              testAborted,
               dispatch.then((outcome) => {
                 throw new Error(`dispatch settled before delivery: ${JSON.stringify(outcome)}`);
               }),
