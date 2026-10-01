@@ -28,7 +28,11 @@ function probeMxcIsolationTier(
   const notReady = (reason: string, cause?: unknown) =>
     new Error(
       `[mxc] MXC Windows ProcessContainer sandbox is not ready: ${reason}. ` +
-        `Run "${executablePath}" --probe for host details.`,
+        `Run "${executablePath}" --probe for host details. ` +
+        `The selected executor must be compatible with MXC 0.8.0 and support --probe. ` +
+        `If mxcBinaryPath points to an older executor, update it or unset ` +
+        `plugins.entries.mxc.config.mxcBinaryPath and restart the Gateway to use ` +
+        `the bundled SDK executor.`,
       cause === undefined ? undefined : { cause },
     );
   let output: string;

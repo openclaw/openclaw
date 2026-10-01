@@ -101,7 +101,7 @@ describe("assertMxcReadiness", () => {
     const deps = depsFor({ probe: new Error("Command failed: wxc-exec.exe --probe") });
 
     expect(() => assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps })).toThrow(
-      /host probe failed: Command failed/u,
+      /host probe failed: Command failed.*older executor.*unset plugins\.entries\.mxc\.config\.mxcBinaryPath/u,
     );
   });
 
@@ -109,7 +109,7 @@ describe("assertMxcReadiness", () => {
     const deps = depsFor({ probe: "wxc-exec: unknown option --probe" });
 
     expect(() => assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps })).toThrow(
-      /host probe did not return JSON/u,
+      /host probe did not return JSON.*older executor.*unset plugins\.entries\.mxc\.config\.mxcBinaryPath/u,
     );
   });
 
