@@ -1,3 +1,4 @@
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   asNullableObjectRecord,
   asNullableRecord,
@@ -13,25 +14,8 @@ function addModelId(target: Set<string>, value: unknown) {
 }
 
 function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
-  if (typeof modelConfig === "string") {
-    addModelId(target, modelConfig);
-    return;
-  }
-  const record = asNullableObjectRecord(modelConfig);
-  if (!record) {
-    return;
-  }
-  addModelId(target, record.primary);
-  addModelId(target, record.model);
-  addModelId(target, record.id);
-  addModelId(target, record.value);
-  const fallbacks = Array.isArray(record.fallbacks)
-    ? record.fallbacks
-    : Array.isArray(record.fallback)
-      ? record.fallback
-      : [];
-  for (const fallback of fallbacks) {
-    addModelId(target, fallback);
+  for (const ref of listModelRefsFromConfigValue(modelConfig)) {
+    addModelId(target, ref);
   }
 }
 
