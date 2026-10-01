@@ -9,10 +9,8 @@ import {
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import {
-  loadSessionEntry,
-  type SessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -40,7 +38,12 @@ import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
-import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
+import {
+  clearCliSessionInStore,
+  consumeCliSessionForkInStore,
+  persistCliSessionForkSuccessorInStore,
+  restoreCliSessionForkInStore,
+} from "../cli-session-store.js";
 import {
   getCliSessionBinding,
   resolveCliSessionClearReason,
@@ -49,6 +52,7 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { resolveDelegationCapability } from "../delegation-capability.js";
+import { withAdmittedCliCandidate } from "../embedded-agent-runner/run-entry-cli.js";
 import { resolveRunEntryCliRuntime } from "../embedded-agent-runner/run-entry-runtime.js";
 import type { RunEntryCandidateOptions } from "../embedded-agent-runner/run-entry.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -65,11 +69,9 @@ import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
-import { createAgentRunSupersededAbortError } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { withLocalSessionPlacementTurnSettlement } from "../session-placement-admission.js";
 import {
   isSubagentAnnounceCompletionHandoff,
   isTrustedSubagentCompletionHandoffForRun,
@@ -84,11 +86,6 @@ import {
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
-import {
-  consumeCliSessionForkInStore,
-  persistCliSessionForkSuccessorInStore,
-  restoreCliSessionForkInStore,
-} from "./session-store.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -487,29 +484,39 @@ export function runAgentAttempt(
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
-    return withLocalSessionPlacementTurnSettlement(
+    return withAdmittedCliCandidate(
       {
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey ?? params.sessionId,
-        agentId: params.sessionAgentId,
-        runId: params.runId,
+        claim: {
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+          agentId: params.sessionAgentId,
+          runId: params.runId,
+        },
+        admission: {
+          preparedRunAdmission: params.preparedRunAdmission,
+          lifecycleGeneration: params.lifecycleGeneration,
+          isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+          abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
+          trigger: "user",
+          inputProvenance: params.opts.inputProvenance,
+        },
+        provider: cliExecutionProvider,
+        sessionTarget:
+          params.sessionKey && params.storePath
+            ? {
+                agentId: params.sessionAgentId,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                storePath: params.storePath,
+              }
+            : undefined,
+        expectedLifecycleRevision,
+        readMode: "writable",
+        getSessionEntry: () => params.sessionEntry,
+        classifyResult: params.classifyResult,
       },
-      async (assertSettlementCurrent) => {
-        if (params.sessionKey && params.storePath) {
-          params.sessionEntry = loadSessionEntry({
-            agentId: params.sessionAgentId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-            readConsistency: "latest",
-          });
-          if (
-            params.sessionEntry?.sessionId !== params.sessionId ||
-            params.sessionEntry.lifecycleRevision !== expectedLifecycleRevision
-          ) {
-            throw createAgentRunSupersededAbortError();
-          }
-        }
-        const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
+      async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
+        params.sessionEntry = sessionEntry;
         const cliAuthProfileId = cliAuthNeedsSessionBinding
           ? resolveCliExecutionAuthProfileId({
               cliExecutionProvider,
@@ -743,17 +750,23 @@ export function runAgentAttempt(
             ...(mutableCliSessionStore
               ? {
                   onBeforeFreshCliSessionRetry: async (retry) => {
+                    if (hasNewMediaTask()) {
+                      return false;
+                    }
+                    const currentEntry = await readSessionEntryInWorker(
+                      {
+                        agentId: params.sessionAgentId,
+                        sessionKey: mutableCliSessionStore.sessionKey,
+                        storePath: mutableCliSessionStore.storePath,
+                        readConsistency: "latest",
+                      },
+                      assertSettlementCurrent,
+                    );
+                    assertSettlementCurrent();
                     if (
                       hasNewMediaTask() ||
-                      getCliSessionBinding(
-                        loadSessionEntry({
-                          agentId: params.sessionAgentId,
-                          sessionKey: mutableCliSessionStore.sessionKey,
-                          storePath: mutableCliSessionStore.storePath,
-                          readConsistency: "latest",
-                        }),
-                        cliExecutionProvider,
-                      )?.sessionId !== retry.sessionId
+                      getCliSessionBinding(currentEntry, cliExecutionProvider)?.sessionId !==
+                        retry.sessionId
                     ) {
                       return false;
                     }
@@ -806,32 +819,12 @@ export function runAgentAttempt(
           }
           throw err;
         }
-        const classification = params.classifyResult?.(result);
-        if (
-          !params.preserveCliSessionBinding &&
-          (!classification || result.meta.agentMeta?.clearCliSessionBinding === true)
-        ) {
-          return await persistCliSessionBindingResult({
-            agentId: params.sessionAgentId,
-            provider: cliExecutionProvider,
-            result,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-            sessionStore: params.sessionStore,
-            expectedSession: params.sessionEntry,
-            assertSettlementCurrent,
-            abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
-          });
-        }
-        return result;
-      },
-      {
-        preparedRunAdmission: params.preparedRunAdmission,
-        lifecycleGeneration: params.lifecycleGeneration,
-        isFinalFallbackAttempt: params.isFinalFallbackAttempt,
-        abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
-        trigger: "user",
-        inputProvenance: params.opts.inputProvenance,
+        return settleResult({
+          result,
+          expectedSession: params.sessionEntry,
+          sessionStore: params.sessionStore,
+          preserveBinding: params.preserveCliSessionBinding,
+        });
       },
     );
   }

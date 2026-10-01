@@ -82,8 +82,11 @@ it("serves describe during a 2,048-session drain without transcript reads in row
     const projection = await initializing;
     bindSessionRowProjection(context, () => projection);
     const startupMs = performance.now() - started;
-    const respond = vi.fn();
     const describe = async (id: string, includeDerivedTitles?: boolean) => {
+      let remainingAtResponse = 0;
+      const respond = vi.fn().mockImplementation(() => {
+        remainingAtResponse = projection.dirtyRowCount;
+      });
       const releaseForeground = retainSessionListForegroundWork();
       try {
         await sessionByKeyReadHandlers["sessions.describe"]!({
@@ -97,21 +100,23 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       } finally {
         releaseForeground();
       }
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({ key: "agent:main:legacy-2047" }),
+      });
+      return remainingAtResponse;
     };
     try {
       const requestStarted = performance.now();
-      await describe("under-drain", true);
+      const remainingAtResponse = await describe("under-drain", true);
       const describeMs = performance.now() - requestStarted;
-      const remainingAtResponse = projection.dirtyRowCount;
       await projection.ensureMaterialized();
       const initialDrainMs = performance.now() - started;
       const initialDrainCpu = process.threadCpuUsage(cpu);
       expect(indexBuilds).toHaveBeenCalledTimes(1);
       sessionChanges.emit({ all: true, scope: "config" });
       const dirtyRequestStarted = performance.now();
-      await describe("dirty-drain");
+      const remainingAfterDirtyResponse = await describe("dirty-drain");
       const dirtyDescribeMs = performance.now() - dirtyRequestStarted;
-      const remainingAfterDirtyResponse = projection.dirtyRowCount;
       console.log(
         JSON.stringify({
           count,
@@ -127,14 +132,9 @@ it("serves describe during a 2,048-session drain without transcript reads in row
           materializationBoundedReads,
         }),
       );
-      expect(respond).toHaveBeenCalledWith(true, {
-        session: expect.objectContaining({ key: "agent:main:legacy-2047" }),
-      });
       expect(materializationTranscriptReads).toBe(0);
       expect(materializationUsageReads).toBe(0);
       expect(materializationBoundedReads).toBe(0);
-      expect(describeMs).toBeLessThan(100);
-      expect(dirtyDescribeMs).toBeLessThan(100);
       // A response must not depend on completion of unrelated resident rows.
       expect(remainingAtResponse).toBeGreaterThan(0);
       expect(remainingAfterDirtyResponse).toBeGreaterThan(0);

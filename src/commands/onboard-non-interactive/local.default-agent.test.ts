@@ -421,7 +421,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       opts: {
         ...localOptions,
         authChoice: "demo-api-key",
-        gatewayPort: 70_000,
+        gatewayBind: "custom",
       },
       runtime,
       baseConfig: {},

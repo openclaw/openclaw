@@ -64,6 +64,7 @@ it("bounds list reads across two viewers and three streaming sessions for three 
     const agents = createAgentCapability(source.gateway);
     const store = rosterActivityStore({
       gateway: source.gateway,
+      sessions,
       agents,
       agentIdentity: {
         get: () => null,

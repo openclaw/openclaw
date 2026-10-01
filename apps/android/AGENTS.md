@@ -4,7 +4,7 @@ Root rules still apply. This file adds the Android release guardrails.
 
 ## Google Play Releases
 
-- Agent-driven Google Play uploads must use only `pnpm android:release:upload`. The no-input **Android Store Release** GitHub Action calls this owner to plan, generate notes, and upload the selected clean source commit without preparation commits or finalization PRs.
+- Agent-driven Google Play uploads must use only `pnpm android:release:upload`. The **Android Store Release** GitHub Action calls this owner to plan, generate notes, and upload the selected clean source commit without preparation commits or finalization PRs. Its default `release` operation stages the store listing; `internal` and scheduled runs use `--destination internal`, skip screenshots and listing updates, and publish only to `internal` and `wear:internal`.
 - Google Play releases use the saved Android plan and generated notes artifact. Notes compare the selected source with the public phone and Wear releases, and upload revalidates those baselines. Do not substitute tracked changelog notes or the latest internal build as the store baseline.
 - Android pinned metadata and changelog sync remain the defaults for ordinary archives and Gateway APK publication. Store releases leave them unchanged. Keep preparation independent of iOS and preserve `.github/workflows/android-release.yml`.
 - Follow [VERSIONING.md](VERSIONING.md) for public revisions, sequential store codes, immutable source refs, and the legacy cutover. Do not infer a store release identity from a new code's date-like shape or an editable Play release name.

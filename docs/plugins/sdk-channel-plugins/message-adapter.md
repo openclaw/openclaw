@@ -127,6 +127,17 @@ When transport cleanup policy must change, pass a synchronous `prepareCleanup`
 callback to `cleanupPending`; it runs in order with clears, before deletion.
 Rejected deletions remain owned for a later cleanup attempt.
 
+For synchronous turn rotation, `reset()` advances `generation`, reopens delivery,
+and resets the current message and pending updates. Published messages remain the
+adapter's responsibility. `reset("discard")` also retires
+creates from earlier generations when they settle. Call `createMessage(send, publish)`
+inside the serialized send loop; its synchronous `publish` callback installs only
+current-generation receipts. Capture `generation` before edits and recheck it before
+publishing their results. `retireCurrent(stopForClear)` similarly fences awaited
+cleanup. Adapters that already settle their sends before rotation can use
+`resetMessage()` to reset identity and pending/throttle state without reopening delivery
+or advancing the generation.
+
 ### Commentary delivery ownership
 
 Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.

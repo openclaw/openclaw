@@ -69,6 +69,11 @@ The personal file supplements, rather than replaces, the shared file, overriding
 conflicting shared user preferences, not project rules or security policy. The
 workspace-root `USER.md` remains shared regardless of the workspace directory's name.
 
+Codex connections without a managed inference relay use shared workspace
+preferences only: they omit the selected personal overlay because native thread
+instructions can be inherited by child agents. Managed relay connections retain
+parent-only personal-profile delivery. See [Codex workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files#skills-persona-and-memory-without-a-managed-relay).
+
 Files are refreshed on later turns. Reassigning the session changes personal
 context on the next new turn, not the running turn. Another participant can steer
 under the normal permission and queue rules without switching personal context.

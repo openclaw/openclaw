@@ -62,6 +62,16 @@ export async function readSessionHistoryRequest(
     };
   }
   if (request.kind === "recent-page") {
+    if (request.params.exactArchivePath) {
+      const { ArchivedTranscriptReader } = await import("./session-transcript-archive-reader.js");
+      return {
+        kind: "recent-page",
+        result: await new ArchivedTranscriptReader({
+          exactArchivePath: request.params.exactArchivePath,
+          sessionId: request.params.target.sessionId,
+        }).readRecentWithStats(request.params.options),
+      };
+    }
     return {
       kind: "recent-page",
       result: await options.readers.readRecentSessionMessagesWithStatsAsync(

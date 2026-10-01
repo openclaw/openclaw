@@ -340,6 +340,9 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get presentation() {
       return state;
     },
+    get eventSubscriptionError() {
+      return scopedSessions?.eventSubscriptionError ?? null;
+    },
     get canonicalListRevision() {
       return canonicalListRevision;
     },
@@ -395,12 +398,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       }
       return scopedSessions!.listSnapshot(scope);
     },
-    subscribeList(
-      scope: Parameters<SessionCapability["subscribeList"]>[0],
-      listener: Parameters<SessionCapability["subscribeList"]>[1],
-    ) {
-      return scopedSessions!.subscribeList(scope, listener);
-    },
+    subscribeList: (...args: Parameters<SessionCapability["subscribeList"]>) =>
+      scopedSessions!.subscribeList(...args),
     observeList: (...args: Parameters<SessionCapability["observeList"]>) =>
       scopedSessions!.observeList(...args),
     refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
