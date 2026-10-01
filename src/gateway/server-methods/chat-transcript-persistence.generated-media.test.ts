@@ -9,7 +9,10 @@ import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { enrichAssistantTranscriptMediaForRun } from "./chat-transcript-persistence.js";
+import {
+  enrichAssistantTranscriptMediaForRun,
+  rewriteAssistantTranscriptMessageByIdempotencyKey,
+} from "./chat-transcript-persistence.js";
 
 const RUN_ID = "generated-media-completion";
 const MESSAGE_ID = "completion-answer";
@@ -30,6 +33,8 @@ async function withTranscriptFixture(
     };
     mediaBlock: Record<string, unknown>;
   }) => Promise<void>,
+  completionText = "Here are four options.\n",
+  completionDisplay?: Array<Record<string, unknown>>,
 ): Promise<void> {
   await withOpenClawTestState({ label: "generated-media-transcript" }, async (state) => {
     const scope = {
@@ -91,14 +96,16 @@ async function withTranscriptFixture(
         eventId: MESSAGE_ID,
         message: {
           role: "assistant",
+          idempotencyKey: "completion-answer-key",
           content: [
             { type: "thinking", thinking: "Synthetic reasoning.", thinkingSignature: "opaque" },
-            { type: "text", text: "Here are four options.\n", textSignature: "signed-caption" },
+            { type: "text", text: completionText, textSignature: "signed-caption" },
             { type: "text", text: `MEDIA:${mediaUrl}`, textSignature: "signed-media" },
             { type: "text", text: "\nPick 1, 2, 3, or 4.", textSignature: "signed-choice" },
           ],
           stopReason: "stop",
           openclawDelivery: { replyToCurrent: true },
+          ...(completionDisplay ? { openclawDisplayContent: completionDisplay } : {}),
           __openclaw: { runId: RUN_ID },
         },
       },
@@ -158,6 +165,80 @@ async function withTranscriptFixture(
 }
 
 describe("generated-media transcript enrichment", () => {
+  it("retains model text when attaching supplemental TTS audio", async () => {
+    await withTranscriptFixture(null, async ({ scope, snapshot }) => {
+      const before = snapshot().rows.find((row) => row.event.id === MESSAGE_ID)?.event.message;
+      const audio = { type: "audio", mimeType: "audio/mpeg", url: "managed-audio" };
+      await expect(
+        rewriteAssistantTranscriptMessageByIdempotencyKey({
+          scope,
+          idempotencyKey: "completion-answer-key",
+          content: [{ type: "text", text: "Here are four options. Pick 1, 2, 3, or 4." }, audio],
+          preserveModelContent: true,
+        }),
+      ).resolves.toEqual({ messageId: MESSAGE_ID });
+      const after = snapshot().rows.find((row) => row.event.id === MESSAGE_ID)?.event.message;
+      if (!isRecord(before) || !isRecord(after)) {
+        throw new Error("completion message missing from fixture");
+      }
+      expect(after.content).toEqual(before.content);
+      const display = after.openclawDisplayContent;
+      expect(display).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "text",
+            text: "Here are four options. Pick 1, 2, 3, or 4.",
+          }),
+          expect.objectContaining(audio),
+        ]),
+      );
+      expect(JSON.stringify(display)).not.toContain("Audio reply");
+    });
+  });
+
+  it.each([false, true])(
+    "shows cleaned TTS text without exposing hidden speech on reload (streamed=%s)",
+    async (streamed) => {
+      await withTranscriptFixture(
+        null,
+        async ({ scope, snapshot }) => {
+          const before = snapshot().rows.find((row) => row.event.id === MESSAGE_ID)?.event.message;
+          const audio = { type: "audio", mimeType: "audio/mpeg", url: "managed-audio" };
+          await expect(
+            rewriteAssistantTranscriptMessageByIdempotencyKey({
+              scope,
+              idempotencyKey: "completion-answer-key",
+              content: [
+                { type: "text", text: "Here are four options. Pick 1, 2, 3, or 4." },
+                audio,
+              ],
+              preserveModelContent: true,
+            }),
+          ).resolves.toEqual({ messageId: MESSAGE_ID });
+          const after = snapshot().rows.find((row) => row.event.id === MESSAGE_ID)?.event.message;
+          if (!isRecord(after)) {
+            throw new Error("completion message missing from fixture");
+          }
+          expect(after.content).toEqual(isRecord(before) ? before.content : undefined);
+          expect(after.openclawDisplayContent).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "text",
+                text: "Here are four options. Pick 1, 2, 3, or 4.",
+              }),
+              expect.objectContaining(audio),
+            ]),
+          );
+          expect(JSON.stringify(after.openclawDisplayContent)).not.toContain("Speech only.");
+        },
+        "Here are four options. [[tts:text]]Speech only.[[/tts:text]]\n",
+        streamed
+          ? [{ type: "text", text: "Here are four options. [[tts:text]]Speech only.[[/tts:text]]" }]
+          : undefined,
+      );
+    },
+  );
+
   it.each([null, "initial-revision"])(
     "enriches only its run's reply and preserves model bytes through replay (revision=%s)",
     async (revision) => {
