@@ -371,6 +371,7 @@ src/commands/doctor/shared/legacy-runtime-model-policy.ts
 src/commands/doctor/shared/legacy-runtime-model-providers.ts
 src/commands/doctor/shared/legacy-tool-name-migration.ts
 src/commands/doctor/shared/legacy-tool-policy-scopes.ts
+src/commands/doctor/shared/legacy-tools-by-sender.ts
 src/commands/doctor/shared/legacy-web-tools-migrate.ts
 src/compat/legacy-names.ts
 src/config/agent-dirs.ts
