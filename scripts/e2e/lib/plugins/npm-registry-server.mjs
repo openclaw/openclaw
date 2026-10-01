@@ -447,4 +447,5 @@ server.listen(requestedPort, bindHost, () => {
   } finally {
     fs.rmSync(tempFile, { force: true });
   }
+  process.send?.(server.address().port);
 });
