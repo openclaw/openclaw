@@ -1,6 +1,6 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing } from "lit";
+import { html, noChange, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type {
@@ -15,6 +15,7 @@ import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
+import { livePresentation, type PresentationBinding } from "../../../lit/presentation-binding.ts";
 import "../../../components/tooltip.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import {
@@ -116,17 +117,21 @@ function renderChecks(
     sessionId?: string;
     basePath?: string;
     presented?: boolean;
+    presentation?: PresentationBinding;
   },
 ) {
   const checks = pullRequest.checks;
   const label = checks ? t(CHECK_LABEL_KEYS[checks.state]) : t("chat.pullRequests.ciMonitoring");
+  let details: HTMLDetailsElement | undefined;
+  const isPresented = () => props.presentation?.isPresented() ?? props.presented ?? true;
   const syncChecksOverlay = (element: EventTarget | null | undefined) => {
     if (!(element instanceof HTMLDetailsElement)) {
       return;
     }
+    details = element;
     syncAnchoredOverlay(element, "top", { alignment: "end" });
     const popup = element.querySelector<WaPopup>(":scope > wa-popup[data-anchored-overlay]");
-    if (popup && props.presented === false) {
+    if (popup && !isPresented()) {
       popup.active = false;
     }
   };
@@ -142,7 +147,10 @@ function renderChecks(
         ${t("chat.pullRequests.checks")}
         <span class="chat-pr__checks-chevron" aria-hidden="true">${icons.chevronDown}</span>
       </summary>
-      <wa-popup data-anchored-overlay>
+      <wa-popup
+        data-anchored-overlay
+        .active=${props.presentation ? livePresentation({ owner: props.presentation.owner, isPresented: () => isPresented() && Boolean(details?.open) }) : noChange}
+      >
         <div
           class="chat-pr__checks-menu"
           role="group"
@@ -172,7 +180,7 @@ function renderChecks(
             .sessionKey=${props.sessionKey ?? ""}
             .sessionId=${props.sessionId ?? ""}
             .basePath=${props.basePath ?? ""}
-            .presented=${props.presented ?? true}
+            .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
           ></openclaw-chat-ci-automation>
           ${
             checks
@@ -180,7 +188,7 @@ function renderChecks(
                   .pullRequest=${pullRequest}
                   .gateway=${props.gateway}
                   .sessionKey=${props.sessionKey ?? ""}
-                  .presented=${props.presented ?? true}
+                  .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
                 ></openclaw-chat-ci-details>`
               : nothing
           }
@@ -300,6 +308,7 @@ export function renderChatPullRequests(props: {
   sessionId?: string;
   basePath?: string;
   presented?: boolean;
+  presentation?: PresentationBinding;
   branch?: ControlUiSessionBranch;
   status: ControlUiSessionPullRequestSnapshot["status"];
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;

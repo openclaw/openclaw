@@ -43,6 +43,7 @@ import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import {
@@ -112,7 +113,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
   protected override async scheduleUpdate() {
-    while (this.hasUpdated && this.isConnected && document.visibilityState === "hidden") {
+    while (
+      this.hasUpdated &&
+      this.isConnected &&
+      (document.visibilityState === "hidden" || !this.presented)
+    ) {
       await new Promise<void>((resolve) => {
         this.hiddenUpdateResume = resolve;
       });
@@ -127,6 +132,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     );
     this.context?.connectionBootstrap.setForegroundPane(this, null);
     this.hiddenUpdateResume?.();
+    this.hiddenUpdateResume = undefined;
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     super.disconnectedCallback();
     // A removed Home pane cannot bubble its final loading edge. Notify its
@@ -175,6 +181,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
     const wasConversationPresented = this.conversationPresented;
     this.visuallyPresentedValue = value;
+    this.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
     this.requestUpdate("visuallyPresented", previous);
     this.notifyConversationPresentation(wasConversationPresented);
   }
@@ -208,6 +215,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     const wasConversationPresented = this.conversationPresented;
     this.headerPresentationGeneration += 1;
     this.presentedValue = value;
+    if (value) {
+      this.hiddenUpdateResume?.();
+      this.hiddenUpdateResume = undefined;
+    }
+    this.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
     this.progressCard.hostUpdate();
     this.requestUpdate("presented", previous);
     this.presentedChanged(value);
@@ -315,6 +327,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly chatState = new ChatStateController<ChatPageHost>(
     this,
     () => {
+      this.syncQueuedEditRetention();
       const activity = this.runActivity;
       if (
         activity?.client === this.publishedRunActivity?.client &&
@@ -614,4 +627,5 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;
+  protected abstract syncQueuedEditRetention(): void;
 }

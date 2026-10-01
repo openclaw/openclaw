@@ -516,13 +516,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
     this.captureArchivePresentationFocus();
-    if (
-      this.state &&
-      ((changedProperties.has("selected") && !this.selected) ||
-        (changedProperties.has("presented") && !this.presented))
-    ) {
-      cancelChatModelRecovery(this.state);
-    }
     if (changedProperties.has("sessionKey") && this.state) {
       const catalogKey = parseCatalogSessionKey(this.sessionKey);
       const nextSessionKey = catalogKey
@@ -585,7 +578,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
-    this.syncQueuedEditRetention();
     void chatAvatars.refreshSenderAgentAvatars(this.state);
     if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
