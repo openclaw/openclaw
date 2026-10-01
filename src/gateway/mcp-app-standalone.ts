@@ -65,8 +65,9 @@ function signTicket(nonce: string, expiresAtMs: number, secret: Buffer): string 
     .digest("base64url");
 }
 
-function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): string {
-  return `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs, secret)}`;
+function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): StandaloneTicket {
+  const ticket = `v1.${binding.nonce}.${binding.expiresAtMs}.${signTicket(binding.nonce, binding.expiresAtMs, secret)}`;
+  return { ticket, url: `${MCP_APP_STANDALONE_PATH}#${ticket}`, expiresAtMs: binding.expiresAtMs };
 }
 
 export function createMcpAppStandaloneTicket(params: {
@@ -104,12 +105,7 @@ export function createMcpAppStandaloneTicket(params: {
     (reusable.expiresAtMs >= expiresAtMs ||
       reusable.expiresAtMs - nowMs >= MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS)
   ) {
-    const ticket = formatTicket(reusable, params.secret ?? ticketSecret);
-    return {
-      ticket,
-      url: `${MCP_APP_STANDALONE_PATH}#${ticket}`,
-      expiresAtMs: reusable.expiresAtMs,
-    };
+    return formatTicket(reusable, params.secret ?? ticketSecret);
   }
   // Standalone issuance is additive to the existing authenticated view API.
   // At capacity, omit the link rather than failing that pre-existing path.
@@ -126,12 +122,7 @@ export function createMcpAppStandaloneTicket(params: {
     expiresAtMs,
   };
   ticketBindings.set(nonce, binding);
-  const ticket = formatTicket(binding, params.secret ?? ticketSecret);
-  return {
-    ticket,
-    url: `${MCP_APP_STANDALONE_PATH}#${ticket}`,
-    expiresAtMs,
-  };
+  return formatTicket(binding, params.secret ?? ticketSecret);
 }
 
 export function verifyMcpAppStandaloneTicket(

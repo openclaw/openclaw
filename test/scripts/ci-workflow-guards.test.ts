@@ -1620,12 +1620,7 @@ AFTER_CD
         { runnerProfile: "github" },
         { runAttempt: 2 },
         { frozenTarget: true },
-        { authorAssociation: "FIRST_TIME_CONTRIBUTOR" },
-        { authorAssociation: "FIRST_TIMER" },
-        { authorAssociation: "NONE" },
-        { authorAssociation: "MANNEQUIN" },
-        { headRepository: "contributor/openclaw" },
-        { headRepository: "" },
+        { headRepository: "contributor/openclaw", runAttempt: 2, runnerProfile: "github" },
         { repository: "contributor/openclaw" },
       ];
     for (const context of restrictedNodeContexts) {
@@ -1639,6 +1634,34 @@ AFTER_CD
         JSON.stringify(context),
       ).toBe(96);
     }
+    // Fork first attempts keep hosted check stripes but plan Node shards with the
+    // configured backend, so they get the same Node parallelism.
+    expect(
+      evaluateWorkflowExpression(nodeParallel, {
+        ...canonicalNodePr,
+        runnerBackend: "hybrid",
+        headRepository: "contributor/openclaw",
+        runnerProfile: "github",
+        preflightOutputs: { node_runner_backend: "hybrid" },
+      }),
+      "fork first attempt",
+    ).toBe(130);
+    // Author association no longer limits capacity.
+    for (const authorAssociation of [
+      "FIRST_TIME_CONTRIBUTOR",
+      "FIRST_TIMER",
+      "NONE",
+      "MANNEQUIN",
+    ]) {
+      expect(
+        evaluateWorkflowExpression(nodeParallel, {
+          ...canonicalNodePr,
+          runnerBackend: "hybrid",
+          authorAssociation,
+        }),
+        authorAssociation,
+      ).toBe(130);
+    }
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -1649,7 +1672,7 @@ AFTER_CD
       [{ eventName: "push" }, 4],
       [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 4],
       [{ eventName: "pull_request", runnerBackend: "hybrid" }, 4],
-      [{ eventName: "pull_request", authorAssociation: "NONE" }, 2],
+      [{ eventName: "pull_request", authorAssociation: "NONE" }, 4],
       [{ eventName: "push", runnerBackend: "github" }, 2],
       [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
       [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
@@ -2296,6 +2319,14 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             : "blacksmith-4vcpu-ubuntu-2404",
         );
       }
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...context,
+          authorAssociation: "NONE",
+          headRepository: "contributor/openclaw",
+        }),
+        `${jobName}: untrusted fork first attempt`,
+      ).toBe(evaluateWorkflowExpression(expression, context));
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2303,7 +2334,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         { runnerBackend: "github" },
         { eventName: "workflow_dispatch" },
         { repository: "contributor/openclaw" },
-        { authorAssociation: "NONE", headRepository: "contributor/openclaw" },
       ] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, ...override }), jobName).toBe(
           "ubuntu-24.04",
@@ -2457,7 +2487,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           runAttempt: 1,
           runnerBackend: "blacksmith",
         }),
-      ).toBe("ubuntu-24.04");
+      ).toBe("blacksmith-32vcpu-ubuntu-2404");
     },
   );
 
