@@ -47,7 +47,6 @@ import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.type
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
-import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -84,7 +83,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   PluginStateWorkerOperations &
   UserPreferenceWorkerOperations &
   CronStateWorkerOperations &
-  ProjectRegistryWorkerOperations &
   WorkerEnvironmentWorkerOperations &
   WorkerInferenceStoreOperations &
   PlacementTurnClaimWorkerOperations &
