@@ -632,16 +632,22 @@ describe("telegram media groups", () => {
       vi.useFakeTimers({ toFake: ["performance"] });
       const setTimeoutSpy = holdTelegramMediaTimeouts(forwardWindowMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      // Telegram attachment downloads routinely outlast the forward quiet window.
-      readRemoteMediaBufferSpy.mockImplementation(async () => {
-        for (const timer of resolveActiveScheduledTimersForDelay(
+      // The debouncer discards its flush promise; the delivered turn is the completion signal.
+      const elapseForwardWindow = () => {
+        const timers = resolveActiveScheduledTimersForDelay(
           setTimeoutSpy,
           clearTimeoutSpy,
           forwardWindowMs,
-        )) {
+        );
+        for (const timer of timers) {
           clearTimeout(timer.handle);
-          await timer.callback();
+          timer.callback();
         }
+        return timers.length;
+      };
+      // Telegram attachment downloads routinely outlast the forward quiet window.
+      readRemoteMediaBufferSpy.mockImplementation(async () => {
+        elapseForwardWindow();
         return {
           buffer: Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
           contentType: "image/png",
@@ -680,12 +686,7 @@ describe("telegram media groups", () => {
           me: { username: "openclaw_bot" },
           getFile: async () => ({ file_path: "photos/fwd1.jpg" }),
         });
-        await flushActiveScheduledTimersForDelay({
-          setTimeoutSpy,
-          clearTimeoutSpy,
-          delayMs: forwardWindowMs,
-          expectedCount: 1,
-        });
+        expect(elapseForwardWindow()).toBe(1);
 
         const payload = await deliveredTurn.promise;
         expect(payload.Body).toContain("Look at this");
