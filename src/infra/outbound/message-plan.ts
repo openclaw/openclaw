@@ -146,7 +146,7 @@ export function planOutboundTextMessageUnits(params: {
       ? [params.text]
       : (params.chunkerMode ?? "text") === "markdown"
         ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline")
-        : chunkByParagraph(params.text, params.textLimit);
+        : chunkByParagraph(params.text, params.textLimit, { splitLongParagraphs: false });
   if (!blockChunks.length && params.text) {
     blockChunks.push(params.text);
   }
