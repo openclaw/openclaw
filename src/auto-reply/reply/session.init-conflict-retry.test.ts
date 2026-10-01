@@ -1,13 +1,12 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   ReplySessionInitConflictError,
@@ -173,8 +172,9 @@ describe("runWithSessionInitConflictRetry", () => {
 });
 
 describe("initSessionState conflict retry wiring", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-late-conflict-");
   it("retries a late same-session lifecycle conflict without losing either update", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-late-conflict-"));
+    const root = sessionDirs.make();
     const storePath = path.join(root, "sessions.json");
     let lateWrites = 0;
     commitConflictControl.commitCalls = 0;
@@ -243,12 +243,11 @@ describe("initSessionState conflict retry wiring", () => {
       });
     } finally {
       commitConflictControl.beforeEntryMutation = undefined;
-      await fs.rm(root, { recursive: true, force: true });
     }
   });
 
   it("cancels the production backoff through the initializer signal", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-conflict-abort-"));
+    const root = sessionDirs.make();
     const controller = new AbortController();
     commitConflictControl.abortController = controller;
     commitConflictControl.commitCalls = 0;
@@ -270,7 +269,6 @@ describe("initSessionState conflict retry wiring", () => {
     } finally {
       commitConflictControl.abortController = undefined;
       commitConflictControl.remainingFailures = 0;
-      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

@@ -1,13 +1,12 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { failDurableDelivery } from "../../infra/outbound/delivery-completion.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 
 const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
@@ -58,7 +57,7 @@ function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgCo
 // one uncertainty notice and acknowledge the debt. Store, settlement, and turn
 // lifecycle are real; only transport ends are stubbed.
 describe("pending delivery notice end to end", () => {
-  let tmpDir: string;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-notice-e2e-");
   let storePath: string;
   let cfg: OpenClawConfig;
   const sessionKey = "agent:main:telegram:direct:chat-1";
@@ -75,8 +74,7 @@ describe("pending delivery notice end to end", () => {
     vi.clearAllMocks();
     sendRecoveryNotice.mockResolvedValue({ suppressed: false });
     appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-notice-e2e-"));
-    storePath = path.join(tmpDir, "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
     completion.storePath = storePath;
     cfg = { session: { store: storePath } } as OpenClawConfig;
     await replaceSessionEntry(
@@ -101,10 +99,6 @@ describe("pending delivery notice end to end", () => {
         },
       },
     );
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   const runTurn = (

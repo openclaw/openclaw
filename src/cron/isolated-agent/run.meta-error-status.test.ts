@@ -168,7 +168,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       expected: {
         status: "error",
         error: "Network timeout: no shell tool is available in this run.",
-        errorClassification: { kind: "permanent" },
+        errorClassification: { kind: "permanent", reportedByAgent: true },
       },
     },
     {

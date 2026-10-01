@@ -1,13 +1,9 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Message } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
@@ -17,20 +13,15 @@ vi.mock("../config.js", async () => ({
   getRuntimeConfig: vi.fn().mockReturnValue({}),
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-transcript-byte-");
 
 describe("SQLite transcript reader byte budget", () => {
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = tempDirs.make("openclaw-transcript-byte-");
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
   });
 
   function userMessage(content: string): Message {

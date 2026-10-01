@@ -4087,20 +4087,49 @@ describe("cron method validation", () => {
   });
 
   it.each([
-    { sessionTarget: "main", waits: false },
-    { sessionTarget: "session:agent:ops:main", waits: false },
-    { sessionTarget: "isolated", waits: true },
+    { name: "main", job: { sessionTarget: "main" }, waits: false },
+    { name: "named own session", job: { sessionTarget: "session:main" }, waits: false },
+    {
+      name: "aliased own session",
+      job: { sessionTarget: "session:agent:ops:main" },
+      mainKey: "work",
+      waits: false,
+    },
+    {
+      name: "current-session announce into the caller",
+      job: {
+        sessionTarget: "current",
+        sessionKey: "agent:ops:main",
+        delivery: { mode: "announce" },
+      },
+      waits: false,
+    },
+    {
+      // Quiet current jobs run detached and never commit into the conversation.
+      name: "quiet current-session",
+      job: { sessionTarget: "current", sessionKey: "agent:ops:main", delivery: { mode: "none" } },
+      waits: true,
+    },
+    { name: "isolated", job: { sessionTarget: "isolated" }, waits: true },
+    {
+      // The automations tool stamps the creator's session onto non-isolated jobs.
+      name: "other named session created from the caller",
+      job: { sessionTarget: "session:reports", sessionKey: "agent:ops:main" },
+      waits: true,
+    },
   ] as const)(
-    "waits for a $sessionTarget run from an agent turn only when it can finish meanwhile",
-    async ({ sessionTarget, waits }) => {
-      const context = createCronContext(
-        createCronJob({ id: "cron-1", agentId: "ops", sessionTarget }),
-      );
+    "waits for a $name run from an agent turn only when it can finish meanwhile",
+    async ({ job, mainKey, waits }) => {
+      setRuntimeConfig(mainKey ? { session: { mainKey } } : {});
+      const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops", ...job }));
 
       const { respond } = await invokeCron(
         "cron.run",
         { id: "cron-1", waitTimeoutMs: 60_000 },
-        { context, client: callerClient("ops") },
+        {
+          context,
+          client: callerClient("ops", undefined, mainKey ? `agent:ops:${mainKey}` : undefined),
+        },
       );
 
       // The caller's turn holds the main lane and its own session lane, so those runs
@@ -4118,6 +4147,45 @@ describe("cron method validation", () => {
       );
     },
   );
+
+  it("waits for a command job named for an administrator's own session", async () => {
+    // Command jobs run as processes, so a target naming the caller's session never
+    // queues them behind the caller's turn.
+    const client = callerClient("main");
+    const identity = client.internal!.agentRuntimeIdentity!;
+    const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
+    identity.delegatedAuthority = { kind: "local", ...authority };
+    const scope = createCronCreatorAuthorityRunScope(
+      identity.operationalRunInstance.runId,
+      { kind: "local" },
+      { source: "control-ui-admin" },
+    );
+    const context = createCronContext(
+      createCronJob({
+        id: "cron-1",
+        agentId: "main",
+        sessionTarget: "session:main",
+        payload: { kind: "command", argv: ["echo", "report"] },
+        delivery: { mode: "none" },
+      }),
+    );
+    try {
+      await runWithCronCreatorAuthorityCapability(scope, () =>
+        withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
+          identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint("cron.run");
+          return await invokeCron(
+            "cron.run",
+            { id: "cron-1", waitTimeoutMs: 60_000 },
+            { client, context },
+          );
+        }),
+      );
+      expect(context.cron.waitForManualRun).toHaveBeenCalledOnce();
+    } finally {
+      revokeCronCreatorAuthorityRunScope(scope);
+      releaseAgentRunDelegatedAuthority(authority);
+    }
+  });
 
   it.each([
     { caller: "allowed", releasesOutcome: true },

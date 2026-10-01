@@ -1,11 +1,10 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { loadSubagentSpawnModuleForTest } from "./subagent-spawn.test-helpers.js";
 
 type ForkSession =
@@ -13,6 +12,7 @@ type ForkSession =
 type SpawnSubagent = typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 describe("subagent fork context through SQLite and tool boundaries", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-fork-cleanup-");
   const parentKey = "agent:main:main";
   const parentId = "parent-session";
   let tempDir: string;
@@ -28,8 +28,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
-  let closeAgentDatabases: () => void;
-  let closeStateDatabase: () => void;
   let resetScheduler: () => void;
   let restoreUpsert: () => void;
   let forkedEntry: SessionEntry | undefined;
@@ -107,10 +105,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     sessions = await import("../../../config/sessions/session-accessor.js");
     ({ forkSessionEntryFromParent: forkSession } =
       await import("../../../auto-reply/reply/session-fork.js"));
-    ({ closeOpenClawAgentDatabasesForTest: closeAgentDatabases } =
-      await import("../../../state/openclaw-agent-db.js"));
-    ({ closeOpenClawStateDatabaseForTest: closeStateDatabase } =
-      await import("../../../state/openclaw-state-db.js"));
     const { testing } = await import("../swarm/swarm-scheduler.test-support.js");
     resetScheduler = () => testing.reset();
     const runtime = await import("./subagent-spawn.runtime.js");
@@ -127,7 +121,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   });
 
   beforeEach(async () => {
-    tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fork-cleanup-")));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     config = {
       session: { store: storePath, mainKey: "main", scope: "per-sender" },
@@ -206,9 +200,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
 
   afterEach(() => {
     resetScheduler();
-    closeAgentDatabases();
-    closeStateDatabase();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   afterAll(() => {

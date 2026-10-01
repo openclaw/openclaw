@@ -262,7 +262,7 @@ function captureCliBlockFallbackWrite(
     sessionKeys: [normalizedKey],
     readOnly: true,
     onReadSource: (readSource) => {
-      source = readSource;
+      source = { agentId: readSource.agentId, path: readSource.path };
     },
   })[0]?.entry;
   if (!source || !captured || captured.sessionId !== identity.sessionId) {
