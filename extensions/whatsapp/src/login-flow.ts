@@ -1,7 +1,8 @@
 // Whatsapp plugin module coordinates interactive login method selection.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup-runtime";
-import { loginWeb, loginWebWithPhoneCode, normalizeWhatsAppPairingPhoneNumber } from "./login.js";
+import { loginWeb, loginWebWithPhoneCode } from "./login.js";
+import { normalizeWhatsAppPairingPhoneNumber } from "./phone-code.js";
 
 type WhatsAppLoginMethod = "qr" | "phone-number";
 

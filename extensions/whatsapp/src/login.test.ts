@@ -4,7 +4,8 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWebAuthForLogin, restoreCredsFromBackupIfNeeded } from "./auth-store.js";
-import { loginWeb, loginWebWithPhoneCode, normalizeWhatsAppPairingPhoneNumber } from "./login.js";
+import { loginWeb, loginWebWithPhoneCode } from "./login.js";
+import { normalizeWhatsAppPairingPhoneNumber } from "./phone-code.js";
 import { createCompletedPhoneCodeCreds } from "./phone-code.test-helpers.js";
 import { createWaSocket, type waitForWaConnection } from "./session.js";
 

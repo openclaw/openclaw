@@ -11,7 +11,7 @@
     "@solidjs/web": "2.0.0-rc.18",
     "audio-decode": "3.12.0",
     "baileys": "7.0.0-rc14",
-    "libphonenumber-js": "1.13.12",
+    "libphonenumber-js": "1.13.13",
     "solid-js": "2.0.0-rc.18",
     "typebox": "1.4.3"
   },

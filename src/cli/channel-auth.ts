@@ -49,7 +49,10 @@ function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): 
   return mode === "login" ? Boolean(plugin.auth?.login) : Boolean(plugin.gateway?.logoutAccount);
 }
 
-async function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): Promise<boolean> {
+async function isConfiguredAuthPlugin(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+): Promise<boolean> {
   const key = plugin.id;
   if (isBlockedObjectKey(key)) {
     return false;
