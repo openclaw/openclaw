@@ -300,11 +300,7 @@ function failureKindForClaudeCli(
   if (isFailoverError(error) && error.reason === "timeout") {
     return "timeout";
   }
-  const inferred = diagnosticErrorFailureKind(error);
-  if (inferred) {
-    return inferred;
-  }
-  return abortSignal?.aborted ? "aborted" : undefined;
+  return diagnosticErrorFailureKind(error) ?? (abortSignal?.aborted ? "aborted" : undefined);
 }
 
 function usageField(usage: CliUsage | undefined): { usage?: CliUsage } {

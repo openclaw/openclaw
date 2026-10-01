@@ -23,7 +23,6 @@ const mocks = vi.hoisted(() => ({
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
   saveSubagentRegistryChangesToSqlite: vi.fn(),
-  saveSubagentRegistryToSqlite: vi.fn(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
 }));
 
@@ -71,7 +70,21 @@ vi.mock("../../../infra/agent-events.js", () => ({
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
   saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
-  saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
+}));
+
+vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
+  getActiveOpenClawStateDatabaseReadSnapshot: () => undefined,
+  executeExistingOpenClawStateRead: vi.fn<
+    typeof import("../../../state/openclaw-state-db-readonly.js").executeExistingOpenClawStateRead
+  >(async (_options, command) => {
+    expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+    return {
+      ok: true,
+      type: "subagents.runs",
+      sourceAdmitted: true,
+      runs: mocks.loadSubagentRegistryFromSqlite(),
+    };
+  }),
 }));
 
 vi.mock("../../timeout.js", () => ({
@@ -93,9 +106,11 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
+  let persistence: typeof import("./subagent-registry-state.js");
+  let persistAsync: typeof persistence.persistSubagentRunsToDiskAsyncOrThrow;
 
-  function hydrateAndActivateRegistry() {
-    registry.initSubagentRegistry();
+  async function hydrateAndActivateRegistry() {
+    await registry.initSubagentRegistry();
     const recoveryRuntime = {
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(async () => ({ status: "pending" })),
@@ -105,7 +120,7 @@ describe("announce loop guard (#18264)", () => {
       recoveryRuntime,
       resolveGatewayContext: () => gatewayContext as never,
     };
-    registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    await registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
   }
 
   const { flushAsync } = createLifecycleWaits("agent:main:main");
@@ -128,6 +143,10 @@ describe("announce loop guard (#18264)", () => {
   }
 
   beforeAll(async () => {
+    persistence = await import("./subagent-registry-state.js");
+    const { createSubagentPersistenceMock } =
+      await import("../../subagent-test-fixtures.test-helpers.js");
+    persistAsync = createSubagentPersistenceMock(persistence).persistSubagentRunsToDiskAsyncOrThrow;
     registry = await import("./subagent-registry.test-helpers.js");
   });
 
@@ -141,6 +160,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
     registry.resetSubagentRegistryForTests({ persist: false });
+    vi.spyOn(persistence, "persistSubagentRunsToDiskAsyncOrThrow").mockImplementation(persistAsync);
   });
 
   afterEach(async () => {
@@ -171,13 +191,14 @@ describe("announce loop guard (#18264)", () => {
         endedAt: now - 10 * 60_000,
       },
       cleanupCompletedAt: undefined,
+      completion: { required: false },
       delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
     };
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
     // Initialization finalizes expired pending rows without another recipient-visible attempt.
     const beforeInit = Date.now();
-    hydrateAndActivateRegistry();
+    await hydrateAndActivateRegistry();
     await waitForRun(entry.runId, (run) => typeof run.cleanupCompletedAt === "number");
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
@@ -211,11 +232,12 @@ describe("announce loop guard (#18264)", () => {
         endedAt: now - 60_000,
       },
       expectsCompletionMessage: true,
+      completion: { required: true },
       delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 30_000 },
     };
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
-    hydrateAndActivateRegistry();
+    await hydrateAndActivateRegistry();
     const resumed = await waitForRun(
       entry.runId,
       (run) =>
@@ -264,12 +286,14 @@ describe("announce loop guard (#18264)", () => {
               endedAt: now - 10_000,
             },
             cleanupHandled: false,
+            completion: { required: false },
+            delivery: { status: "pending" as const },
           },
         ],
       ]),
     );
 
-    hydrateAndActivateRegistry();
+    await hydrateAndActivateRegistry();
     await flushAsync();
 
     const stored = await waitForRun(

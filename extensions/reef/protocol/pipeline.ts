@@ -1,8 +1,7 @@
-import { sha256 } from "@noble/hashes/sha2.js";
 import type { AuditStore } from "./audit.js";
-import { canonicalBytes } from "./canonical.js";
+import { canonicalBytes, sha256Hex } from "./canonical.js";
 import { deterministicChecks } from "./checks.js";
-import { fromBase64url, hex } from "./encoding.js";
+import { fromBase64url } from "./encoding.js";
 import {
   bodyHash,
   openClaimed,
@@ -464,7 +463,7 @@ function computeApprovalDigest(
   proposalHash: string,
   policyVersion: string,
 ): string {
-  return hex(
-    sha256(canonicalBytes({ id, from, to, direction, bodyHash: proposalHash, policyVersion })),
+  return sha256Hex(
+    canonicalBytes({ id, from, to, direction, bodyHash: proposalHash, policyVersion }),
   );
 }

@@ -329,22 +329,16 @@ export function* resolveSessionListProfileReference(
 }
 
 export function projectSessionPeopleFacet(
-  people: Iterable<SessionPerson>,
+  people: ReadonlyMap<string, SessionPerson>,
   selectedProfileId?: string,
 ) {
-  const entries = [...people];
+  const entries = [...people.values()];
   const compare = (a: SessionPerson, b: SessionPerson) =>
     b.sessionCount - a.sessionCount ||
     (a.label ?? a.identity.id).localeCompare(b.label ?? b.identity.id) ||
     a.identity.id.localeCompare(b.identity.id);
   const visiblePeople = sortAndLimitBy(entries, SESSIONS_LIST_OWNER_LIMIT, compare);
-  const selected = selectedProfileId
-    ? sortAndLimitBy(
-        entries.filter((person) => person.identity.id === selectedProfileId),
-        1,
-        compare,
-      )[0]
-    : undefined;
+  const selected = selectedProfileId ? people.get(selectedProfileId) : undefined;
   if (selected && !visiblePeople.includes(selected)) {
     visiblePeople.splice(-1, 1, selected);
   }

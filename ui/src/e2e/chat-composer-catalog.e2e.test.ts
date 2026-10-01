@@ -89,7 +89,11 @@ suite.define(() => {
     async (width) => {
       const artifactDir = suite.artifactDir;
       await suite.withPage(
-        { viewport: { width, height: 900 }, recordVideo: { dir: artifactDir } },
+        {
+          viewport: { width, height: 900 },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? { dir: artifactDir } : undefined,
+        },
         async ({ page }) => {
           const selectedModel = { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" };
           const activeModel = { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" };

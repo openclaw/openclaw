@@ -1,5 +1,5 @@
 // Daemon lifecycle config guard tests cover config checks before service lifecycle actions.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VERSION } from "../../version.js";
 import {
   lifecycleTestRuntime,
@@ -109,13 +109,7 @@ function createServiceRunArgs() {
   };
 }
 
-let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
-let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
-let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
-
-beforeAll(async () => {
-  ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
-});
+import { runServiceRestart, runServiceStart, runServiceStop } from "./lifecycle-core.js";
 
 beforeEach(() => {
   resetLifecycleRuntimeLogs();

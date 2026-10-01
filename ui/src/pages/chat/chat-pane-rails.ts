@@ -82,13 +82,11 @@ export function createChatPaneRails(params: {
       paneLabel: params.paneLabel,
     },
     expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
-    narrowLayout: false,
     presented: params.presented,
   });
   const sessionWorkspace = {
     ...sessionWorkspaceBase,
     collapsed: !isPanelVisible("workspace"),
-    narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("workspace"),
     onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
     onToggleBrowser: state.browserPanelAvailable ? () => togglePanelSlot("browser") : undefined,

@@ -1,7 +1,10 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
@@ -33,6 +36,7 @@ import {
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
+  recordSessionStateEventAsync,
   recordSubagentSpawned,
   registerMainSessionGroupWatch,
   registerSessionStateWatch,
@@ -73,6 +77,79 @@ afterEach(async () => {
 });
 
 describe("session state events", () => {
+  it.each(
+    [
+      { change: "ownership", key: child, field: "lifecycleRunId", records: false },
+      { change: "metadata", key: child, field: "label", records: true },
+      { change: "another session", key: watcher, field: "lifecycleRunId", records: true },
+    ].flatMap(({ change, key, field, records }) =>
+      [1, 2].map((verdict) => ({ change, key, field, records, verdict })),
+    ),
+  )(
+    "records=$records after $change changes during native verdict $verdict",
+    async ({ key, field, records, verdict }) => {
+      const database = createDatabaseOptions();
+      const target = { agentId: "main", sessionKey: child, env: database.env };
+      const entry = { sessionId: "session-child", updatedAt: 1, lifecycleRunId: "original-run" };
+      await upsertSessionEntryCore(target, entry);
+      await createWatcherSession(database);
+      openOpenClawStateDatabase(database);
+      const current = await withSessionEntryReadOnlyInWorker(
+        target,
+        () => {},
+        async (read, owner) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return captureSessionEntryCurrentRead(target, owner);
+        },
+      );
+      if (!current.source) {
+        throw new Error("Expected a file-backed source");
+      }
+      let changedAfterVerdict = false;
+      let verdicts = 0;
+      const peer = new DatabaseSync(current.source.path);
+      const check = {
+        source: current.source,
+        assertCurrent: (facts: { lifecycleRunId?: unknown } | undefined) => {
+          current.assertSourceCurrent();
+          expect(facts?.lifecycleRunId).toBe("original-run");
+          if (++verdicts === verdict) {
+            peer
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+              )
+              .run(`$.${field}`, "successor-run", key);
+            changedAfterVerdict = true;
+          }
+        },
+      };
+      try {
+        const input = eventInput({ watcherSessionKeys: [], dedupeKey: "currency-signal" });
+        const options = { ...database, now: 0, sessionEntryCurrent: check };
+        const recorded = await recordSessionStateEventAsync(input, options);
+        expect(changedAfterVerdict).toBe(true);
+        if (records) {
+          expect(recorded).toMatchObject({ sessionKey: child, sessionId: entry.sessionId });
+          expect(getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
+        } else {
+          expect(recorded).toBeUndefined();
+          expect(getSessionStateVersion(child, "main", database)).toBe(0);
+        }
+
+        await upsertSessionEntryCore(target, entry);
+        expect(await recordSessionStateEventAsync(input, options)).toMatchObject({
+          sessionKey: child,
+          sessionId: entry.sessionId,
+        });
+        expect(getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
+      } finally {
+        peer.close();
+      }
+    },
+  );
+
   it("does not advance a replacement watch from older producer facts", () => {
     const database = createDatabaseOptions();
     resetHeartbeatEventsForTest();

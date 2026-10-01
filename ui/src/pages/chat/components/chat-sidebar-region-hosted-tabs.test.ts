@@ -8,7 +8,7 @@ import {
   type PanelHostedTab,
   type PanelHostedTabsElement,
 } from "../../../components/panel-hosted-tabs.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
 import "./chat-sidebar-region.runtime.ts";
 

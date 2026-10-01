@@ -54,11 +54,7 @@ export class NewSessionAttachmentDraft {
 
   reset(options: { release: boolean }) {
     this.abortReads();
-    if (options.release) {
-      releaseChatAttachmentPayloads(this.attachments);
-    }
-    this.attachments = [];
-    this.notify();
+    this.clearAfterSubmit(options.release);
   }
 
   clearAfterSubmit(release: boolean) {

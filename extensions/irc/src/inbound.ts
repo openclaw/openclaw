@@ -8,7 +8,6 @@ import {
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import {
   deliverFormattedTextWithAttachments,
@@ -187,11 +186,11 @@ export async function handleIrcInbound(params: {
   });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
-    cfg: config as OpenClawConfig,
+    cfg: config,
     surface: CHANNEL_ID,
   });
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config);
+  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config);
   const mentionNick = connectedNick?.trim() || account.nick;
   const explicitMentionRegex = mentionNick
     ? new RegExp(
@@ -221,7 +220,7 @@ export async function handleIrcInbound(params: {
       : `#${message.target}`;
   const peerId = message.isGroup ? channelTarget : message.senderNick;
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
-    cfg: config as OpenClawConfig,
+    cfg: config,
     channel: CHANNEL_ID,
     accountId: account.accountId,
     peer: {
@@ -234,7 +233,7 @@ export async function handleIrcInbound(params: {
       channelId: CHANNEL_ID,
       accountId: account.accountId,
       identity: ircIngressIdentity,
-      cfg: config as OpenClawConfig,
+      cfg: config,
       readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
     })
     .message({
@@ -412,7 +411,7 @@ export async function handleIrcInbound(params: {
     : undefined;
 
   await core.channel.inbound.dispatch({
-    cfg: config as OpenClawConfig,
+    cfg: config,
     channel: CHANNEL_ID,
     accountId: account.accountId,
     route: { agentId: route.agentId, sessionKey: route.sessionKey },

@@ -140,7 +140,6 @@ describe("restart verifier local control identity", () => {
                   sharedAuthOk,
                   authOk: mode === "none" || sharedAuthOk,
                   hasSharedAuth: mode !== "none",
-                  isLocalClient: true,
                 });
                 if (decision.kind !== "allow") {
                   reject("device identity required");

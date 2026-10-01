@@ -13,6 +13,7 @@ import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { CronListPageResult } from "../../../src/cron/service/list-page-types.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.js";
 import type {
   GatewaySessionRow as GatewayWireSessionRow,
@@ -299,14 +300,8 @@ export type CronStatus = {
 
 export type { CronServiceRunResult as CronRunResult } from "../../../src/cron/service-contract.js";
 
-export type CronJobsListResult<Row = ProtocolCronJob> = {
+export type CronJobsListResult<Row = ProtocolCronJob> = Omit<CronListPageResult, "jobs"> & {
   jobs: Row[];
-  snapshotRevision: string;
-  total: number;
-  limit: number;
-  offset: number;
-  nextOffset: number | null;
-  hasMore: boolean;
 };
 
 export type CronRunsResult = {

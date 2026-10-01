@@ -90,7 +90,6 @@ export type ConfigProps = {
   /** Curated content inside the active section; receives the canonical schema editor. */
   renderSection?: (editor: TemplateResult | typeof nothing) => TemplateResult;
   formValue: Record<string, unknown> | null;
-  originalValue: Record<string, unknown> | null;
   activeSection: string | null;
   activeSubsection: string | null;
   onRawChange: (next: string) => void;

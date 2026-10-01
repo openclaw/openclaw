@@ -1,6 +1,3 @@
-/**
- * Shared identifiers for Codex native subagent execution and completion receipts.
- */
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
@@ -10,7 +7,6 @@ export type NativeSubagentAssignment = {
   nativeTurnId: string | undefined;
 };
 
-/** Run ID prefix for native child thread assignments. */
 const CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX = "codex-thread:";
 
 /** Initial assignments use the thread locator; follow-ups belong to a native turn. */

@@ -12,7 +12,7 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-} from "./placement-session-tool-operations.js";
+} from "./placement-session-tool-operations.kernel.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { deferWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";

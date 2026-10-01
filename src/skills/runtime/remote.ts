@@ -17,10 +17,10 @@ import {
   isRemoteSkillEligibilityNode,
   parseBinProbePayload,
   supportsSystemRun,
-  supportsSystemWhich,
 } from "./remote-probe-utils.js";
 import {
   recordRemoteSkillNodeInfo,
+  remoteConnectionKey,
   removeRemoteNodeSkills,
   setRemoteSkillConnectionReconciler,
 } from "./remote-skills.js";
@@ -162,7 +162,7 @@ function buildRemoteProbeSignature(params: {
     params.command,
     normalizeLowercaseStringOrEmpty(params.platform),
     normalizeLowercaseStringOrEmpty(params.deviceFamily),
-    [...(params.commands ?? [])].toSorted(),
+    (params.commands ?? []).toSorted(),
     params.bins.toSorted(),
   ]);
 }
@@ -230,10 +230,6 @@ function recordRemoteNodeProbeFailure(
   }
 }
 
-function remoteConnectionKey(nodeId: string, connId: string): string {
-  return `${nodeId}\0${connId}`;
-}
-
 function listCurrentRemoteConnectionKeys(): ReadonlySet<string> | undefined {
   if (!remoteRegistry) {
     return undefined;
@@ -279,8 +275,7 @@ export async function primeRemoteSkillsCache() {
         { pairingGenerationAuthoritative: true },
       );
       if (
-        node.bins &&
-        node.bins.length > 0 &&
+        node.bins?.length &&
         isMacPlatform(node.platform, node.deviceFamily) &&
         supportsSystemRun(node.commands)
       ) {
@@ -432,7 +427,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   if (!isMacPlatform(platform, deviceFamily)) {
     return;
   }
-  const canWhich = supportsSystemWhich(commands);
+  const canWhich = commands?.includes("system.which") ?? false;
   const canRun = supportsSystemRun(commands);
   if (!canWhich && !canRun) {
     return;
@@ -578,12 +573,10 @@ export function getRemoteSkillEligibility(options?: {
   const currentConnections = listCurrentRemoteConnectionKeys();
   const macNodes = [...remoteNodes.values()].filter(
     (node) =>
-      node.connected &&
+      isRemoteSkillEligibilityNode(node) &&
       (!currentConnections ||
         (node.connId !== undefined &&
-          currentConnections.has(remoteConnectionKey(node.nodeId, node.connId)))) &&
-      isMacPlatform(node.platform, node.deviceFamily) &&
-      supportsSystemRun(node.commands),
+          currentConnections.has(remoteConnectionKey(node.nodeId, node.connId)))),
   );
   if (macNodes.length === 0) {
     return undefined;

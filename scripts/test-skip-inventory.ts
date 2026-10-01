@@ -57,12 +57,6 @@ const SKIP_METHODS = new Set(["only", "runIf", "skip", "skipIf", "todo"]);
 const TEST_TARGETS = new Set(["describe", "it", "test"]);
 const TRANSPARENT_CHAIN_METHODS = new Set(["concurrent", "each", "sequential"]);
 
-function listCandidateFiles(repoRoot: string): string[] {
-  return listRepoFilesSync(repoRoot, {
-    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
-  });
-}
-
 function targetFromExpression(expression: ts.Expression): SkipInventoryTarget {
   if (ts.isIdentifier(expression) && TEST_TARGETS.has(expression.text)) {
     return expression.text as SkipInventoryTarget;
@@ -182,33 +176,6 @@ function containsConditionalExpression(node: ts.Node): boolean {
   return node.forEachChild((child) => containsConditionalExpression(child) || undefined) ?? false;
 }
 
-function createFinding(params: {
-  file: string;
-  kind: SkipInventoryKind;
-  lines: string[];
-  method: TestSkipInventoryFinding["method"];
-  node: ts.Node;
-  reasonNode: ts.Node;
-  sourceFile: ts.SourceFile;
-  target: SkipInventoryTarget;
-}): TestSkipInventoryFinding {
-  const { line } = params.sourceFile.getLineAndCharacterOfPosition(params.node.getStart());
-  return {
-    excerpt: params.lines[line]?.trim() ?? "",
-    file: params.file,
-    kind: params.kind,
-    line: line + 1,
-    method: params.method,
-    reason: methodReason({
-      file: params.file,
-      method: params.method,
-      sourceFile: params.sourceFile,
-      textNode: params.reasonNode,
-    }),
-    target: params.target,
-  };
-}
-
 function scanFile(params: { file: string; sourceFile: ts.SourceFile }): TestSkipInventoryFinding[] {
   const { sourceFile } = params;
   const lines = sourceFile.text.split(/\r?\n/u);
@@ -221,14 +188,21 @@ function scanFile(params: { file: string; sourceFile: ts.SourceFile }): TestSkip
     reasonNode: ts.Node;
     target: SkipInventoryTarget;
   }): void {
-    findings.push(
-      createFinding({
+    const { line } = sourceFile.getLineAndCharacterOfPosition(details.node.getStart());
+    findings.push({
+      excerpt: lines[line]?.trim() ?? "",
+      file: params.file,
+      kind: details.kind,
+      line: line + 1,
+      method: details.method,
+      reason: methodReason({
         file: params.file,
-        lines,
+        method: details.method,
         sourceFile,
-        ...details,
+        textNode: details.reasonNode,
       }),
-    );
+      target: details.target,
+    });
   }
 
   function visit(node: ts.Node): void {
@@ -276,7 +250,9 @@ export function collectTestSkipInventoryReport(
   params: { repoRoot?: string } = {},
 ): TestSkipInventoryReport {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const files = listCandidateFiles(repoRoot);
+  const files = listRepoFilesSync(repoRoot, {
+    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
+  });
   const findings: TestSkipInventoryFinding[] = [];
   const parser = createNativeTypeScriptParser({ cwd: repoRoot });
   try {

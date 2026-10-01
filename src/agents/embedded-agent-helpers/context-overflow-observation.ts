@@ -6,21 +6,10 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
     return false;
   }
   const lower = normalizeLowercaseStringOrEmpty(errorMessage);
-  const hasCompactionTerm =
-    lower.includes("summarization failed") ||
-    lower.includes("auto-compaction") ||
-    lower.includes("compaction failed") ||
-    lower.includes("compaction");
-  if (!hasCompactionTerm) {
-    return false;
-  }
-  // Treat any likely overflow shape as a compaction failure when compaction terms are present.
-  // Providers often vary wording (e.g. "context window exceeded") across APIs.
-  if (isLikelyContextOverflowError(errorMessage)) {
-    return true;
-  }
-  // Keep explicit fallback for bare "context overflow" strings.
-  return lower.includes("context overflow");
+  return (
+    (lower.includes("summarization failed") || lower.includes("compaction")) &&
+    (isLikelyContextOverflowError(errorMessage) || lower.includes("context overflow"))
+  );
 }
 
 const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [

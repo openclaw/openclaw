@@ -285,7 +285,7 @@ extension DashboardManager {
     {
         // A saved renewal may reach the catalog before its serialized cookie
         // write finishes. The existing account lease remains valid throughout.
-        !controller.hasTLSParams(configuration.tlsParams) ||
+        controller.tlsParams != configuration.tlsParams ||
             controller.auth != configuration.auth ||
             !controller.hasCurrentBrowserSession ||
             controller.browserSession?.browserDataPrincipal != configuration.browserSession?.browserDataPrincipal ||
@@ -309,5 +309,62 @@ extension DashboardManager {
               state.gatewayRoutingGeneration == generation,
               state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
         return (configuration, endpoint)
+    }
+}
+
+extension DashboardManager {
+    func windowConfiguration(
+        for target: DashboardGatewayTarget, userGesture: Bool = false) async throws
+        -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
+    {
+        switch target {
+        case .primary:
+            while true {
+                try Task.checkCancellation()
+                let generation = self.endpointGeneration
+                let mode = AppStateStore.shared.connectionMode
+                do {
+                    let endpoint = try await primaryEndpoint(mode: mode)
+                    let config = endpoint.config
+                    let token = await authTokenProvider(config)
+                    guard self.endpointGeneration == generation else { continue }
+                    let configuration = try await dashboardConfiguration(
+                        endpoint: endpoint, mode: mode, target: target, token: token)
+                    guard self.endpointGeneration == generation else { continue }
+                    return (configuration, endpoint)
+                } catch {
+                    guard self.endpointGeneration == generation else { continue }
+                    throw error
+                }
+            }
+        case .local:
+            return try await self.localWindowConfiguration()
+        case let .profile(profileID):
+            while true {
+                try Task.checkCancellation()
+                guard !self.unavailableProfileIDs.contains(profileID) else { throw CancellationError() }
+                let revision = self.profileCredentialRevisions[profileID, default: 0]
+                var resolvedEndpoint: GatewayConnection.EndpointSnapshot?
+                do {
+                    let endpoint = try await profileEndpoint(profileID: profileID)
+                    resolvedEndpoint = endpoint
+                    let configuration = try await dashboardConfiguration(
+                        endpoint: endpoint, mode: .remote, target: target, token: endpoint.config.token)
+                    guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
+                    return (configuration, endpoint)
+                } catch {
+                    guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
+                    guard let configuration = try WindowConfiguration(
+                        signedOut: error,
+                        profileID: profileID,
+                        name: self.gatewayEntries.first { $0.id == target.bridgeID }?.name,
+                        endpoint: resolvedEndpoint,
+                        userGesture: userGesture)
+                    else { throw error }
+                    return (configuration, GatewayConnection.EndpointSnapshot(
+                        config: (configuration.url, nil, nil), routeAuthority: nil))
+                }
+            }
+        }
     }
 }

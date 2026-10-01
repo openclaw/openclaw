@@ -1,4 +1,3 @@
-// Status-reaction controller helpers for channel-visible agent activity.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { TOOL_DISPLAY_CONFIG } from "../agents/tool-display-config.js";
 import { resolveToolDisplay } from "../agents/tool-display.js";
@@ -14,30 +13,10 @@ export type StatusReactionAdapter = {
 };
 
 /** Optional emoji overrides for each status reaction state. */
-export type StatusReactionEmojis = {
-  queued?: string;
-  thinking?: string;
-  tool?: string;
-  coding?: string;
-  web?: string;
-  deploy?: string;
-  build?: string;
-  concierge?: string;
-  done?: string;
-  error?: string;
-  stallSoft?: string;
-  stallHard?: string;
-  compacting?: string;
-};
+export type StatusReactionEmojis = Partial<typeof DEFAULT_EMOJIS>;
 
 /** Timing controls for debounced status reactions and stall warnings. */
-export type StatusReactionTiming = {
-  debounceMs?: number;
-  stallSoftMs?: number;
-  stallHardMs?: number;
-  doneHoldMs?: number;
-  errorHoldMs?: number;
-};
+export type StatusReactionTiming = Partial<typeof DEFAULT_TIMING>;
 
 /** Controller API for agent status reaction state transitions. */
 export type StatusReactionController = {
@@ -54,7 +33,7 @@ export type StatusReactionController = {
 };
 
 /** Default emoji set used by status reaction controllers. */
-export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
+export const DEFAULT_EMOJIS = {
   queued: "👀",
   thinking: "🧠",
   tool: "🛠️",
@@ -71,7 +50,7 @@ export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
 };
 
 /** Default debounce, stall, and terminal hold timings for status reactions. */
-export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
+export const DEFAULT_TIMING = {
   debounceMs: 700,
   stallSoftMs: 10_000,
   stallHardMs: 30_000,

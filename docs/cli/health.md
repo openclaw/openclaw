@@ -41,6 +41,7 @@ openclaw health --debug
 - Unhealthy channel lines include the recorded startup error when available, so a stopped channel reports its failure cause alongside its state.
 - Human-readable output includes failures for plugins enabled explicitly, automatically, or by default, and warnings for configured plugins that are unavailable. It shows at most 20 plugin diagnostics plus an omitted count. These warnings also appear in `openclaw gateway health` and the Health table in `openclaw status --deep`. Plugin diagnostics are sanitized for single-line terminal output; JSON retains the snapshot values.
 - Once ready, `--json` returns the full snapshot: channels, per-account probes, plugin load state, context-engine quarantine state, model-pricing cache state, event-loop health, delivery-queue warnings, and per-agent session stores.
+- Config read failures report the unreadable path and underlying error instead of a missing-credentials diagnostic. This also applies to `openclaw gateway health`.
 - Session ages in text and JSON use the Gateway's clock.
 - Heartbeat intervals in text show the resolved cadence without rounding away milliseconds. Week units are retained for long intervals.
 - Top-level `ok: true` means the health RPC succeeded and the Gateway produced a snapshot. Queue and plugin warnings do not change it to `false`.

@@ -135,6 +135,10 @@ describe("Microsoft Teams QA transport adapter", () => {
           id: "19:qa-primary@thread.tacv2;messageid=thread-root",
           conversationType: "channel",
         },
+        channelData: {
+          team: { id: "qa-msteams-team" },
+          channel: { id: "19:qa-primary@thread.tacv2" },
+        },
       });
       expect(addInboundMessage).toHaveBeenCalledTimes(1);
       expect(config.channels?.msteams?.requireMention).toBe(true);
@@ -162,6 +166,21 @@ describe("Microsoft Teams QA transport adapter", () => {
         timestamp: expect.any(Number),
         to: "channel:qa-primary",
       });
+
+      for (const [kind, conversationType] of [
+        ["direct", "personal"],
+        ["group", "groupChat"],
+      ] as const) {
+        await adapter.sendInbound({
+          accountId: "default",
+          conversation: { id: `qa-${kind}`, kind },
+          senderId: "driver",
+          text: "qa chat ingress",
+        });
+        expect(inboundActivity).toMatchObject({ conversation: { conversationType } });
+        // Team/channel markers make a personal chat fail the Gateway's scope admission.
+        expect(inboundActivity?.channelData).toEqual({ tenant: { id: "qa-msteams-tenant" } });
+      }
     } finally {
       await adapter.cleanup?.();
     }

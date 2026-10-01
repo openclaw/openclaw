@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import Observation
 import OpenClawDiscovery
+import OpenClawKit
 import SwiftUI
 
 enum UIStrings {
@@ -123,7 +124,7 @@ enum OnboardingSystemAgentResumeStore {
             remoteTransport: state.remoteTransport,
             remoteURL: state.remoteUrl,
             remoteTarget: state.remoteTarget,
-            localStateDir: OpenClawConfigFile.stateDirURL(),
+            localStateDir: OpenClawPaths.stateDirURL,
             sshRemotePort: sshRemotePort)
     }
 
@@ -133,7 +134,7 @@ enum OnboardingSystemAgentResumeStore {
         remoteTransport: AppState.RemoteTransport,
         remoteURL: String,
         remoteTarget: String,
-        localStateDir: URL = OpenClawConfigFile.stateDirURL(),
+        localStateDir: URL = OpenClawPaths.stateDirURL,
         sshRemotePort: Int = 18789) -> String?
     {
         switch connectionMode {
@@ -531,47 +532,13 @@ enum OnboardingSystemAgentResumeStore {
         components.user = nil
         components.password = nil
         components.queryItems = components.queryItems?.filter { queryItem in
-            !self.isSensitiveQueryItemName(queryItem.name)
+            !GatewayEndpointID.isSensitiveQueryItemName(queryItem.name)
         }
         if components.queryItems?.isEmpty == true {
             components.query = nil
         }
         components.fragment = nil
         return components.string ?? normalized
-    }
-
-    private static func isSensitiveQueryItemName(_ value: String) -> Bool {
-        let normalized = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: "-", with: "_")
-        return [
-            "access_token",
-            "api_key",
-            "apikey",
-            "app_secret",
-            "auth",
-            "auth_token",
-            "authorization",
-            "client_secret",
-            "code",
-            "credential",
-            "hook_token",
-            "id_token",
-            "jwt",
-            "key",
-            "pass",
-            "passwd",
-            "password",
-            "private_key",
-            "refresh_token",
-            "secret",
-            "session",
-            "signature",
-            "token",
-            "x_amz_security_token",
-            "x_amz_signature",
-        ].contains(normalized)
     }
 }
 
@@ -699,6 +666,8 @@ struct OnboardingView: View {
     @State var installingCLI = false
     @State var cliInstallPhase: CLIInstallPhase = .idle
     @State var cliStatus: String?
+    @State var updatingGatewayHosting = false
+    @State var gatewayHostingError: String?
     @State var monitoringDiscovery = false
     @State var cliExecutableReady = false
     @State var cliInstalled = false
@@ -826,7 +795,7 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking
+        !self.isCLIBlocking && !self.isAISetupBlocking && !self.updatingGatewayHosting
     }
 
     static func remoteGatewayAdvanceDecision(

@@ -552,7 +552,12 @@ describe("scenario-flow-runner", () => {
             token: gatewayToken,
           },
         },
-        buildAgentSessionKey: () => sessionKey,
+        transport: {
+          id: "qa-channel",
+          accountId: "default",
+          buildAgentDelivery: ({ target }: { target: string }) => ({ replyTo: target }),
+        },
+        resolveAgentRoute: () => ({ sessionKey }),
         webOpenPage: async ({ url }: { url: string }) => {
           openedUrls.push(url);
           return { pageId: "control-ui-session-page" };

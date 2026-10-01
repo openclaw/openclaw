@@ -126,11 +126,7 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         settleExited({ code, signal });
       });
       child.stdin.on("error", () => {});
-      if (options.input !== undefined) {
-        child.stdin.end(options.input);
-      } else {
-        child.stdin.end();
-      }
+      child.stdin.end(options.input);
 
       let stopPromise: Promise<void> | undefined;
       return {

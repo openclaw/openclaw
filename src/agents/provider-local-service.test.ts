@@ -5,9 +5,11 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -15,7 +17,8 @@ import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { killPidIfAlive, readPidFile } from "../test-utils/process-tree.js";
 import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
 import { hasLocalServiceProcessExited } from "./provider-local-service-process.js";
 import {
@@ -32,6 +35,21 @@ import {
   waitForReadyOneShotHostExit,
 } from "./provider-local-service.test-support.js";
 import { hasManagedProviderLocalServices } from "./provider-runtime-lifecycle.js";
+
+// The one-shot host's exit handler sends SIGKILL but cannot join its service's
+// extinction. That foreign child has no retained exit handle in this process.
+async function waitForServiceExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isPidAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for local service ${pid} to exit`, { cause: error });
+    }
+    throw error;
+  }
+}
 
 async function waitForProbeFailure(url: string): Promise<void> {
   // Idle-stop assertions wait until the local service no longer responds.
@@ -629,7 +647,8 @@ describe("provider local service", () => {
         throw new Error("Expected restarted provider local service lease");
       }
       expect((await fetch(healthUrl)).ok).toBe(true);
-      expect(await waitForPidToExit(firstForkedPid)).toBe(true);
+      // Replacement acquisition joins the retired process tree before spawning anew.
+      expect(isPidAlive(firstForkedPid)).toBe(false);
       secondLease.release();
 
       const starts = (await fs.readFile(startsPath, "utf8")).trim().split("\n");
@@ -706,7 +725,7 @@ describe("provider local service", () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
-  it("does not keep one-shot hosts alive through diagnostic pipes", async () => {
+  it("does not keep one-shot hosts alive through diagnostic pipes", async ({ signal }) => {
     const port = await fixture.claimPort();
     const tempDir = tempDirs.make("openclaw-local-service-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
@@ -749,10 +768,14 @@ describe("provider local service", () => {
     let servicePid: number | undefined;
 
     try {
-      const result = await waitForReadyOneShotHostExit(parent, () => stderr);
+      const result = await withinTest(
+        waitForReadyOneShotHostExit(parent, () => stderr),
+        signal,
+      );
       expect(result, stderr).toEqual({ code: 0, signal: null });
       servicePid = await readPidFile(servicePidPath);
-      expect(await waitForPidToExit(servicePid)).toBe(true);
+      await waitForServiceExit(servicePid, signal);
+      expect(isPidAlive(servicePid)).toBe(false);
     } finally {
       killPidIfAlive(parent.pid);
       if (servicePid === undefined) {

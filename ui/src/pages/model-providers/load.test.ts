@@ -3,8 +3,9 @@ import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { loadModelProviderCost, loadModelProvidersData, loadModelProviderUsage } from "./load.ts";
+import { loadModelProviderCost, loadModelProvidersData } from "./load.ts";
 
 describe("loadModelProvidersData", () => {
   it.each([false, true])(
@@ -333,7 +334,7 @@ describe("loadModelProvidersData", () => {
         controller.abort();
       }
       const loading = Promise.allSettled([
-        loadModelProviderUsage(client, controller.signal),
+        requestProviderUsage(client, { signal: controller.signal }),
         loadModelProviderCost(client, controller.signal),
       ]);
       try {

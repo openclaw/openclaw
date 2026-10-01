@@ -13,7 +13,7 @@ import type {
 } from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { readEnvInt } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -23,10 +23,7 @@ const MAX_FINISHED_SESSION_COUNT = 50;
 const MAX_FINISHED_SESSION_OUTPUT_CHARS = 2_000_000;
 
 function clampTtl(value: number | undefined) {
-  if (value === undefined || Number.isNaN(value)) {
-    return DEFAULT_JOB_TTL_MS;
-  }
-  return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
+  return clampWithDefault(value, DEFAULT_JOB_TTL_MS, MIN_JOB_TTL_MS, MAX_JOB_TTL_MS);
 }
 
 const defaultJobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
@@ -250,32 +247,25 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   if (!scope) {
     return { ...drainSession(session), acknowledge() {} };
   }
-  const pending = session.pendingPollDelivery;
-  if (pending) {
+  let delivery = session.pendingPollDelivery;
+  if (delivery) {
     // The first retry claims the staged bytes for its turn. Parallel siblings then
     // observe that scope and cannot duplicate the recovery result.
-    if (pending.scope === scope) {
+    if (delivery.scope === scope) {
       return { output: "", outputDropped: false, acknowledge() {} };
     }
-    pending.scope = scope;
-    return {
-      output: pending.output,
-      outputDropped: pending.outputDropped,
-      acknowledge() {
-        if (session.pendingPollDelivery === pending) {
-          session.pendingPollDelivery = undefined;
-        }
-      },
-    };
+    delivery.scope = scope;
+  } else {
+    const drained = drainSession(session);
+    if (drained.output.length === 0 && !drained.outputDropped) {
+      return { ...drained, acknowledge() {} };
+    }
+    delivery = { ...drained, scope };
+    session.pendingPollDelivery = delivery;
   }
-  const drained = drainSession(session);
-  if (drained.output.length === 0 && !drained.outputDropped) {
-    return { ...drained, acknowledge() {} };
-  }
-  const delivery = { ...drained, scope };
-  session.pendingPollDelivery = delivery;
   return {
-    ...drained,
+    output: delivery.output,
+    outputDropped: delivery.outputDropped,
     acknowledge() {
       if (session.pendingPollDelivery === delivery) {
         session.pendingPollDelivery = undefined;

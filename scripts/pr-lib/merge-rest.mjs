@@ -218,6 +218,7 @@ function pullRequest(record) {
 }
 
 function beginRead(repo, pr, observe) {
+  const startedAtMs = Date.now();
   // Included headers select the protected writer route, so pooled-reader
   // permissions cannot establish the actor's access to branch policy.
   const response = parseGithubResponse(
@@ -243,10 +244,10 @@ function beginRead(repo, pr, observe) {
     "policy-reader admin access changed",
   );
   const policy = receipt ? null : readMergePolicy(repo);
-  return { authority, main: mainSha, record, policy };
+  return { authority, main: mainSha, record, policy, startedAtMs };
 }
 
-function finishRead(repo, pr, snapshot, requireStableMain) {
+function finishRead(repo, pr, snapshot, requireStableMain, priorCiObservation) {
   const current = readPullRequest(repo, snapshot.authority, pr);
   const identity = (record) => {
     const {
@@ -256,15 +257,37 @@ function finishRead(repo, pr, snapshot, requireStableMain) {
     } = pullRequest(record);
     return facts;
   };
-  requireEvidence(
-    JSON.stringify(identity(current)) === JSON.stringify(identity(snapshot.record)),
-    "PR identity, head, or lifecycle changed while reading evidence",
-  );
+  const sameIdentity =
+    JSON.stringify(identity(current)) === JSON.stringify(identity(snapshot.record));
+  const { requiredChecks: _checks, ...policy } = snapshot.policy ?? {};
+  const samePolicy =
+    !priorCiObservation ||
+    current.merged ||
+    JSON.stringify(readMergePolicy(repo)) === JSON.stringify(policy);
   const mainSha = readMain(repo);
+  if (priorCiObservation || mainSha !== snapshot.main || !sameIdentity || !samePolicy) {
+    const finishedAtMs = Date.now();
+    console.error(
+      `REST merge observation: ${JSON.stringify({
+        transport: "rest",
+        requestedGhRoute: "plain",
+        observedGhRoute: "unrecorded",
+        requestedCacheControl: "max-age=0",
+        mainBefore: snapshot.main,
+        mainAfter: mainSha,
+        startedAtMs: snapshot.startedAtMs,
+        finishedAtMs,
+        elapsedMs: finishedAtMs - snapshot.startedAtMs,
+      })}`,
+    );
+  }
+  requireEvidence(sameIdentity, "PR identity, head, or lifecycle changed while reading evidence");
+  requireEvidence(samePolicy, "branch policy changed while reading evidence");
   requireEvidence(
     !requireStableMain || current.merged || mainSha === snapshot.main,
     "main changed while reading evidence",
   );
+  snapshot.mainBefore = snapshot.main;
   snapshot.main = mainSha;
   return current;
 }
@@ -591,7 +614,13 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     );
     snapshot.policy.requiredChecks = checks;
   }
-  const current = finishRead(repo, pr, snapshot, observing && mode !== "observe-admission");
+  const current = finishRead(
+    repo,
+    pr,
+    snapshot,
+    observing && mode !== "observe-admission" && !priorCiObservation,
+    priorCiObservation,
+  );
   if (observing && !priorCiObservation && current.state === "open") {
     // REST can still be calculating after GraphQL is ready. Select the alternate
     // reader before retaining intent; mutation dispatch never changes transports.
@@ -638,6 +667,8 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
         },
       },
       restPolicy: snapshot.policy,
+      // The admission owner validates both endpoints before retaining an observation.
+      ...(priorCiObservation ? { mainBefore: snapshot.mainBefore } : {}),
       transport: "rest",
     };
   } else {

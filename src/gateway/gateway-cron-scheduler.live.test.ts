@@ -1,16 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type {
+  CronScratchGetResult,
+  CronScratchSetResult,
+} from "../../packages/gateway-protocol/src/schema/cron.types.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
-import { isProcessAlive, waitForDead, waitForPidFile } from "../../test/helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../../test/helpers/process-wait.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 
 const describeLive = isLiveTestEnabled() ? describe : describe.skip;
@@ -48,7 +59,41 @@ async function waitForJob(
 }
 
 describeLive("cron scheduling through an isolated Gateway", () => {
-  it("preserves trigger intervals, stream matches, timeout output, on-exit rearming, and declaration recovery", async () => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts.close();
+  });
+
+  async function fixturePidBeforeSettlement(
+    pidPath: string,
+    gatewayClosed: Promise<void>,
+  ): Promise<number> {
+    const readPid = async () => {
+      const text = await fs.readFile(pidPath, "utf8").catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return "";
+        }
+        throw error;
+      });
+      const pid = Number.parseInt(text, 10);
+      if (!Number.isInteger(pid) || pid <= 0) {
+        throw new Error(`timeout waiting for pid in ${pidPath}`);
+      }
+      return pid;
+    };
+    // PID publication precedes the receipt; gateway exit may beat socket delivery.
+    return await Promise.race([
+      receipts.waitFor(pidPath, "ready").then(readPid),
+      gatewayClosed.then(readPid),
+    ]);
+  }
+
+  it("preserves trigger intervals, stream matches, timeout output, on-exit rearming, and declaration recovery", async ({
+    signal,
+  }) => {
     const instance = await createOpenClawTestInstance({
       name: "cron-scheduler",
       env: {
@@ -123,15 +168,6 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           lastTriggerEvalAtMs: firstEvalAt,
           nextRunAtMs: nextEvalAt,
         });
-        await instance.stopGateway();
-        await instance.startGateway();
-        const restored = await cliJson<CronJob>(instance, ["cron", "get", watcher.id]);
-        expect(restored.state).toMatchObject({
-          triggerEvalCount: 1,
-          triggerState: first.state.triggerState,
-          lastTriggerEvalAtMs: firstEvalAt,
-          nextRunAtMs: nextEvalAt,
-        });
         const second = await waitForJob(
           instance,
           watcher.id,
@@ -144,9 +180,68 @@ describeLive("cron scheduling through an isolated Gateway", () => {
         expect(await cliJson(instance, ["cron", "runs", watcher.id])).toMatchObject({
           entries: [],
         });
+        await cliJson(instance, ["cron", "disable", watcher.id]);
+        const quiescent = await waitForJob(
+          instance,
+          watcher.id,
+          (job) => !job.enabled && job.state.runningAtMs === undefined,
+        );
+        const scratchText = "private café notes\nretained across restart";
+        expect(
+          await cliJson<CronScratchSetResult>(instance, [
+            "cron",
+            "scratch",
+            watcher.id,
+            "--set",
+            scratchText,
+            "--expected-revision",
+            "0",
+          ]),
+        ).toMatchObject({ ok: true, currentRevision: 1, scratch: { content: scratchText } });
+        await instance.stopGateway();
+        await instance.startGateway();
+        const restored = await cliJson<CronJob>(instance, ["cron", "get", watcher.id]);
+        expect(restored.enabled).toBe(false);
+        expect(restored.state).toEqual(quiescent.state);
+        expect(
+          await cliJson<CronScratchGetResult>(instance, ["cron", "scratch", watcher.id]),
+        ).toMatchObject({ currentRevision: 1, scratch: { content: scratchText } });
+        expect(
+          await cliJson<CronScratchSetResult>(instance, [
+            "cron",
+            "scratch",
+            watcher.id,
+            "--unset",
+            "--expected-revision",
+            "1",
+          ]),
+        ).toEqual({ ok: true, scratch: null, currentRevision: 2, maxBytes: 262_144 });
+        const staleScratch = await instance.cli([
+          "cron",
+          "scratch",
+          watcher.id,
+          "--set",
+          "stale resurrection",
+          "--expected-revision",
+          "1",
+          "--url",
+          instance.url,
+          "--token",
+          instance.gatewayToken,
+          "--json",
+        ]);
+        expect(staleScratch.code).toBe(1);
+        expect(staleScratch.stderr).toContain("cron scratch changed concurrently");
+        const clearedScratch = await cliJson<CronScratchGetResult>(instance, [
+          "cron",
+          "scratch",
+          watcher.id,
+        ]);
+        expect(clearedScratch.currentRevision).toBe(2);
+        expect(clearedScratch.scratch).toBeNull();
         await cliJson(instance, ["cron", "rm", watcher.id]);
         logLiveProgress(
-          "cron scheduler: quiet condition kept its 30-second floor through reads and restart",
+          "cron scheduler: quiet condition kept its 30-second floor; disabled trigger state and scratch survived restart",
         );
 
         const scriptPath = path.join(workspace, "capture-stream.js");
@@ -277,6 +372,14 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           "cron scheduler: command timeout retained progress and its timeout classification",
         );
 
+        const gateway = instance.child!;
+        const gatewayClosed = new Promise<void>((resolve) => {
+          if (gateway.exitCode !== null || gateway.signalCode !== null) {
+            resolve();
+          } else {
+            gateway.once("exit", () => resolve());
+          }
+        });
         const onExitDir = path.join(workspace, "on-exit");
         const releasePath = path.join(onExitDir, "release-first");
         const payloadCountPath = path.join(onExitDir, "payload-count");
@@ -285,25 +388,33 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           fs.writeFile(path.join(onExitDir, "watch-count"), "0"),
           fs.writeFile(payloadCountPath, "0"),
           fs.writeFile(
-            path.join(onExitDir, "watch.cjs"),
+            path.join(onExitDir, "watch.mjs"),
             [
-              "const fs = require('node:fs');",
-              "const path = require('node:path');",
+              "import fs from 'node:fs';",
+              "import path from 'node:path';",
+              `const __dirname = ${JSON.stringify(onExitDir)};`,
+              fixtureReceiptClientSource(receipts.endpoint),
               "const countPath = path.join(__dirname, 'watch-count');",
               "const count = Number(fs.readFileSync(countPath, 'utf8')) + 1;",
               "fs.writeFileSync(countPath, String(count));",
-              "fs.writeFileSync(path.join(__dirname, 'watch-' + count + '.pid'), String(process.pid));",
+              "const pidPath = path.join(__dirname, 'watch-' + count + '.pid');",
+              "fs.writeFileSync(pidPath, String(process.pid));",
+              "sendReceipt(pidPath, 'ready');",
             ].join("\n"),
           ),
           fs.writeFile(
-            path.join(onExitDir, "payload.cjs"),
+            path.join(onExitDir, "payload.mjs"),
             [
-              "const fs = require('node:fs');",
-              "const path = require('node:path');",
+              "import fs from 'node:fs';",
+              "import path from 'node:path';",
+              `const __dirname = ${JSON.stringify(onExitDir)};`,
+              fixtureReceiptClientSource(receipts.endpoint),
               "const countPath = path.join(__dirname, 'payload-count');",
               "const count = Number(fs.readFileSync(countPath, 'utf8')) + 1;",
               "fs.writeFileSync(countPath, String(count));",
-              "fs.writeFileSync(path.join(__dirname, 'payload-' + count + '.pid'), String(process.pid));",
+              "const pidPath = path.join(__dirname, 'payload-' + count + '.pid');",
+              "fs.writeFileSync(pidPath, String(process.pid));",
+              "sendReceipt(pidPath, 'ready');",
               "if (count === 1) {",
               "  const timer = setInterval(() => {",
               "    if (fs.existsSync(path.join(__dirname, 'release-first'))) {",
@@ -326,22 +437,28 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           "isolated",
           "--no-deliver",
           "--on-exit",
-          "node watch.cjs",
+          "node watch.mjs",
           "--on-exit-cwd",
           onExitDir,
           "--command-argv",
-          JSON.stringify([process.execPath, path.join(onExitDir, "payload.cjs")]),
+          JSON.stringify([process.execPath, path.join(onExitDir, "payload.mjs")]),
           "--timeout-seconds",
           "60",
         ]);
         try {
-          const firstPid = await waitForPidFile(path.join(onExitDir, "payload-1.pid"), 30_000);
+          const firstPid = await withinTest(
+            fixturePidBeforeSettlement(path.join(onExitDir, "payload-1.pid"), gatewayClosed),
+            signal,
+          );
           expect(isProcessAlive(firstPid)).toBe(true);
           expect(await cliJson(instance, ["cron", "get", onExit.id])).toMatchObject({
             enabled: false,
           });
           await cliJson(instance, ["cron", "enable", onExit.id]);
-          const replacementPid = await waitForPidFile(path.join(onExitDir, "watch-2.pid"), 30_000);
+          const replacementPid = await withinTest(
+            fixturePidBeforeSettlement(path.join(onExitDir, "watch-2.pid"), gatewayClosed),
+            signal,
+          );
           await waitForDead(replacementPid, 10_000);
           expect(
             isProcessAlive(firstPid),
@@ -356,8 +473,12 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           });
 
           await fs.writeFile(releasePath, "released");
-          const secondPid = await waitForPidFile(path.join(onExitDir, "payload-2.pid"), 30_000);
-          await Promise.all([waitForDead(firstPid, 10_000), waitForDead(secondPid, 10_000)]);
+          const secondPid = await withinTest(
+            fixturePidBeforeSettlement(path.join(onExitDir, "payload-2.pid"), gatewayClosed),
+            signal,
+          );
+          // The replacement watcher joins its predecessor's payload before admission.
+          expect(isProcessAlive(firstPid)).toBe(false);
           let completedRuns: CronRunLogEntry[] = [];
           const completionDeadline = Date.now() + 30_000;
           do {
@@ -373,6 +494,8 @@ describeLive("cron scheduling through an isolated Gateway", () => {
             await delay(100);
           } while (Date.now() < completionDeadline);
           expect(completedRuns).toHaveLength(2);
+          // Successful command receipts are published after the command scope joins exit.
+          expect(isProcessAlive(secondPid)).toBe(false);
           expect(new Set(completedRuns.map((run) => run.summary))).toEqual(
             new Set(["on-exit payload 1", "on-exit payload 2"]),
           );

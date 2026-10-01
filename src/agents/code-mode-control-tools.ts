@@ -220,8 +220,5 @@ export function reconcileCodeModeExecBeforeHookParams(params: {
   if (adjustedCodeChanged) {
     return { ...params.adjustedParams, command: adjustedCode };
   }
-  if (adjustedCommandChanged) {
-    return { ...params.adjustedParams, code: adjustedCommand };
-  }
-  return params.adjustedParams;
+  return { ...params.adjustedParams, code: adjustedCommand };
 }

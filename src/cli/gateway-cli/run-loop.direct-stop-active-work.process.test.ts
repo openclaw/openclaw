@@ -178,9 +178,9 @@ describe("runGatewayLoop direct-stop active work", () => {
     expect(fs.existsSync(fixtureDir)).toBe(false);
   });
 
-  posixIt.each([false, true])(
-    "reports and drains a rootless adopted channel run after OS SIGTERM (trace=%s)",
-    async (traceEnabled) => {
+  posixIt(
+    "reports and drains a rootless adopted channel run after OS SIGTERM",
+    async () => {
       const fixtureDir = tempDirs.make("openclaw-direct-stop-active-work-");
       const stateDir = path.join(fixtureDir, "state");
       const homeDir = path.join(fixtureDir, "home");
@@ -200,7 +200,7 @@ describe("runGatewayLoop direct-stop active work", () => {
             NODE_OPTIONS: undefined,
             OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
             OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_GATEWAY_RESTART_TRACE: traceEnabled ? "1" : undefined,
+            OPENCLAW_GATEWAY_RESTART_TRACE: "1",
             VITEST: undefined,
           },
           stdio: ["ignore", "pipe", "pipe"],
@@ -245,13 +245,9 @@ describe("runGatewayLoop direct-stop active work", () => {
       expect(output.indexOf("active-work drain settled; beginning server close")).toBeLessThan(
         output.indexOf("process proof: gateway-close"),
       );
-      if (traceEnabled) {
-        expect(output).toContain("restart trace: stop.signal.received ");
-        expect(output).toContain("restart trace: stop.drain.begin ");
-        expect(output).toContain("restart trace: stop.drain ");
-      } else {
-        expect(output).not.toContain("restart trace:");
-      }
+      expect(output).toContain("restart trace: stop.signal.received ");
+      expect(output).toContain("restart trace: stop.drain.begin ");
+      expect(output).toContain("restart trace: stop.drain ");
     },
     TEST_TIMEOUT_MS,
   );

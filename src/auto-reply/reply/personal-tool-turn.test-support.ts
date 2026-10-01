@@ -3,6 +3,8 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
@@ -17,7 +19,7 @@ import {
   withGatewayPersonalToolUser,
 } from "../../agents/tools/gateway-caller-context.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
-import type { GatewayClient } from "../../gateway/server-methods/types.js";
+import type { GatewayClient, GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -113,11 +115,22 @@ type Person = {
   profileId: string;
   senderId: string;
   name: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  readCurrentRoleAssignment?: () => string | null;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
 };
 
 export async function withPersonalToolTurn<T>(
-  params: { owner: Person; backendKind?: "embedded" | "cli"; hiddenQuestion?: boolean },
+  params: {
+    owner: Person;
+    backendKind?: "embedded" | "cli";
+    hiddenQuestion?: boolean;
+    sessionKey?: string;
+    sessionId?: string;
+    runId?: string;
+    admittedRunContext?: AdmittedRunContext;
+    gatewayContextResolver?: GatewayContextResolver;
+  },
   test: (turn: {
     steer(
       person: Person,
@@ -126,6 +139,7 @@ export async function withPersonalToolTurn<T>(
     revoke(profileId: string): void;
     complete(): void;
     operation: ReturnType<typeof createTestReplyOperation>;
+    admittedRunContext: AdmittedRunContext;
     runtimeIdentity: AgentRuntimeIdentity;
     releaseCounts: Map<string, number>;
   }) => Promise<T>,
@@ -135,11 +149,13 @@ export async function withPersonalToolTurn<T>(
   const run = createQueueTestRun({ prompt: "Arrange my view" });
   const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
   const authority = (person: Person, scopes = ["operator.read", "operator.write"]) =>
+    person.operatorAuthority ??
     createAdmittedRunOperatorAuthority({
       profileId: person.profileId,
       scopes,
       gatewayAccessGrant: null,
       modelPolicy,
+      readCurrentRoleAssignment: person.readCurrentRoleAssignment,
       assertCurrent() {
         if (revoked.has(person.profileId)) {
           throw new Error("Profile access revoked");
@@ -151,8 +167,8 @@ export async function withPersonalToolTurn<T>(
   run.operatorAuthority = authority(params.owner);
   Object.assign(run.run, {
     agentId: "main",
-    sessionKey: "agent:main:personal-tools",
-    sessionId: "personal-tools",
+    sessionKey: params.sessionKey ?? "agent:main:personal-tools",
+    sessionId: params.sessionId ?? "personal-tools",
     senderId: params.owner.senderId,
     senderName: params.owner.name,
     senderIsOwner: true,
@@ -164,21 +180,24 @@ export async function withPersonalToolTurn<T>(
     sessionId: run.run.sessionId,
   });
   operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-  const runId = "personal-tool-run";
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    operatorAuthority: run.operatorAuthority,
-    facts: {
-      agentId: "main",
-      runId,
-      ingress: { kind: "system", state: "present", boundary: "personal-tool-test" },
-    },
-  });
+  const runId = params.runId ?? "personal-tool-run";
+  const admission = params.admittedRunContext
+    ? undefined
+    : prepareAgentRunAdmission({
+        cfg: {},
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        operatorAuthority: run.operatorAuthority,
+        facts: {
+          agentId: "main",
+          runId,
+          ingress: { kind: "system", state: "present", boundary: "personal-tool-test" },
+        },
+      });
   let reject = false;
   let registeredHandle: EmbeddedAgentQueueHandle | undefined;
   try {
-    const admittedRunContext = await admission.admit("embedded", "personal-tool-test");
+    const admittedRunContext =
+      params.admittedRunContext ?? (await admission!.admit("embedded", "personal-tool-test"));
     const delegatedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
     if (!delegatedAuthority) {
       throw new Error("The test turn was not admitted");
@@ -198,8 +217,11 @@ export async function withPersonalToolTurn<T>(
         operatorAuthority: run.operatorAuthority,
         operationalRunInstance: admittedRunContext.operationalRunInstance,
         gatewayUiCommandTarget: params.owner.gatewayUiCommandTarget,
+        gatewayContextResolver: params.gatewayContextResolver,
         receiptAuthority: () => {
-          admission.assertSourceCurrent();
+          if (getAdmittedRunDelegatedAuthority(admittedRunContext) !== delegatedAuthority) {
+            throw new Error("The test turn is no longer admitted");
+          }
         },
       },
       () =>
@@ -272,6 +294,7 @@ export async function withPersonalToolTurn<T>(
             }
             return await test({
               operation,
+              admittedRunContext,
               runtimeIdentity,
               releaseCounts,
               complete: () => operation.complete(),
@@ -306,6 +329,6 @@ export async function withPersonalToolTurn<T>(
       clearAgentRunContext(runId);
     }
     operation.complete();
-    admission.close();
+    admission?.close();
   }
 }

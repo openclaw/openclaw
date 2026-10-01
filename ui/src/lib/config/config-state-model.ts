@@ -54,9 +54,6 @@ export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGateway
     configFormOriginal: initialConfigValue<Record<string, unknown> | null>(null),
     configFormDirty: false,
     configFormMode: initialConfigValue<"form" | "raw">("form"),
-    configSearchQuery: "",
-    configActiveSection: initialConfigValue<string | null>(null),
-    configActiveSubsection: initialConfigValue<string | null>(null),
     lastError: initialConfigValue<string | null>(null),
   };
 }

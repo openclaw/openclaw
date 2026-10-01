@@ -1,6 +1,6 @@
 import { asRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
+import { prepareCronRunAdmission } from "../../cron/run-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -146,7 +146,8 @@ describe("gateway update action", () => {
     "uses recorded scheduler admission %s independently of audit and chat delivery",
     async (admissionSource) => {
       const sessionKey = "agent:main:synthetic-update";
-      const admission = prepareCronPromptRunAdmission({
+      const admission = prepareCronRunAdmission({
+        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: {},
         agentId: "main",
         runId: "synthetic-run",

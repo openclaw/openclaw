@@ -1,4 +1,3 @@
-/** ACP streaming and projection settings derived from config. */
 import type { AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -29,10 +28,8 @@ function isAcpSessionUpdateTag(tag: string): tag is keyof typeof ACP_TAG_VISIBIL
   return Object.hasOwn(ACP_TAG_VISIBILITY_DEFAULTS, tag);
 }
 
-/** ACP delivery strategy for projected assistant output. */
 type AcpDeliveryMode = "live" | "final_only";
 
-/** Normalized ACP projection settings consumed by stream projectors. */
 export type AcpProjectionSettings = {
   deliveryMode: AcpDeliveryMode;
   hiddenBoundarySeparator: "space" | "paragraph";
@@ -53,7 +50,6 @@ function resolveAcpDeliveryMode(value: unknown): AcpDeliveryMode {
   return DEFAULT_ACP_DELIVERY_MODE;
 }
 
-/** Resolves ACP projection settings with bounded defaults. */
 export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjectionSettings {
   const stream = cfg.acp?.stream;
   const deliveryMode = resolveAcpDeliveryMode(stream?.deliveryMode);
@@ -70,7 +66,6 @@ export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjection
   };
 }
 
-/** Resolves ACP streaming chunk/coalescing settings. */
 export function resolveAcpStreamingConfig(params: {
   cfg: OpenClawConfig;
   provider?: string;
@@ -106,10 +101,7 @@ export function resolveAcpStreamingConfig(params: {
 }
 
 export function isAcpTagVisible(settings: AcpProjectionSettings, tag: string | undefined): boolean {
-  if (!tag) {
-    return true;
-  }
-  if (!isAcpSessionUpdateTag(tag)) {
+  if (!tag || !isAcpSessionUpdateTag(tag)) {
     return true;
   }
   const override = settings.tagVisibility[tag];

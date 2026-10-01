@@ -18,6 +18,8 @@ import {
   listMediaGenerationOperations,
 } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
+import { findDuplicateGuardImageGenerationTaskForSession } from "../media-generation-task-status.js";
+import * as announceDelivery from "../subagents/announce/subagent-announce-delivery.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   createMediaGenerationTaskLifecycle,
@@ -67,17 +69,7 @@ describe("undelivered generated media", () => {
             return append(params);
           });
         }
-        const lifecycle = createMediaGenerationTaskLifecycle({
-          toolName: "image_generate",
-          taskKind: "image_generation",
-          label: "Image generation",
-          queuedProgressSummary: "Queued image generation",
-          generatedLabel: "image",
-          failureProgressSummary: "Image generation failed",
-          eventSource: "image_generation",
-          announceType: "image generation task",
-          completionLabel: "image",
-        });
+        const lifecycle = createMediaGenerationTaskLifecycle("image");
         if (requesterState === "current") {
           await cleanupSessionStateForTest({ stateDir: state.stateDir });
         }
@@ -163,6 +155,95 @@ describe("undelivered generated media", () => {
 });
 
 describe("media admission after requester lookup", () => {
+  it("detaches through the durable transcript while keeping each requesting peer's ownership", async () => {
+    await withOpenClawTestState({ prefix: "media-shared-main-" }, async (state) => {
+      await state.writeConfig({ agents: { ownership: "explicit", entries: { main: {} } } });
+      const requesterRunSessionKey = "agent:main:main";
+      const firstKey = "agent:main:discord:default:direct:peer-a";
+      const secondKey = "agent:main:discord:default:direct:peer-b";
+      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+      const sessionId = "shared-media-requester";
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey: requesterRunSessionKey },
+        { sessionId, lifecycleRevision: "shared-lifecycle", updatedAt: 1 },
+      );
+      const prompt = "a synthetic lighthouse";
+      const firstOrigin = { channel: "discord", accountId: "default", to: "user:peer-a" };
+      const lifecycle = imageGenerationTaskLifecycle;
+      const first = await lifecycle.createTaskRun({
+        sessionKey: firstKey,
+        requesterRunSessionKey,
+        requesterAgentId: "main",
+        requesterOrigin: firstOrigin,
+        prompt,
+      });
+      expect(first).toMatchObject({
+        detach: true,
+        requesterSessionKey: firstKey,
+        requesterOrigin: firstOrigin,
+        requesterTranscript: {
+          sessionKey: requesterRunSessionKey,
+          sessionId,
+          lifecycleRevision: "shared-lifecycle",
+        },
+      });
+      const request = { prompt, agentId: "main" };
+      expect(
+        await findDuplicateGuardImageGenerationTaskForSession(firstKey, request),
+      ).toMatchObject({
+        taskId: first?.taskId,
+        requesterSessionKey: firstKey,
+      });
+      expect(
+        await findDuplicateGuardImageGenerationTaskForSession(secondKey, request),
+      ).toBeUndefined();
+      const second = await lifecycle.createTaskRun({
+        sessionKey: secondKey,
+        requesterRunSessionKey,
+        requesterAgentId: "main",
+        requesterOrigin: { ...firstOrigin, to: "user:peer-b" },
+        prompt,
+      });
+      expect(second).toMatchObject({ detach: true, requesterSessionKey: secondKey });
+      expect(second?.taskId).not.toBe(first?.taskId);
+      for (const [sessionKey, handle] of [
+        [firstKey, first],
+        [secondKey, second],
+      ] as const) {
+        expect(
+          await findDuplicateGuardImageGenerationTaskForSession(sessionKey, request),
+        ).toMatchObject({
+          taskId: handle?.taskId,
+          requesterSessionKey: sessionKey,
+        });
+      }
+      const deliver = vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockResolvedValue({
+        delivered: true,
+        path: "direct",
+      });
+      await expect(
+        lifecycle.wakeTaskCompletion({
+          handle: first,
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "generated",
+        }),
+      ).resolves.toEqual({ status: "delivered" });
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requesterSessionKey: firstKey,
+          targetRequesterSessionKey: requesterRunSessionKey,
+          preparedRequester: expect.objectContaining({
+            binding: expect.objectContaining({ sessionKey: requesterRunSessionKey, sessionId }),
+          }),
+          requesterSessionOrigin: firstOrigin,
+          completionDirectOrigin: firstOrigin,
+          directOrigin: firstOrigin,
+        }),
+      );
+    });
+  });
+
   it("keeps a missing requester inline while retaining native operation tracking", async () => {
     await withOpenClawTestState({ prefix: "media-missing-requester-" }, async (state) => {
       await state.writeConfig({ agents: { ownership: "explicit", entries: { main: {} } } });

@@ -1,8 +1,9 @@
+import { Routes } from "discord-api-types/v10";
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createChannelMessage, RequestClient } from "../internal/discord.js";
+import { RequestClient } from "../internal/discord.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 
 function createPreviewController(
@@ -303,9 +304,9 @@ describe("Discord draft preview REST lifecycle", () => {
       payload: { text: "Something failed", isError: true },
       isError: true,
       deliverNormally: async (payload) => {
-        const sent = await createChannelMessage<{ id: string }>(rest, "c1", {
+        const sent = (await rest.post(Routes.channelMessages("c1"), {
           body: { content: payload.text },
-        });
+        })) as { id: string };
         return { messageIds: [sent.id], visibleReplySent: true };
       },
     });

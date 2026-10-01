@@ -3,6 +3,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { getChildLogger } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
 import {
@@ -61,6 +62,7 @@ export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
 const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
 
 export class SqliteWorkerBroker {
+  private readonly explicitSqliteCloseReleasesNativeResources = captureSqliteWorkerClosePolicy();
   // WAL readers on independent actors can progress on separate threads without blocking writers.
   private readonly maxWorkers = Math.min(8, Math.max(2, Math.floor(availableParallelism() / 8)));
   private readonly waiters = new Map<Slot, Set<(error?: unknown) => void>>();
@@ -72,6 +74,7 @@ export class SqliteWorkerBroker {
   private readonly stores = new Map<object, StoreClient>();
   private readonly operations = new Set<Promise<void>>();
   private readonly lifecycle = createSqliteWorkerLifecycle({
+    explicitSqliteCloseReleasesNativeResources: this.explicitSqliteCloseReleasesNativeResources,
     actors: this.actors,
     slots: this.slots,
     stores: this.stores,
@@ -127,7 +130,7 @@ export class SqliteWorkerBroker {
       const generation = options.runtimeGeneration;
       generation?.retain(this, async () => {
         await this.inputAdmission.joinOpens();
-        await this.lifecycle.closeGeneration(generation);
+        return await this.lifecycle.settleGeneration(generation);
       });
     } catch (error) {
       this.clients.delete(client);
@@ -411,6 +414,7 @@ export class SqliteWorkerBroker {
 
   private async acquireSlot(options: PreparedSqliteWorkerOpen): Promise<Slot> {
     options.assertCurrent?.();
+    const shareWorkers = this.explicitSqliteCloseReleasesNativeResources;
     const available = [...this.slots].filter(
       (slot) =>
         !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
@@ -418,28 +422,25 @@ export class SqliteWorkerBroker {
     // A retained updater cannot borrow another generation's carrier or evict its actors.
     // One extra slot belongs to the broker, not to each generation requesting one.
     const borrowedGenerationSlot =
-      !process.versions.bun &&
+      shareWorkers &&
       options.runtimeGeneration !== undefined &&
       available.length === 0 &&
       this.slots.size >= this.maxWorkers &&
       ![...this.slots].some((slot) => slot.borrowedGenerationSlot);
-    // Return Bun to shared workers after https://github.com/oven-sh/bun/pull/40005 ships.
     if (
       !borrowedGenerationSlot &&
-      this.slots.size >= (process.versions.bun ? MAX_STORES : this.maxWorkers)
+      this.slots.size >= (shareWorkers ? this.maxWorkers : MAX_STORES)
     ) {
-      if (!available.length || process.versions.bun) {
+      if (!available.length || !shareWorkers) {
         const retiring = [...this.slots].filter((slot) => Boolean(slot.failed || slot.retiring));
         if (retiring.length > 0) {
           await Promise.race(retiring.map(({ exit }) => exit));
           return this.acquireSlot(options);
         }
-        if (process.versions.bun) {
-          throw new SqliteWorkerError("SQLite worker store capacity reached", "overloaded");
-        }
-        if (!available.length) {
-          throw new SqliteWorkerError("SQLite worker runtime capacity reached", "overloaded");
-        }
+        throw new SqliteWorkerError(
+          `SQLite worker ${shareWorkers ? "runtime" : "store"} capacity reached`,
+          "overloaded",
+        );
       }
       const selected = available.reduce((left, right) =>
         left.actors.size <= right.actors.size ? left : right,

@@ -8,10 +8,6 @@ import {
   currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
-  isLikelyMacosDesktopHome,
-  packageBuildCommitFromTgz,
-  packageVersionFromTgz,
-  parseMacosDsclUserHomeLine,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
@@ -38,10 +34,13 @@ import {
 import { MacosGuest } from "./guest-transports.ts";
 import { MacosDiscordSmoke } from "./macos-discord.ts";
 import { runMacosHostCommand as run } from "./macos-exec.ts";
+import { resolveMacosDesktopHome, resolveMacosDesktopUser } from "./macos-users.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
   assertDevChannelUpdate,
+  expectedPackageBuildCommit,
+  expectedPackageTargetVersion,
   installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
@@ -252,7 +251,7 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
         );
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
-            this.artifact.version || (await packageVersionFromTgz(this.artifact.path));
+            this.artifact.version || (await expectedPackageTargetVersion(this.artifact));
         }
       } else if (this.targetInstallsDirectly()) {
         this.targetExpectVersion = run(
@@ -502,64 +501,19 @@ exec node "$entry" ${argv}`,
   }
 
   private resolveDesktopUser(): string {
-    const consoleUser =
-      run("prlctl", ["exec", this.options.vmName, "/usr/bin/stat", "-f", "%Su", "/dev/console"], {
-        check: false,
-        quiet: true,
-        timeoutMs: this.phases.remainingTimeoutMs(30_000),
-      })
-        .stdout.trim()
-        .replaceAll("\r", "")
-        .split("\n")
-        .at(-1) ?? "";
-    if (
-      /^[A-Za-z0-9._-]+$/.test(consoleUser) &&
-      consoleUser !== "root" &&
-      consoleUser !== "loginwindow"
-    ) {
-      return consoleUser;
-    }
-    const users = run(
-      "prlctl",
-      ["exec", this.options.vmName, "/usr/bin/dscl", ".", "-list", "/Users", "NFSHomeDirectory"],
-      {
-        check: false,
-        quiet: true,
-        timeoutMs: this.phases.remainingTimeoutMs(30_000),
-      },
-    ).stdout.replaceAll("\r", "");
-    for (const line of users.split("\n")) {
-      const parsed = parseMacosDsclUserHomeLine(line);
-      const user = parsed?.user;
-      if (
-        user &&
-        isLikelyMacosDesktopHome(parsed?.home) &&
-        !user.startsWith("_") &&
-        user !== "Shared" &&
-        user !== ".localized"
-      ) {
-        return user;
-      }
-    }
-    return "";
+    return resolveMacosDesktopUser((args) => this.readDesktopUserOutput(args));
   }
 
   private resolveDesktopHome(user: string): string {
-    const output = run(
-      "prlctl",
-      [
-        "exec",
-        this.options.vmName,
-        "/usr/bin/dscl",
-        ".",
-        "-read",
-        `/Users/${user}`,
-        "NFSHomeDirectory",
-      ],
-      { check: false, quiet: true, timeoutMs: this.phases.remainingTimeoutMs(30_000) },
-    ).stdout.replaceAll("\r", "");
-    const match = /^NFSHomeDirectory:\s+(.+)$/m.exec(output);
-    return match?.[1]?.trim() || `/Users/${user}`;
+    return resolveMacosDesktopHome(user, (args) => this.readDesktopUserOutput(args));
+  }
+
+  private readDesktopUserOutput(args: string[]): string {
+    return run("prlctl", ["exec", this.options.vmName, ...args], {
+      check: false,
+      quiet: true,
+      timeoutMs: this.phases.remainingTimeoutMs(30_000),
+    }).stdout;
   }
 
   private restoreSnapshot(): void {
@@ -695,8 +649,7 @@ ${guestOpenClaw} --version`);
       die("package artifact missing");
     }
     const commit =
-      this.artifact.buildCommitShort ||
-      (await packageBuildCommitFromTgz(this.artifact.path)).slice(0, 7);
+      this.artifact.buildCommitShort || (await expectedPackageBuildCommit(this.artifact));
     this.verifyVersionContains(commit);
   }
 

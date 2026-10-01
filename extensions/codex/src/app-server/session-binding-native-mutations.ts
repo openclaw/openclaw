@@ -49,42 +49,12 @@ export function mutateNativeSubagentBinding({
   mutation: CodexNativeSubagentBindingMutation;
   assertCurrent: (() => void) | undefined;
 }): { result: boolean; next?: StoredCodexAppServerBinding } {
-  if (
+  const isAssignment =
     mutation.kind === "record-native-subagent-assignment" ||
-    mutation.kind === "consume-native-subagent-assignment"
-  ) {
-    if (!assertCurrent) {
-      throw new Error("Codex native assignment mutation requires current authority.");
-    }
-    assertCurrent();
-    if (
-      current?.state !== "active" ||
-      !ownsStoredSessionGeneration(identity, current) ||
-      (identity.kind === "session" && mutation.owner.sessionId !== identity.sessionId) ||
-      !matchesCodexNativeSubagentSubmissionBinding(current.binding, mutation.owner)
-    ) {
-      return { result: false };
-    }
-    const changed = mutateNativePendingAssignments({
-      current: current.nativeSubagentAssignments,
-      owner: mutation.owner,
-      assignment: mutation.assignment,
-      consume: mutation.kind === "consume-native-subagent-assignment",
-    });
-    if (!changed.applied) {
-      return { result: false };
-    }
-    const { nativeSubagentAssignments: _previous, ...bindingOwner } = current;
-    return {
-      result: true,
-      next: {
-        ...bindingOwner,
-        ...(changed.next ? { nativeSubagentAssignments: changed.next } : {}),
-      },
-    };
-  }
+    mutation.kind === "consume-native-subagent-assignment";
   if (!assertCurrent) {
-    throw new Error("Codex native subagent submission mutation requires current authority.");
+    const operation = isAssignment ? "assignment" : "subagent submission";
+    throw new Error(`Codex native ${operation} mutation requires current authority.`);
   }
   assertCurrent();
   if (
@@ -95,21 +65,29 @@ export function mutateNativeSubagentBinding({
   ) {
     return { result: false };
   }
-  const changed = mutateCodexNativeSubagentSubmissions({
-    current: current.nativeSubagentSubmissions,
-    owner: mutation.owner,
-    receipt: mutation.receipt,
-    consume: mutation.kind === "consume-native-subagent-submission",
-  });
+  const field = isAssignment ? "nativeSubagentAssignments" : "nativeSubagentSubmissions";
+  const changed = isAssignment
+    ? mutateNativePendingAssignments({
+        current: current.nativeSubagentAssignments,
+        owner: mutation.owner,
+        assignment: mutation.assignment,
+        consume: mutation.kind === "consume-native-subagent-assignment",
+      })
+    : mutateCodexNativeSubagentSubmissions({
+        current: current.nativeSubagentSubmissions,
+        owner: mutation.owner,
+        receipt: mutation.receipt,
+        consume: mutation.kind === "consume-native-subagent-submission",
+      });
   if (!changed.applied) {
     return { result: false };
   }
-  const { nativeSubagentSubmissions: _previous, ...bindingOwner } = current;
+  const { [field]: _previous, ...bindingOwner } = current;
   return {
     result: true,
     next: {
       ...bindingOwner,
-      ...(changed.next ? { nativeSubagentSubmissions: changed.next } : {}),
+      ...(changed.next ? { [field]: changed.next } : {}),
     },
   };
 }

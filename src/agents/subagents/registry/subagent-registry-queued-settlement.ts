@@ -2,9 +2,12 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { prepareTerminatedCollectorLaunch } from "../swarm/swarm-collector.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import {
+  replaceSubagentRunRecord,
+  SubagentRegistryWriteError,
+} from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createQueuedRegistrationSettlement(params: {
@@ -44,12 +47,6 @@ export function createQueuedRegistrationSettlement(params: {
         | { phase: "failed"; error: unknown }
       ))
     | undefined;
-  const replaceEntry = (record: SubagentRunRecord) => {
-    for (const key of Object.keys(entry)) {
-      Reflect.deleteProperty(entry, key);
-    }
-    Object.assign(entry, record);
-  };
   const prepareCancelledLaunch = (launchError: string) => {
     const endedAt = entry.execution.endedAt;
     if (
@@ -114,14 +111,14 @@ export function createQueuedRegistrationSettlement(params: {
       let capturing = true;
       let published = false;
       let observedClaim = false;
-      const stopObservingClaim = onSubagentRegistryPersisted(() => {
+      const stopObservingClaim = subscribeSubagentRunChanges("persistence", () => {
         if (exactEntry() && entry.killIntent) {
           observedClaim = true;
         }
       });
       try {
         let publication: Promise<void>;
-        replaceEntry(staged);
+        replaceSubagentRunRecord(entry, staged);
         try {
           publication = manager.persistAsyncOrThrow(
             context,
@@ -147,7 +144,7 @@ export function createQueuedRegistrationSettlement(params: {
                   hasPreimage() &&
                   ownsSession() === ownedSession
                 ) {
-                  replaceEntry(staged);
+                  replaceSubagentRunRecord(entry, staged);
                   if (stage === "terminal") {
                     params.onTerminalPublished(entry.execution);
                   }
@@ -163,7 +160,7 @@ export function createQueuedRegistrationSettlement(params: {
             entry.execution === staged.execution &&
             isDeepStrictEqual(entry, stagedSnapshot)
           ) {
-            replaceEntry(previous);
+            replaceSubagentRunRecord(entry, previous);
           }
           capturing = false;
         }

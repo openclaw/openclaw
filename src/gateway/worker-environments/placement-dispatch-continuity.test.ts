@@ -103,7 +103,7 @@ describe("worker placement restart continuity", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
       const restarted = createTestHarness({}, restartedStore);
       restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);

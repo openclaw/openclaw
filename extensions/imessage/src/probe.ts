@@ -187,12 +187,7 @@ function selectorsFromPayload(payload: Record<string, unknown>): Record<string, 
   return selectors;
 }
 
-// Probe whether the installed imsg CLI accepts `--file` on the `send-rich`
-// subcommand (added by openclaw/imsg#114, which lets a single bridge call
-// combine `--reply-to` and an attachment). We grep the help output rather
-// than trying a real send so the probe is side-effect-free, and we resolve
-// to `false` on any failure (timeout, non-zero exit, missing binary) so
-// callers fall back to the legacy throw rather than silently dropping.
+// Inspect help without sending; failed probes leave the capability disabled.
 async function probeIMessageCliFlag(
   cliPath: string,
   timeoutMs: number,
@@ -259,12 +254,7 @@ export async function probeIMessagePrivateApi(
     // imsg explains an unavailable bridge here (SIP, library validation, macOS
     // 26 AMFI gate). Carry it forward so blocked actions can show the reason.
     const statusMessage = typeof payload?.message === "string" ? payload.message : undefined;
-    // Probe `imsg send-rich --help` for the `--file` flag added by
-    // openclaw/imsg#114. We do this even when the bridge is unavailable
-    // because the help output ships with the CLI binary itself, and the
-    // result is what gates whether reply-with-attachment can route through
-    // the threaded send path. Treat any failure as "not supported" so
-    // callers fall back to the legacy throw rather than silently dropping.
+    // CLI flags remain discoverable while the native bridge is unavailable.
     const sendRichSupportsAttachment = await probeIMessageCliFlag(
       key,
       timeoutMs,
@@ -316,11 +306,6 @@ export async function probeIMessagePrivateApi(
   }
 }
 
-/**
- * Probe iMessage RPC availability.
- * @param timeoutMs - Explicit timeout in ms. If undefined, uses config or default.
- * @param opts - Additional options (cliPath, dbPath, runtime).
- */
 export async function probeIMessage(
   timeoutMs?: number,
   opts: IMessageProbeOptions = {},
@@ -333,7 +318,6 @@ export async function probeIMessage(
     cliPath,
     remoteHost: opts.remoteHost ?? cfg?.channels?.imessage?.remoteHost,
   });
-  // Use explicit timeout if provided, otherwise fall back to config, then default
   const effectiveTimeout =
     timeoutMs ?? cfg?.channels?.imessage?.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 

@@ -71,12 +71,34 @@ describe("Gateway request start fairness", () => {
     expect(starts).toEqual(Array.from({ length: 65 }, (_, index) => index));
   });
 
-  it("rejects count overflow without starting it inline and releases waiting capacity", async () => {
+  it("bounds one connection without consuming another connection's start capacity", async () => {
     vi.spyOn(performance, "now").mockReturnValue(0);
     const accepted = Array.from({ length: 257 }, () => requestStart());
     expect(scheduleGatewayRequestStart(1, workRequest, "connection")).toBeNull();
-    await Promise.all(accepted);
+    const other = requestStart(1, workRequest, "another-connection");
+    await Promise.all([...accepted, other]);
     await expect(requestStart()).resolves.toBeUndefined();
+  });
+
+  it("admits a hundred clients' grouped setup requests in FIFO order", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    const methods = [
+      "exec.approval.list",
+      "plugin.approval.list",
+      "openclaw.approval.list",
+      "cron.status",
+      "cron.list",
+    ];
+    const starts: number[] = [];
+    const setup = Array.from({ length: 100 }, (_, client) =>
+      methods.map((method, offset) =>
+        requestStart(200, { method }, `client-${client}`).then(() => {
+          starts.push(client * methods.length + offset);
+        }),
+      ),
+    ).flat();
+    await Promise.all(setup);
+    expect(starts).toEqual(Array.from({ length: 500 }, (_, index) => index));
   });
 
   it("accounts the original serialized bytes independently of frame count", async () => {
@@ -92,8 +114,8 @@ describe("Gateway request start fairness", () => {
   it("reserves subscription capacity while preserving FIFO order and work limits", async () => {
     vi.spyOn(performance, "now").mockReturnValue(0);
     const starts: number[] = [];
-    const work = Array.from({ length: 257 }, (_, index) =>
-      requestStart().then(() => starts.push(index)),
+    const work = Array.from({ length: 1025 }, (_, index) =>
+      requestStart(1, workRequest, `work-${index % 4}`).then(() => starts.push(index)),
     );
     const controls = Array.from({ length: 600 }, (_, index) =>
       requestStart(180, subscribeRequest, `client-${Math.floor(index / 6)}`).then(() =>
@@ -109,7 +131,7 @@ describe("Gateway request start fairness", () => {
       expect(scheduleGatewayRequestStart(bytes, request, "another-client")).toBeNull();
     }
     await Promise.all([...work, ...controls]);
-    expect(starts).toEqual(Array.from({ length: 857 }, (_, index) => index));
+    expect(starts).toEqual(Array.from({ length: 1625 }, (_, index) => index));
     await expect(requestStart()).resolves.toBeUndefined();
   });
 

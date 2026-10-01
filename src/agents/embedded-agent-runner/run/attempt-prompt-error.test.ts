@@ -5,18 +5,19 @@ const hoisted = vi.hoisted(() => ({
   isMidTurnPrecheckSignal: vi.fn(() => false),
   isSessionsYieldAbortError: vi.fn(() => false),
   markYieldAborted: vi.fn(),
-  persistSessionsYieldContextMessage: vi.fn(async () => undefined),
+  sendCustomMessage: vi.fn(async () => undefined),
   releaseLeasedSteering: vi.fn(),
   stripSessionsYieldArtifacts: vi.fn(),
-  waitForSessionsYieldAbortSettle: vi.fn(async () => undefined),
+  waitForEmbeddedAbortSettle: vi.fn(async () => undefined),
   withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
 }));
 
 vi.mock("./attempt-sessions-yield.js", () => ({
   isSessionsYieldAbortError: hoisted.isSessionsYieldAbortError,
-  persistSessionsYieldContextMessage: hoisted.persistSessionsYieldContextMessage,
   stripSessionsYieldArtifacts: hoisted.stripSessionsYieldArtifacts,
-  waitForSessionsYieldAbortSettle: hoisted.waitForSessionsYieldAbortSettle,
+}));
+vi.mock("./attempt-subscription-cleanup.js", () => ({
+  waitForEmbeddedAbortSettle: hoisted.waitForEmbeddedAbortSettle,
 }));
 vi.mock("./midturn-precheck.js", () => ({
   isMidTurnPrecheckSignal: hoisted.isMidTurnPrecheckSignal,
@@ -32,6 +33,7 @@ function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInpu
     activeSession: {
       agent: { state: { messages: [] } },
       messages: [],
+      sendCustomMessage: hoisted.sendCustomMessage,
       sessionManager: SessionManager.inMemory(),
     },
     attempt: { runId: "run-1", sessionId: "session-1" },
@@ -96,15 +98,22 @@ describe("handleEmbeddedAttemptPromptError", () => {
     await expect(handleEmbeddedAttemptPromptError(input)).resolves.toEqual({});
 
     expect(hoisted.markYieldAborted).toHaveBeenCalledOnce();
-    expect(hoisted.waitForSessionsYieldAbortSettle).toHaveBeenCalledWith({
-      settlePromise,
+    expect(hoisted.waitForEmbeddedAbortSettle).toHaveBeenCalledWith({
+      promise: settlePromise,
       runId: "run-1",
       sessionId: "session-1",
+      reason: "sessions_yield",
     });
     expect(hoisted.stripSessionsYieldArtifacts).toHaveBeenCalledWith(input.activeSession);
-    expect(hoisted.persistSessionsYieldContextMessage).toHaveBeenCalledWith(
-      input.activeSession,
-      "wait for follow-up",
+    expect(hoisted.sendCustomMessage).toHaveBeenCalledWith(
+      {
+        customType: "openclaw.sessions_yield",
+        content:
+          "wait for follow-up\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]",
+        display: false,
+        details: { source: "sessions_yield", message: "wait for follow-up" },
+      },
+      { triggerTurn: false },
     );
   });
 
@@ -112,7 +121,7 @@ describe("handleEmbeddedAttemptPromptError", () => {
     const recoveryError = new Error("settle failed");
     let marked = false;
     hoisted.isSessionsYieldAbortError.mockReturnValue(true);
-    hoisted.waitForSessionsYieldAbortSettle.mockImplementationOnce(async () => {
+    hoisted.waitForEmbeddedAbortSettle.mockImplementationOnce(async () => {
       expect(marked).toBe(true);
       throw recoveryError;
     });

@@ -43,6 +43,7 @@ vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
 
 vi.mock("../../sessions/session-state-events.js", () => ({
   recordSessionStateEvent: hoisted.recordSessionStateEvent,
+  recordSessionStateEventAsync: hoisted.recordSessionStateEvent,
 }));
 
 vi.mock("../../sessions/session-upstream-links.js", () => ({

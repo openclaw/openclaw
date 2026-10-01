@@ -297,7 +297,6 @@ extension WatchInboxStore {
     private static var persistedDeliveryResult: WatchReplySendResult {
         WatchReplySendResult(
             delivery: .queued,
-            transport: "journal",
             errorMessage: nil,
             requiresCanonicalReadback: false)
     }
@@ -306,6 +305,6 @@ extension WatchInboxStore {
         let message = (error as? OpenClawWatchChatDeliveryError)?.message
             ?? String(localized: "Couldn't save this Watch message. Try again when storage is available.")
         return WatchReplySendResult(
-            delivery: .notSent, transport: "none", errorMessage: message, requiresCanonicalReadback: false)
+            delivery: .notSent, errorMessage: message, requiresCanonicalReadback: false)
     }
 }

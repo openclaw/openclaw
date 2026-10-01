@@ -34,6 +34,7 @@ import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createNullWriter } from "../../shared/null-writer.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   isTerminalInteractive,
@@ -56,7 +57,7 @@ import {
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
 import { signalGatewayRestart } from "./lifecycle-unmanaged.js";
-import { createDaemonActionContext, createNullWriter } from "./response.js";
+import { createDaemonActionContext } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -97,25 +98,16 @@ async function handleSystemScopeSystemdGateway(
     return null;
   }
   const stdout = createNullWriter();
-  if (action === "stop") {
-    await stopSystemdService({
-      stdout,
-      env: process.env,
-      onMutation: createGatewayLifecycleMutationAudit({ action: "stop" }),
-    });
-    return {
-      result: "stopped",
-      message: `Gateway stopped via system-scope systemd unit ${installed.unitName}.`,
-    };
-  }
-  await restartSystemdService({
+  const runAction = action === "stop" ? stopSystemdService : restartSystemdService;
+  await runAction({
     stdout,
     env: process.env,
-    onMutation: createGatewayLifecycleMutationAudit({ action: "restart" }),
+    onMutation: createGatewayLifecycleMutationAudit({ action }),
   });
+  const result = action === "stop" ? "stopped" : "restarted";
   return {
-    result: "restarted",
-    message: `Gateway restarted via system-scope systemd unit ${installed.unitName}.`,
+    result,
+    message: `Gateway ${result} via system-scope systemd unit ${installed.unitName}.`,
   };
 }
 

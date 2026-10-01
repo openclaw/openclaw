@@ -52,7 +52,6 @@ export async function installBenchmarkRegistryRuntime(mode: "memory" | "durable"
         await import("../src/agents/subagents/registry/subagent-registry.store.sqlite.js");
       replaceModule("../src/agents/subagents/registry/subagent-registry.store.sqlite.ts", {
         ...sqlite,
-        saveSubagentRegistryToSqlite: () => {},
         saveSubagentRegistryChangesToSqlite: () => {},
       } satisfies typeof sqlite);
     }

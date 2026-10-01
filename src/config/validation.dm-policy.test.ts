@@ -15,26 +15,30 @@ beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
-function createDmPolicyRegistry(params: {
-  channelId: string;
+function validateDmPolicy(
+  channels: Record<string, unknown>,
   doctorCapabilities?: {
     dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
     openDmRequiresAllowFromWildcard?: boolean;
-  };
-}): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      createPluginManifestRecordFixture({
-        id: params.channelId,
-        channels: [params.channelId],
-        packageChannel: {
-          id: params.channelId,
-          doctorCapabilities: params.doctorCapabilities,
+  },
+) {
+  return validateConfigObjectWithPlugins(
+    { channels },
+    {
+      pluginMetadataSnapshot: {
+        manifestRegistry: {
+          diagnostics: [],
+          plugins: Object.keys(channels).map((id) =>
+            createPluginManifestRecordFixture({
+              id,
+              channels: [id],
+              packageChannel: { id, doctorCapabilities },
+            }),
+          ),
         },
-      }),
-    ],
-  };
+      },
+    },
+  );
 }
 
 describe("validateConfigObjectWithPlugins DM policy warnings", () => {
@@ -80,11 +84,12 @@ describe("validateConfigObjectWithPlugins DM policy warnings", () => {
     },
   ];
   it.each(
-    ownerCases.flatMap((scenario) =>
-      (["plus", "core"] as const).flatMap((first) =>
-        [true, false].map((requiresWildcard) => ({ scenario, first, requiresWildcard })),
-      ),
-    ),
+    ownerCases.flatMap((scenario) => {
+      // Ineligible replacements must lose even when first; selected peers retain both orders.
+      const orders =
+        scenario.expected === "core" ? (["plus"] as const) : (["plus", "core"] as const);
+      return orders.map((first) => ({ scenario, first, requiresWildcard: first === "plus" }));
+    }),
   )(
     "uses $scenario.name DM capability with $first first and requiresWildcard=$requiresWildcard",
     ({ scenario, first, requiresWildcard }) => {
@@ -163,141 +168,62 @@ describe("validateConfigObjectWithPlugins DM policy warnings", () => {
   );
 
   it("respects channel metadata that open DMs do not require a wildcard", () => {
-    const result = validateConfigObjectWithPlugins(
+    const result = validateDmPolicy(
       {
-        channels: {
-          qqbot: {
-            dmPolicy: "open",
-            allowFrom: ["openclaw:approval-disabled"],
-            accounts: {
-              ops: {
-                dmPolicy: "open",
-                allowFrom: ["openclaw:approval-disabled"],
-              },
-            },
-          },
+        qqbot: {
+          dmPolicy: "open",
+          allowFrom: ["openclaw:approval-disabled"],
+          accounts: { ops: { dmPolicy: "open", allowFrom: ["openclaw:approval-disabled"] } },
         },
       },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createDmPolicyRegistry({
-            channelId: "qqbot",
-            doctorCapabilities: { openDmRequiresAllowFromWildcard: false },
-          }),
-        },
-      },
+      { openDmRequiresAllowFromWildcard: false },
     );
-
     expect(result).toMatchObject({ ok: true, warnings: [] });
   });
 
   it("uses manifest metadata to skip nested-only DM config shapes", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        channels: {
-          matrix: {
-            dm: {
-              policy: "open",
-            },
-          },
-        },
-      },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createDmPolicyRegistry({
-            channelId: "matrix",
-            doctorCapabilities: { dmAllowFromMode: "nestedOnly" },
-          }),
-        },
-      },
+    const result = validateDmPolicy(
+      { matrix: { dm: { policy: "open" } } },
+      { dmAllowFromMode: "nestedOnly" },
     );
-
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(
-        result.warnings.filter((warning) => warning.path.startsWith("channels.matrix")),
-      ).toEqual([]);
-    }
+    expect(result.warnings.filter((warning) => warning.path.startsWith("channels.matrix"))).toEqual(
+      [],
+    );
   });
 
   it("does not warn for disabled channels or accounts", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        channels: {
-          mattermost: {
-            enabled: false,
-            dmPolicy: "open",
-            accounts: {
-              team: {
-                dmPolicy: "open",
-              },
-            },
-          },
-          slack: {
-            accounts: {
-              work: {
-                enabled: false,
-                dmPolicy: "open",
-              },
-            },
-          },
-        },
+    const result = validateDmPolicy({
+      mattermost: {
+        enabled: false,
+        dmPolicy: "open",
+        accounts: { team: { dmPolicy: "open" } },
       },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: {
-            diagnostics: [],
-            plugins: [
-              ...createDmPolicyRegistry({ channelId: "mattermost" }).plugins,
-              ...createDmPolicyRegistry({ channelId: "slack" }).plugins,
-            ],
-          },
-        },
-      },
-    );
-
+      slack: { accounts: { work: { enabled: false, dmPolicy: "open" } } },
+    });
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(
-        result.warnings.filter((warning) => warning.path.startsWith("channels.mattermost")),
-      ).toEqual([]);
-      expect(
-        result.warnings.filter((warning) => warning.path.startsWith("channels.slack")),
-      ).toEqual([]);
-    }
+    expect(
+      result.warnings.filter((warning) => warning.path.startsWith("channels.mattermost")),
+    ).toEqual([]);
+    expect(result.warnings.filter((warning) => warning.path.startsWith("channels.slack"))).toEqual(
+      [],
+    );
   });
 
   it("does not suggest channel allowFrom as sufficient when account allowFrom overrides it", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        channels: {
-          mattermost: {
-            allowFrom: ["*"],
-            accounts: {
-              team: {
-                dmPolicy: "open",
-                allowFrom: [],
-              },
-            },
-          },
-        },
+    const result = validateDmPolicy({
+      mattermost: {
+        allowFrom: ["*"],
+        accounts: { team: { dmPolicy: "open", allowFrom: [] } },
       },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createDmPolicyRegistry({ channelId: "mattermost" }),
-        },
-      },
-    );
-
+    });
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      const warning = result.warnings.find(
-        (entry) => entry.path === "channels.mattermost.accounts.team.allowFrom",
-      );
-      expect(warning?.message).toContain(
-        "remove channels.mattermost.accounts.team.allowFrom to inherit channels.mattermost.allowFrom",
-      );
-      expect(warning?.message).not.toContain("(or channels.mattermost.allowFrom)");
-    }
+    const warning = result.warnings.find(
+      (entry) => entry.path === "channels.mattermost.accounts.team.allowFrom",
+    );
+    expect(warning?.message).toContain(
+      "remove channels.mattermost.accounts.team.allowFrom to inherit channels.mattermost.allowFrom",
+    );
+    expect(warning?.message).not.toContain("(or channels.mattermost.allowFrom)");
   });
 });

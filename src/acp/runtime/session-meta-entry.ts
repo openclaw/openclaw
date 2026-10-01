@@ -15,8 +15,11 @@ import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-o
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import type { AcpSessionControlBinding } from "./session-control-owner.js";
-import type { AcpSessionEntryExpectation } from "./session-meta-entry.kernel.js";
+import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
+import {
+  captureAcpSessionEntryBinding,
+  type AcpSessionEntryExpectation,
+} from "./session-meta-entry.kernel.js";
 import type {
   AcpSessionEntryMutation,
   AcpSessionEntryMutationResult,
@@ -72,11 +75,7 @@ export async function updateAcpSessionStoreEntry(params: {
               expectedEntry:
                 params.expectedEntry === null
                   ? null
-                  : {
-                      sessionId: params.expectedEntry.sessionId,
-                      lifecycleRevision: params.expectedEntry.lifecycleRevision,
-                      sessionStartedAt: params.expectedEntry.sessionStartedAt,
-                    },
+                  : captureAcpSessionEntryBinding(params.expectedEntry),
               expectedControlBinding: params.expectedControlBinding,
             },
           })

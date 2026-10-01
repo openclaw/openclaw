@@ -17,6 +17,7 @@ import type {
 import type { CronStoreFile } from "../../../cron/types.js";
 import { syncDirectoryIfSupported } from "../../../infra/directory-durability.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { isUpdateRehearsalReadOnlyPath } from "../../../infra/update-rehearsal-paths.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 const LEGACY_CRON_ARCHIVE_SUFFIX = ".migrated";
@@ -89,7 +90,9 @@ async function legacyCronFileExists(filePath: string): Promise<boolean> {
   }
 }
 
-type ArchiveOutcome = { ok: true; archivePath?: string } | { ok: false; reason: string };
+type ArchiveOutcome =
+  | { ok: true; archivePath?: string }
+  | { ok: false; reason: string; deferred?: true };
 
 async function sha256File(filePath: string): Promise<string> {
   return createHash("sha256")
@@ -228,7 +231,7 @@ async function copyLegacyCronFileAcrossDevices(
         reason: `${formatErrorMessage(err)}; the durable archive is preserved at ${archivePath} because the source was already removed`,
       };
     }
-    const cleanupFailures: string[] = [];
+    let cleanupReason = "";
     if (archiveCreated) {
       let archiveRemoved = false;
       try {
@@ -242,14 +245,11 @@ async function copyLegacyCronFileAcrossDevices(
         archiveRemoved = true;
         await syncDirectoryIfSupported(path.dirname(archivePath));
       } catch (cleanupErr) {
-        cleanupFailures.push(
-          archiveRemoved
-            ? `the partial archive was removed, but cleanup directory sync failed: ${formatErrorMessage(cleanupErr)}`
-            : `partial archive remains at ${archivePath} because cleanup failed: ${formatErrorMessage(cleanupErr)}`,
-        );
+        cleanupReason = archiveRemoved
+          ? `; the partial archive was removed, but cleanup directory sync failed: ${formatErrorMessage(cleanupErr)}`
+          : `; partial archive remains at ${archivePath} because cleanup failed: ${formatErrorMessage(cleanupErr)}`;
       }
     }
-    const cleanupReason = cleanupFailures.length > 0 ? `; ${cleanupFailures.join("; ")}` : "";
     return { ok: false, reason: `${formatErrorMessage(err)}${cleanupReason}` };
   }
 }
@@ -271,6 +271,13 @@ export async function archiveLegacyCronFile(
     return { ok: false, reason: formatErrorMessage(err) };
   }
 
+  if (isUpdateRehearsalReadOnlyPath(filePath, process.env)) {
+    return {
+      ok: false,
+      deferred: true,
+      reason: `Update rehearsal retained legacy cron source at ${filePath}; Doctor will archive it during the live update.`,
+    };
+  }
   try {
     await fs.rename(filePath, archivePath);
   } catch (err) {
@@ -455,7 +462,6 @@ function resolveCronStateId(job: Record<string, unknown>): string | undefined {
   return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
 }
 
-/** Return true when legacy cron JSON or state files exist for a store path. */
 export async function legacyCronStoreFilesExist(storePath: string): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   return (
@@ -466,7 +472,7 @@ export async function legacyCronStoreFilesExist(storePath: string): Promise<bool
 
 type LegacyCronArchiveResult =
   | { ok: true }
-  | { ok: false; failures: Array<{ path: string; reason: string }> };
+  | { ok: false; failures: Array<{ path: string; reason: string; deferred?: true }> };
 
 /** Archive legacy cron JSON/state files after successful migration. */
 export async function archiveLegacyCronStoreForMigration(
@@ -475,7 +481,7 @@ export async function archiveLegacyCronStoreForMigration(
 ): Promise<LegacyCronArchiveResult> {
   const resolvedStorePath = path.resolve(storePath);
   const statePath = resolveLegacyCronStatePath(resolvedStorePath);
-  const failures: Array<{ path: string; reason: string }> = [];
+  const failures: Array<{ path: string; reason: string; deferred?: true }> = [];
   const archived: Array<{ path: string; archivePath: string; sha256?: string }> = [];
   const rollbackArchived = async (): Promise<void> => {
     for (const target of archived.toReversed()) {
@@ -513,7 +519,11 @@ export async function archiveLegacyCronStoreForMigration(
   for (const target of targets) {
     const outcome = await archiveLegacyCronFile(target.path, target.sha256);
     if (!outcome.ok) {
-      failures.push({ path: target.path, reason: outcome.reason });
+      failures.push({
+        path: target.path,
+        reason: outcome.reason,
+        ...(outcome.deferred ? { deferred: true } : {}),
+      });
       await rollbackArchived();
       break;
     }
@@ -531,7 +541,6 @@ export async function archiveLegacyCronStoreForMigration(
   return failures.length === 0 ? { ok: true } : { ok: false, failures };
 }
 
-/** Load legacy cron JSON/state files into the current loaded-store shape for migration. */
 export async function loadLegacyCronStoreForMigration(
   storePath: string,
 ): Promise<LoadedCronStore & { migrationSource?: LegacyCronMigrationSource }> {
@@ -589,14 +598,14 @@ export async function loadLegacyCronStoreForMigration(
         configJobRuntimeEntries.push(isRecord(entry) ? structuredClone(entry) : {});
         mergeStateFileEntry(job, entry);
       }
-    } else if (!hasLegacyInlineState) {
+    } else {
       for (const job of jobs) {
-        backfillMissingRuntimeFields(job);
+        if (hasLegacyInlineState) {
+          ensureJobStateObject(job);
+        } else {
+          backfillMissingRuntimeFields(job);
+        }
       }
-    }
-
-    for (const job of jobs) {
-      ensureJobStateObject(job);
     }
 
     return {

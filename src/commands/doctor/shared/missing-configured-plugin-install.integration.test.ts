@@ -20,6 +20,7 @@ import {
   startStaticRegistry,
 } from "../../../plugins/test-helpers/npm-registry-fixtures.js";
 import * as processExecution from "../../../process/exec.js";
+import { npmCommandArgs } from "../../../test-utils/npm-command.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   detectConfiguredPluginInstallHealthIssues,
@@ -155,8 +156,7 @@ describe("Doctor same-version required dependency repair", () => {
                   const [argv, options] = args;
                   if (
                     scenario === "killed-npm" &&
-                    argv[0] === "npm" &&
-                    argv[1] === "install" &&
+                    npmCommandArgs(argv)?.[0] === "install" &&
                     !argv.includes("--package-lock-only")
                   ) {
                     const installOptions =
@@ -193,8 +193,7 @@ describe("Doctor same-version required dependency repair", () => {
                   }
                   const result = await realRun(...args);
                   if (
-                    argv[0] === "npm" &&
-                    argv[1] === "install" &&
+                    npmCommandArgs(argv)?.[0] === "install" &&
                     !argv.includes("--package-lock-only") &&
                     result.code === 0
                   ) {

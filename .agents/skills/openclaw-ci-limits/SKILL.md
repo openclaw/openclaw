@@ -29,6 +29,27 @@ availability, Blacksmith control-plane health, and downstream queue drains.
   scans should stay on GitHub-hosted runners unless measured evidence says
   Blacksmith is required.
 
+## Runner Cost Policy
+
+- Use the smallest runner that completes the required workload reliably. Keep
+  short control jobs hosted and ordinary trusted development proof local.
+- Treat the 32-class as an exception, not a default or generic retry. Record the
+  command and measured peak memory, a smaller-runner OOM, or a controlled
+  comparison showing lower total billed cost. Low CPU use alone does not prove
+  a memory-heavy job can move down. Preserve resource-based worker limits.
+- Routine OpenClaw Testboxes use the 16-class with a 60-minute total-job
+  default, including hydration. Keep the 15-minute idle ceiling. Shorter
+  deadlines are welcome for known short commands; do not request four hours
+  automatically or upsize only to obtain more time. Select
+  `.github/workflows/ci-check-high-memory-testbox.yml` explicitly only for a
+  named memory-heavy command; see `docs/reference/test/remote-proof.md`.
+  That workflow has at most four concurrent leases inside the shared 32-slot
+  Testbox pool. All Testbox profiles cap idle time at 15 minutes.
+- Do not promote an entire workflow family because one command needs more RAM.
+  Keep proven high-memory CI rows scoped to their owning planner and evidence;
+  remeasure before changing their allocation. A 32-class label is not proof of
+  32 available CPUs. Compare observed resources and total billed job cost.
+
 ## Rejected Experiments
 
 - **Boundary asynchronous input preparation (2026-09-26):** Adding the existing
@@ -270,7 +291,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   API and job deadlines remain unchanged.
   The aggregate preserves failure-triggered PR cancellation through the
   `pr-fail-fast` cause outputs; superseded runs without a failure cause still
-  skip the aggregate. PR Node matrices use native fail-fast. The same-repository
+  skip the aggregate. Canonical PR Node matrices disable native fail-fast on
+  every attempt; reruns complete every leg so inherited main failures leave the
+  remaining admin-landing proof intact. Native fail-fast applies only to PRs in
+  other workflow repositories. Historical runs retain their tested policy. The same-repository
   PR first-attempt monitor alone has `actions: write` and adds one 4-class registration per
   eligible PR, or uses hosted Ubuntu under the outage override. Main/manual
   matrices remain complete. The monitor starts after preflight, observes failures
@@ -305,6 +329,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   class-vCPU-minutes (1.17% of that broad run). Include that allowance with
   Node packing costs until native proof measures the new duration. No jobs,
   registrations, permissions, compiler checks, or hosted eligibility are added.
+  The package-boundary row has a 30-minute whole-job budget: three hosted
+  four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
+  SDK preparation and 126 compiles before final validation/canary/cleanup.
+  One completed both compile and canary but still exceeded the job deadline.
+  Other additional-check groups retain 20 minutes; compiler concurrency,
+  complete inventory, receipt guards, canary, and routing remain unchanged.
 - Current fast plugin/channel contract families each share one checkout/setup.
   Their two weighted process envelopes run sequentially with unchanged include
   lists and package commands; channel invocations retain four project slots and
@@ -505,11 +535,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   at least eight actual CPUs and 28 GiB memory, with the existing two-worker
   fallback elsewhere. Keep its worker-specific timing identity and require
   three original-shard replays plus sampled memory evidence when changing it.
-  The measured Gateway server-isolated/database-worker family uses at most eight
-  workers only in a serial, non-frozen self-hosted job with at least eight actual
-  CPUs and 28 GiB memory. Its 20.70 GiB observed aggregate RSS leaves the existing
-  25% reserve at that floor. Preserve its two-worker fallback, other groups' pins,
-  hosted planning, complete inventory, and old timing generations until refit.
+  The Gateway server-isolated/database-worker family keeps two workers, including
+  roomy serial self-hosted jobs, to leave cold-startup headroom within its existing
+  test deadlines. Preserve host admission and fallback rules, other groups' pins,
+  hosted planning, complete inventory, cleanup, and old timing generations until
+  refit. The historical eight-worker qualification does not establish headroom
+  for the current fixture cohort.
   The primary GitHub profile remains serial at 210s. Failed-job-only hybrid
   retries retain the original wider matrix on hosted Ubuntu, clamp to one child,
   and keep two workers per child; they can exceed the eight-minute normal-run

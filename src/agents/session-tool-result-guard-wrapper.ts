@@ -55,6 +55,7 @@ type GuardedSessionManager = SessionManager & {
     skipBeforeMessageWriteHooks: boolean | undefined,
     assistantErrorTranscript: AssistantErrorTranscript | undefined,
     inputProvenance: InputProvenance | undefined,
+    suppressNextUserMessagePersistence: boolean | undefined,
   ) => void;
 };
 
@@ -106,6 +107,12 @@ export function guardSessionManager(
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   let inputProvenance = opts?.inputProvenance;
+  let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
+  const preparedUserReplayKey =
+    opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
+    pendingPreparedUserTurnMessage?.idempotencyKey
+      ? pendingPreparedUserTurnMessage?.idempotencyKey
+      : undefined;
   if (typeof guardedSessionManager.flushPendingToolResults === "function") {
     guardedSessionManager.setTranscriptRunContext?.(
       opts?.runId,
@@ -113,17 +120,12 @@ export function guardSessionManager(
       skipBeforeMessageWriteHooks,
       opts?.assistantErrorTranscript,
       inputProvenance,
+      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
     );
     return guardedSessionManager;
   }
 
   const hookRunner = getGlobalHookRunner();
-  let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
-  const preparedUserReplayKey =
-    opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
-    pendingPreparedUserTurnMessage?.idempotencyKey
-      ? pendingPreparedUserTurnMessage?.idempotencyKey
-      : undefined;
   let queuedUserTurnTranscriptRecorder: UserTurnTranscriptRecorder | undefined;
   const runtimeUserMessageByPersistedMessage = new WeakMap<
     AgentMessage,
@@ -254,6 +256,7 @@ export function guardSessionManager(
         Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
       ) {
         pendingPreparedUserTurnMessage = undefined;
+        guard.clearNextUserMessagePersistenceSuppression();
       }
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
       const recorder =
@@ -293,8 +296,9 @@ export function guardSessionManager(
             contextWindowTokens: opts.contextWindowTokens,
           })
         : undefined,
-    suppressNextUserMessagePersistence:
-      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
+    // Compaction may have removed the admitted user from model context. If the
+    // prompt reinjects it, keep it model-only; a different queued input clears this above.
+    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: opts?.assistantErrorTranscript,
     onMessagePersisted: opts?.onMessagePersisted,
@@ -329,8 +333,12 @@ export function guardSessionManager(
     skipHooks,
     errors,
     provenance,
+    suppressUserPersistence,
   ) => {
     guard.setTranscriptRunId(runId, errors);
+    if (suppressUserPersistence !== undefined) {
+      guard.setNextUserMessagePersistenceSuppression(suppressUserPersistence);
+    }
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
     inputProvenance = provenance;

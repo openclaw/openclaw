@@ -16,9 +16,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { hasUnjoinedWork, runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import {
@@ -30,10 +29,24 @@ import {
   createFixtureDiagnostics,
   type FixtureDiagnostics,
 } from "../helpers/fixture-diagnostics.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
+let fixtureReceipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  fixtureReceipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await fixtureReceipts?.close();
+});
+
 const artifactBytes = Buffer.from([0, 255, 128, 10, 65]);
 type Receipt = {
   version: number;
@@ -55,28 +68,35 @@ type Inspection = {
 };
 
 async function withFixture(scenario: (context: ReturnType<typeof createFixture>) => Promise<void>) {
-  const diagnostics = createFixtureDiagnostics("staging-recovery");
-  const f = createFixture(diagnostics);
-  let failure: Error | undefined;
-  try {
-    await scenario(f);
-  } catch (error) {
-    failure =
-      error instanceof Error ? error : new Error("Recovery scenario failed", { cause: error });
-  }
-  try {
-    await f.close(Boolean(failure));
-  } catch (error) {
-    diagnostics?.report("failure");
-    throw failure
-      ? new AggregateError([failure, error], "Recovery assertion and fixture cleanup failed", {
-          cause: error,
-        })
-      : error;
-  }
-  if (failure) {
-    throw failure;
-  }
+  const completion = (async () => {
+    const diagnostics = createFixtureDiagnostics("staging-recovery");
+    const f = createFixture(diagnostics);
+    let failure: Error | undefined;
+    try {
+      await scenario(f);
+    } catch (error) {
+      failure =
+        error instanceof Error ? error : new Error("Recovery scenario failed", { cause: error });
+    }
+    try {
+      await f.close(Boolean(failure));
+    } catch (error) {
+      diagnostics?.report("failure");
+      throw failure
+        ? new AggregateError([failure, error], "Recovery assertion and fixture cleanup failed", {
+            cause: error,
+          })
+        : error;
+    }
+    if (failure) {
+      throw failure;
+    }
+  })();
+  // Vitest must join cleanup even after the timed-out body has resumed its finally blocks.
+  onTestFinished(async () => {
+    await completion.catch(() => {});
+  });
+  await completion;
 }
 
 function createFixture(diagnostics?: FixtureDiagnostics) {
@@ -145,7 +165,8 @@ function createFixture(diagnostics?: FixtureDiagnostics) {
   writeFileSync(
     cli,
     `#!/usr/bin/env -S ${JSON.stringify(nodeExecutable)} ${nodeArgs.join(" ")}
-const fs = require('node:fs');
+import fs from 'node:fs';
+${fixtureReceiptClientSource(fixtureReceipts.endpoint)}
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(nodePolicy)}, JSON.stringify({entry:'claims-cli', nodeArgs:process.execArgv.filter(flag=>${JSON.stringify(nodeArgs)}.includes(flag))}) + '\\n');
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
@@ -154,6 +175,7 @@ const plan = JSON.parse(fs.readFileSync(${JSON.stringify(plan)}, 'utf8'));
 const finish = () => process.stdout.write(JSON.stringify({version:1,source:'local-claims',claims:plan.claims,problems:[]}));
 if (plan.gate) {
   fs.writeFileSync(plan.gate.ready, 'ready');
+  sendReceipt(plan.gate.ready, 'ready');
   const timer = setInterval(() => { if (fs.existsSync(plan.gate.release)) { clearInterval(timer); finish(); } }, 10);
 } else finish();
 `,
@@ -162,6 +184,15 @@ if (plan.gate) {
   const controllers = new Set<AbortController>(),
     pending = new Set<Promise<unknown>>();
   let unjoined = false;
+  const phases = new Map<string, ReturnType<typeof createDeferred<void>>>();
+  const phase = (path: string) => {
+    let gate = phases.get(path);
+    if (!gate) {
+      gate = createDeferred();
+      phases.set(path, gate);
+    }
+    return gate.promise;
+  };
   const command = (
     binary: string,
     args: string[],
@@ -184,11 +215,22 @@ if (plan.gate) {
           args,
           cwd: repository,
           env: { ...env, ...override },
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["ignore", "pipe", "pipe", "pipe"],
           timeoutMs,
           requireProcessTreeExit: true,
           signal: controller.signal,
           onReady(child) {
+            let phasesBuffer = "";
+            child.stdio[3]?.on("data", (chunk: Buffer) => {
+              phasesBuffer += chunk.toString();
+              let newline: number;
+              while ((newline = phasesBuffer.indexOf("\n")) >= 0) {
+                const path = phasesBuffer.slice(0, newline);
+                phasesBuffer = phasesBuffer.slice(newline + 1);
+                void phase(path);
+                phases.get(path)!.resolve();
+              }
+            });
             const capture = (chunk: Buffer, output: "stdout" | "stderr") => {
               observation?.output(output, chunk.byteLength);
               if (tooLarge) {
@@ -252,6 +294,11 @@ import crypto from 'node:crypto';
 import {join,resolve,basename} from 'node:path';
 import {syncBuiltinESMExports} from 'node:module';
 const ctx = ${JSON.stringify({ root, repository: source, staging, cli, calls })};
+function notifyFixturePhase(path) {
+  fs.writeFileSync(path, 'ready');
+  // A synchronous pipe write reaches the parent even while SQLite blocks this thread.
+  fs.writeSync(3, path + '\\n');
+}
 ${prelude}
 syncBuiltinESMExports();
 ${includeCapsule ? `const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule).href)});` : ""}
@@ -314,13 +361,24 @@ process.kill(process.pid,'SIGKILL');`,
     expect(result.status, result.stderr).toBe(0);
     return JSON.parse(result.stdout) as { discovery: Inspection; result?: Recovery };
   };
-  const waitFor = async (path: string) => {
-    const deadline = Date.now() + 10_000;
-    while (!existsSync(path) && Date.now() < deadline) {
-      await delay(10);
-    }
-    expect(existsSync(path), "fixture never reached its synchronization point: " + path).toBe(true);
-  };
+  const waitForPhase = (
+    path: string,
+    operation: Promise<unknown>,
+    signal: AbortSignal,
+    receipt = false,
+  ) =>
+    withinTest(
+      Promise.race([
+        receipt ? fixtureReceipts.waitFor(path, "ready") : phase(path),
+        operation.then(() => {
+          // The fixture records readiness before replying; receipt delivery can lag settlement.
+          expect(existsSync(path), "fixture never reached its synchronization point: " + path).toBe(
+            true,
+          );
+        }),
+      ]),
+      signal,
+    );
   return {
     root,
     source,
@@ -344,7 +402,7 @@ process.kill(process.pid,'SIGKILL');`,
     commit,
     git: (...args: string[]) => gitAt(source, ...args),
     gitAt,
-    waitFor,
+    waitForPhase,
     stage: (value: string) => diagnostics?.stage(value),
     receipt: (stage: Stage) =>
       JSON.parse(readFileSync(join(stage.root, "staging.json"), "utf8")) as Receipt,
@@ -423,14 +481,16 @@ function blockingMirrorIo(root: string, hook: string) {
   return `const {DatabaseSync}=await import('node:sqlite');
 function blockedIo(){
   const gate=new DatabaseSync(${JSON.stringify(join(root, "io-gate.sqlite"))},{timeout:15000});
-  fs.writeFileSync(${JSON.stringify(join(root, "io-ready"))},'ready');
+  notifyFixturePhase(${JSON.stringify(join(root, "io-ready"))});
   try{gate.exec('BEGIN EXCLUSIVE');gate.exec('ROLLBACK');}finally{gate.close();}
 }
 ${hook}`;
 }
 
 describe.skipIf(process.platform === "win32")("Crabbox reusable staging ownership", () => {
-  it("waits for allocation contention and reuses the other repository's warm mirror", async () =>
+  it("waits for allocation contention and reuses the other repository's warm mirror", async ({
+    signal,
+  }) =>
     withFixture(async (f) => {
       const other = join(f.root, "other-repository");
       mkdirSync(other);
@@ -442,9 +502,9 @@ describe.skipIf(process.platform === "win32")("Crabbox reusable staging ownershi
         const pending = f.program(
           `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
 console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
-          `const error=console.error;console.error=(...args)=>{error(...args);if(args.join(' ').includes('waiting for source mirror allocation'))fs.writeFileSync(${JSON.stringify(ready)},'waiting');};`,
+          `const error=console.error;console.error=(...args)=>{error(...args);if(args.join(' ').includes('waiting for source mirror allocation'))notifyFixturePhase(${JSON.stringify(ready)});};`,
         );
-        await f.waitFor(ready);
+        await f.waitForPhase(ready, pending, signal);
         unlock();
         const result = await pending;
         expect(result.status, result.stderr).toBe(0);
@@ -528,7 +588,9 @@ DatabaseSync.prototype.exec=function(sql){
       expect(existsSync(warm!.root)).toBe(true);
     }));
 
-  it("keeps other warm mirrors available while a slot's database digest is slow", async () =>
+  it("keeps other warm mirrors available while a slot's database digest is slow", async ({
+    signal,
+  }) =>
     withFixture(async (f) => {
       const other = join(f.root, "other-repository");
       mkdirSync(other);
@@ -545,7 +607,7 @@ fs.openSync=(path,...args)=>{const fd=open(path,...args);if(path===${JSON.string
 fs.readSync=(fd,...args)=>{if(fd===databaseFd){databaseFd=undefined;blockedIo();}return read(fd,...args);};`,
           ),
         );
-        await f.waitFor(join(f.root, "io-ready"));
+        await f.waitForPhase(join(f.root, "io-ready"), pending, signal);
         const concurrent = await f.program(
           `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
         );
@@ -561,7 +623,9 @@ fs.readSync=(fd,...args)=>{if(fd===databaseFd){databaseFd=undefined;blockedIo();
       }
     }));
 
-  it("reserves an eviction victim until disposal finishes without blocking another warm slot", async () =>
+  it("reserves an eviction victim until disposal finishes without blocking another warm slot", async ({
+    signal,
+  }) =>
     withFixture(async (f) => {
       const other = join(f.root, "other-repository");
       const newcomer = join(f.root, "new-repository");
@@ -579,7 +643,7 @@ fs.readSync=(fd,...args)=>{if(fd===databaseFd){databaseFd=undefined;blockedIo();
             `const remove=fs.rmSync;fs.rmSync=(path,...args)=>{if(path===${JSON.stringify(join(victim!.root, "payload"))})blockedIo();return remove(path,...args);};`,
           ),
         );
-        await f.waitFor(join(f.root, "io-ready"));
+        await f.waitForPhase(join(f.root, "io-ready"), pending, signal);
         const concurrent = await f.program(
           `const victim=createMirrorStaging(ctx.staging,ctx.repository);const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
 console.log(JSON.stringify({victimAdopted:Boolean(victim),reused:next?.reused,root:next?.staging.root}));victim?.discard();next?.discard();`,
@@ -1521,28 +1585,30 @@ if(!interrupted)throw new Error('fixture did not interrupt artifact publication'
 
     it(
       "allows only one concurrent recovery owner and detects changed receipts during verification",
-      async () =>
+      async ({ signal }) =>
         withFixture(async (f) => {
           const stage = await f.prepare(),
             gate = { ready: join(f.root, "claims-ready"), release: join(f.root, "claims-release") };
           f.inventory([], gate);
           const first = f.recover(stage);
-          await f.waitFor(gate.ready);
+          await f.waitForPhase(gate.ready, first, signal, true);
           expect((await f.recover(stage)).report.reason).toContain("interrupted recovery");
           writeFileSync(gate.release, "release");
           expect((await first).report.recovered).toBe(true);
           f.inventory();
           const changed = await f.prepare();
-          rmSync(gate.ready);
-          rmSync(gate.release);
-          f.inventory([], gate);
+          const changedGate = {
+            ready: join(f.root, "changed-claims-ready"),
+            release: join(f.root, "changed-claims-release"),
+          };
+          f.inventory([], changedGate);
           const recovering = f.recover(changed);
-          await f.waitFor(gate.ready);
+          await f.waitForPhase(changedGate.ready, recovering, signal, true);
           writeFileSync(
             join(changed.root, "staging.json"),
             JSON.stringify({ ...f.receipt(changed), hold: "writers" }),
           );
-          writeFileSync(gate.release, "release");
+          writeFileSync(changedGate.release, "release");
           expect((await recovering).report).toMatchObject({
             recovered: false,
             reason: expect.stringContaining("ownership changed"),

@@ -174,8 +174,11 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
 }
 
 async function untrackedStats(root: string): Promise<{ additions: number; files: number }> {
-  const listing = await gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  const paths = (listing ?? "").split("\0").filter(Boolean);
+  const listing = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]).catch(
+    () => null,
+  );
+  // NUL-delimited filenames retain leading whitespace, unlike scalar Git output.
+  const paths = listing?.code === 0 ? listing.stdout.split("\0").filter(Boolean) : [];
   let additions = 0;
   for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
     additions += await untrackedFileAdditions(root, filePath);

@@ -1,4 +1,3 @@
-// API baseline helpers render public SDK exports for contract drift reports.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
