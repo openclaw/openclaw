@@ -30,6 +30,7 @@ import {
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
+import { resolveAgentsApiSessionAccessError } from "./agentsapi-errors.js";
 import * as files from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
@@ -585,6 +586,12 @@ export async function runAgentsApiAttempt(
     }
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
+  }
+  if (terminal.kind === "failed") {
+    terminal = {
+      ...terminal,
+      error: resolveAgentsApiSessionAccessError(terminal.error, remoteSessionId),
+    };
   }
   const result: EmbeddedRunAttemptResult = {
     terminal,

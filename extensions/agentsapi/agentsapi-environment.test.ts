@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import OpenAI from "openai";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -425,36 +427,114 @@ describe("Agents API attempt environment selection", () => {
     },
   );
 
-  it("retains an existing binding when the replacement key is unauthorized", async () => {
-    const created = await attempt("openai_hosted");
-    const binding = created.bind.mock.calls[0]![0];
-    mocks.fetch.mockClear();
+  it.each([401, 403])(
+    "retains ordinary HTTP %s access errors and the existing binding",
+    async (status) => {
+      const created = await attempt("openai_hosted");
+      const binding = created.bind.mock.calls[0]![0];
+      mocks.fetch.mockClear();
+      mocks.fetch.mockImplementation(async ({ url }) => ({
+        response: Response.json(
+          { error: { message: "Fixture key cannot access session", type: "authentication_error" } },
+          { status },
+        ),
+        finalUrl: url,
+        release: async () => {},
+      }));
+      const denied = await attempt(
+        "openai_hosted",
+        binding,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { resolvedApiKey: "fixture-denied-api-key" },
+      );
+      expect(denied.result).toMatchObject({
+        terminal: { kind: "failed", error: expect.objectContaining({ status }) },
+      });
+      expect(mocks.fetch.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([
+        `/v1/agents/sessions/${binding.sessionId}`,
+      ]);
+      expect(denied.bind).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ...[
+      { operation: "reasoning update", suffix: "" },
+      { operation: "input submission", suffix: "/events" },
+      { operation: "item retrieval", suffix: "/items" },
+    ].map(({ operation, suffix }) => ({
+      operation,
+      suffix,
+      status: 404,
+      type: "not_found_error",
+      backendMessage: "No managed agent resource found: session-fixture",
+      userMessage:
+        "Agents API could not find the saved session or this API key cannot access it. Check that the key belongs to the session's project and has the required permissions, then retry.",
+    })),
+    {
+      operation: "input submission with the original-key requirement",
+      suffix: "/events",
+      status: 403,
+      type: "forbidden",
+      backendMessage: "hosted session input requires the API key that created its CCA thread",
+      userMessage:
+        "Agents API currently requires the original API key to send input to this hosted session. Restore that key, then retry to continue the same session.",
+    },
+  ])(
+    "reports inaccessible saved sessions during $operation as a terminal preflight",
+    async ({ suffix, status, type, backendMessage, userMessage }) => {
+      const created = await attempt("openai_hosted");
+      const binding = created.bind.mock.calls[0]![0];
+      const fetch = mocks.fetch.getMockImplementation()!;
+      mocks.fetch.mockImplementation(async (request) => {
+        if (new URL(request.url).pathname === `/v1/agents/sessions/${binding.sessionId}${suffix}`) {
+          return {
+            response: Response.json({ error: { message: backendMessage, type } }, { status }),
+            finalUrl: request.url,
+            release: async () => {},
+          };
+        }
+        return fetch(request);
+      });
+
+      const { result } = await attempt("openai_hosted", binding);
+
+      expect(result.terminal.kind).toBe("failed");
+      if (result.terminal.kind !== "failed") {
+        throw new Error("Expected the saved-session request to fail");
+      }
+      expect(result.terminal.error).toBeInstanceOf(AgentHarnessPreflightError);
+      expect(result.terminal.error).toMatchObject({
+        message: expect.stringContaining(backendMessage),
+        userMessage,
+        cause: expect.objectContaining({ status, type }),
+      });
+    },
+  );
+
+  it("preserves missing-model errors for ordinary fallback", async () => {
     mocks.fetch.mockImplementation(async ({ url }) => ({
       response: Response.json(
-        { error: { message: "Fixture key cannot access session", type: "authentication_error" } },
-        { status: 401 },
+        { error: { message: "The model fixture-model does not exist", code: "model_not_found" } },
+        { status: 404 },
       ),
       finalUrl: url,
       release: async () => {},
     }));
-    const denied = await attempt(
-      "openai_hosted",
-      binding,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      { resolvedApiKey: "fixture-denied-api-key" },
-    );
-    expect(denied.result).toMatchObject({
-      terminal: { kind: "failed", error: expect.objectContaining({ status: 401 }) },
-    });
-    expect(mocks.fetch.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([
-      `/v1/agents/sessions/${binding.sessionId}`,
-    ]);
-    expect(denied.bind).not.toHaveBeenCalled();
+
+    const { result } = await attempt("openai_hosted");
+
+    expect(result.terminal.kind).toBe("failed");
+    if (result.terminal.kind !== "failed") {
+      throw new Error("Expected the missing model request to fail");
+    }
+    expect(result.terminal.error).toBeInstanceOf(OpenAI.NotFoundError);
+    expect(result.terminal.error).toMatchObject({ code: "model_not_found", status: 404 });
   });
 
   it("rejects an invalid runtime environment setting before native writes", async () => {
