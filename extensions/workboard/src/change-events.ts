@@ -22,9 +22,6 @@ function resolveExternalChangeCheckMs(env: NodeJS.ProcessEnv = process.env): num
   );
 }
 
-/** Exported for tests; production uses resolveExternalChangeCheckMs(). */
-export const WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = resolveExternalChangeCheckMs();
-
 export function createWorkboardChangeEventService(
   store: Pick<
     WorkboardStore,
