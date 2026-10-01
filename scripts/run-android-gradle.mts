@@ -74,11 +74,18 @@ export function resolveAndroidSdkEnv(options: SdkOptions = {}) {
   return { ...env, ANDROID_HOME: defaultSdkDir };
 }
 
+// Node cannot spawn batch wrappers without a shell on Windows, so the Windows
+// gradle wrapper needs cmd.exe normalization while POSIX keeps the direct path.
+export function resolveGradleWrapperBin(platform: NodeJS.Platform = process.platform) {
+  return platform === "win32" ? "gradlew.bat" : "./gradlew";
+}
+
 export async function run(
   command: string,
   args: readonly string[],
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
+  options: { shell?: boolean } = {},
 ) {
   try {
     return await runManagedCommand({
@@ -86,7 +93,7 @@ export async function run(
       bin: command,
       cwd,
       env,
-      shell: false,
+      shell: options.shell ?? false,
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -111,7 +118,10 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   }
 
   const env = resolveAndroidSdkEnv();
-  const gradleStatus = await run("./gradlew", gradleArgs, androidDir, env);
+  const isWindows = process.platform === "win32";
+  const gradleStatus = await run(resolveGradleWrapperBin(), gradleArgs, androidDir, env, {
+    shell: isWindows,
+  });
   const command = postArgs[0];
   if (gradleStatus !== 0 || command === undefined) {
     return gradleStatus;

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   linuxArmAndroidGradleSkipMessage,
   resolveAndroidSdkEnv,
+  resolveGradleWrapperBin,
   run,
   shouldSkipLinuxArmAndroidGradle,
   splitAndroidGradleArgs,
@@ -158,6 +159,12 @@ process.exitCode = await run(
         process.kill(descendantPid, "SIGKILL");
       }
     }
+  });
+
+  it("resolves the platform-appropriate Gradle wrapper command", () => {
+    expect(resolveGradleWrapperBin("win32")).toBe("gradlew.bat");
+    expect(resolveGradleWrapperBin("linux")).toBe("./gradlew");
+    expect(resolveGradleWrapperBin("darwin")).toBe("./gradlew");
   });
 
   it("reports spawn errors and returns a failure status", async () => {
