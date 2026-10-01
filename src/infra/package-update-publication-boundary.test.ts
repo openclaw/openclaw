@@ -18,6 +18,7 @@ import {
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
 import { writePackageRoot } from "./package-update-steps.test-support.js";
@@ -55,7 +56,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
         let transaction: PackageUpdateTransaction | undefined;
         const result = await swapStagedPackageInstall({
           ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           onTransaction: (issued) => {
             transaction = issued;
           },
@@ -114,7 +115,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           let nextTransaction: PackageUpdateTransaction | undefined;
           const next = await swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             onTransaction: (issued) => {
               nextTransaction = issued;
             },
@@ -148,7 +149,7 @@ it.skipIf(process.platform === "win32")(
         await expect(
           swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             beforeActivate: async () => {
               throw refusal;
             },
@@ -187,7 +188,11 @@ it.skipIf(process.platform === "win32")(
             assertNoPendingPackageActivation(f.packageRoot);
             const result = await swapStagedPackageInstall({
               ...f.params,
-              activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+              activation: {
+                fence,
+                runtime: packageActivationRuntimeForTest(),
+                onPrepared: () => {},
+              },
               beforeActivate: async () => {},
             });
             expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
@@ -214,7 +219,7 @@ it.skipIf(process.platform === "win32")(
         await expect(
           swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             beforeActivate: async () => {
               throw uncertainty;
             },
@@ -245,7 +250,7 @@ it.skipIf(process.platform === "win32")(
         await expect(
           swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             beforeActivate: async () => {
               fs.renameSync(f.packageRoot, previous);
               await writePackageRoot(f.packageRoot, "3.0.0");
@@ -298,7 +303,7 @@ it.skipIf(process.platform === "win32")(
         let transaction: PackageUpdateTransaction | undefined;
         const result = await swapStagedPackageInstall({
           ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           onTransaction: (issued) => {
             transaction = issued;
           },

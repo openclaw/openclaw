@@ -21,7 +21,8 @@ export function registerSubagentRestoreCacheCases(params: {
     "invalidates loaded snapshots on restore, including empty stores (%s)",
     async (empty) => {
       const stale = createRun("stale");
-      persistSubagentRunsToDisk(new Map([[stale.runId, stale]]));
+      params.mockRestoredRows(new Map([[stale.runId, stale]]));
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
       const restored = empty
         ? new Map<string, SubagentRunRecord>()
         : new Map([["restored", createRun("restored")]]);
@@ -44,7 +45,8 @@ export function registerSubagentRestoreCacheCases(params: {
     async (committed) => {
       const entry = createRun("retained");
       const canonical = new Map([[entry.runId, entry]]);
-      persistSubagentRunsToDiskOrThrow(canonical);
+      params.mockRestoredRows(canonical);
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let reads = 0;

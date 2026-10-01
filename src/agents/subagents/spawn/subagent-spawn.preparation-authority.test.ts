@@ -43,7 +43,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -263,11 +263,8 @@ describe("pending spawn preparation authority", () => {
           expect(
             await fs.readFile(
               path.join(
-                resolveSubagentAttachmentDir(
-                  "main",
-                  childSessionKey,
-                  path.basename(details.attachments.relDir),
-                ),
+                resolveSubagentSessionAttachmentRootDir({ agentId: "main", childSessionKey }),
+                path.basename(details.attachments.relDir),
                 "synthetic.txt",
               ),
               "utf8",

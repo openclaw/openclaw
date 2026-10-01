@@ -71,6 +71,11 @@ class DevicePage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @state() private newDomain = "";
+  @state() private gatewayHostingEdit: {
+    capability: NativeDeviceSettingsCapability;
+    pending: boolean;
+    error?: Error;
+  } | null = null;
   private targetProfileTimer: {
     capability: NativeDeviceSettingsCapability;
     timer: ReturnType<typeof setTimeout>;
@@ -107,6 +112,34 @@ class DevicePage extends OpenClawLightDomElement {
       checked,
       disabled,
       onChange: (value) => this.context.nativeDeviceSettings?.set(key, value),
+    });
+  }
+
+  private renderGatewayHosting(app: NonNullable<NativeDeviceSettingsSnapshot["app"]>) {
+    const capability = this.context.nativeDeviceSettings;
+    if (app.keepGatewayRunning === undefined || !capability) {
+      return nothing;
+    }
+    const edit =
+      this.gatewayHostingEdit?.capability === capability ? this.gatewayHostingEdit : null;
+    return renderSettingsToggleRow({
+      title: t("configPage.deviceSettings.keepGatewayRunning"),
+      description: html`${t("configPage.deviceSettings.keepGatewayRunningHint")}
+      ${edit?.error ? html`<br /><span role="alert">${t("configPage.deviceSettings.keepGatewayRunningFailed")} ${edit.error.message}</span>` : nothing}`,
+      checked: app.keepGatewayRunning,
+      disabled: app.keepGatewayRunningAvailable !== true || edit?.pending === true,
+      onChange: (value) => {
+        const request = { capability, pending: true };
+        this.gatewayHostingEdit = request;
+        capability.set("app.keepGatewayRunning", value, (error) => {
+          if (
+            this.gatewayHostingEdit === request &&
+            this.context.nativeDeviceSettings === capability
+          ) {
+            this.gatewayHostingEdit = { capability, pending: false, error };
+          }
+        });
+      },
     });
   }
 
@@ -382,6 +415,7 @@ class DevicePage extends OpenClawLightDomElement {
                 }
                 ${this.toggle("app.iconAnimationsEnabled", app.iconAnimationsEnabled, "iconAnimations", t("configPage.deviceSettings.iconAnimationsHint"))}
                 ${this.toggle("app.launchAtLogin", app.launchAtLogin, "launchAtLogin", app.launchAtLoginAvailable === false ? t("configPage.deviceSettings.launchAtLoginUnavailable") : undefined, app.launchAtLoginAvailable === false)}
+                ${this.renderGatewayHosting(app)}
                 ${this.toggle("app.quickChatEnabled", app.quickChatEnabled, "quickChat", t("configPage.deviceSettings.quickChatHint"))}
                 ${
                   app.quickChatShortcut !== undefined

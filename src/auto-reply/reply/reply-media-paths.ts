@@ -429,8 +429,8 @@ export function applyPreparedReplyMedia(
     for (const source of previousSourceUrls?.get(sourceKey) ?? []) {
       sourceUrls.add(source);
     }
-    if (normalized.mediaUrl !== media.trim()) {
-      sourceUrls.add(media.trim());
+    if (normalized.mediaUrl !== media) {
+      sourceUrls.add(media);
     }
     if (sourceUrls.size > 0) {
       sourcesByReference.set(normalizedKey, sourceUrls);

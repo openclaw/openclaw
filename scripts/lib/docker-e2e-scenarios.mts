@@ -235,6 +235,13 @@ function createPackageUpdateMaintenanceLanes() {
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
+    // Explicit Docker/release regression; the per-PR cell still runs only one real update.
+    lane("published-driver-lifecycle", "pnpm test:docker:published-driver-lifecycle", {
+      e2eImageKind: "bare",
+      resources: ["service"],
+      estimateSeconds: 15,
+      timeoutMs: 10 * 60 * 1000,
+    }),
     npmLane(
       "published-driver-update",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-driver-update",

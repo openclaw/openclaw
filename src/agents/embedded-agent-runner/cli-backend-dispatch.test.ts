@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -10,6 +9,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
@@ -26,7 +26,7 @@ const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "cli-dispatch-history-");
 
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
@@ -332,7 +332,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
 
 describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   it("reads and mirrors the dispatched turn in the selected custom SQLite store", async () => {
-    const dir = tempDirs.make("cli-dispatch-history-");
+    const dir = tempDirs.make();
     const sessionTarget = {
       agentId: "main",
       sessionId: "recall-session",
@@ -706,7 +706,7 @@ describe("detached CLI transcript ownership", () => {
   it.each([false, true])(
     "does not mirror a detached turn into durable metadata (existing: %s)",
     async (existing) => {
-      const root = tempDirs.make("openclaw-detached-cli-");
+      const root = tempDirs.make();
       const storePath = path.join(root, "final", "openclaw-agent.sqlite");
       const params = baseRunParams({
         agentId: "main",

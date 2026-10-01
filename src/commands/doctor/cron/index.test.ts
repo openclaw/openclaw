@@ -235,7 +235,6 @@ describe("maybeRepairLegacyCronStore", () => {
           kind: "agentTurn",
           message: "scheduled continuation",
           toolsAllow: ["read", "cron"],
-          toolsAllowIsDefault: true,
         },
         scheduledToolPolicy: {
           version: 1,
@@ -421,46 +420,6 @@ describe("maybeRepairLegacyCronStore", () => {
         script: job.trigger?.script,
       })),
     ).toEqual(unsupportedScripts);
-  });
-
-  it("keeps shared-workspace legacy MCP warnings scoped to each job agent", async () => {
-    const sharedWorkspace = path.join(path.dirname(storePath), "shared-workspace");
-    await writeCurrentCronStore(
-      ["research", "support", undefined].map((agentId, index) =>
-        createCurrentCronJob({
-          id: `job-${index}`,
-          name: agentId ?? "Ambient",
-          agentId,
-          payload: {
-            kind: "agentTurn",
-            message: "run",
-            toolsAllow: ["read"],
-            toolsAllowIsDefault: true,
-          },
-        }),
-      ),
-    );
-    const cfg = createCronConfig();
-    cfg.agents = {
-      ownership: "explicit",
-      defaults: { systemAgent: { agentId: "research" } },
-      entries: {
-        research: { workspace: sharedWorkspace },
-        support: { workspace: sharedWorkspace },
-      },
-    };
-    cfg.mcp = {
-      servers: {
-        notes: { transport: "stdio", command: "notes-mcp", codex: { agents: ["research"] } },
-      },
-    };
-    await maybeRepairLegacyCronStore({ cfg, options: {}, prompter: makePrompter(true) });
-    const advisory = noteMock.mock.calls.find(([message]) =>
-      message.includes("inherited default tool cap"),
-    )?.[0];
-    expect(advisory).toContain("research");
-    expect(advisory).toContain("Ambient");
-    expect(advisory).not.toContain("support");
   });
 
   it("recovers a valid quarantined schedule only after Doctor confirmation", async () => {

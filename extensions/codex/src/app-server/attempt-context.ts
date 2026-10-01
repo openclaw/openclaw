@@ -10,7 +10,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readNonBlankString as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
   CODEX_MEMORY_CONTEXT_BASENAME,
@@ -19,7 +22,6 @@ import {
   getCodexContextFileDisplayBasename,
   isNonEmptyString,
   normalizeCodexContextFilePath,
-  normalizeCodexDynamicToolName,
   type CodexBootstrapFile,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
@@ -389,7 +391,7 @@ export function buildCodexWatchedSessionsContext(params: {
     sessionKey: params.sessionKey,
     sandboxed: params.sandboxed,
     toolNames: flattenCodexDynamicToolFunctions(params.dynamicTools).map((tool) =>
-      normalizeCodexDynamicToolName(tool.name),
+      normalizeLowercaseStringOrEmpty(tool.name),
     ),
   });
 }
@@ -404,7 +406,7 @@ export function renderCodexSkillsInstructions(params: {
   }
   const names = new Set(
     flattenCodexDynamicToolFunctions(params.dynamicTools ?? []).map((tool) =>
-      normalizeCodexDynamicToolName(tool.name),
+      normalizeLowercaseStringOrEmpty(tool.name),
     ),
   );
   const prompt = params.skillsPrompt?.trim();

@@ -7,7 +7,6 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import { settleRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
@@ -28,12 +27,10 @@ import {
   commitRequesterWake,
   getPendingWakeCommit,
   hasRequesterWakeOwner,
-  rearmRequesterWakeAfterCommit,
   retryPendingWakeCommit,
   shouldReportRequesterSettleWakeFailure,
 } from "./subagent-registry-requester-wake-commit.js";
 import {
-  assertRequesterWakeCommitCurrent,
   commitRequesterSettleWakeMutation,
   isCurrentRequesterSettleWakeBatch,
 } from "./subagent-registry-requester-wake-mutation.js";
@@ -52,47 +49,10 @@ const completeRequesterSettleWakeBatch = async (
 ): Promise<boolean> => {
   const params = context.options;
   if (
-    !pending.committedWake &&
-    !isCurrentRequesterSettleWakeBatch(
-      context,
-      entries,
-      rearmGeneration,
-      outcome?.delivered === true && outcome.requesterVisibleFinalDelivered === true,
-    )
-  ) {
-    return false;
-  }
-  assertSubagentRegistryWriteSourceCurrent(stateContext);
-  if (outcome) {
-    const result = await settleRequesterCompletionBatch({
-      entries: entries.map((subagent) => ({ subagent })),
-      outcome,
-      context: stateContext,
-      committed: pending.committedWake,
-      onCommitted: (write) => {
-        pending.committedWake = write;
-      },
-      onPublished: () => pending.adoptPublished(entries),
-      retiredPreimages: new Set(entries.filter((entry) => pending.isPublishedRetirement(entry))),
-      isCurrent: () => {
-        assertRequesterWakeCommitCurrent(
-          context,
-          entries,
-          stateContext,
-          pending,
-          outcome.delivered && outcome.requesterVisibleFinalDelivered === true,
-        );
-        return true;
-      },
-    });
-    if (result.applied !== true || result.publication !== "published") {
-      return false;
-    }
-  } else if (
     !(await commitRequesterSettleWakeMutation(
       context,
       entries,
-      { kind: "complete" },
+      outcome ? { kind: "settle", outcome } : { kind: "complete" },
       stateContext,
       pending,
     ))
@@ -388,7 +348,16 @@ export function scheduleRequesterSettleWake(
             const pending = getPendingWakeCommit(context, entry);
             if (pending) {
               await retryPendingWakeCommit(context, pending);
-              rearmRequesterWakeAfterCommit(context, pending, entry, isSourceCurrent);
+              if (
+                pending.needsWakeContinuation &&
+                isSourceCurrent() &&
+                pending.isCurrent(entry) &&
+                entry.requesterSettleWake &&
+                getPendingWakeCommit(context, entry) === undefined
+              ) {
+                pending.needsWakeContinuation = false;
+                context.pendingRequesterSettleWakeRearms.add(entry);
+              }
               if (pending.initialTransfer?.completed) {
                 context.pendingRequesterSettleWakeRearms.add(entry);
               }

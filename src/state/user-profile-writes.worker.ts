@@ -22,6 +22,7 @@ import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 import {
   applyVerifiedGitHubIdentity,
   githubAuthenticationSubject,
+  selectProfileAccessEntries,
 } from "./user-profile-github-identity.js";
 import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
 import { projectUserProfileDisplay, publishUserProfilesChange } from "./user-profile-list.js";
@@ -33,7 +34,6 @@ import {
 } from "./user-profile-mutation.js";
 import {
   insertUserProfile,
-  selectProfileDisplayEntries,
   selectUserProfileEmailAlias,
   setUserProfileEmailBinding,
   requireResolvedUserProfileMetadataById,
@@ -106,7 +106,7 @@ export function executeUserProfileWrite<T>(
         const value = operation();
         if (targetProfileId !== undefined) {
           const linked = requireResolvedUserProfileMetadataById(db, targetProfileId);
-          const row = selectProfileDisplayEntries(db, [linked.id])[0]?.[1];
+          const row = selectProfileAccessEntries(db, [linked.id])[0]?.[1];
           if (!row) {
             throw new UserProfileNotFoundError(linked.id);
           }
@@ -135,7 +135,7 @@ export function executeUserProfileWrite<T>(
           return [{ email, before, after }];
         });
         const ids = [...current.display];
-        const after = new Map(ids.length ? selectProfileDisplayEntries(db, ids) : []);
+        const after = new Map(ids.length ? selectProfileAccessEntries(db, ids) : []);
         const publication: UserProfileMutationPublication = {
           kind: "user-profile-mutation",
           sequence: ++sequence,
@@ -170,7 +170,7 @@ export function executeUserProfileWrite<T>(
         throw new Error("Profile mutation requires its original transaction");
       }
       const missing = ids.filter((id) => !current.before.has(id));
-      const rows = new Map(missing.length ? selectProfileDisplayEntries(db, missing) : []);
+      const rows = new Map(missing.length ? selectProfileAccessEntries(db, missing) : []);
       for (const id of missing) {
         current.before.set(id, rows.get(id));
       }

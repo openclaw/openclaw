@@ -626,7 +626,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
                 requesterSessionKey,
                 requesterAgentId,
                 triggerMessage: wakeMessage,
-                steerMessage: wakeMessage,
                 requesterSessionOrigin,
                 directOrigin,
                 sourceSessionKey: batchSessionKeys[0],

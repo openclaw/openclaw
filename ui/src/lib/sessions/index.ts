@@ -638,6 +638,9 @@ export function createSessionCapability(
       return canonicalListRevision;
     },
     githubPublication,
+    get cachedRoutingDefaults() {
+      return cacheLifecycle.routingDefaults;
+    },
     whenCachedRosterSettled: () => cacheLifecycle.settled,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,

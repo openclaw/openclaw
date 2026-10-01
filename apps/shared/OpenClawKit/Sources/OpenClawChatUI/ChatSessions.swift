@@ -674,8 +674,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
 
     public init(
         key: String,
-        kind: String?,
-        displayName: String?,
+        kind: String? = nil,
+        displayName: String? = nil,
         classification: String? = nil,
         boardFace: String? = nil,
         agentId: String? = nil,
@@ -683,23 +683,23 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         peerKind: String? = nil,
         isMain: Bool? = nil,
         isBackground: Bool? = nil,
-        surface: String?,
-        subject: String?,
-        room: String?,
-        space: String?,
-        updatedAt: Double?,
-        sessionId: String?,
-        systemSent: Bool?,
-        abortedLastRun: Bool?,
-        thinkingLevel: String?,
-        verboseLevel: String?,
-        inputTokens: Int?,
-        outputTokens: Int?,
-        totalTokens: Int?,
+        surface: String? = nil,
+        subject: String? = nil,
+        room: String? = nil,
+        space: String? = nil,
+        updatedAt: Double? = nil,
+        sessionId: String? = nil,
+        systemSent: Bool? = nil,
+        abortedLastRun: Bool? = nil,
+        thinkingLevel: String? = nil,
+        verboseLevel: String? = nil,
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
-        modelProvider: String?,
-        model: String?,
-        contextTokens: Int?,
+        modelProvider: String? = nil,
+        model: String? = nil,
+        contextTokens: Int? = nil,
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         thinkingOptions: [String]? = nil,
         thinkingDefault: String? = nil,
@@ -814,29 +814,6 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.thinkingLevels = thinkingLevels
         self.thinkingOptions = thinkingOptions
         self.thinkingDefault = thinkingDefault
-    }
-
-    static func placeholder(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
     }
 
     public var isPinned: Bool {

@@ -106,7 +106,7 @@ import {
 } from "./openclaw-tools.sessions-send-requester-retirement.test-support.js";
 import { observeSessionSendContinuations } from "./openclaw-tools.sessions-timeout.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
-import { onSubagentRegistryPersisted } from "./subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import { observeRootWork } from "./subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   addSubagentRunForTests,
@@ -115,7 +115,6 @@ import {
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
-import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import * as sendDelivery from "./tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -139,10 +138,6 @@ type AgentCallParams = {
   inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
 };
 const calls: GatewayCall[] = [];
-const finalAnnounce = vi.fn(async () => ({
-  payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-  meta: { durationMs: 1 },
-}));
 function mockGatewayReply(
   waitResult: Record<string, unknown> = {
     status: "ok",
@@ -173,16 +168,25 @@ function send(requesterKey: string, targetKey: string, timeoutSeconds = 1) {
 }
 function expectCoordination(
   result: Awaited<ReturnType<typeof send>>,
-  child: boolean,
   requesterChild: boolean,
+  deliveredChild?: boolean,
 ) {
-  expect.soft(result.details).toMatchObject({
-    status: "ok",
-    reply: "Requested result",
-    delivery: { status: child ? "skipped" : "pending" },
-  });
+  expect.soft(result.details).toMatchObject(
+    deliveredChild === undefined
+      ? {
+          status: "ok",
+          reply: "Requested result",
+          delivery: { status: "skipped" },
+        }
+      : { status: "accepted", delivery: { status: "pending" } },
+  );
   const agentCalls = calls.filter((call) => call.method === "agent");
-  expect.soft(agentCalls).toHaveLength(child ? 1 : 6);
+  expect.soft(agentCalls).toHaveLength(deliveredChild === undefined ? 1 : 2);
+  if (deliveredChild !== undefined) {
+    expect(agentParams(agentCalls[1] ?? {}).inputProvenance?.sourceRole).toBe(
+      deliveredChild ? "subagent" : undefined,
+    );
+  }
   expect
     .soft(agentParams(agentCalls[0] ?? {}).inputProvenance?.sourceRole)
     .toBe(requesterChild ? "subagent" : undefined);
@@ -218,18 +222,15 @@ describe("sessions_send child coordination", () => {
     callGatewayMock.mockReset();
     calls.length = 0;
     mockGatewayReply();
-    finalAnnounce.mockClear();
     readAcpSessionMetaMock.mockReset().mockReturnValue(undefined);
     readAcpSessionMetaForEntryMock
       .mockReset()
       .mockImplementation((params: unknown) => readAcpSessionMetaMock(params));
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    await agentStepTesting.setDepsForTest({ agentCommandFromIngress: finalAnnounce });
   });
   afterEach(async () => {
     await settleSessionWork();
     resetGatewayWorkAdmission();
-    await agentStepTesting.setDepsForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });
@@ -433,7 +434,7 @@ describe("sessions_send child coordination", () => {
           runId,
           targetDisposition: "queued",
           watched: true,
-          delivery: { status: "pending", mode: "announce" },
+          delivery: { status: "pending" },
         });
         const onYield = vi.fn();
         const yielded = await createSessionsYieldTool({
@@ -462,7 +463,7 @@ describe("sessions_send child coordination", () => {
           );
         expect(requesterCalls()).toHaveLength(0);
         const delivered = new Promise<void>((resolve) => {
-          stopObserving = onSubagentRegistryPersisted(() => {
+          stopObserving = subscribeSubagentRunChanges("persistence", () => {
             const child = getSubagentRunByRunId(runId);
             if (child?.delivery?.status === "delivered" && !child.requesterSettleWake) {
               resolve();
@@ -541,13 +542,16 @@ describe("sessions_send child coordination", () => {
       ).toBeUndefined();
       const requesterKey = direction === "requester" ? alternateKey : peerKey;
       const targetKey = direction === "target" ? alternateKey : peerKey;
-      const result = await send(requesterKey, targetKey);
+      const result = await send(requesterKey, targetKey, direction === "target" ? 0 : 1);
       await settleSessionWork();
-      const agentCalls = expectCoordination(result, child, direction === "requester" && child);
+      const agentCalls = expectCoordination(
+        result,
+        direction === "requester" && child,
+        direction === "target" ? child : undefined,
+      );
       if (child) {
-        expect(result.details).toMatchObject({ delivery: { mode: "announce" } });
+        expect(result.details).toMatchObject({ delivery: { status: "skipped" } });
         expect(agentParams(agentCalls[0] ?? {}).extraSystemPrompt).toBeUndefined();
-        expect(finalAnnounce).not.toHaveBeenCalled();
         expect(calls.some((call) => call.method === "send")).toBe(false);
       }
       if (direction === "target") {
@@ -633,9 +637,24 @@ describe("sessions_send child coordination", () => {
           metadataRead.readAcpSessionMetaForEntry({ ...params, databasePath }),
       );
       await writeEntry(reusedKey, currentEntry);
-      const result = await send(requesterKey, targetKey);
+      const result = await send(requesterKey, targetKey, direction === "target" ? 0 : 1);
       await settleSessionWork();
-      expectCoordination(result, expectedChild, direction === "requester" && expectedChild);
+      if (direction === "target") {
+        expect(result.details).toMatchObject({
+          status: "accepted",
+          delivery: { status: "skipped" },
+        });
+        const agentCalls = calls.filter((call) => call.method === "agent");
+        expect(agentCalls).toEqual([
+          expect.objectContaining({ params: expect.objectContaining({ sessionKey: targetKey }) }),
+        ]);
+        expect(agentParams(agentCalls[0] ?? {}).inputProvenance?.sourceRole).toBeUndefined();
+        expect(
+          calls.filter((call) => call.method === "agent.wait" || call.method === "send"),
+        ).toHaveLength(0);
+      } else {
+        expectCoordination(result, expectedChild);
+      }
     },
   );
 
@@ -661,7 +680,7 @@ describe("sessions_send child coordination", () => {
       const result = await send(requesterKey, targetKey, timeoutSeconds);
       expect(result.details).toMatchObject({
         status: "accepted",
-        delivery: { status: "skipped", mode: "announce" },
+        delivery: { status: "skipped" },
       });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       const agentCalls = calls.filter((call) => call.method === "agent");

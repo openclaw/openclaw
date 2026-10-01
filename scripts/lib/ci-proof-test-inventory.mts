@@ -22,6 +22,8 @@ function isOwnerSelectedUiE2eTest(file: string): boolean {
 export const CI_PROOF_TEST_FILES = [
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
+  "test/e2e/qa-lab/plugins/feishu-crabline.real-gateway.candidate.e2e.test.mts",
+  "test/e2e/qa-lab/plugins/slack-crabline-roundtrip.candidate.e2e.test.mts",
   "test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/frv.release.test.ts",
@@ -4942,7 +4944,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/commands/doctor-skill-workshop-sqlite.relocation-conflicts.test.ts",
   "src/commands/doctor-skill-workshop-sqlite.relocation.test.ts",
   "src/commands/doctor-state-integrity.transcripts.test.ts",
-  "src/commands/doctor/cron/native-tool-advisory.test.ts",
   "src/commands/onboard-agent.persistence.test.ts",
   "src/commands/onboard-config-provenance.integration.test.ts",
   "src/commands/onboard-interactive.test.ts",

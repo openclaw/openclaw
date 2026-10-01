@@ -405,7 +405,7 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       expect(runPrompt(cliRun, true)).toContain("Message delivery destination metadata");
     });
 
-    it("keeps a cron-tool default toolsAllow marker after a self-edit before CLI execution", async () => {
+    it("runs a self-edited automatic snapshot with the owner tools on CLI", async () => {
       mockCliAnnounce();
       const job = makeJob(announce, {
         toolsAllow: ["read", "cron"],
@@ -419,13 +419,9 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
         },
       });
       await runCronIsolatedAgentTurn(makeParams(job));
-      const cliRun = expectFields(
-        mockCall(runCliAgentMock)[0],
-        {
-          toolsAllow: ["read", "cron"],
-        },
-        "CLI run params",
-      );
+      // The automatic snapshot runs with the owner conversation's tools: no CLI cap.
+      const cliRun = expectFields(mockCall(runCliAgentMock)[0], {}, "CLI run params");
+      expect(cliRun.toolsAllow).toBeUndefined();
       expect(runPrompt(cliRun)).not.toContain("Message delivery destination metadata");
       expect(cliRun.transcriptPrompt).toBeUndefined();
     });

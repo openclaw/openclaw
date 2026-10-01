@@ -59,7 +59,6 @@ import {
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
-  QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -153,6 +152,7 @@ import {
   buildReasoningAndAssistantEvents,
   buildFailedResponseEvents,
 } from "./mock-openai-events.js";
+import { planGroupMessageToolTurn } from "./mock-openai-group-message-tool.js";
 import {
   extractLatestScenarioFamilyPrompt,
   extractLastUserText,
@@ -1399,15 +1399,15 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents(divergentFinal || marker);
   }
-  if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
-    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "send",
-        message: marker,
-      });
-    }
-    return buildAssistantEvents("");
+  const groupMessageToolTurn = planGroupMessageToolTurn({
+    allInputText,
+    body,
+    marker: exactMarkerDirective ?? exactReplyDirective,
+    hasCompletedToolOutput,
+    isSettledToolContinuation,
+  });
+  if (groupMessageToolTurn) {
+    return groupMessageToolTurn;
   }
   if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";

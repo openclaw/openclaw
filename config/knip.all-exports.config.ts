@@ -82,6 +82,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/vitest/vitest.jsdom-preload.mts!",
   // Test drivers and Docker fixtures are executed by path from package scripts
   // and the test-project registry.
+  // The published-driver lifecycle runner copies this executable into its Docker image.
+  "scripts/e2e/lib/upgrade-survivor/published-driver-process-fixture.mjs!",
   "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts!",
   "test/e2e/qa-lab/runtime/docker-e2e-lane.ts!",
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",

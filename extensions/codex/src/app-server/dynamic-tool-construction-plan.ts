@@ -1,5 +1,5 @@
 import type { resolveSandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isCodexRemoteExecPlacementSandbox } from "./config.js";
+import { isCodexPairedNodeRemoteExecPlacementSandbox } from "./config.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
@@ -12,13 +12,7 @@ export function resolveCodexToolConstructionPlan(
   nativeToolSurfaceEnabled: boolean | undefined,
   requireWorkspaceOnly: boolean | undefined,
 ): OpenClawCodingToolsOptions["toolConstructionPlan"] {
-  if (
-    !isCodexRemoteExecPlacementSandbox(sandbox) ||
-    sandbox?.backendId !== "node" ||
-    !("placementNodeId" in sandbox) ||
-    typeof sandbox.placementNodeId !== "string" ||
-    !sandbox.placementNodeId
-  ) {
+  if (!isCodexPairedNodeRemoteExecPlacementSandbox(sandbox) || sandbox?.backendId !== "node") {
     return requireWorkspaceOnly
       ? {
           includeBaseCodingTools: true,

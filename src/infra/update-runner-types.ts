@@ -34,8 +34,8 @@ type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 export type UpdateStepProgress = {
   onRollbackOutcome?: (outcome: NonNullable<UpdateRunResult["rollbackOutcome"]>) => void;
   onHeartbeat?: () => void;
-  onStepStart?: (step: UpdateStepInfo) => void;
-  onStepComplete?: (step: UpdateStepCompletion) => void;
+  onStepStart?: (step: UpdateStepInfo) => void | Promise<void>;
+  onStepComplete?: (step: UpdateStepCompletion) => void | Promise<void>;
 };
 
 type GitUpdateTarget = {

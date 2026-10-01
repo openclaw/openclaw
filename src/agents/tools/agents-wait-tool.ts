@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
-import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
 import { prepareSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
@@ -230,7 +230,7 @@ async function waitForCollector(params: {
     }
   };
   // Cover the worker read as well as the parked wait; publications during either need a reread.
-  const unsubscribe = onSubagentRegistryPersisted(wake);
+  const unsubscribe = subscribeSubagentRunChanges("persistence", wake);
   params.signal?.addEventListener("abort", wake, { once: true });
   try {
     for (;;) {

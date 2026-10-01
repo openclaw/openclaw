@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
 import {
@@ -21,17 +22,7 @@ const OptionalBootstrapFileNameSchema = z.enum([
   "IDENTITY.md",
 ]);
 
-const AgentThinkingLevelSchema = z.enum([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "adaptive",
-  "max",
-  "ultra",
-]);
+const AgentThinkingLevelSchema = z.enum(ALL_THINKING_LEVELS);
 
 const EmbeddedAgentConfigSchema = z.strictObject({
   projectSettingsPolicy: z

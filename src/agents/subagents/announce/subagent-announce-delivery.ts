@@ -1,8 +1,3 @@
-/**
- * Subagent completion announcement delivery.
- *
- * Routes completion payloads through gateway/channel/session paths and records delivery evidence.
- */
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
@@ -140,7 +135,6 @@ function createCompletionUserTurnTranscriptRecorderFactory(params: {
 
 export async function deliverSubagentAnnouncement(
   params: Omit<SubagentAnnounceDirectParams, "createUserTurnTranscriptRecorder"> & {
-    steerMessage: string;
     sourceRunId?: string;
     requireDirectDelivery?: boolean;
     preparedRequester?: { binding: SessionDeliveryRequesterBinding; entry: SessionEntry };
@@ -302,7 +296,7 @@ export async function deliverSubagentAnnouncement(
         deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(getSubagentAnnounceRuntimeConfig()),
         requesterSessionKey: params.requesterSessionKey,
         requesterAgentId: params.requesterAgentId,
-        steerMessage: params.steerMessage,
+        steerMessage: params.triggerMessage,
         createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
         signal: params.signal,
         isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,

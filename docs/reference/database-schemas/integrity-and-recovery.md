@@ -455,6 +455,21 @@ The report names the retained original directory and the standalone backups.
 Keep them until the updated Gateway has been verified; do not overwrite newer
 runtime state with an old copy.
 
+During a managed update (`OPENCLAW_UPDATE_IN_PROGRESS` is truthy), Doctor still
+reports stores without NOCOW, but `--fix`/`--repair` defers the rewrite unless the
+updater also sets `OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR=1`. Without that request,
+Doctor prints an explicit deferral note and leaves the store directories in
+place. This updater-to-Doctor environment contract lets the updater account for
+physical identity changes separately from schema migration. Operator runs outside
+a managed update keep the normal explicit repair behavior.
+
+Doctor drains its database handles and awaits its inspection workers before the
+rewrite. A refusal saying `store files are open (pids: …)` names the processes
+reported by `fuser`. A refusal saying `fuser could not establish that all handles
+are closed` includes the inspection error; check that `fuser` is installed and
+can inspect processes through `/proc`. Both refusals leave the original store
+in place, including when process inspection reports permission errors.
+
 Missing tools skip repair with a note. Insufficient space, active Gateway
 ownership, or failed pre-publication verification leave the previous store in
 place. An uncertain exchange stops activation and names the retained recovery

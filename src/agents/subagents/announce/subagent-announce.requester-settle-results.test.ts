@@ -148,7 +148,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(message).not.toContain("NO_REPLY");
     expect(message).not.toContain("stale source reply");
     expect(message).not.toContain("unrelated source reply");
-    expect(call.steerMessage).toBe(message);
     expect(call.requireVisibleReply).toBe(true);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1, {
       delivered: true,

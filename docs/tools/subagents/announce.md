@@ -9,12 +9,11 @@ read_when:
 
 ## Announce
 
-Sub-agents report back via an announce step:
+Sub-agents report back through completion delivery:
 
-- The announce step runs inside the sub-agent session (not the requester session).
-- Runs spawned with `expectsCompletionMessage: false` skip the announce step entirely; the run registry records their delivery as not required.
-- An exact `ANNOUNCE_SKIP` response suppresses announce output.
-- For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
+- The completed child's result is handed to the requester; delivery does not ask the child to generate a separate announcement.
+- Runs spawned with `expectsCompletionMessage: false` skip completion delivery entirely; the run registry records their delivery as not required.
+- For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent as `(no output)` for visible representation or retry; it is not credited as silent delivery. This also applies when several child results are collected together.
 - Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
 
 By default, delivery depends on requester depth:
@@ -113,8 +112,8 @@ projection limits. The bounded lifecycle snapshot remains separate from the
 complete answer sent to the parent.
 
 A successful child with an empty final reply remains in the batch with its task
-identity, `ok` status, and `(no output)` result. Intentional silence and announce
-skip tokens keep their existing suppression behavior.
+identity, `ok` status, and `(no output)` result. Intentional silence remains
+available for non-required completions.
 
 For nested work, descendant findings help the child form its answer. The child's
 own final answer is what travels onward to its parent. If the child sends its
