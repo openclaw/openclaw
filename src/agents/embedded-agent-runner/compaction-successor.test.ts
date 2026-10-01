@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { readAttachedSessionEndTranscriptSourceForTest } from "../../plugins/session-end-transcript.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -493,6 +494,17 @@ describe("accepted successor lifecycle notifications", () => {
           sessionKey: fixture.target.sessionKey,
           agentId: "main",
         });
+        const source = readAttachedSessionEndTranscriptSourceForTest(endContext);
+        expect(source.available).toBe(true);
+        if (source.available) {
+          await expect(
+            source.readTail({ maxMessages: 10, maxBytes: 64_000 }),
+          ).resolves.toMatchObject({
+            messages: [expect.objectContaining({ content: "Preserved predecessor history" })],
+            totalMessages: 1,
+            truncated: false,
+          });
+        }
         expect(startContext).toEqual({
           sessionId: fixture.successorId,
           sessionKey: fixture.target.sessionKey,

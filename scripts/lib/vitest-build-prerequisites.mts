@@ -654,7 +654,7 @@ function isMissingVitestResolveError(error: unknown): error is NodeJS.ErrnoExcep
 /**
  * Builds the actionable dependency-install message when Vitest is unavailable.
  */
-export function resolveMissingVitestDependencyMessage(
+function resolveMissingVitestDependencyMessage(
   baseDir = resolveRepoRoot(import.meta.url),
   fsImpl: Pick<VitestFs, "existsSync"> = fs,
 ): string {

@@ -527,16 +527,11 @@ export async function resolveWorkspaceBootstrapStatus(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
-  const state = (await readCanonicalWorkspaceStateSnapshot(resolvedDir, options)).setup;
-  if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
+  if (await isWorkspaceSetupCompleted(resolvedDir, options)) {
     return "complete";
   }
   const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapExists = await pathExists(bootstrapPath);
-  if (!bootstrapExists) {
-    return "complete";
-  }
-  return "pending";
+  return (await pathExists(bootstrapPath)) ? "pending" : "complete";
 }
 
 export async function seedWorkspaceBootstrap(params: {
@@ -917,17 +912,14 @@ export async function ensureAgentWorkspace(params?: {
       skipOptionalBootstrapFiles.add(filename);
     }
   }
-  const shouldWriteBootstrapFile = (fileName: string): boolean =>
-    !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
-
   await publishAgentInstructions(agentsPath, defaultAgentsTemplate, purpose, beforePersistentApply);
-  if (shouldWriteBootstrapFile(DEFAULT_SOUL_FILENAME)) {
+  if (!skipOptionalBootstrapFiles.has(DEFAULT_SOUL_FILENAME)) {
     await publishBootstrapFile(soulPath, soulTemplate, beforePersistentApply);
   }
-  const identityPathCreated = shouldWriteBootstrapFile(DEFAULT_IDENTITY_FILENAME)
+  const identityPathCreated = !skipOptionalBootstrapFiles.has(DEFAULT_IDENTITY_FILENAME)
     ? await publishBootstrapFile(identityPath, identityTemplate, beforePersistentApply)
     : false;
-  if (shouldWriteBootstrapFile(DEFAULT_USER_FILENAME)) {
+  if (!skipOptionalBootstrapFiles.has(DEFAULT_USER_FILENAME)) {
     await publishBootstrapFile(userPath, userTemplate, beforePersistentApply);
   }
 
@@ -985,11 +977,7 @@ export async function ensureAgentWorkspace(params?: {
         bootstrapTemplate,
         beforePersistentApply,
       );
-      if (!wroteBootstrap) {
-        bootstrapExists = await pathExists(bootstrapPath);
-      } else {
-        bootstrapExists = true;
-      }
+      bootstrapExists = wroteBootstrap || (await pathExists(bootstrapPath));
       if (bootstrapExists && !state.bootstrapSeededAt) {
         markState({ bootstrapSeededAt: nowIso() });
       }
@@ -1097,12 +1085,6 @@ type BootstrapSessionContext = {
   workspaceDir?: string;
 };
 
-function resolveBootstrapSessionContext(
-  session?: string | BootstrapSessionContext,
-): BootstrapSessionContext {
-  return typeof session === "string" ? { sessionKey: session } : (session ?? {});
-}
-
 function filterRootMemoryBootstrapFiles(
   files: WorkspaceBootstrapFile[],
   workspaceRoot?: string,
@@ -1129,7 +1111,8 @@ export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  const { sessionKey, chatType, workspaceDir } = resolveBootstrapSessionContext(session);
+  const { sessionKey, chatType, workspaceDir }: BootstrapSessionContext =
+    typeof session === "string" ? { sessionKey: session } : (session ?? {});
   const isSubagent = isSubagentSessionKey(sessionKey);
   const isCron = isCronSessionKey(sessionKey);
   const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
@@ -1243,11 +1226,6 @@ async function resolveExtraBootstrapPatternPaths(
   return matches.length > 0 ? matches : [pattern];
 }
 
-function patternWalkRootStaysInWorkspace(workspaceDir: string, pattern: string): boolean {
-  const walkRoot = path.resolve(workspaceDir, resolveGlobWalkRoot(pattern));
-  return isPathInside(workspaceDir, walkRoot);
-}
-
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
@@ -1262,7 +1240,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   const resolvedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (!patternWalkRootStaysInWorkspace(resolvedDir, pattern)) {
+    if (!isPathInside(resolvedDir, path.resolve(resolvedDir, resolveGlobWalkRoot(pattern)))) {
       diagnostics.push({
         path: path.resolve(resolvedDir, pattern),
         reason: "security",

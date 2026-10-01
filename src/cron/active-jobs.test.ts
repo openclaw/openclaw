@@ -24,7 +24,7 @@ import {
   onCronJobInactive,
   resetCronActiveJobs,
 } from "./active-jobs.js";
-import { prepareCronPromptRunAdmission } from "./isolated-agent/run-admission.js";
+import { prepareCronRunAdmission } from "./run-admission.js";
 
 afterEach(() => {
   resetCronActiveJobs();
@@ -80,7 +80,8 @@ describe("cron message action authority", () => {
       const jobId = "long-message-read";
       const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
       const controller = new AbortController();
-      const owner = prepareCronPromptRunAdmission({
+      const owner = prepareCronRunAdmission({
+        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         agentId: "main",
         runId: "long-message-run",

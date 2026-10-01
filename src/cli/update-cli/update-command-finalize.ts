@@ -19,6 +19,7 @@ import {
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
 } from "../../infra/update-doctor-result.js";
+import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
@@ -86,6 +87,7 @@ import {
 export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
+  handoff?: ManagedHandoffRepair,
 ): Promise<void> {
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
@@ -105,6 +107,7 @@ export async function updateFinalizeCommand(
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {
     const lifecycle = new UpdateFinalizationLifecycle(Boolean(opts.json), timeoutMs, stopChildren);
+    lifecycle.handoff = handoff;
     try {
       const { root, installKind, runId } = await withUpdateAdmissionReporting(
         opts,
@@ -525,6 +528,9 @@ async function updateFinalizeCommandInternal(
               })
             : undefined;
         const observed = failure ? await lifecycle.observeFailure(failure) : undefined;
+        if (!failure) {
+          lifecycle.handoff?.complete(invokingRunId);
+        }
         if (opts.json) {
           defaultRuntime.writeJson({
             ...result,

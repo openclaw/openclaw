@@ -33,6 +33,7 @@ async function withAnnounce(
     const deps = createCliDeps();
     mockAgentPayloads(options.texts.map((text) => ({ text })));
     const result = await runCronIsolatedAgentTurn({
+      deliveryAttemptFence: null,
       cfg: makeCfg(home, storePath, {
         ...options.cfg,
         ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),

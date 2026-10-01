@@ -2101,6 +2101,10 @@ describe("release validation no-push transport", () => {
             "-c",
             `
           gh() { printf '%s\\n' "$SOURCE_SHA"; }
+          git() {
+            printf '%s\\trefs/tags/%s\\n' "$SIGNED_RELEASE_TAG_OBJECT_SHA" "$RELEASE_TAG"
+            printf '%s\\trefs/tags/%s^{}\\n' "$TARGET_SHA" "$RELEASE_TAG"
+          }
           node() {
             if [[ "$1 $2" == "scripts/linux-app-channel.mjs finalize-core" ]]; then
               printf '%s\\n' "$*" >> "$CALLS"
@@ -2120,7 +2124,10 @@ describe("release validation no-push transport", () => {
               GITHUB_REPOSITORY: "openclaw/openclaw",
               RELEASE_TAG: tag,
               RELEASE_NPM_DIST_TAG: distTag,
+              PARENT_WORKFLOW_SHA: "b".repeat(40),
+              SIGNED_RELEASE_TAG_OBJECT_SHA: "c".repeat(40),
               SOURCE_SHA: "a".repeat(40),
+              TARGET_SHA: "a".repeat(40),
               GITHUB_WORKFLOW_SHA: "b".repeat(40),
               GITHUB_REF_NAME: "release-publish/bbbbbbbbbbbb-123",
               GITHUB_REF: "refs/tags/release-publish/bbbbbbbbbbbb-123",

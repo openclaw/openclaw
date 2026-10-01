@@ -711,6 +711,7 @@ src/infra/json-files.ts
 src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
 src/infra/lifecycle-write-custody.ts
+src/infra/lru-cache.ts
 src/infra/map-size.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
@@ -1106,7 +1107,6 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-value-views.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
-src/plugins/plugin-lru-cache.ts
 src/plugins/plugin-metadata-contributions.ts
 src/plugins/plugin-metadata-env.ts
 src/plugins/plugin-metadata-lifecycle.ts
@@ -1342,6 +1342,7 @@ src/state/openclaw-state-db-cache.ts
 src/state/openclaw-state-db-content-version.ts
 src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
+src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-existing-schema.ts
@@ -1394,6 +1395,7 @@ src/state/openclaw-state-lease-worker-owner.ts
 src/state/openclaw-state-lease-worker-storage.ts
 src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
+src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts

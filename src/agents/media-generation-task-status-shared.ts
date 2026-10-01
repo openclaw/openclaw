@@ -104,12 +104,7 @@ function resolveMediaGenerationTaskRequesterAgentId(
   if (explicit) {
     return explicit;
   }
-  const ownerKey = normalizeOptionalString(task.requesterSessionKey);
-  const parsed = parseAgentSessionKey(ownerKey)?.agentId;
-  if (parsed) {
-    return parsed;
-  }
-  return undefined;
+  return parseAgentSessionKey(normalizeOptionalString(task.requesterSessionKey))?.agentId;
 }
 
 function isTaskStillBlockingDuplicateGuard(task: MediaGenerationOperation): boolean {
@@ -163,10 +158,10 @@ function findPersistedTaskForRecentMediaGenerationStart(params: {
     ) {
       return false;
     }
-    if (task.taskId === params.cachedTask.taskId) {
-      return true;
-    }
-    return Boolean(task.runId && task.runId === params.cachedTask.runId);
+    return (
+      task.taskId === params.cachedTask.taskId ||
+      Boolean(task.runId && task.runId === params.cachedTask.runId)
+    );
   });
 }
 
@@ -288,7 +283,6 @@ function findRecentStartedMediaGenerationTaskForSession(params: {
       ) {
         retainedEntries.push(entry);
       }
-      continue;
     }
   }
   if (retainedEntries.length > 0) {
@@ -439,9 +433,7 @@ function buildMediaGenerationTaskStatusText(params: {
 }): string {
   const provider = getMediaGenerationTaskProviderId(params.task, params.sourcePrefix);
   const active =
-    params.task.status === "queued" ||
-    params.task.status === "running" ||
-    params.task.terminalOutcome === "blocked";
+    isTaskStillBlockingDuplicateGuard(params.task) || params.task.terminalOutcome === "blocked";
   const lines = [
     active
       ? `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${provider ? ` with ${provider}` : ""}.`

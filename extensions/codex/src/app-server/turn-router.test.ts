@@ -138,6 +138,55 @@ describe("CodexAppServerTurnRouter", () => {
     );
   });
 
+  it.each([
+    "Codex couldn't save diagnostic logs to its local database. Use /feedback with logs included before closing Codex, or run `codex doctor` for diagnostics.",
+    "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.",
+  ])(
+    "records a diagnostic-log failure once instead of replaying it across turns: %s",
+    async (message) => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createHarness();
+      const router = getCodexAppServerTurnRouter(harness.client);
+      const notifications = vi.fn();
+      const routes = ["thread-first", "thread-sibling"].map((threadId) =>
+        router.reserveThread({ threadId, onNotification: notifications }),
+      );
+      for (const route of routes) {
+        route.armTurn();
+        await route.bindTurn("turn-first");
+      }
+
+      harness.send({ method: "warning", params: { threadId: null, message } });
+      await Promise.all(routes.map((route) => route.drain()));
+      expect(notifications).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith(message);
+      for (const route of routes) {
+        route.release();
+      }
+
+      const later = router.reserveThread({
+        threadId: "thread-first",
+        onNotification: notifications,
+      });
+      later.armTurn();
+      await later.bindTurn("turn-later");
+      expect(notifications).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      later.release();
+    },
+  );
+
+  it("records a log failure before observers exist and keeps a new connection's failure visible", () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const message =
+      "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.";
+    for (const harness of [createHarness(), createHarness()]) {
+      harness.send({ method: "warning", params: { threadId: null, message } });
+      harness.client.addNotificationHandler(vi.fn());
+    }
+    expect(warn.mock.calls).toEqual([[message], [message]]);
+  });
+
   it("does not dispatch a request that times out before route activation", async () => {
     vi.useFakeTimers();
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);

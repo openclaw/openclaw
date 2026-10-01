@@ -545,6 +545,12 @@ largest family and 64 MiB for restoration while migrated originals remain.
 Hard-linked database or journal files refuse before migration because restoring
 one pathname cannot safely restore every alias.
 
+Backup metadata reuses the snapshot publisher's verified SHA-256 and byte count,
+avoiding another full database read. Recovery still verifies the stored bytes
+against that receipt before replacing any live database, so later snapshot changes
+are rejected. This saving requires the installed updater to contain the fix;
+older updaters retain their original backup path.
+
 Settled, verified successful activation removes the current update's database
 snapshots, together with the old package backup. Rollback, failed or unverified
 completion, and restore refusal keep them. Cleanup failures produce a maintenance warning with
@@ -558,6 +564,10 @@ If the Gateway was confirmed stopped during capture and the update fails before
 the candidate is allowed to start, restoration also requires matching database
 write evidence. Doctor checks the captured file generations before migrations
 and records their final generations before releasing maintenance ownership.
+Any fingerprint change during maintenance, including a newly created database,
+refuses automatic restoration. Gateway maintenance ownership does not exclude
+independent SQLite writers, and these observations cannot distinguish Doctor's
+own writes from foreign commits. Changed databases require manual recovery.
 Rollback checks those facts again while holding database file exclusions. The
 fingerprints cover database, WAL, and rollback-journal identity, timestamps,
 sizes, and content digests; they reuse the snapshot inventory.

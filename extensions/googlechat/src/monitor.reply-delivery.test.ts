@@ -45,13 +45,15 @@ function createCore(params?: {
   } as unknown as GoogleChatCoreRuntime;
 }
 
+let createGoogleChatTypingMessage: typeof import("./monitor-reply-delivery.js").createGoogleChatTypingMessage;
 let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliverGoogleChatReply;
 
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.sendGoogleChatMessage.mockResolvedValue(null);
   mocks.updateGoogleChatMessage.mockResolvedValue({});
-  ({ deliverGoogleChatReply } = await import("./monitor-reply-delivery.js"));
+  ({ createGoogleChatTypingMessage, deliverGoogleChatReply } =
+    await import("./monitor-reply-delivery.js"));
 });
 
 afterAll(() => {
@@ -127,6 +129,40 @@ describe("Google Chat reply delivery", () => {
       space: "spaces/AAA",
       text: "second chunk",
       thread: "spaces/AAA/threads/fallback",
+    });
+  });
+
+  it("replaces the typing message for a valid explicit thread target", async () => {
+    const core = createCore();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/reply" });
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "retargeted reply",
+        replyToId: "spaces/AAA/threads/other",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime: createRuntimeSpies(),
+      core,
+      config,
+      typingMessage: createGoogleChatTypingMessage({
+        messageName: "spaces/AAA/messages/typing",
+        requestedThreadName: "spaces/AAA/threads/root",
+        deliveredThreadName: "spaces/AAA/threads/root",
+      }),
+    });
+
+    expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+    });
+    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "retargeted reply",
+      thread: "spaces/AAA/threads/other",
     });
   });
 

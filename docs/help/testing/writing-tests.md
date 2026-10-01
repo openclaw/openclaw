@@ -92,6 +92,14 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
 - State the measured cost in the PR for every new or materially changed test
   file, and the CI seconds once the run exists.
 
+`withTestTimeout` and `raceWithTimeoutResult` are grandfathered wall-clock races;
+`check:test-timeout-race-ratchet` keeps their per-file counts in
+`config/test-timeout-race-baseline.txt` shrink-only. Wait for the owned completion
+signal with `awaitGateBeforeSettlement(gate, operation, message)` or
+`withinTest(work, signal)` from `test/helpers/promise.ts`, or use `vi.useFakeTimers()`
+through the owner's injected clock seam. After removing sites, run
+`pnpm check:test-timeout-race-ratchet --prune` to shrink the baseline.
+
 ## Raw SQLite state access
 
 `closeOpenClawStateDatabaseForTest()` closes native handles synchronously, but

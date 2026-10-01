@@ -55,6 +55,7 @@ export async function createDiskSwap(sourceRoot, base) {
     "infra/errno",
     "infra/fs-safe-remove",
     "infra/mutation-authority",
+    "infra/package-update-backup-paths",
     "infra/package-update-swap",
     "infra/package-update-swap-results",
     "infra/package-update-swap-target",

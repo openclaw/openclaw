@@ -254,12 +254,9 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
             };
             const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
             try {
-              db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-                managedRoot,
-                managedRow.owner,
-                managedRow.payload_json,
-                managedRow.updated_at,
-              );
+              db.prepare(
+                "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+              ).run(managedRoot, managedRow.owner, managedRow.payload_json, managedRow.updated_at);
             } finally {
               db.close();
             }

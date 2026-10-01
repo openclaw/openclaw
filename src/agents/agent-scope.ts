@@ -545,11 +545,8 @@ export function resolveSubagentModelFallbacksOverride(
     return subagentFallbacks;
   }
   const selection = resolveSubagentModelConfigSelectionResult({ cfg, agentId });
-  if (selection?.source === "agent") {
+  if (selection?.source === "agent" || selection?.source === "default-subagent") {
     return resolveSelectedModelFallbacksOverride(selection.raw);
-  }
-  if (selection?.source === "default-subagent") {
-    return resolveSelectedModelFallbacksOverride(cfg.agents?.defaults?.subagents?.model);
   }
   return undefined;
 }

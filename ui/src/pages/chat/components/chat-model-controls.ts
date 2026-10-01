@@ -181,11 +181,20 @@ function prepareChatModelCatalog(catalog: ModelCatalogEntry[]) {
 function resolveChatModelPickerLabel(
   entry: ModelCatalogEntry | undefined,
   fallbackLabel: string,
+  runtimeId: string | null | undefined = entry?.agentRuntime?.id,
 ): string {
-  if (entry && normalizeChatModelProviderId(entry.provider) === "openai") {
-    return entry.name.trim() || fallbackLabel;
+  const label =
+    entry && normalizeChatModelProviderId(entry.provider) === "openai"
+      ? entry.name.trim() || fallbackLabel
+      : fallbackLabel;
+  if (runtimeId !== "codex" || !entry) {
+    return label;
   }
-  return fallbackLabel;
+  const runtimeIds = new Set([
+    entry.agentRuntime?.id,
+    ...(entry.runtimeChoices ?? []).map((choice) => choice.agentRuntime.id),
+  ]);
+  return runtimeIds.has("openclaw") && runtimeIds.has("codex") ? `${label} codex` : label;
 }
 
 function formatPickerModelLabel(label: string): string {
@@ -415,7 +424,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         value: option.value,
         commitValue: option.value,
         isDefault: false,
-        label: pickerOption.label,
+        label: resolveChatModelPickerLabel(catalogEntry, option.label, choice.agentRuntime.id),
         provider: pickerOption.provider,
         agentRuntime: choice.agentRuntime.id,
         runtimeOverride: choice.agentRuntime.id,
@@ -472,7 +481,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         : {}),
       isDefault: false,
       value: currentOverride,
-      label: currentCatalogEntry?.name.trim() || currentOverride,
+      label: resolveChatModelPickerLabel(
+        currentCatalogEntry,
+        currentCatalogEntry?.name.trim() || currentOverride,
+      ),
       provider: catalog.provider(currentOverride, currentProviderHint),
     });
   }
@@ -524,16 +536,21 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   ) {
     activeModelOption.contextTokens = activeSession.contextTokens;
   }
+  // Observed models lack runtime provenance, even when a harness fallback keeps the same model.
+  const triggerRuntime = activeModelValue ? null : (selectedAgentRuntime ?? defaultRuntime);
   // A lock prevents model changes; the concrete selection still owns its label.
   // Without a selection, neither the runtime nor the agent default identifies it.
   const committedModelLabel =
     props.modelSelectionLocked === true && !triggerModelValue
       ? t("chat.selectors.lockedSessionModel")
-      : (modelOptions.find((entry) => entry.value === triggerModelValue)?.label ??
-        resolveChatModelPickerLabel(
-          catalog.entry(triggerModelValue),
-          triggerModelValue || pickerDefaultLabel,
-        ));
+      : resolveChatModelPickerLabel(
+          catalog.entry(triggerModelValue || defaultModel),
+          formatPickerModelLabel(
+            selectOptions.find((entry) => entry.value === triggerModelValue)?.label ??
+              (catalog.entry(triggerModelValue)?.name.trim() || triggerModelValue || defaultLabel),
+          ),
+          triggerModelValue || defaultModel ? triggerRuntime : null,
+        );
   const managedCatalog = props.modelCatalogState ?? {
     hasSnapshot: !props.modelsLoading,
     status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
