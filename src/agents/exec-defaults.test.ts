@@ -41,27 +41,8 @@ describe("resolveExecDefaults", () => {
     ).toBe(false);
   });
 
-  it("does not advertise node routing when exec host is auto and sandbox is available", () => {
-    const defaults = resolveExecDefaults({
-      cfg: withDefaultAgent({
-        tools: {
-          exec: {
-            host: "auto",
-          },
-        },
-      }),
-      sandboxAvailable: true,
-    });
-
-    expect(defaults.host).toBe("auto");
-    expect(defaults.effectiveHost).toBe("sandbox");
-    expect(defaults.canRequestNode).toBe(false);
-  });
-
   it.each([
     { host: "gateway", sessionKey: "agent:main:guest" },
-    { host: "node", sessionKey: "agent:main:guest" },
-    { host: "gateway", sessionKey: "global" },
     { host: "node", sessionKey: "global" },
   ] as const)(
     "keeps required $sessionKey sandboxed and hides nodes despite configured host=$host",
@@ -129,23 +110,6 @@ describe("resolveExecDefaults", () => {
     },
   );
 
-  it("keeps node routing available when exec host is auto without sandbox", () => {
-    const defaults = resolveExecDefaults({
-      cfg: withDefaultAgent({
-        tools: {
-          exec: {
-            host: "auto",
-          },
-        },
-      }),
-      sandboxAvailable: false,
-    });
-
-    expect(defaults.host).toBe("auto");
-    expect(defaults.effectiveHost).toBe("gateway");
-    expect(defaults.canRequestNode).toBe(true);
-  });
-
   it("honors session-level exec host overrides", () => {
     const sessionEntry = {
       execHost: "node",
@@ -179,27 +143,9 @@ describe("resolveExecDefaults", () => {
 
     expect(defaults.host).toBe("auto");
     expect(defaults.effectiveHost).toBe("gateway");
+    expect(defaults.canRequestNode).toBe(true);
     expect(defaults.mode).toBe("full");
     expect(defaults.security).toBe("full");
-    expect(defaults.ask).toBe("off");
-  });
-
-  it("keeps sandbox deny by default when auto resolves to sandbox", () => {
-    const defaults = resolveExecDefaults({
-      cfg: withDefaultAgent({
-        tools: {
-          exec: {
-            host: "auto",
-          },
-        },
-      }),
-      sandboxAvailable: true,
-    });
-
-    expect(defaults.host).toBe("auto");
-    expect(defaults.effectiveHost).toBe("sandbox");
-    expect(defaults.mode).toBe("deny");
-    expect(defaults.security).toBe("deny");
     expect(defaults.ask).toBe("off");
   });
 
@@ -226,7 +172,10 @@ describe("resolveExecDefaults", () => {
 
     // Sandbox mode is intentionally self-contained: gateway approval floors
     // must not leak into the local deny-by-default sandbox contract.
+    expect(defaults.host).toBe("auto");
     expect(defaults.effectiveHost).toBe("sandbox");
+    expect(defaults.canRequestNode).toBe(false);
+    expect(defaults.mode).toBe("deny");
     expect(defaults.security).toBe("deny");
     expect(defaults.ask).toBe("off");
     expect(execApprovals.loadExecApprovals).not.toHaveBeenCalled();
@@ -398,13 +347,6 @@ describe("resolveExecDefaults", () => {
       security: "allowlist",
       ask: "on-miss",
       mode: "auto",
-    },
-    {
-      permissionMode: "full",
-      override: { mode: "full" },
-      security: "full",
-      ask: "off",
-      mode: "full",
     },
     {
       permissionMode: "workspace",

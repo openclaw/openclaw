@@ -1,4 +1,5 @@
-import type { WebSocket } from "ws";
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { WebSocket } from "ws";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type {
   WorkerHeartbeatParams,
@@ -6,13 +7,7 @@ import type {
   WorkerHelloOk,
   WorkerLiveEventParams,
   WorkerLiveEventResponseFrame,
-  WorkerPortalParams,
-  WorkerPortalResponseFrame,
   WorkerProtocolCloseReason,
-  WorkerSessionsSendParams,
-  WorkerSessionsSendResponseFrame,
-  WorkerSessionsSpawnParams,
-  WorkerSessionsSpawnResponseFrame,
   WorkerTranscriptCommitParams,
   WorkerTranscriptCommitResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -21,6 +16,13 @@ import type {
   WorkerComputerResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import type {
+  WorkerGatewayToolInvokeParams,
+  WorkerGatewayToolCancelParams,
+  WorkerGatewayToolResult,
+  WorkerGatewayToolResponseFrame,
+  WorkerGatewayToolCancelResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import type {
   WorkerInferenceCancelParams,
   WorkerInferenceCancelResponseFrame,
   WorkerInferenceEventFrame,
@@ -28,10 +30,7 @@ import type {
   WorkerInferenceStartResponseFrame,
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type {
-  WorkerSkillWorkshopParams,
-  WorkerSkillWorkshopResponseFrame,
-} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
@@ -48,7 +47,6 @@ import {
   formatWorkerConnectionFailure,
   isFencedCloseReason,
   resolvePositiveTimeout,
-  toWorkerConnectionError,
   type WorkerConnectionExit,
   type WorkerConnectionOptions,
   type WorkerConnectionState,
@@ -69,8 +67,6 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
 
 const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-const WORKER_SESSION_SPAWN_TIMEOUT_MS = 15 * 60_000;
-const WORKER_SESSION_SEND_TIMEOUT_SLACK_MS = 60_000;
 
 type ReadyWaiter = {
   resolve: (hello: WorkerHelloOk) => void;
@@ -145,7 +141,7 @@ export class WorkerConnection {
   }
 
   waitForReady(): Promise<WorkerHelloOk> {
-    if (this.stateValue.kind === "ready") {
+    if (this.stateValue.kind === "ready" && this.socket?.readyState === WebSocket.OPEN) {
       return Promise.resolve(this.stateValue.hello);
     }
     if (this.isTerminal()) {
@@ -204,31 +200,50 @@ export class WorkerConnection {
     return this.frames.request("live-event", params);
   }
 
-  requestSessionsSpawn(
-    params: WorkerSessionsSpawnParams,
-  ): Promise<WorkerSessionsSpawnResponseFrame> {
-    const timeoutMs = Math.max(this.requestTimeoutMs, WORKER_SESSION_SPAWN_TIMEOUT_MS);
-    return this.requestDurableSessionOperation(() =>
-      this.frames.request("sessions-spawn", params, undefined, timeoutMs),
-    );
+  async invokeGatewayTool(
+    params: WorkerGatewayToolInvokeParams,
+    options: {
+      replay?: boolean;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      onUpdate?: (result: WorkerGatewayToolResult) => void;
+    } = {},
+  ): Promise<WorkerGatewayToolResponseFrame> {
+    let sequence = 0;
+    const remove = this.frames.onGatewayToolUpdate(({ payload }) => {
+      if (
+        payload.generation === params.generation &&
+        payload.toolCallId === params.toolCallId &&
+        payload.seq > sequence
+      ) {
+        sequence = payload.seq;
+        options.onUpdate?.(payload.result);
+      }
+    });
+    const request = () => {
+      options.signal?.throwIfAborted();
+      return this.frames.request(
+        "gateway-tool",
+        params,
+        undefined,
+        Math.max(this.requestTimeoutMs, options.timeoutMs ?? 0),
+      );
+    };
+    try {
+      return await (options.replay
+        ? this.requestReplayableOperation(request, options.signal)
+        : racePromiseWithAbortSignal(request(), options.signal));
+    } finally {
+      remove();
+    }
   }
 
-  requestSessionsSend(params: WorkerSessionsSendParams): Promise<WorkerSessionsSendResponseFrame> {
-    const requestedTimeoutMs =
-      (params.timeoutSeconds ?? 30) * 1_000 + WORKER_SESSION_SEND_TIMEOUT_SLACK_MS;
-    const timeoutMs = Math.max(this.requestTimeoutMs, requestedTimeoutMs);
-    return this.requestDurableSessionOperation(() =>
-      this.frames.request("sessions-send", params, undefined, timeoutMs),
+  cancelGatewayTool(
+    params: WorkerGatewayToolCancelParams,
+  ): Promise<WorkerGatewayToolCancelResponseFrame> {
+    return this.requestReplayableOperation(() =>
+      this.frames.request("gateway-tool-cancel", params),
     );
-  }
-
-  requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame> {
-    return this.frames.request("portal", params);
-  }
-  requestSkillWorkshop(
-    params: WorkerSkillWorkshopParams,
-  ): Promise<WorkerSkillWorkshopResponseFrame> {
-    return this.frames.request("skill-workshop", params);
   }
 
   requestComputer(params: WorkerComputerParams): Promise<WorkerComputerResponseFrame> {
@@ -237,19 +252,22 @@ export class WorkerConnection {
     return this.frames.request("computer", params, undefined, params.timeoutMs);
   }
 
-  private async requestDurableSessionOperation<T>(request: () => Promise<T>): Promise<T> {
+  private async requestReplayableOperation<T>(
+    request: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     for (;;) {
+      signal?.throwIfAborted();
       try {
-        return await request();
+        return await racePromiseWithAbortSignal(request(), signal);
       } catch (error) {
+        signal?.throwIfAborted();
         if (!(error instanceof WorkerConnectionInterruptedError) || this.isTerminal()) {
           throw error;
         }
-        // The Gateway durably coordinates these calls by toolCallId. Reconnect
-        // and replay the identical request until a response arrives or the
-        // credential/connection is terminal; transient reconnects cannot invent
-        // a second operation.
-        await this.waitForReady();
+        // Only tools whose owner retains settlement may replay a lost response.
+        // Reuse the call identity so reconnect cannot elect another operation.
+        await racePromiseWithAbortSignal(this.waitForReady(), signal);
       }
     }
   }
@@ -287,7 +305,7 @@ export class WorkerConnection {
             this.reconnectAbort.signal,
           );
         } catch (error) {
-          throw this.isTerminal() ? this.terminalError() : toWorkerConnectionError(error);
+          throw this.isTerminal() ? this.terminalError() : toStructuredErrorObject(error);
         }
         remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
         if (remainingMs <= 0) {
@@ -308,7 +326,7 @@ export class WorkerConnection {
         if (this.isTerminal()) {
           throw this.terminalError();
         }
-        lastFailure = toWorkerConnectionError(error);
+        lastFailure = toStructuredErrorObject(error);
         this.reportConnectionFailure(
           new Error(formatWorkerConnectionFailure(this.options, lastFailure)),
         );
@@ -385,7 +403,7 @@ export class WorkerConnection {
       await this.connectUntilReady();
     } catch (error) {
       if (!this.isTerminal()) {
-        this.finishTerminal({ kind: "failed", error: toWorkerConnectionError(error) });
+        this.finishTerminal({ kind: "failed", error: toStructuredErrorObject(error) });
       }
     } finally {
       this.reconnectPromise = undefined;
@@ -436,7 +454,7 @@ export class WorkerConnection {
       }
     } catch (error) {
       if (!(error instanceof WorkerConnectionInterruptedError) && !this.isTerminal()) {
-        this.finishTerminal({ kind: "failed", error: toWorkerConnectionError(error) });
+        this.finishTerminal({ kind: "failed", error: toStructuredErrorObject(error) });
         return;
       }
     }

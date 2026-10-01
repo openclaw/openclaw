@@ -1,23 +1,23 @@
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
+import { finishCronRun } from "./run-history.js";
 import { cronFailureNotificationEventContext, emit, type CronServiceState } from "./state.js";
-import { tryFinishCronTaskRun } from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
 /** Records a terminal task/event fact before the fallible runtime-row commit. */
-export function emitCronOutcomeForJob(
+export async function emitCronOutcomeForJob(
   state: CronServiceState,
   job: CronJob,
   result: TimedCronRunOutcome,
-): void {
+): Promise<void> {
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
     return;
   }
-  recordCronOutcomeForJob(state, job, result);
+  await recordCronOutcomeForJob(state, job, result);
   emitCronOutcomeEventForJob(state, job, result);
 }
 
-function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: number) {
+export function createCronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome) {
   return {
     jobId: job.id,
     action: "finished",
@@ -35,7 +35,7 @@ function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: nu
     delivery: result.delivery,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
-    runAtMs,
+    runAtMs: result.startedAt,
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,
     ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
@@ -45,13 +45,13 @@ function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: nu
   } as const;
 }
 
-export function recordCronOutcomeForJob(
+export async function recordCronOutcomeForJob(
   state: CronServiceState,
   job: CronJob,
   result: TimedCronRunOutcome,
-): void {
-  const event = cronOutcomeEvent(job, result, result.startedAt);
-  tryFinishCronTaskRun(state, {
+): Promise<void> {
+  const event = createCronOutcomeEvent(job, result);
+  await finishCronRun(state, {
     taskRunId: result.taskRunId,
     job,
     event,
@@ -71,7 +71,7 @@ export function emitCronOutcomeEventForJob(
 ): void {
   emit(
     state,
-    cronOutcomeEvent(job, result, result.startedAt),
+    createCronOutcomeEvent(job, result),
     cronFailureNotificationEventContext(result.failureNotificationDetail),
   );
 }

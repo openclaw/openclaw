@@ -2,28 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawStateReadReply } from "../state/openclaw-state-read.types.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { configureNodeHost, loadNodeHostConfig, loadNodeHostConfigReadOnly } from "./config.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 const readers = [loadNodeHostConfig, loadNodeHostConfigReadOnly];
 
 function fixture() {
@@ -49,17 +42,11 @@ function seed(env: NodeJS.ProcessEnv) {
 }
 
 async function withoutParentSql(operation: () => Promise<void>): Promise<number> {
-  const { DatabaseSync, StatementSync } = requireNodeSqlite();
-  const calls = [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await operation();
-    const count = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+    const count = sql.count();
     expect(count).toBe(0);
     return count;
   } finally {

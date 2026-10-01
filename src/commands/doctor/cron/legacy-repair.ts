@@ -27,16 +27,15 @@ import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { markLegacyMigrationSourceRemoved } from "../../../infra/state-migrations.receipts.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
+import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import {
   createRetiredModelRefRepairResolver,
   repairRetiredModelSlots,
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
-import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import {
-  archiveLegacyCronQuarantineForMigration,
   loadLegacyCronQuarantineForMigration,
   type LegacyCronQuarantine,
 } from "./legacy-quarantine-migration.js";
@@ -45,6 +44,7 @@ import {
   migrateLegacyCronRunLogsToSqlite,
 } from "./legacy-run-log-migration.js";
 import {
+  archiveLegacyCronFile,
   archiveLegacyCronStoreForMigration,
   assertLegacyCronMigrationSourceCurrent,
   legacyCronStoreFilesExist,
@@ -97,10 +97,6 @@ export type LegacyCronRepairResult = {
   codexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
 };
 
-function pluralize(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 function formatRunLogMigrationNote(importedFiles: number): string {
   return importedFiles > 0
     ? ` Imported ${pluralize(importedFiles, "legacy cron run log")} into SQLite.`
@@ -150,7 +146,7 @@ export async function loadLegacyCronRepairState(params: {
   }
   let persistedQuarantine: CronQuarantinedJob[];
   try {
-    persistedQuarantine = loadCronQuarantinedJobs(storePath, params.env);
+    persistedQuarantine = await loadCronQuarantinedJobs(storePath, params.env);
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);
     persistedQuarantine = [];
@@ -293,7 +289,6 @@ export async function applyLegacyCronStoreRepair(params: {
     jobs: state.rawJobs,
     legacyWebhook,
   });
-  const dreamingMigration = migrateLegacyDreamingPayloadShape(state.rawJobs);
   warnings.push(...notifyMigration.warnings);
   const retirementChanges: string[] = [];
   if (resolveRetired) {
@@ -338,7 +333,6 @@ export async function applyLegacyCronStoreRepair(params: {
     state.invalidConfigRows.length > 0 ||
     normalized.mutated ||
     notifyMigration.changed ||
-    dreamingMigration.changed ||
     quarantineRecovery.recoveredJobs.length > 0;
   const changed =
     state.legacyStoreDetected ||
@@ -381,6 +375,11 @@ export async function applyLegacyCronStoreRepair(params: {
             assertCronJobsStoreUnchanged(db, state.storePath, state.jobsFingerprint);
           }
         };
+        const saveOptions = {
+          ...(quarantine ? { quarantine } : {}),
+          ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
+          preserveRuntimeState: true,
+        };
         if (migrationSource && !state.legacyMigrationAlreadyImported) {
           await assertLegacyCronMigrationSourceCurrent(migrationSource);
           await saveCronJobsStoreWithMetadata(
@@ -390,22 +389,16 @@ export async function applyLegacyCronStoreRepair(params: {
               assertSnapshotCurrent(db);
               return acquireLegacyCronMigrationReceipt(db, migrationSource);
             },
-            {
-              ...(quarantine ? { quarantine } : {}),
-              ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
-              preserveRuntimeState: true,
-            },
+            saveOptions,
           );
         } else {
           await saveCronJobsStore(state.storePath, store, {
-            ...(quarantine ? { quarantine } : {}),
-            ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
-            preserveRuntimeState: true,
+            ...saveOptions,
             transactionHooks: { beforeWrite: assertSnapshotCurrent },
           });
         }
       } else if (quarantine) {
-        saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
+        await saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }
     } catch (err) {
       rethrowSqliteSchemaVersionError(err);
@@ -430,7 +423,10 @@ export async function applyLegacyCronStoreRepair(params: {
   }
 
   if (state.legacyQuarantine) {
-    const archiveResult = await archiveLegacyCronQuarantineForMigration(state.legacyQuarantine);
+    const archiveResult = await archiveLegacyCronFile(
+      state.legacyQuarantine.path,
+      state.legacyQuarantine.sourceSha256,
+    );
     if (archiveResult.ok) {
       changes.push(
         `Cron quarantine migrated to SQLite from ${shortenHomePath(state.legacyQuarantine.path)}.`,
@@ -489,11 +485,6 @@ export async function applyLegacyCronStoreRepair(params: {
     );
   } else if (storeChanged) {
     changes.push(`Cron store normalized at ${shortenHomePath(state.storePath)}.`);
-  }
-  if (dreamingMigration.rewrittenCount > 0) {
-    changes.push(
-      `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
-    );
   }
   if (normalized.legacyTriggerScriptJobs.length > 0) {
     changes.push(
@@ -609,15 +600,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
     }
     const state = await loadLegacyCronRepairState({ cfg: params.cfg });
     return state
-      ? await applyLegacyCronStoreRepair({
-          cfg: params.cfg,
-          retiredModelRefConfig: params.retiredModelRefConfig,
-          authProfileIdMap: params.authProfileIdMap,
-          state,
-          migrateCodexModelRefs: params.migrateCodexModelRefs,
-          repairRetiredModelRefs: params.repairRetiredModelRefs,
-          blockedModelIdentities: params.blockedModelIdentities,
-        })
+      ? await applyLegacyCronStoreRepair({ ...params, state })
       : { changes: [], warnings: [] };
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);

@@ -49,10 +49,5 @@ export async function captureSubagentCompletionReplyUsing(params: {
   if (params.waitForReply === false) {
     return undefined;
   }
-  return await readLatestSubagentOutputWithRetryUsing({
-    sessionKey: params.sessionKey,
-    maxWaitMs: params.maxWaitMs,
-    retryIntervalMs: params.retryIntervalMs,
-    readSubagentOutput: params.readSubagentOutput,
-  });
+  return await readLatestSubagentOutputWithRetryUsing(params);
 }

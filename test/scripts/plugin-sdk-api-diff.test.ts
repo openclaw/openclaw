@@ -15,7 +15,13 @@ import {
   selectPluginSdkApiReleaseEvidence,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withTestTimeout } from "../helpers/promise.js";
+import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -51,7 +57,12 @@ function commit(repo: string, message: string): string {
 function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]) {
   return spawnSync(
     process.execPath,
-    ["--import", import.meta.resolve("tsx"), resolve("scripts/plugin-sdk-api-diff.mts"), ...args],
+    [
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+      ),
+      ...args,
+    ],
     {
       cwd: repo,
       encoding: "utf8",
@@ -67,11 +78,15 @@ function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]
   );
 }
 
-async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
+async function waitFor(
+  check: () => boolean,
+  timeoutMs: number,
+  label = "Plugin SDK API diff child",
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
     if (Date.now() >= deadline) {
-      throw new Error("timed out waiting for Plugin SDK API diff child");
+      throw new Error(`timed out waiting for ${label}`);
     }
     await new Promise((resolveWait) => {
       setTimeout(resolveWait, 25);
@@ -80,6 +95,150 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
 }
 
 describe("Plugin SDK API diff CLI", () => {
+  it("finishes every revision install before starting declaration rendering", async () => {
+    const repo = tempDirs.make("plugin-sdk-install-order-repo-");
+    const runnerTemp = tempDirs.make("plugin-sdk-install-order-temp-");
+    const binDir = tempDirs.make("plugin-sdk-install-order-bin-");
+    const installClaim = join(binDir, "install-claim");
+    const blockedMarker = join(binDir, "install-blocked");
+    const releaseMarker = join(binDir, "install-release");
+    const renderDuringInstall = join(binDir, "render-during-install");
+    const renderStarted = join(binDir, "render-started");
+    git(repo, ["init", "--quiet", "--initial-branch=main"]);
+    mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
+    mkdirSync(join(repo, "scripts/lib"), { recursive: true });
+    writeFileSync(join(repo, ".gitignore"), "node_modules\n");
+    writeFileSync(
+      join(repo, "package.json"),
+      JSON.stringify({ version: "2026.8.2", type: "module" }),
+    );
+    writeFileSync(
+      join(repo, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          target: "ESNext",
+          types: [],
+          skipLibCheck: true,
+        },
+      }),
+    );
+    writeFileSync(join(repo, "scripts/lib/plugin-sdk-entrypoints.json"), '["fixture"]');
+    writeFileSync(join(repo, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "[]");
+    const source = join(repo, "src/plugin-sdk/fixture.ts");
+    writeFileSync(source, "export type Fixture = string;\n");
+    const baseSha = commit(repo, "base");
+    writeFileSync(source, "export type Fixture = number;\n");
+    commit(repo, "head");
+    symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
+
+    const fakePnpm = join(binDir, "pnpm");
+    writeFileSync(
+      fakePnpm,
+      `#!/bin/sh
+if mkdir "$PNPM_MARKER" 2>/dev/null; then
+  while [ ! -e "$PNPM_BLOCKED" ]; do sleep 0.05; done
+  exit 0
+fi
+: > "$PNPM_BLOCKED"
+while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
+`,
+    );
+    chmodSync(fakePnpm, 0o755);
+    const renderProbe = join(binDir, "render-probe.cjs");
+    writeFileSync(
+      renderProbe,
+      `const childProcess = require("node:child_process");
+const fs = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+const os = require("node:os");
+os.availableParallelism = () => 8;
+os.totalmem = () => 32 * 1024 ** 3;
+process.constrainedMemory = () => 32 * 1024 ** 3;
+const originalSpawn = childProcess.spawn;
+let activeInstalls = 0;
+let installCount = 0;
+childProcess.spawn = function (command, args, options) {
+  const child = originalSpawn.call(this, command, args, options);
+  if (command === "pnpm") {
+    activeInstalls += 1;
+    installCount += 1;
+    child.once("close", () => {
+      activeInstalls -= 1;
+      setImmediate(() => fs.writeFileSync(process.env.PNPM_RELEASE, "release\\n"));
+    });
+  }
+  if (args?.includes("--render-root") && (installCount < 2 || activeInstalls > 0)) {
+    fs.writeFileSync(process.env.RENDER_DURING_INSTALL, "started early\\n");
+  }
+  return child;
+};
+syncBuiltinESMExports();
+if (process.argv.includes("--render-root")) {
+  fs.writeFileSync(process.env.RENDER_STARTED, "started\\n");
+}
+`,
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+        ),
+        "--base",
+        baseSha,
+        "--head",
+        "HEAD",
+      ],
+      {
+        cwd: repo,
+        env: {
+          ...withRuntimePreload(process.env, renderProbe),
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+          PNPM_MARKER: installClaim,
+          PNPM_BLOCKED: blockedMarker,
+          PNPM_RELEASE: releaseMarker,
+          RENDER_DURING_INSTALL: renderDuringInstall,
+          RENDER_STARTED: renderStarted,
+          RUNNER_TEMP: runnerTemp,
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const close = new Promise<number | null>((resolveClose) => {
+      child.once("close", resolveClose);
+    });
+    let exitCode: number | null = null;
+    try {
+      await waitFor(() => existsSync(blockedMarker), 15_000, "second revision install");
+      exitCode = await withTestTimeout(close, 30_000, "Plugin SDK API diff did not finish");
+    } finally {
+      writeFileSync(releaseMarker, "release\n");
+      if (child.exitCode === null) {
+        child.kill();
+      }
+      await close;
+    }
+    const progressLines = stderr.trim().split("\n");
+    expect(progressLines).toHaveLength(8);
+    for (const line of progressLines) {
+      expect(line).toMatch(
+        /^\[plugin-sdk-api-diff\] [a-f0-9]{40} (install|render) (started|completed in \d+ms)$/,
+      );
+    }
+    expect(exitCode).toBe(0);
+    expect(existsSync(blockedMarker)).toBe(true);
+    expect(existsSync(renderStarted)).toBe(true);
+    expect(existsSync(renderDuringInstall)).toBe(false);
+  }, 50_000);
+
   it("reports identical commit aliases without installing or changing a dirty caller", () => {
     const repo = tempDirs.make("plugin-sdk-identical-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-identical-temp-");
@@ -197,9 +356,9 @@ describe("Plugin SDK API diff CLI", () => {
     const child = spawn(
       process.execPath,
       [
-        "--import",
-        import.meta.resolve("tsx"),
-        resolve("scripts/plugin-sdk-api-diff.mts"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+        ),
         "--base",
         baseSha,
         "--head",

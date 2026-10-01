@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createDoctorHealthFlowContext,
@@ -13,6 +12,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const notes = vi.hoisted(() => vi.fn());
@@ -61,14 +61,7 @@ it("reports registered database bloat off the host without changing stored artif
     };
     const before = await snapshot();
     notes.mockClear();
-    const spies = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      vi.spyOn(StatementSync.prototype, "get"),
-      vi.spyOn(StatementSync.prototype, "all"),
-      vi.spyOn(StatementSync.prototype, "run"),
-      vi.spyOn(StatementSync.prototype, "iterate"),
-    ];
+    const sql = observeMainThreadSql();
     try {
       await runDoctorHealthContributionList(context, contributions);
       expect(notes).toHaveBeenCalledExactlyOnceWith(
@@ -77,14 +70,10 @@ it("reports registered database bloat off the host without changing stored artif
         ),
         "SQLite database size",
       );
-      for (const spy of spies) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      sql.expectIdle();
       expect(await snapshot()).toEqual(before);
     } finally {
-      for (const spy of spies) {
-        spy.mockRestore();
-      }
+      sql.restore();
       await closeOpenClawStateDatabaseAsync();
     }
   });

@@ -1,24 +1,26 @@
-// Googlechat plugin module implements monitor access behavior.
 import {
   channelIngressRoutes,
-  createChannelIngressResolver,
   type ChannelIngressContextBinding,
+  type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import type {
+  ChannelBotLoopProtectionConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringEntries,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  GROUP_POLICY_BLOCKED_LABEL,
-  createChannelPairingController,
-  isDangerousNameMatchingEnabled,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  type OpenClawConfig,
-} from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import { buildGoogleChatGroupPolicyScope } from "./group-policy.js";
@@ -26,13 +28,7 @@ import { googleChatIngressIdentity, normalizeGoogleChatUserId } from "./ingress-
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
 
-type GoogleChatGroupEntry = {
-  requireMention?: boolean;
-  enabled?: boolean;
-  botLoopProtection?: ChannelBotLoopProtectionConfig;
-  users?: Array<string | number>;
-  systemPrompt?: string;
-};
+type GoogleChatGroupEntry = NonNullable<ResolvedGoogleChatAccount["config"]["groups"]>[string];
 
 function resolveGoogleChatGroupConfig(params: {
   groupId: string;
@@ -71,7 +67,6 @@ function resolveGoogleChatGroupConfig(params: {
   return {
     entry: deprecatedNameMatch ? undefined : (entry ?? fallback),
     allowlistConfigured: true,
-    fallback,
     deprecatedNameMatch,
   };
 }
@@ -79,7 +74,7 @@ function resolveGoogleChatGroupConfig(params: {
 function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: string | null) {
   const mentionAnnotations = annotations.filter((entry) => entry.type === "USER_MENTION");
   const hasAnyMention = mentionAnnotations.length > 0;
-  const botTargets = new Set(["users/app", botUser?.trim()].filter(Boolean) as string[]);
+  const botTargets = new Set(normalizeTrimmedStringList(["users/app", botUser]));
   const wasMentioned = mentionAnnotations.some((entry) => {
     const userName = entry.userMention?.user?.name;
     if (!userName) {
@@ -97,10 +92,7 @@ const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
 const warnedMutableGroupKeys = new Set<string>();
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
-  const deprecated = entries
-    .map((v) => normalizeOptionalString(v))
-    .filter((v): v is string => Boolean(v))
-    .filter((v) => /^users\/.+@.+/i.test(v));
+  const deprecated = normalizeTrimmedStringList(entries).filter((v) => /^users\/.+@.+/i.test(v));
   if (deprecated.length === 0) {
     return;
   }
@@ -157,9 +149,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
 }): Promise<
   | {
       ok: true;
-      channelIngress: Awaited<
-        ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>
-      >;
+      channelIngress: ResolvedChannelMessageIngress;
       commandAuthorized: boolean | undefined;
       effectiveWasMentioned: boolean | undefined;
       groupBotLoopProtection: ChannelBotLoopProtectionConfig | undefined;
@@ -275,51 +265,53 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         blockReason: groupEntry ? "sender_empty_allowlist" : "route_not_allowlisted",
       },
   );
-  const resolvedAccess = await createChannelIngressResolver({
-    channelId: "googlechat",
-    accountId: account.accountId,
-    identity: googleChatIngressIdentity,
-    cfg: config,
-    readStoreAllowFrom: pairing.readAllowFromStore,
-  }).message({
-    subject: {
-      stableId: senderId,
-      aliases: { email: senderEmail },
-    },
-    conversation: {
-      kind: isGroup ? "group" : "direct",
-      id: spaceId,
-    },
-    contextBinding: params.contextBinding,
-    route,
-    allowFrom: rawConfigAllowFrom,
-    groupAllowFrom,
-    dmPolicy,
-    groupPolicy: senderGroupPolicy,
-    policy: {
-      groupAllowFromFallbackToAllowFrom: false,
-      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
-      ...(groupActivation
-        ? {
-            activation: {
-              requireMention: groupActivation.requireMention,
-              allowTextCommands: groupActivation.allowTextCommands,
+  const resolvedAccess = await core.channel.inbound.ingress
+    .createResolver({
+      channelId: "googlechat",
+      accountId: account.accountId,
+      identity: googleChatIngressIdentity,
+      cfg: config,
+      readStoreAllowFrom: pairing.readAllowFromStore,
+    })
+    .message({
+      subject: {
+        stableId: senderId,
+        aliases: { email: senderEmail },
+      },
+      conversation: {
+        kind: isGroup ? "group" : "direct",
+        id: spaceId,
+      },
+      contextBinding: params.contextBinding,
+      route,
+      allowFrom: rawConfigAllowFrom,
+      groupAllowFrom,
+      dmPolicy,
+      groupPolicy: senderGroupPolicy,
+      policy: {
+        groupAllowFromFallbackToAllowFrom: false,
+        mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+        ...(groupActivation
+          ? {
+              activation: {
+                requireMention: groupActivation.requireMention,
+                allowTextCommands: groupActivation.allowTextCommands,
+              },
+            }
+          : {}),
+      },
+      ...(groupActivation == null
+        ? {}
+        : {
+            mentionFacts: {
+              canDetectMention: true,
+              wasMentioned: groupActivation.wasMentioned,
+              hasAnyMention: groupActivation.hasAnyMention,
+              implicitMentionKinds: [],
             },
-          }
-        : {}),
-    },
-    ...(groupActivation == null
-      ? {}
-      : {
-          mentionFacts: {
-            canDetectMention: true,
-            wasMentioned: groupActivation.wasMentioned,
-            hasAnyMention: groupActivation.hasAnyMention,
-            implicitMentionKinds: [],
-          },
-        }),
-    command,
-  });
+          }),
+      command,
+    });
   const senderAccess = resolvedAccess.senderAccess;
   const commandAuthorized = resolvedAccess.commandAccess.requested
     ? resolvedAccess.commandAccess.authorized

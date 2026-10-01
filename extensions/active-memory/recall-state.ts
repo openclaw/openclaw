@@ -26,11 +26,15 @@ type ActiveRecallRunEntry = {
 const activeRecallRuns = new Map<string, ActiveRecallRunEntry>();
 const timeoutCircuitBreaker = new Map<string, CircuitBreakerEntry>();
 
-function buildCircuitBreakerKey(agentId: string, provider?: string, model?: string): string {
+export function buildCircuitBreakerKey(agentId: string, provider?: string, model?: string): string {
   return `${agentId}:${provider ?? "unknown"}/${model ?? "unknown"}`;
 }
 
-function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: number): boolean {
+export function isCircuitBreakerOpen(
+  key: string,
+  maxTimeouts: number,
+  cooldownMs: number,
+): boolean {
   const entry = timeoutCircuitBreaker.get(key);
   if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
     return false;
@@ -43,7 +47,7 @@ function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: numb
   return true;
 }
 
-function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
+export function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
   const now = Date.now();
   for (const [entryKey, entry] of timeoutCircuitBreaker) {
     if (now - entry.lastTimeoutAt >= cooldownMs) {
@@ -65,11 +69,11 @@ function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
   }
 }
 
-function resetCircuitBreaker(key: string): void {
+export function resetCircuitBreaker(key: string): void {
   timeoutCircuitBreaker.delete(key);
 }
 
-function scheduleMemorySearchCleanupAfterTimeout(
+export function scheduleMemorySearchCleanupAfterTimeout(
   api: OpenClawPluginApi,
   logPrefix: string,
   agentId: string,
@@ -92,7 +96,7 @@ function scheduleMemorySearchCleanupAfterTimeout(
   });
 }
 
-async function resolveActiveRecallForRun(
+export async function resolveActiveRecallForRun(
   runId: string,
   start: (onTimeoutCleanup: (cleanup: Promise<void>) => void) => Promise<ActiveRecallResult>,
 ): Promise<ActiveRecallResult> {
@@ -135,7 +139,7 @@ async function resolveActiveRecallForRun(
   return await entry.promise;
 }
 
-function forgetActiveRecallRun(runId: string | undefined): void {
+export function forgetActiveRecallRun(runId: string | undefined): void {
   if (runId) {
     for (const key of activeRecallRuns.keys()) {
       if (key === runId || key.startsWith(`${runId}:`)) {
@@ -145,7 +149,7 @@ function forgetActiveRecallRun(runId: string | undefined): void {
   }
 }
 
-function buildCacheKey(params: {
+export function buildCacheKey(params: {
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
@@ -176,7 +180,7 @@ function buildCacheKey(params: {
   return `${params.agentId}:${params.sessionKey ?? params.sessionId ?? "none"}:${hash}`;
 }
 
-function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
+export function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
   const cached = activeRecallCache.get(cacheKey);
   if (!cached) {
     return undefined;
@@ -193,7 +197,7 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
   return cached.result;
 }
 
-function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
+export function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
   const rawNow = Date.now();
   const now = asDateTimestampMs(rawNow);
   if (
@@ -238,7 +242,7 @@ function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
   }
 }
 
-function toSingleLineLogValue(value: string): string {
+export function toSingleLineLogValue(value: string): string {
   const singleLine = value
     .replace(/[\r\n\t]/g, " ")
     .replace(/\s+/g, " ")
@@ -248,39 +252,21 @@ function toSingleLineLogValue(value: string): string {
     : singleLine;
 }
 
-function toSingleLineErrorMessage(error: unknown): string {
+export function toSingleLineErrorMessage(error: unknown): string {
   return toSingleLineLogValue(coerceErrorMessage(error));
 }
 
-function shouldCacheResult(result: ActiveRecallResult): boolean {
+export function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" && result.summary.length > 0;
 }
 
-function resetActiveRecallStateForTests(): void {
+export function resetActiveRecallStateForTests(): void {
   activeRecallCache.clear();
   activeRecallRuns.clear();
   timeoutCircuitBreaker.clear();
   lastActiveRecallCacheSweepAt = 0;
 }
 
-function getCircuitBreakerEntry(key: string): CircuitBreakerEntry | undefined {
+export function getCircuitBreakerEntry(key: string): CircuitBreakerEntry | undefined {
   return timeoutCircuitBreaker.get(key);
 }
-
-export {
-  buildCacheKey,
-  buildCircuitBreakerKey,
-  getCachedResult,
-  getCircuitBreakerEntry,
-  isCircuitBreakerOpen,
-  forgetActiveRecallRun,
-  recordCircuitBreakerTimeout,
-  resetActiveRecallStateForTests,
-  resetCircuitBreaker,
-  resolveActiveRecallForRun,
-  scheduleMemorySearchCleanupAfterTimeout,
-  setCachedResult,
-  shouldCacheResult,
-  toSingleLineErrorMessage,
-  toSingleLineLogValue,
-};

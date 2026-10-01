@@ -262,7 +262,7 @@ struct GatewayDiscoverySelectionFlowTests {
     private static func button(_ title: String, in root: NSView) async throws -> AnyObject? {
         let matches = try await AppKitTestSupport.accessibilityElements(in: root).filter {
             $0.accessibilityRole?() == .button && $0.isAccessibilityEnabled?() == true &&
-                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].compactMap(\.self).contains {
+                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].compactMap(\.self).contains {
                     $0 == title || (title == "Nearby selection fixture" && $0.contains(title))
                 }
         }

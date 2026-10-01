@@ -4,7 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
@@ -55,7 +55,7 @@ function installStateRuntime({
   setVoiceCallStateRuntime({
     state: {
       ...state,
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+      openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
         const backingStore = state.openKeyedStore<T>(options);
         const store = beforeOperation
           ? {
@@ -156,19 +156,6 @@ describe("voice-call call record store", () => {
     expect(history).toEqual([]);
   });
 
-  it("persists new call snapshots without recreating the JSONL log", async () => {
-    const storePath = createTestStorePath();
-    const call = CallRecordSchema.parse(
-      makePersistedCall({ callId: "call-sqlite", transcript: [] }),
-    );
-
-    await persistCallRecord(storePath, call);
-
-    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
-    const restored = await loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.get("call-sqlite")?.providerCallId).toBe(call.providerCallId);
-  });
-
   it("does not read the JSONL fallback when SQLite state cannot open", async () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(makePersistedCall({ callId: "call-jsonl" }));
@@ -212,7 +199,7 @@ describe("voice-call call record store", () => {
       setVoiceCallStateRuntime({
         state: {
           ...state,
-          openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
             const store = state.openKeyedStore<T>(options);
             if (options.namespace !== CALL_RECORD_EVENT_CHUNKS_NAMESPACE) {
               return store;

@@ -1,4 +1,5 @@
 // Imessage tests cover monitor.watch subscribe retry plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,8 +84,10 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   it("retries a transient watch.subscribe startup timeout without tearing down the monitor", async () => {
     const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
+    const firstSubscribe = createDeferred<void>();
     const firstClient = createRpcClient({
       request: async () => {
+        firstSubscribe.resolve();
         throw new Error("imsg rpc timeout (watch.subscribe)");
       },
     });
@@ -100,6 +103,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       statusSink,
     });
 
+    await Promise.race([firstSubscribe.promise, monitorPromise]);
     await vi.advanceTimersByTimeAsync(1_000);
     await monitorPromise;
 
@@ -145,9 +149,11 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   it("still fails after bounded startup retries are exhausted", async () => {
     const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
+    const firstSubscribe = createDeferred<void>();
     createIMessageRpcClientMock.mockImplementation(async () =>
       createRpcClient({
         request: async () => {
+          firstSubscribe.resolve();
           throw new Error("imsg rpc timeout (watch.subscribe)");
         },
       }),
@@ -159,6 +165,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       statusSink,
     }).catch((error: unknown) => error);
 
+    await Promise.race([firstSubscribe.promise, monitorErrorPromise]);
     await vi.advanceTimersByTimeAsync(2_000);
     const monitorError = await monitorErrorPromise;
 

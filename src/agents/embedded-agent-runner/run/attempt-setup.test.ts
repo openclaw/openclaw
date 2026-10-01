@@ -8,6 +8,7 @@ import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook
 import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
@@ -34,6 +35,13 @@ import {
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const attemptModel = makeProviderModelFixture({
+  id: "gpt-5.4",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+  reasoning: true,
+});
 
 function sandboxContext(workspaceAccess: SandboxContext["workspaceAccess"]): SandboxContext {
   return {
@@ -69,6 +77,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
 
   it("prepares the identity that owns the current agent session", async () => {
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {
         agents: {
           list: [{ id: "main", default: true }, { id: "marketing" }],
@@ -202,6 +211,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
   it("prepares one closed session permission policy", async () => {
     const root = path.join(os.tmpdir(), "openclaw-attempt-permission-root");
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       permissionMode: "workspace",
@@ -226,6 +236,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
     };
 
     await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       provider: "openai",
@@ -284,6 +295,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       plugin: {} as never,
     };
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       provider: "openai",
@@ -309,6 +321,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveProviderRuntimePluginHandle.mockReturnValue(resolvedHandle);
     const metadataSnapshot = { pluginIds: ["other"] };
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       provider: "openai",

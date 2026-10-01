@@ -1,22 +1,17 @@
-// Shared helpers for subagent command actions and target resolution.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
+import type { ControlledSubagentRunsReadContext } from "../../../agents/subagents/registry/subagent-control-scope.js";
 import type { SubagentRunRecord } from "../../../agents/subagents/registry/subagent-registry.types.js";
-import { buildSubagentRunView } from "../../../agents/subagents/registry/subagent-run-view.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../../agents/tools/sessions-helpers.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { commandReply } from "../command-gates.js";
-import { extractSubagentMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-
-export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const RECENT_WINDOW_MINUTES = 30;
 
@@ -25,12 +20,12 @@ type SubagentsCommandParams = Parameters<CommandHandler>[0];
 export type SubagentsCommandContext = {
   params: SubagentsCommandParams;
   requesterKey: string;
-  runs: SubagentRunRecord[];
+  readContext: Pick<ControlledSubagentRunsReadContext, "list">;
   restTokens: string[];
 };
 
 export function resolveSubagentEntryForToken(
-  runs: SubagentRunRecord[],
+  view: ControlledSubagentRunsReadContext["list"]["view"],
   token: string | undefined,
 ): { entry: SubagentRunRecord } | { reply: CommandHandlerResult } {
   const fail = (message: string) => ({ reply: commandReply(`⚠️ ${message}`) });
@@ -38,12 +33,7 @@ export function resolveSubagentEntryForToken(
   if (!trimmed) {
     return fail("Missing subagent id.");
   }
-  const readIndex = buildSubagentRunReadIndex();
-  const { latest, active, recent } = buildSubagentRunView({
-    runs,
-    recentMinutes: RECENT_WINDOW_MINUTES,
-    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
-  });
+  const { latest, active, recent } = view;
   if (trimmed === "last") {
     const entry = latest[0];
     return entry ? { entry } : fail("Unknown subagent.");
@@ -126,17 +116,4 @@ export function buildSubagentsHelp() {
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");
-}
-
-export function formatLogLines(messages: ChatMessage[]) {
-  const lines: string[] = [];
-  for (const msg of messages) {
-    const extracted = extractSubagentMessageText(msg);
-    if (!extracted) {
-      continue;
-    }
-    const label = extracted.role === "assistant" ? "Assistant" : "User";
-    lines.push(`${label}: ${extracted.text}`);
-  }
-  return lines;
 }

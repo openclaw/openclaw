@@ -1,6 +1,9 @@
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import type { SessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
 
+// Getters rebuild this on every pane render; transcript caches key queued turns by identity.
+const initialTurns = new WeakMap<SessionPlacementRecovery, ChatQueueItem>();
+
 export function buildPlacementStartupInitialTurn(params: {
   recovery: SessionPlacementRecovery;
   attachments: ChatAttachment[];
@@ -10,7 +13,7 @@ export function buildPlacementStartupInitialTurn(params: {
   error?: string;
 }): ChatQueueItem {
   const { recovery, attachments, createdAt, checking, reconnecting, error } = params;
-  return {
+  const initialTurn: ChatQueueItem = {
     id: recovery.messageId,
     text: recovery.message,
     ...(recovery.mentions?.length ? { mentions: recovery.mentions } : {}),
@@ -35,4 +38,19 @@ export function buildPlacementStartupInitialTurn(params: {
       ? { sendError: error ?? (recovery.phase === "paused" ? recovery.error : undefined) }
       : {}),
   };
+  const previous = initialTurns.get(recovery);
+  const keys = Reflect.ownKeys(initialTurn);
+  if (
+    previous &&
+    Reflect.ownKeys(previous).length === keys.length &&
+    keys.every(
+      (key) =>
+        Object.hasOwn(previous, key) &&
+        Object.is(Reflect.get(previous, key), Reflect.get(initialTurn, key)),
+    )
+  ) {
+    return previous;
+  }
+  initialTurns.set(recovery, initialTurn);
+  return initialTurn;
 }

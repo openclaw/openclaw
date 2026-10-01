@@ -213,39 +213,23 @@ export function resolveConversationRouteEligibilityForAgent(params: {
   const hasObservedContext = Boolean(
     params.conversation.routeContextObserved || params.conversation.routeContext,
   );
-  const pluginOwner = resolvePluginRouteOwner(params.config, params.conversation);
-  if (pluginOwner) {
-    if (pluginOwner.kind === "unavailable") {
-      return "unavailable";
+  let owner = resolvePluginRouteOwner(params.config, params.conversation);
+  if (!owner) {
+    const route = resolveConfiguredRouteOwner(
+      params.config,
+      params.conversation,
+      params.conversation.routeContext,
+    );
+    if (!route) {
+      return "denied";
     }
-    return pluginOwner.agentId === requestedAgentId &&
-      !(
-        !hasObservedContext &&
-        pluginOwner.agentId &&
-        hasUnrecordedContextualBinding({
-          config: params.config,
-          conversation: params.conversation,
-          resolvedAgentId: pluginOwner.agentId,
-        })
-      )
-      ? "eligible"
-      : "denied";
+    owner = resolveGenericRouteOwner({
+      config: params.config,
+      conversation: params.conversation,
+      route,
+      ...(params.conversation.routeContext ? { context: params.conversation.routeContext } : {}),
+    });
   }
-
-  const route = resolveConfiguredRouteOwner(
-    params.config,
-    params.conversation,
-    params.conversation.routeContext,
-  );
-  if (!route) {
-    return "denied";
-  }
-  const owner = resolveGenericRouteOwner({
-    config: params.config,
-    conversation: params.conversation,
-    route,
-    ...(params.conversation.routeContext ? { context: params.conversation.routeContext } : {}),
-  });
   if (owner.kind === "unavailable") {
     return "unavailable";
   }
@@ -282,8 +266,6 @@ export function assertConversationRouteEligibleForAgent(params: {
   );
 }
 
-type ResolveConversation = typeof resolveConversation;
-
 export function assertConversationDeliveryAttemptAuthorized(params: {
   config: OpenClawConfig;
   agentId: string;
@@ -292,12 +274,8 @@ export function assertConversationDeliveryAttemptAuthorized(params: {
   expectedSessionId?: string;
   expectedSessionKey?: string;
   scope: ConversationRegistryScope;
-  resolveConversation?: ResolveConversation;
 }): void {
-  const conversation = (params.resolveConversation ?? resolveConversation)(
-    params.scope,
-    params.conversationRef,
-  );
+  const conversation = resolveConversation(params.scope, params.conversationRef);
   if (
     !conversation ||
     resolveConversationRouteFingerprint(conversation) !== params.expectedRouteFingerprint ||

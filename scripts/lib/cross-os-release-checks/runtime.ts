@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { runReleaseAgentTurn } from "./agent.ts";
 import type {
-  AgentTurnResult,
+  CommandResult,
   GatewayHandle,
   LaneCommandParams,
   LaneState,
@@ -33,6 +33,7 @@ import {
   verifyDashboardAssetUrls,
 } from "./network-smokes.ts";
 import {
+  captureGatewayProcess,
   hasChildExited,
   registerActiveChildProcessTree,
   runCommand,
@@ -156,41 +157,12 @@ export async function startGateway(params: LaneCommandParams): Promise<GatewayHa
     },
   );
   const activeChildTree = registerActiveChildProcessTree(child);
-  child.stdout?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  let resolveChildClose: () => void;
-  const childClosePromise = new Promise<void>((resolvePromise) => {
-    resolveChildClose = resolvePromise;
-  });
-  let closeLogPromise: Promise<void> | undefined;
-  const closeLog = () => {
-    closeLogPromise ??= new Promise<void>((resolvePromise) => {
-      gatewayLog.once("error", () => resolvePromise());
-      gatewayLog.end(() => resolvePromise());
-    });
-    return closeLogPromise;
-  };
-  child.once("close", () => {
-    resolveChildClose();
-    activeChildTree.unregister();
-    void closeLog();
-  });
-  child.once("error", () => {
-    resolveChildClose();
-    activeChildTree.unregister();
-    void closeLog();
-  });
-  return {
+  return captureGatewayProcess(
     child,
-    closeLog,
-    launchLogOffset,
-    logPath: params.logPath,
-    waitForClose: () => childClosePromise,
-  };
+    gatewayLog,
+    { launchLogOffset, logPath: params.logPath },
+    activeChildTree.unregister,
+  );
 }
 
 export async function waitForGateway(
@@ -286,18 +258,15 @@ export async function runModelsSet(params: LaneCommandParams & { providerConfig:
 
 export async function runAgentTurn(
   params: LaneCommandParams & { label: string },
-): Promise<AgentTurnResult> {
-  return runReleaseAgentTurn(
-    params,
-    (args, timeoutMs) =>
-      runOpenClaw({
-        lane: params.lane,
-        env: params.env,
-        args,
-        logPath: params.logPath,
-        timeoutMs,
-      }),
-    "agent turn",
+): Promise<CommandResult> {
+  return runReleaseAgentTurn(params, (args, timeoutMs) =>
+    runOpenClaw({
+      lane: params.lane,
+      env: params.env,
+      args,
+      logPath: params.logPath,
+      timeoutMs,
+    }),
   );
 }
 

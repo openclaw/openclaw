@@ -12,7 +12,10 @@ import {
   hasSiblingThreadWork,
   hasThreadOwnership,
   invalidateThreadOwnership,
+  revertRetainedThreadInstructions,
   type RetainedLiveThread,
+  type CodexEphemeralThreadPolicy,
+  type CodexAppServerLiveThreadOwnership,
   type ThreadOwnershipState,
   type ThreadOwnerToken,
   type ThreadReleaseTransition,
@@ -33,18 +36,6 @@ type ClientRuntime = ThreadOwnershipState & {
   sessionMetadata: Map<string, { sessionsRoot: string; rolloutPath: string; metadata: JsonObject }>;
   workspaceReferences: Map<string, { digest?: string; needsReintroduction: boolean }>;
   evictionTimer?: ReturnType<typeof setTimeout>;
-};
-
-export type CodexAppServerLiveThreadOwnership = {
-  assertCurrent: () => void;
-  configFingerprint?: string;
-  /** Ephemeral configuration is creation-owned and cannot be refreshed or cold-resumed. */
-  ephemeralPolicy?: string;
-  serviceTier?: CodexServiceTier | null;
-  /** Releases this active claim or the exact idle record it published. */
-  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
-  /** Forgets this local owner after native shutdown, without unsubscribing a successor. */
-  forget: () => void;
 };
 
 /** Match Codex's native grace window without retaining inactive conversations indefinitely. */
@@ -227,11 +218,6 @@ export function ensureCodexAppServerClientRuntime(
         CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
         "Codex app-server ChatGPT token refresh timed out before its external-auth deadline. Retry the request; if it persists, sign in again with OpenClaw.",
       );
-      if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
-        throw new Error(
-          "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-        );
-      }
       if (runtime.closed) {
         throw new Error("Codex app-server client closed during ChatGPT token refresh.");
       }
@@ -429,7 +415,7 @@ export async function retainCodexAppServerLiveThread(
   releaseThread?: (threadId: string, assertCurrent?: () => void) => Promise<void>,
   configFingerprint?: string,
   serviceTier?: CodexServiceTier | null,
-  ephemeralPolicy?: string,
+  ephemeralPolicy?: CodexEphemeralThreadPolicy,
 ): Promise<boolean> {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed) {
@@ -646,6 +632,17 @@ function claimCodexAppServerThreadOwnership(
       }
     },
   };
+}
+
+/** Standalone incognito compaction retains its separately owned subscription. */
+export function revertCodexAppServerLiveThreadInstructions(
+  client: CodexAppServerClient,
+  threadId: string,
+): void {
+  const runtime = configuredClients.get(client);
+  if (runtime && !runtime.closed) {
+    revertRetainedThreadInstructions(runtime, threadId);
+  }
 }
 
 /** Distinguish active claimed ownership from an already-evicted idle subscription. */

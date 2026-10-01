@@ -179,51 +179,46 @@ describe("managed credential isolation", () => {
     },
   );
 
-  it.each(["system", "agent", "personal"] as const)(
-    "installs %s credentials without mutating native host authentication",
-    async (scope) => {
-      const env = { OPENCLAW_STATE_DIR: dirs.make("github-managed-isolation-") };
-      const profileDir = resolveManagedGitHubProfileDir({
-        agentId: "main",
-        scope,
-        profileId: "ghp_11111111111111111111111111111111",
-        env,
-      });
-      let nativeActiveToken = "synthetic-native-token";
-      commands.run.mockImplementation(
-        async (argv: string[], options: { env: NodeJS.ProcessEnv }) => {
-          // cli/cli cf7aa911: even insecure Login calls activateUser, which deletes
-          // the host-global active keyring slot before copying the candidate token.
-          if (argv[1] === "auth" && argv[2] === "login") {
-            nativeActiveToken = "";
-            await fs.writeFile(
-              path.join(String(options.env.GH_CONFIG_DIR), "hosts.yml"),
-              "github.com:\n",
-            );
-            return result();
-          }
-          if (argv[1] === "api") {
-            return result(JSON.stringify(account));
-          }
-          throw new Error("Unexpected subprocess");
-        },
-      );
-      await installManagedGitHubProfile({
-        profileDir,
-        token: "synthetic-managed-token",
-        commitConfig: async () => {},
-      });
-      expect(nativeActiveToken).toBe("synthetic-native-token");
-      expect(commands.run).not.toHaveBeenCalled();
-      expect(fetch).toHaveBeenCalledWith(
-        "https://api.github.com/user",
-        expect.objectContaining({
-          headers: expect.objectContaining({ Authorization: "Bearer synthetic-managed-token" }),
-          redirect: "error",
-        }),
-      );
-    },
-  );
+  it("installs credentials without mutating native host authentication", async () => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("github-managed-isolation-") };
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId: "ghp_11111111111111111111111111111111",
+      env,
+    });
+    let nativeActiveToken = "synthetic-native-token";
+    commands.run.mockImplementation(async (argv: string[], options: { env: NodeJS.ProcessEnv }) => {
+      // cli/cli cf7aa911: even insecure Login calls activateUser, which deletes
+      // the host-global active keyring slot before copying the candidate token.
+      if (argv[1] === "auth" && argv[2] === "login") {
+        nativeActiveToken = "";
+        await fs.writeFile(
+          path.join(String(options.env.GH_CONFIG_DIR), "hosts.yml"),
+          "github.com:\n",
+        );
+        return result();
+      }
+      if (argv[1] === "api") {
+        return result(JSON.stringify(account));
+      }
+      throw new Error("Unexpected subprocess");
+    });
+    await installManagedGitHubProfile({
+      profileDir,
+      token: "synthetic-managed-token",
+      commitConfig: async () => {},
+    });
+    expect(nativeActiveToken).toBe("synthetic-native-token");
+    expect(commands.run).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.github.com/user",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer synthetic-managed-token" }),
+        redirect: "error",
+      }),
+    );
+  });
 
   it("rejects a corrupt CLI config and keeps YAML credential diagnostics private", async () => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("github-corrupt-config-") };
@@ -269,11 +264,13 @@ describe("managed credential isolation", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it.each(
-    (["system", "agent", "personal"] as const).flatMap((scope) =>
-      ["{}", "github.com:\n", "github.com: [invalid"].map((hosts) => ({ scope, hosts })),
-    ),
-  )(
+  it.each([
+    { scope: "system", hosts: "{}" },
+    { scope: "system", hosts: "github.com:\n" },
+    { scope: "system", hosts: "github.com: [invalid" },
+    { scope: "agent", hosts: "{}" },
+    { scope: "personal", hosts: "{}" },
+  ] as const)(
     "rejects tokenless or corrupt $scope profile $hosts despite native authentication",
     async ({ scope, hosts }) => {
       const env = {

@@ -1,6 +1,6 @@
+import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import {
-  bytesToBase64,
   estimateBase64DecodedByteLength,
   floatToPcm16,
   RealtimeTalkMediaStreamMeter,
@@ -21,6 +21,7 @@ import {
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
+  shouldInterruptRealtimeTalkControlResponse,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
   type RealtimeTalkTransportStartResult,
@@ -39,6 +40,7 @@ type GoogleLiveMessage = {
       }>;
     };
     generationComplete?: boolean;
+    interactionStatus?: "IN_PROGRESS" | "IDLE" | "INTERACTION_STATUS_UNSPECIFIED";
     turnComplete?: boolean;
   };
   toolCall?: {
@@ -61,17 +63,9 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
   };
 }
 
-// Browser sessions can still pin a 2.5 model, whose text and tool-response wire
-// contract differs from the 3.1 default carried in new session metadata.
-function isGemini31LiveModel(model: string | undefined): boolean {
-  if (!model) {
-    return true;
-  }
-  const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
-  return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
-}
-
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
+  private readonly gemini31LiveModel: boolean;
+  private readonly extendedThinkingModel: boolean;
   private ws: WebSocket | null = null;
   private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
   private readonly input = this.ctx.input;
@@ -99,22 +93,21 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     private readonly session: RealtimeTalkJsonPcmWebSocketSessionResult,
     private readonly ctx: RealtimeTalkTransportContext,
   ) {
+    // Pinned 2.5 models retain their fragment and async tool-response contracts.
+    const modelId = session.model?.replace(/^models\//, "") ?? "";
+    this.gemini31LiveModel =
+      !session.model || (modelId.startsWith("gemini-3.1-") && modelId.includes("-live"));
+    this.extendedThinkingModel =
+      modelId.startsWith("gemini-3.8-live") && modelId.includes("extended-thinking");
     this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
     this.toolOwner = new GoogleLiveToolOwner({
       ctx,
       emitTalkEvent: this.emitTalkEvent,
       isClosed: () => this.closed,
-      failConnection: (detail) => {
-        const ws = this.ws;
-        if (ws) {
-          this.failConnection(ws, detail);
-        }
-      },
+      failConnection: (detail) => this.failConnection(this.ws, detail),
       isDescribeViewActive: () =>
         this.videoFramesActive && this.hasSentVideoFrame && this.camera.hasUsableTrack(),
       sendResult: (callId, name, result) => this.sendToolResult(callId, name, result),
-      sendControlSpeechMessage: (message) => this.sendControlSpeechMessage(message),
-      stopOutputForSuppressedControl: (result) => this.stopOutputForSuppressedControl(result),
     });
     this.camera = new RealtimeTalkCameraController({
       acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
@@ -152,12 +145,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const wsUrl = buildGoogleLiveUrl(this.session);
     this.closed = false;
     this.cameraPublished = false;
-    this.input.adopt((detail) => {
-      const ws = this.ws;
-      if (ws) {
-        this.failConnection(ws, detail);
-      }
-    });
+    this.input.adopt((detail) => this.failConnection(this.ws, detail));
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     const ws = new WebSocket(wsUrl);
@@ -289,10 +277,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
   }
 
-  private failConnection(ws: WebSocket, detail: string): void {
+  private failConnection(ws: WebSocket | null, detail: string): void {
     // Error and close can arrive for the same socket, or after a replacement
     // starts. Only the current lifecycle owner may report and release resources.
-    if (this.closed || this.ws !== ws) {
+    if (this.closed || !ws || this.ws !== ws) {
       return;
     }
     if (this.lifecycle.failStartup(ws, new Error(detail))) {
@@ -407,11 +395,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         final: true,
         payload: { reason: "provider-interrupted" },
       });
-    } else if (content?.turnComplete && !this.interruptedTurn) {
+    } else if (
+      content?.turnComplete &&
+      !this.interruptedTurn &&
+      (!this.extendedThinkingModel || content.interactionStatus === "IDLE")
+    ) {
       this.emitTalkEvent({ type: "turn.ended", final: true });
     }
-    // Google completes interrupted turns separately; input transcription can
-    // arrive in between and must not have its new Talk turn closed by that frame.
+    // Every turnComplete finalizes that spoken utterance above. Extended Thinking filler
+    // remains IN_PROGRESS, so it does not end the overall Talk turn until IDLE. Google
+    // completes interrupted turns separately; their cancellation remains terminal even if
+    // the accompanying interaction status is not IDLE.
     if (content?.turnComplete) {
       this.interruptedTurn = false;
     }
@@ -432,16 +426,14 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   ): boolean {
     const pending = this.pendingTranscripts[role];
     // Live 3.1 input messages are complete utterances even without finished.
-    const completeInput = role === "user" && isGemini31LiveModel(this.session.model);
+    const completeInput = role === "user" && this.gemini31LiveModel;
     if (transcript.text) {
       pending.byteCount += utf8Encoder.encode(transcript.text).byteLength;
       if (pending.byteCount > GOOGLE_LIVE_MAX_TRANSCRIPT_BYTES) {
-        if (this.ws) {
-          this.failConnection(
-            this.ws,
-            "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit",
-          );
-        }
+        this.failConnection(
+          this.ws,
+          "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit",
+        );
         return false;
       }
       pending.text += transcript.text;
@@ -532,7 +524,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           {
             id: callId,
             name,
-            ...(!isGemini31LiveModel(this.session.model) ? { scheduling: "WHEN_IDLE" } : {}),
+            // Extended Thinking rejects scheduled responses; plain 3.8 retains them.
+            ...(!this.gemini31LiveModel && !this.extendedThinkingModel
+              ? { scheduling: "WHEN_IDLE" }
+              : {}),
             response:
               result && typeof result === "object" && !Array.isArray(result)
                 ? result
@@ -618,7 +613,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
 
   private sendControlSpeechMessage(message: string): void {
     this.stopOutput();
-    if (!isGemini31LiveModel(this.session.model)) {
+    if (!this.gemini31LiveModel) {
       this.send({
         clientContent: {
           turns: [{ role: "user", parts: [{ text: message }] }],
@@ -635,14 +630,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private stopOutputForSuppressedControl(result: unknown): void {
-    if (!result || typeof result !== "object") {
-      return;
-    }
-    const record = result as Record<string, unknown>;
-    if (
-      record.ok === true &&
-      (record.mode === "cancel" || (record.suppress === true && record.mode !== "steer"))
-    ) {
+    if (shouldInterruptRealtimeTalkControlResponse(result)) {
       this.stopOutput();
     }
   }

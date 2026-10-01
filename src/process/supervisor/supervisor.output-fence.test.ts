@@ -124,6 +124,7 @@ describe("process supervisor output fence", () => {
       expect(adapter.killMock).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersToNextTimerAsync();
       await expect(run.wait()).resolves.toMatchObject({
         reason: "no-output-timeout",
         noOutputTimedOut: true,

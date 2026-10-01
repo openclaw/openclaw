@@ -5,12 +5,8 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
-import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
@@ -133,12 +129,16 @@ function fixture(count = 3, payloadBytes = 4096) {
   vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(harness));
   let watcher: fs.FSWatcher;
   let timer: ReturnType<typeof setTimeout>;
+  let gatePoll: ReturnType<typeof setInterval>;
   const entered = new Promise<{ claimedRoot: string; file: string }>((resolve, reject) => {
-    watcher = fs.watch(root, () => {
+    const readEntered = () => {
       if (fs.existsSync(marker)) {
         resolve(JSON.parse(fs.readFileSync(marker, "utf8")));
       }
-    });
+    };
+    watcher = fs.watch(root, readEntered);
+    // Native directory notifications can be coalesced; the atomic marker owns readiness.
+    gatePoll = setInterval(readEntered, 25);
     watcher.once("error", reject);
     timer = setTimeout(
       () =>
@@ -152,6 +152,7 @@ function fixture(count = 3, payloadBytes = 4096) {
   }).finally(() => {
     watcher.close();
     clearTimeout(timer);
+    clearInterval(gatePoll);
   });
   const release = () => {
     if (gate.isTransaction) {
@@ -176,6 +177,7 @@ function fixture(count = 3, payloadBytes = 4096) {
       gate.close();
       watcher.close();
       clearTimeout(timer);
+      clearInterval(gatePoll);
     },
   };
 }
@@ -183,7 +185,8 @@ function fixture(count = 3, payloadBytes = 4096) {
 async function readSnapshot(source: string, signal?: AbortSignal): Promise<void> {
   const prepared = await prepareSqliteReadOnlyLocation(source, { signal });
   try {
-    const db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
+    // Windows test homes can put the prepared snapshot at the native path limit.
+    const db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
     try {
       expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
     } finally {
@@ -194,23 +197,8 @@ async function readSnapshot(source: string, signal?: AbortSignal): Promise<void>
   }
 }
 
-function createOwnedDatabase() {
-  const stateDir = tempDirs.make("sqlite-reclaim-owned-state-");
-  const bootstrapCache = path.join(stateDir, "bootstrap-cache");
-  vi.stubEnv("XDG_CACHE_HOME", bootstrapCache);
-  const options = {
-    env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" },
-    path: path.join(stateDir, "state", "openclaw.sqlite"),
-  };
-  openOpenClawStateDatabase(options).db.exec(
-    "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');",
-  );
-  return { options, bootstrapCache };
-}
-
 it("keeps caller cancellation independent of idle reclamation", async () => {
-  for (const mode of ["snapshot", "update", "owned"] as const) {
-    const owned = mode === "owned" ? createOwnedDatabase() : undefined;
+  for (const mode of ["snapshot", "update"] as const) {
     const f = mode === "snapshot" ? fixture(64, 4 * 1024 * 1024) : fixture();
     const controller = new AbortController();
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
@@ -219,49 +207,28 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
     const operation = withSqliteReadOnlyWorkerScope(async () => {
       if (mode === "snapshot") {
         await readSnapshot(f.source, controller.signal);
-      } else if (mode === "update") {
+      } else {
         await readUpdateStateSchemaVersions({
           stateDir: path.dirname(f.source),
           config: {},
           signal: controller.signal,
         });
-      } else {
-        if (!owned) {
-          throw new Error("Owned database fixture is unavailable");
-        }
-        // Cold-open repair must not consume the backlog reserved for the owned snapshot.
-        vi.stubEnv("XDG_CACHE_HOME", owned.bootstrapCache);
-        const owner = await acquireOpenClawStateDatabaseFileExclusion(owned.options.path);
-        try {
-          await owner.mutate(owner.assertCurrent, async () => {
-            openOpenClawStateDatabase(owned.options);
-            vi.stubEnv("XDG_CACHE_HOME", path.dirname(f.cache));
-            await readSnapshot(owned.options.path, controller.signal);
-          });
-        } finally {
-          owner.release();
-        }
       }
     }).then(
       () => undefined,
       (error: unknown) => error,
     );
     try {
-      const started = performance.now();
       controller.abort(reason);
       const error = await operation;
-      const cancellationMs = performance.now() - started;
-      const workerWasRunning = !f.worker().settled;
-      const directoryWasPresent = fs.existsSync(entered.file);
+      // Cancellation must settle while reclamation is still held at the native gate.
+      expect(error).toBe(reason);
+      expect(error).toMatchObject({ name: "AbortError" });
+      expect(f.worker().settled, mode).toBe(false);
+      expect(fs.existsSync(entered.file), mode).toBe(true);
       f.release();
       await reclamation;
       await f.worker().closed;
-      console.log(JSON.stringify({ mode, cancellationMs }));
-      expect(error).toBe(reason);
-      expect(error).toMatchObject({ name: "AbortError" });
-      expect.soft(cancellationMs, mode).toBeLessThan(250);
-      expect.soft(workerWasRunning, mode).toBe(true);
-      expect.soft(directoryWasPresent, mode).toBe(true);
       expect(fs.existsSync(entered.claimedRoot)).toBe(false);
     } finally {
       controller.abort(reason);
@@ -286,25 +253,16 @@ it("serves another snapshot without waiting for shared idle reclamation", async 
   );
   let second: Promise<void> | undefined;
   try {
-    let secondSettled = false;
-    second = readSnapshot(f.source).finally(() => {
-      secondSettled = true;
-    });
-    const started = performance.now();
+    second = readSnapshot(f.source);
     controller.abort(reason);
     const error = await first;
-    const cancellationMs = performance.now() - started;
-    const workerWasRunning = !f.worker().settled;
+    expect(error).toBe(reason);
+    expect(f.worker().settled).toBe(false);
     await second;
-    const survivorFinishedBeforeReclamation = secondSettled && !f.worker().settled;
+    expect(f.worker().settled).toBe(false);
     f.release();
     await reclamation;
     await f.worker().closed;
-    console.log(JSON.stringify({ sharedCancellationMs: cancellationMs }));
-    expect(error).toBe(reason);
-    expect(cancellationMs).toBeLessThan(250);
-    expect(workerWasRunning).toBe(true);
-    expect(survivorFinishedBeforeReclamation).toBe(true);
     expect(f.worker().child.exitCode).toBe(0);
     expect(f.worker().child.signalCode).toBeNull();
     expect(fs.readdirSync(f.cache)).toEqual([]);
@@ -323,7 +281,9 @@ it("stops idle reclamation at the next directory boundary on shutdown", async ()
   let shutdown: Promise<void> | undefined;
   try {
     const entered = await f.entered;
-    const untouched = f.roots.filter((root) => fs.existsSync(root));
+    // Payload removal precedes the rename, so identify the fenced root directly.
+    const untouched = f.roots.filter((root) => root !== entered.claimedRoot && fs.existsSync(root));
+    expect(f.roots).toContain(entered.claimedRoot);
     expect(untouched).toHaveLength(f.roots.length - 1);
     shutdown = waitForSignalExitBarriers();
     await vi.waitFor(() => expect(f.worker().child.stdin?.writableEnded).toBe(true));

@@ -7,6 +7,7 @@ import {
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
+import { createTextPairingAdapter } from "../channels/plugins/pairing-adapters.js";
 import {
   createScopedAccountReplyToModeResolver,
   createTopLevelChannelReplyToModeResolver,
@@ -188,24 +189,6 @@ export type {
   ChannelMessagingAdapter,
 } from "../channels/plugins/types.core.js";
 
-function createInlineTextPairingAdapter(params: {
-  idLabel: string;
-  message: string;
-  normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-  notify: (
-    params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
-      message: string;
-    },
-  ) => Promise<void> | void;
-}): ChannelPairingAdapter {
-  return {
-    idLabel: params.idLabel,
-    normalizeAllowEntry: params.normalizeAllowEntry,
-    notifyApproval: async (ctx) => {
-      await params.notify({ ...ctx, message: params.message });
-    },
-  };
-}
 export type {
   ProviderUsageSnapshot,
   UsageProviderId,
@@ -663,14 +646,8 @@ type ChatChannelAttachedOutboundOptions = {
 };
 
 function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: string | null }>(
-  security:
-    | ChannelSecurityAdapter<TResolvedAccount>
-    | ChatChannelSecurityOptions<TResolvedAccount>
-    | undefined,
-): ChannelSecurityAdapter<TResolvedAccount> | undefined {
-  if (!security) {
-    return undefined;
-  }
+  security: ChannelSecurityAdapter<TResolvedAccount> | ChatChannelSecurityOptions<TResolvedAccount>,
+): ChannelSecurityAdapter<TResolvedAccount> {
   if (!("dm" in security)) {
     return security;
   }
@@ -702,36 +679,24 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
 }
 
 function resolveChatChannelPairing(
-  pairing: ChannelPairingAdapter | ChatChannelPairingOptions | undefined,
-): ChannelPairingAdapter | undefined {
-  if (!pairing) {
-    return undefined;
-  }
-  if (!("text" in pairing)) {
-    return pairing;
-  }
-  return createInlineTextPairingAdapter(pairing.text);
+  pairing: ChannelPairingAdapter | ChatChannelPairingOptions,
+): ChannelPairingAdapter {
+  return "text" in pairing ? createTextPairingAdapter(pairing.text) : pairing;
 }
 
 function resolveChatChannelThreading<TResolvedAccount>(
-  threading: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount> | undefined,
-): ChannelThreadingAdapter | undefined {
-  if (!threading) {
-    return undefined;
-  }
+  threading: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount>,
+): ChannelThreadingAdapter {
   if (!("topLevelReplyToMode" in threading) && !("scopedAccountReplyToMode" in threading)) {
     return threading;
   }
 
-  let resolveReplyToMode: ChannelThreadingAdapter["resolveReplyToMode"];
-  if ("topLevelReplyToMode" in threading) {
-    resolveReplyToMode = createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode);
-  } else {
-    resolveReplyToMode = createScopedAccountReplyToModeResolver<TResolvedAccount>(
-      threading.scopedAccountReplyToMode,
-    );
-  }
-
+  const resolveReplyToMode =
+    "topLevelReplyToMode" in threading
+      ? createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode)
+      : createScopedAccountReplyToModeResolver<TResolvedAccount>(
+          threading.scopedAccountReplyToMode,
+        );
   return {
     ...threading,
     resolveReplyToMode,
@@ -739,11 +704,8 @@ function resolveChatChannelThreading<TResolvedAccount>(
 }
 
 function resolveChatChannelOutbound(
-  outbound: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions | undefined,
-): ChannelOutboundAdapter | undefined {
-  if (!outbound) {
-    return undefined;
-  }
+  outbound: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions,
+): ChannelOutboundAdapter {
   if (!("attachedResults" in outbound)) {
     return outbound;
   }

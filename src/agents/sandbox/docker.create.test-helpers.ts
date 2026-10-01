@@ -23,6 +23,7 @@ const spawnState = vi.hoisted(() => ({
   containerExists: true,
   inspectRunning: true,
   inspectError: "",
+  createError: "",
   labelHash: "",
   mounts: "[]",
   tmpfs: null as Record<string, string> | null,
@@ -35,6 +36,7 @@ const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
+  completeSandboxRegistryReservation: vi.fn(),
 }));
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -67,6 +69,7 @@ function createRegistryMock() {
     readRegistryEntry: registryMocks.readRegistryEntry,
     removeRegistryEntry: registryMocks.removeRegistryEntry,
     updateRegistry: registryMocks.updateRegistry,
+    completeSandboxRegistryReservation: registryMocks.completeSandboxRegistryReservation,
   };
 }
 
@@ -129,6 +132,8 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     } else {
       stdout = spawnState.inspectRunning ? "true\n" : "false\n";
     }
+  } else if (args[0] === "inspect" && args[2] === "{{.Id}}") {
+    stdout = "c".repeat(64);
   } else if (
     args[0] === "inspect" &&
     args[1] === "-f" &&
@@ -157,11 +162,15 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   } else if (args[0] === "image" && args[1] === "inspect") {
     code = 0;
   } else if (args[0] === "create") {
-    if (spawnState.containerExists) {
+    if (spawnState.createError) {
+      code = 125;
+      stderr = spawnState.createError;
+    } else if (spawnState.containerExists) {
       code = 1;
       stderr = "container name is already in use";
     } else {
       spawnState.containerExists = true;
+      stdout = "c".repeat(64);
       spawnState.inspectRunning = false;
       spawnState.labelHash =
         args
@@ -308,6 +317,7 @@ export function createSandboxContainerTestHarness() {
     spawnState.containerExists = true;
     spawnState.inspectRunning = true;
     spawnState.inspectError = "";
+    spawnState.createError = "";
     spawnState.labelHash = "";
     spawnState.mounts = "[]";
     spawnState.tmpfs = null;
@@ -320,6 +330,8 @@ export function createSandboxContainerTestHarness() {
     registryMocks.removeRegistryEntry.mockResolvedValue(undefined);
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
+    registryMocks.completeSandboxRegistryReservation.mockClear();
+    registryMocks.completeSandboxRegistryReservation.mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
   });
 

@@ -1,3 +1,4 @@
+import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import { REMOTE_WORKSPACE_MUTATION_LOCK_JS } from "./workspace-mutation-lock-remote-script.js";
 import {
   REMOTE_WORKSPACE_MUTATION_CONTEXT_JS,
@@ -78,7 +79,7 @@ function isSafeRelativePath(relative) {
 }
 function parsePaths(raw) {
   const values = JSON.parse(raw);
-  if (!Array.isArray(values) || values.length > 25_000) {
+  if (!Array.isArray(values) || values.length > ${MAX_RECONCILIATION_ENTRIES}) {
     throw new Error("invalid accepted workspace paths");
   }
   const paths = [...new Set(values)];
@@ -98,18 +99,19 @@ function parsePaths(raw) {
     })
     .sort();
 }
-function targetPath(base, relative) {
-  return path.join(base, relative);
+function liveDirectoryStats(target) {
+  const stats = fs.lstatSync(target);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error("unsafe accepted workspace parent");
+  }
+  return stats;
 }
 function livePath(relative) {
   const segments = relative.split("/");
   let parent = root;
   for (const segment of segments.slice(0, -1)) {
     parent = path.join(parent, segment);
-    const stats = fs.lstatSync(parent);
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error("unsafe accepted workspace parent");
-    }
+    liveDirectoryStats(parent);
   }
   return path.join(root, relative);
 }
@@ -121,25 +123,6 @@ function exists(target) {
     if (error && error.code === "ENOENT") return false;
     throw error;
   }
-}
-function removeTree(target) {
-  let stats;
-  try {
-    stats = fs.lstatSync(target);
-  } catch (error) {
-    if (error && error.code === "ENOENT") return;
-    throw error;
-  }
-  if (stats.isDirectory() && !stats.isSymbolicLink()) {
-    fs.chmodSync(target, 0o700);
-    for (const name of fs.readdirSync(target)) removeTree(path.join(target, name));
-    fs.rmdirSync(target);
-  } else {
-    fs.unlinkSync(target);
-  }
-}
-function sameInode(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
 }
 ${REMOTE_WORKSPACE_MUTATION_LOCK_JS}
 function readPaths() {
@@ -203,7 +186,7 @@ function normalizeRecoveredPhase(candidate, cleanupNamespace = false) {
 }
 function readState(candidate) {
   const value = JSON.parse(fs.readFileSync(path.join(candidate, "state.json"), "utf8"));
-  if (!Array.isArray(value) || value.length > 25_000) {
+  if (!Array.isArray(value) || value.length > ${MAX_RECONCILIATION_ENTRIES}) {
     throw new Error("invalid accepted workspace transaction state");
   }
   const relatives = parsePaths(JSON.stringify(value.map((entry) => entry && entry.relative)));
@@ -272,11 +255,8 @@ function prepareWritableAncestors(paths) {
   // parsePaths removes descendants of changed directories, so these are all
   // unchanged live ancestors. Read every mode before mutating any permission.
   const modes = ["", ...ancestorPaths(paths)].map((relative) => {
-    const target = relative ? targetPath(root, relative) : root;
-    const stats = fs.lstatSync(target);
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error("unsafe accepted workspace parent");
-    }
+    const target = relative ? path.join(root, relative) : root;
+    const stats = liveDirectoryStats(target);
     return { relative, mode: stats.mode & 0o7777 };
   });
   writeAncestorModes(modes);
@@ -287,11 +267,8 @@ function makeAncestorsWritable(modes) {
   const widened = [];
   try {
     for (const entry of modes) {
-      const target = entry.relative ? targetPath(root, entry.relative) : root;
-      const stats = fs.lstatSync(target);
-      if (stats.isSymbolicLink() || !stats.isDirectory()) {
-        throw new Error("unsafe accepted workspace parent");
-      }
+      const target = entry.relative ? path.join(root, entry.relative) : root;
+      const stats = liveDirectoryStats(target);
       const currentMode = stats.mode & 0o7777;
       const writableMode = entry.mode | 0o700;
       if (currentMode !== writableMode) {
@@ -314,16 +291,10 @@ function makeAncestorsWritable(modes) {
 }
 function restoreAncestorModes(modes) {
   for (const entry of [...modes].reverse()) {
-    const target = entry.relative ? targetPath(root, entry.relative) : root;
-    const stats = fs.lstatSync(target);
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error("unsafe accepted workspace parent");
-    }
+    const target = entry.relative ? path.join(root, entry.relative) : root;
+    const stats = liveDirectoryStats(target);
     if ((stats.mode & 0o7777) !== entry.mode) fs.chmodSync(target, entry.mode);
   }
-}
-function removeTransaction(candidate = transaction) {
-  removeTree(candidate);
 }
 function restoreTransaction(candidate) {
   if (!exists(candidate)) return;
@@ -335,7 +306,7 @@ function restoreTransaction(candidate) {
       const candidateBackup = path.join(candidate, "backup");
       for (const entry of [...readState(candidate)].reverse()) {
         const live = livePath(entry.relative);
-        const backup = targetPath(candidateBackup, entry.relative);
+        const backup = path.join(candidateBackup, entry.relative);
         if (exists(backup)) {
           removeTree(live);
           fs.renameSync(backup, live);
@@ -350,7 +321,7 @@ function restoreTransaction(candidate) {
   } finally {
     restoreAncestorModes(ancestorModes);
   }
-  removeTransaction(candidate);
+  removeTree(candidate);
 }
 function recoverTransaction(candidate) {
   const phase = normalizeRecoveredPhase(candidate);
@@ -363,7 +334,7 @@ function recoverCleanup(candidate) {
   const phase = normalizeRecoveredPhase(candidate, true);
   if (phase === "applied") transitionPhase(candidate, phase, "applied", "committed");
   else if (phase !== "committed") throw new Error("invalid accepted workspace cleanup phase");
-  removeTransaction(candidate);
+  removeTree(candidate);
 }
 function recoverTransactions() {
   for (const name of fs.readdirSync(transactionRoot)) {
@@ -426,7 +397,7 @@ function runAction() {
         if (!entry.hadLive) continue;
         const source = livePath(entry.relative);
         const sourceStats = fs.lstatSync(source);
-        const destination = targetPath(backupRoot, entry.relative);
+        const destination = path.join(backupRoot, entry.relative);
         fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
         try {
           if (sourceStats.isDirectory() && !sourceStats.isSymbolicLink()) {
@@ -441,7 +412,7 @@ function runAction() {
         }
       }
       for (const entry of state) {
-        const source = targetPath(nextRoot, entry.relative);
+        const source = path.join(nextRoot, entry.relative);
         if (exists(source)) fs.renameSync(source, livePath(entry.relative));
       }
       restoreAncestorModes(ancestorModes);

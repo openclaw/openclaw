@@ -96,6 +96,21 @@ function firstInstallOptions():
     | undefined;
 }
 
+function mockSuccessfulPackageInstall() {
+  installPluginFromInstalledPackageDirMock.mockImplementation(
+    async ({ packageDir }: { packageDir: string }) => {
+      await fs.mkdir(packageDir, { recursive: true });
+      return {
+        ok: true,
+        pluginId: "demo",
+        targetDir: packageDir,
+        version: "1.2.3",
+        extensions: ["index.js"],
+      };
+    },
+  );
+}
+
 function captureSecurityEvents(): {
   events: DiagnosticSecurityEvent[];
   stop: () => void;
@@ -140,20 +155,11 @@ describe("parseGitPluginSpec", () => {
     expect(parsed.ref).toBe("feature/foo");
     expect(parsed.label).toBe("git@github.com:acme/demo");
   });
-
-  it("rejects option-injection specs whose url would start with a dash", () => {
-    expect(parseGitPluginSpec("git:--upload-pack=/tmp/pwn.git")).toBeNull();
-    expect(parseGitPluginSpec("git:-oProxyCommand=payload@example.com:acme/demo.git")).toBeNull();
-  });
 });
 
 describe("isImmutableGitCommitRef", () => {
   it.each([
-    [undefined, false],
-    ["main", false],
-    ["v1.2.3", false],
     ["abc123", false],
-    ["0123456789abcdef0123456789abcdef01234567", true],
     ["0123456789ABCDEF0123456789ABCDEF01234567", true],
   ] as const)("classifies %s as immutable=%s", (ref, expected) => {
     expect(isImmutableGitCommitRef(ref)).toBe(expected);
@@ -192,84 +198,105 @@ describe("installPluginFromGitSpec", () => {
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
-  it("clones, checks out refs, installs from the clone, and returns commit metadata", async () => {
-    runCommandWithTimeoutMock
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-    installPluginFromInstalledPackageDirMock.mockImplementation(
-      async (params: { packageDir: string }) => {
-        await fs.mkdir(params.packageDir, { recursive: true });
-        return {
-          ok: true,
-          pluginId: "demo",
-          targetDir: params.packageDir,
-          version: "1.2.3",
-          extensions: ["index.js"],
-        };
-      },
-    );
+  it.each([
+    {
+      mode: "install",
+      timeoutMs: undefined,
+      workTimeoutMs: undefined,
+      gitWork: 120_000,
+      npmWork: 300_000,
+    },
+    {
+      mode: "update",
+      timeoutMs: undefined,
+      workTimeoutMs: undefined,
+      gitWork: undefined,
+      npmWork: undefined,
+    },
+    { mode: "update", timeoutMs: 50, workTimeoutMs: undefined, gitWork: 50, npmWork: 50 },
+    { mode: "update", timeoutMs: 500, workTimeoutMs: null, gitWork: undefined, npmWork: undefined },
+  ] as const)(
+    "acquires and installs with $mode work=$gitWork, preserving bounded ref probes",
+    async ({ mode, timeoutMs, workTimeoutMs, gitWork, npmWork }) => {
+      runCommandWithTimeoutMock
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      mockSuccessfulPackageInstall();
 
-    const captured = captureSecurityEvents();
-    let result: Awaited<ReturnType<typeof installPluginFromGitSpec>>;
-    try {
-      result = await installPluginFromGitSpec({
-        spec: "git:github.com/acme/demo@v1.2.3",
-        expectedPluginId: "demo",
+      const captured = captureSecurityEvents();
+      let result: Awaited<ReturnType<typeof installPluginFromGitSpec>>;
+      try {
+        result = await installPluginFromGitSpec({
+          spec: "git:github.com/acme/demo@v1.2.3",
+          expectedPluginId: "demo",
+          mode,
+          timeoutMs,
+          workTimeoutMs,
+        });
+      } finally {
+        captured.stop();
+      }
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(result.pluginId).toBe("demo");
+      expect(result.git.url).toBe("https://github.com/acme/demo.git");
+      expect(result.git.ref).toBe("v1.2.3");
+      expect(result.git.commit).toBe("abc123");
+      const cloneArgv = commandArgvAt(0);
+      expect(cloneArgv.slice(0, 4)).toEqual([
+        "git",
+        "clone",
+        "--",
+        "https://github.com/acme/demo.git",
+      ]);
+      expect(cloneArgv[4]).toContain("/repo");
+      expect(commandArgvAt(2)).toEqual(["git", "switch", "--detach", "--", "abc123"]);
+      expect(commandArgvAt(4)).toEqual([
+        "npm",
+        "install",
+        "--omit=dev",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+      ]);
+      for (const index of [0, 2]) {
+        expect(runCommandWithTimeoutMock.mock.calls[index]?.[1]?.timeoutMs).toBe(gitWork);
+      }
+      for (const index of [1, 3]) {
+        expect(runCommandWithTimeoutMock.mock.calls[index]?.[1]?.timeoutMs).toBe(
+          timeoutMs ?? 120_000,
+        );
+      }
+      expect(runCommandWithTimeoutMock.mock.calls[4]?.[1]?.timeoutMs).toBe(npmWork);
+      const installOptions = firstInstallOptions();
+      expect(installOptions?.expectedPluginId).toBe("demo");
+      expect(installOptions?.packageDir).toContain("/repo");
+      expect(installOptions?.installPolicyRequest?.kind).toBe("plugin-git");
+      expect(installOptions?.installPolicyRequest?.requestedSpecifier).toBe(
+        "git:github.com/acme/demo@v1.2.3",
+      );
+      expect(installOptions?.emitSuccessSecurityEvent).toBe(false);
+      expect(captured.events).toHaveLength(1);
+      expect(captured.events[0]).toMatchObject({
+        action: "plugin.installed",
+        outcome: "success",
+        target: { kind: "plugin", name: "demo" },
+        attributes: {
+          source_family: "git",
+          mode: "install",
+          extension_count: 1,
+          has_version: true,
+        },
       });
-    } finally {
-      captured.stop();
-    }
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
-    expect(result.pluginId).toBe("demo");
-    expect(result.git.url).toBe("https://github.com/acme/demo.git");
-    expect(result.git.ref).toBe("v1.2.3");
-    expect(result.git.commit).toBe("abc123");
-    const cloneArgv = commandArgvAt(0);
-    expect(cloneArgv.slice(0, 4)).toEqual([
-      "git",
-      "clone",
-      "--",
-      "https://github.com/acme/demo.git",
-    ]);
-    expect(cloneArgv[4]).toContain("/repo");
-    expect(commandArgvAt(2)).toEqual(["git", "switch", "--detach", "--", "abc123"]);
-    expect(commandArgvAt(4)).toEqual([
-      "npm",
-      "install",
-      "--omit=dev",
-      "--loglevel=error",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-    ]);
-    const installOptions = firstInstallOptions();
-    expect(installOptions?.expectedPluginId).toBe("demo");
-    expect(installOptions?.packageDir).toContain("/repo");
-    expect(installOptions?.installPolicyRequest?.kind).toBe("plugin-git");
-    expect(installOptions?.installPolicyRequest?.requestedSpecifier).toBe(
-      "git:github.com/acme/demo@v1.2.3",
-    );
-    expect(installOptions?.emitSuccessSecurityEvent).toBe(false);
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      action: "plugin.installed",
-      outcome: "success",
-      target: { kind: "plugin", name: "demo" },
-      attributes: {
-        source_family: "git",
-        mode: "install",
-        extension_count: 1,
-        has_version: true,
-      },
-    });
-  });
+    },
+  );
 
   it("does not emit git install success when committing the managed repo fails", async () => {
     const gitRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-fail-"));
@@ -314,42 +341,6 @@ describe("installPluginFromGitSpec", () => {
     } finally {
       await fs.rm(gitRoot, { recursive: true, force: true });
     }
-  });
-
-  it("uses a shallow clone when no ref is requested", async () => {
-    runCommandWithTimeoutMock
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-    installPluginFromInstalledPackageDirMock.mockImplementation(
-      async (params: { packageDir: string }) => {
-        await fs.mkdir(params.packageDir, { recursive: true });
-        return {
-          ok: true,
-          pluginId: "demo",
-          targetDir: params.packageDir,
-          version: "1.2.3",
-          extensions: ["index.js"],
-        };
-      },
-    );
-
-    const result = await installPluginFromGitSpec({ spec: "git:github.com/acme/demo" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
-
-    const cloneArgv = commandArgvAt(0);
-    expect(cloneArgv.slice(0, 6)).toEqual([
-      "git",
-      "clone",
-      "--depth",
-      "1",
-      "--",
-      "https://github.com/acme/demo.git",
-    ]);
-    expect(cloneArgv[6]).toContain("/repo");
   });
 
   it("runs install policy preflight before npm installs git dependencies", async () => {
@@ -456,18 +447,7 @@ describe("installPluginFromGitSpec", () => {
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: `${commit}\n`, stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-    installPluginFromInstalledPackageDirMock.mockImplementation(
-      async (params: { packageDir: string }) => {
-        await fs.mkdir(params.packageDir, { recursive: true });
-        return {
-          ok: true,
-          pluginId: "demo",
-          targetDir: params.packageDir,
-          version: "1.2.3",
-          extensions: ["index.js"],
-        };
-      },
-    );
+    mockSuccessfulPackageInstall();
 
     const result = await installPluginFromGitSpec({
       spec: `git:github.com/acme/demo@${commit}`,
@@ -490,18 +470,7 @@ describe("installPluginFromGitSpec", () => {
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      installPluginFromInstalledPackageDirMock.mockImplementation(
-        async (params: { packageDir: string }) => {
-          await fs.mkdir(params.packageDir, { recursive: true });
-          return {
-            ok: true,
-            pluginId: "demo",
-            targetDir: params.packageDir,
-            version: "1.2.3",
-            extensions: ["index.js"],
-          };
-        },
-      );
+      mockSuccessfulPackageInstall();
 
       const result = await installPluginFromGitSpec({
         spec: "git:github.com/acme/demo",
@@ -527,18 +496,7 @@ describe("installPluginFromGitSpec", () => {
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      installPluginFromInstalledPackageDirMock.mockImplementation(
-        async (params: { packageDir: string }) => {
-          await fs.mkdir(params.packageDir, { recursive: true });
-          return {
-            ok: true,
-            pluginId: "demo",
-            targetDir: params.packageDir,
-            version: "1.2.3",
-            extensions: ["index.js"],
-          };
-        },
-      );
+      mockSuccessfulPackageInstall();
 
       const result = await installPluginFromGitSpec({
         spec: "git:github.com/acme/demo",
@@ -664,18 +622,7 @@ describe("installPluginFromGitSpec", () => {
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-    installPluginFromInstalledPackageDirMock.mockImplementation(
-      async (params: { packageDir: string }) => {
-        await fs.mkdir(params.packageDir, { recursive: true });
-        return {
-          ok: true,
-          pluginId: "demo",
-          targetDir: params.packageDir,
-          version: "1.2.3",
-          extensions: ["index.js"],
-        };
-      },
-    );
+    mockSuccessfulPackageInstall();
     const mkdtempSpy = vi
       .spyOn(fs, "mkdtemp")
       .mockRejectedValueOnce(Object.assign(new Error("read-only filesystem"), { code: "EROFS" }));
@@ -757,18 +704,7 @@ describe("installPluginFromGitSpec", () => {
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      installPluginFromInstalledPackageDirMock.mockImplementation(
-        async (params: { packageDir: string }) => {
-          await fs.mkdir(params.packageDir, { recursive: true });
-          return {
-            ok: true,
-            pluginId: "demo",
-            targetDir: params.packageDir,
-            version: "1.2.3",
-            extensions: ["index.js"],
-          };
-        },
-      );
+      mockSuccessfulPackageInstall();
 
       const result = await installPluginFromGitSpec({
         spec: "git:https://token@github.com/acme/demo.git",

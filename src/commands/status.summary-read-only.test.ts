@@ -237,7 +237,7 @@ describe("getStatusSummary read-only session access", () => {
         const timeline = state.path("status-timeline.jsonl");
         const scan = await withEnvAsync(
           { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timeline },
-          () => scanStatus({ timeoutMs: 100 }),
+          () => scanStatus({ timeoutMs: 100, gatewayProbeDeadlineMs: performance.now() + 100 }),
         );
         expect(scan.agentStatus.totalSessions).toBe(12);
         expect(scan.agentStatus.agents[0]?.lastUpdatedAt).toBe(12);

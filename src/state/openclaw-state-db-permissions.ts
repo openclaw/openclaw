@@ -33,7 +33,11 @@ function bestEffortChmodSync(target: string, mode: number): void {
   stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
 }
 
-export function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
+export function ensureOpenClawStatePermissions(
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+  options: { createDirectory?: boolean } = {},
+): void {
   const dir = path.dirname(pathname);
   const defaultDir = resolveOpenClawStateSqliteDir(env);
   const isDefaultStateDatabase =
@@ -42,7 +46,9 @@ export function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.Pro
     throw new Error(`OpenClaw state database path resolved outside its state dir: ${pathname}`);
   }
   const dirExisted = existsSync(dir);
-  mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });
+  if (options.createDirectory) {
+    mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });
+  }
   // Default state contains credentials-adjacent metadata; custom existing dirs keep caller modes.
   if (isDefaultStateDatabase || !dirExisted) {
     bestEffortChmodSync(dir, OPENCLAW_STATE_DIR_MODE);

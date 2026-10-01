@@ -27,7 +27,11 @@ actor TalkMLXSpeechSynthesizer {
         case timedOut
     }
 
-    static let shared = TalkMLXSpeechSynthesizer()
+    static let shared = TalkMLXSpeechSynthesizer(
+        transportFactory: {
+            try await ProcessMLXTTSTransport.launch(invocation: TalkMLXSpeechSynthesizer.helperInvocation())
+        },
+        observesMemoryPressure: true)
     static let defaultModelRepo = "mlx-community/Soprano-80M-bf16"
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.mlx")
@@ -42,15 +46,6 @@ actor TalkMLXSpeechSynthesizer {
     private var cancelEscalationTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     private var memoryPressureMonitor: MLXMemoryPressureMonitor?
-
-    private init() {
-        self.transportFactory = {
-            try await ProcessMLXTTSTransport.launch(invocation: TalkMLXSpeechSynthesizer.helperInvocation())
-        }
-        self.idleDuration = .seconds(300)
-        self.cancelGraceDuration = .seconds(1)
-        self.observesMemoryPressure = true
-    }
 
     init(
         transportFactory: @escaping MLXTTSTransportFactory,
@@ -95,11 +90,11 @@ actor TalkMLXSpeechSynthesizer {
         let request = MLXTTSRequest.synthesize(MLXTTSSynthesizeRequest(
             id: id,
             text: trimmed,
-            modelRepo: Self.resolvedModelRepo(modelRepo),
-            language: language?.nilIfBlank,
-            voice: voicePreset?.nilIfBlank,
-            referenceAudioPath: referenceAudioPath?.nilIfBlank,
-            referenceText: referenceText?.nilIfBlank,
+            modelRepo: modelRepo?.nonEmpty ?? Self.defaultModelRepo,
+            language: language?.nonEmpty,
+            voice: voicePreset?.nonEmpty,
+            referenceAudioPath: referenceAudioPath?.nonEmpty,
+            referenceText: referenceText?.nonEmpty,
             stream: true))
 
         for attempt in 0...1 {
@@ -428,10 +423,6 @@ actor TalkMLXSpeechSynthesizer {
     private func discardTransport(forRequest id: String) async {
         // A stale request may finish after shutdown admitted a replacement.
         guard self.activeID == id else { return }
-        await self.discardTransport()
-    }
-
-    private func discardTransport() async {
         let transport = self.transport
         self.transport = nil
         await transport?.close()
@@ -466,10 +457,6 @@ actor TalkMLXSpeechSynthesizer {
             executableURL: URL(fileURLWithPath: "/usr/bin/env"),
             argumentPrefix: ["openclaw-mlx-tts"],
             displayName: "openclaw-mlx-tts")
-    }
-
-    private static func resolvedModelRepo(_ modelRepo: String?) -> String {
-        modelRepo?.nilIfBlank ?? self.defaultModelRepo
     }
 }
 
@@ -606,12 +593,5 @@ private final class MLXMemoryPressureMonitor: @unchecked Sendable {
 
     deinit {
         self.source.cancel()
-    }
-}
-
-extension String {
-    fileprivate var nilIfBlank: String? {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

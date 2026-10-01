@@ -1,9 +1,7 @@
-// File Transfer plugin module implements file write tool behavior.
 import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asBoolean, asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { appendFileTransferAudit } from "../shared/audit.js";
 import { inspectStrictBase64 } from "../shared/base64.js";
 import { humanSize } from "../shared/params.js";
 import {
@@ -83,7 +81,7 @@ export function createFileWriteTool(): AnyAgentTool {
       const buffer = sourceBytes.buffer;
       const expectedSha256 = crypto.createHash("sha256").update(buffer).digest("hex");
 
-      const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
+      const { audit, payload } = await invokeNodeToolPayload({
         node: nodeQuery,
         params: raw,
         command: "file.write",
@@ -103,16 +101,11 @@ export function createFileWriteTool(): AnyAgentTool {
 
       const typed = payload as FileWriteSuccess;
 
-      await appendFileTransferAudit({
-        op: "file.write",
-        nodeId,
-        nodeDisplayName,
-        requestedPath: filePath,
+      await audit({
         canonicalPath: typed.path,
         decision: "allowed",
         sizeBytes: typed.size,
         sha256: typed.sha256,
-        durationMs: Date.now() - startedAt,
       });
 
       const overwriteNote = typed.overwritten ? " (overwrote existing file)" : "";

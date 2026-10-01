@@ -488,24 +488,35 @@ describe("control-plane update restart sentinel", () => {
     },
   );
 
-  it("reports a successful same-revision Git run as already current", () => {
-    const payload = buildUpdateRestartSentinelPayload({
-      result: {
-        status: "ok",
-        mode: "git",
-        before: { sha: "aaaaaaaa" },
-        after: { sha: "aaaaaaaa" },
-        steps: [],
-        durationMs: 42,
-      },
-      meta: {},
-      nowMs: 1,
-    });
+  it.each(["ok", "skipped"] as const)(
+    "preserves the same-revision Git producer's %s outcome",
+    (status) => {
+      const payload = buildUpdateRestartSentinelPayload({
+        result: {
+          status,
+          ...(status === "skipped" ? { reason: "already-current" } : {}),
+          mode: "git",
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "aaaaaaaa" },
+          steps: [],
+          durationMs: 42,
+        },
+        meta: { continuationMessage: "Verify the completed runtime maintenance." },
+        nowMs: 1,
+      });
 
-    expect(payload.status).toBe("skipped");
-    expect(payload.stats?.reason).toBe("already-current");
-    expect(payload.continuation).toBeUndefined();
-  });
+      expect(payload.status).toBe(status);
+      expect(payload.stats?.reason).toBe(status === "skipped" ? "already-current" : null);
+      expect(payload.continuation).toEqual(
+        status === "ok"
+          ? {
+              kind: "agentTurn",
+              message: "Verify the completed runtime maintenance.",
+            }
+          : undefined,
+      );
+    },
+  );
 
   it("keeps restart-health-pending sentinels continuation-free until final success", () => {
     const result = {

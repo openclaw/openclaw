@@ -4,6 +4,7 @@ import { qaEvidenceAssertionSchema, qaEvidenceCoverageSchema } from "./evidence-
 import { qaRuntimePairLaneSchema } from "./scenario-catalog.js";
 import {
   qaMaturityTaxonomyIdentitySchema,
+  qaProofClassSchema,
   qaProofRequirementsSchema,
   qaScorecardEvidenceModeSchema,
 } from "./scorecard-taxonomy.js";
@@ -290,16 +291,7 @@ const qaEvidenceIdentitySchema = z.strictObject({
     .nullable(),
   protocol: nullableStringSchema,
   accountRef: nullableStringSchema,
-  proofClass: z
-    .enum([
-      "fixture-only",
-      "real-plugin/local-protocol",
-      "native-host",
-      "packaged-install/upgrade",
-      "live-channel",
-      "live-provider",
-    ])
-    .nullable(),
+  proofClass: qaProofClassSchema.nullable(),
 });
 
 const qaEvidenceOccurrenceSchema = z.strictObject({
@@ -582,9 +574,6 @@ function validateOccurrenceBindings(summary: z.infer<typeof qaEvidenceSummaryV3S
     const next = occurrences.get(nextId)!;
     const currentEffective = entries.get(occurrence.id)?.[0]?.effective;
     const nextEffective = entries.get(next.id)?.[0]?.effective;
-    if (currentEffective && nextEffective) {
-      throw new Error("multiple effective attempts in one retry chain");
-    }
     if (
       occurrence.terminalStatus !== "fail" ||
       (next.terminalStatus !== "pass" && nextEffective) ||

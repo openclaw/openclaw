@@ -293,6 +293,26 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
+  it.each(["", "mock-openai listening on 23456", "mock-openai listening on 65536\n"])(
+    "does not accept HTTP readiness without a complete valid listener receipt (%j)",
+    (receipt) => {
+      withTempDir("openclaw-e2e-mock-receipt-", (tempDir) => {
+        const logPath = path.join(tempDir, "mock.log");
+        fs.writeFileSync(logPath, receipt);
+        const result = runBashWithHelper([
+          "openclaw_e2e_process_alive() { return 0; }",
+          "openclaw_e2e_probe_http() { echo unexpected-probe; return 0; }",
+          "openclaw_e2e_print_log() { :; }",
+          "sleep() { :; }",
+          `openclaw_e2e_wait_mock_openai 0 1 400 "" 123 ${shellQuote(logPath)}`,
+        ]);
+        expect(result.status).toBe(1);
+        expect(result.stdout).not.toContain("unexpected-probe");
+        expect(result.stderr).toContain("did not publish a live listener");
+      });
+    },
+  );
+
   it("requires /readyz after the gateway ready log", () => {
     withTempDir("openclaw-e2e-readyz-required-", (tempDir) => {
       const logPath = path.join(tempDir, "gateway.log");

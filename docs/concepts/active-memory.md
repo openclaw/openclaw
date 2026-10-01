@@ -67,10 +67,10 @@ resolves. Each entry points at the page that now holds the content.
   - <a id="cold-start-grace" />[Cold-start grace](/concepts/active-memory/recommended-setup#cold-start-grace)
 - <a id="debugging" />[Debugging](/concepts/active-memory/troubleshooting#debugging)
 - <a id="common-issues" />[Common issues](/concepts/active-memory/troubleshooting#common-issues)
-  - <a id="registered-recall-tools-return-openclawverbatim531end" />[Registered recall tools return `status=policy-disabled`](/concepts/active-memory/troubleshooting#registered-recall-tools-return-openclawverbatim17end)
+  - <a id="registered-recall-tools-return-openclawverbatim531end" />[Registered recall tools return `status=policy-disabled`](/concepts/active-memory/troubleshooting#registered-recall-tools-return-status-policy-disabled)
   - <a id="embedding-provider-switched-or-stopped-working" />[Embedding provider switched or stopped working](/concepts/active-memory/troubleshooting#embedding-provider-switched-or-stopped-working)
   - <a id="recall-feels-slow-empty-or-inconsistent" />[Recall feels slow, empty, or inconsistent](/concepts/active-memory/troubleshooting#recall-feels-slow-empty-or-inconsistent)
-  - <a id="first-recall-after-gateway-restart-returns-openclawverbatim551end" />[First recall after gateway restart returns `status=timeout`](/concepts/active-memory/troubleshooting#first-recall-after-gateway-restart-returns-openclawverbatim37end)
+  - <a id="first-recall-after-gateway-restart-returns-openclawverbatim551end" />[First recall after gateway restart returns `status=timeout`](/concepts/active-memory/troubleshooting#first-recall-after-gateway-restart-returns-status-timeout)
 
 ## Related pages
 

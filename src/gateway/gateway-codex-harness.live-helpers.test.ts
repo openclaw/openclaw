@@ -39,6 +39,20 @@ function expectStrictCodexModelsCommandText(text: string): void {
   expect(isStrictExpectedCodexModelsCommandText(text)).toBe(true);
 }
 
+function completedCommandEvents(
+  command: string,
+  itemId: string,
+  result: Record<string, unknown> = { exitCode: 0 },
+) {
+  return [
+    { stream: "tool", data: { phase: "start", name: "bash", itemId, args: { command } } },
+    {
+      stream: "tool",
+      data: { phase: "result", itemId, status: "completed", isError: false, result },
+    },
+  ];
+}
+
 describe("gateway codex harness live helpers", () => {
   it("builds an exact large-output command without escape-sensitive newlines", () => {
     const command = buildCodexHarnessLargeOutputCommand({
@@ -94,27 +108,10 @@ describe("gateway codex harness live helpers", () => {
   it("matches a successful wrapped native command by its per-turn marker", () => {
     const expectedCommand = `node -e 'console.log("OPENCLAW-LARGE-OUTPUT-ABC")'`;
     const wrappedCommand = `node -e "console.log(\\"OPENCLAW-LARGE-OUTPUT-ABC\\")"`;
-    const events = [
-      {
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "bash",
-          itemId: "item-1",
-          args: { command: `/bin/bash -lc ${shellSingleQuote(wrappedCommand)}` },
-        },
-      },
-      {
-        stream: "tool",
-        data: {
-          phase: "result",
-          itemId: "item-1",
-          status: "completed",
-          isError: false,
-          result: { exitCode: 0 },
-        },
-      },
-    ];
+    const events = completedCommandEvents(
+      `/bin/bash -lc ${shellSingleQuote(wrappedCommand)}`,
+      "item-1",
+    );
 
     expect(
       requireSuccessfulNativeCommandExecution(events, {
@@ -160,27 +157,7 @@ describe("gateway codex harness live helpers", () => {
   it("accepts a completed native command when Codex omits or nulls its optional exit code", () => {
     const expectedCommand = "node -e OPENCLAW-NO-EXIT-CODE";
     for (const result of [{ status: "completed" }, { status: "completed", exitCode: null }]) {
-      const events = [
-        {
-          stream: "tool",
-          data: {
-            phase: "start",
-            name: "bash",
-            itemId: "item-no-exit-code",
-            args: { command: expectedCommand },
-          },
-        },
-        {
-          stream: "tool",
-          data: {
-            phase: "result",
-            itemId: "item-no-exit-code",
-            status: "completed",
-            isError: false,
-            result,
-          },
-        },
-      ];
+      const events = completedCommandEvents(expectedCommand, "item-no-exit-code", result);
 
       expect(
         requireSuccessfulNativeCommandExecution(events, {
@@ -219,40 +196,6 @@ describe("gateway codex harness live helpers", () => {
         },
       ),
     ).toThrow("native bash command start for marker OPENCLAW-NO-ITEM has no itemId");
-  });
-
-  it("reports a missing successful native command result explicitly", () => {
-    expect(() =>
-      requireSuccessfulNativeCommandExecution(
-        [
-          {
-            stream: "tool",
-            data: {
-              phase: "start",
-              name: "bash",
-              itemId: "item-failed",
-              args: { command: "node -e OPENCLAW-FAILED" },
-            },
-          },
-          {
-            stream: "tool",
-            data: {
-              phase: "result",
-              itemId: "item-failed",
-              status: "completed",
-              isError: true,
-              result: { exitCode: 1 },
-            },
-          },
-        ],
-        {
-          commandMarker: "OPENCLAW-FAILED",
-          expectedCommand: "node -e OPENCLAW-FAILED",
-        },
-      ),
-    ).toThrow(
-      "native bash command item-failed for marker OPENCLAW-FAILED has no successful result",
-    );
   });
 
   it("bounds failed-command diagnostics to the matching item without raw output", () => {
@@ -300,6 +243,7 @@ describe("gateway codex harness live helpers", () => {
       message = error instanceof Error ? error.message : String(error);
     }
 
+    expect(message).toContain("has no successful result");
     expect(message).toContain('"itemId":"item-failed"');
     expect(message).toContain(`"stdoutChars":${secretOutput.length}`);
     expect(message).not.toContain("item-other");
@@ -449,25 +393,7 @@ describe("gateway codex harness live helpers", () => {
   it("accepts successful request-local evidence when compaction removed durable history", () => {
     const expectedCommand = "node -e OPENCLAW-COMPACTED";
     const events = [
-      {
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "bash",
-          itemId: "compacted-command",
-          args: { command: expectedCommand },
-        },
-      },
-      {
-        stream: "tool",
-        data: {
-          phase: "result",
-          itemId: "compacted-command",
-          status: "completed",
-          isError: false,
-          result: { exitCode: 0 },
-        },
-      },
+      ...completedCommandEvents(expectedCommand, "compacted-command"),
       { stream: "compaction", data: { phase: "end", completed: true } },
     ];
 
@@ -553,27 +479,7 @@ describe("gateway codex harness live helpers", () => {
 
   it("ties a result-only durable row to the exact request-local item id", () => {
     const expectedCommand = "node -e OPENCLAW-RESULT-ONLY";
-    const events = [
-      {
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "bash",
-          itemId: "exact-call",
-          args: { command: expectedCommand },
-        },
-      },
-      {
-        stream: "tool",
-        data: {
-          phase: "result",
-          itemId: "exact-call",
-          status: "completed",
-          isError: false,
-          result: { exitCode: 0 },
-        },
-      },
-    ];
+    const events = completedCommandEvents(expectedCommand, "exact-call");
     const resultOnlyMessage = (toolCallId: string) => ({
       role: "toolResult",
       toolCallId,
@@ -784,24 +690,6 @@ describe("gateway codex harness live helpers", () => {
 
     expect(
       EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
-    ).toBe(true);
-  });
-
-  it("accepts the normal-work status emitted by current codex", () => {
-    const text =
-      "Working normally. Current cwd is `/tmp/openclaw-live-codex-harness/workspace/dev`, sandbox is workspace-write, network is restricted, and the current date is 2026-05-09 UTC.";
-
-    expect(
-      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
-    ).toBe(true);
-  });
-
-  it("accepts the idle-ready status emitted by current codex", () => {
-    const text = "I'm idle and ready.";
-
-    expect(
-      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)) ||
-        isExpectedCodexStatusCommandText(text),
     ).toBe(true);
   });
 

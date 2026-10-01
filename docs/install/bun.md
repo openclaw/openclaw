@@ -32,6 +32,8 @@ Bun remains usable as an optional package-script runner. The default package man
 
     Use Node by default for commands that launch OpenClaw.
 
+    When running from source under Bun, workers that reuse the current executable use Bun's native TypeScript support even if the executable has a custom filename. Workers that explicitly require Node keep their Node loader.
+
   </Step>
   <Step title="Run OpenClaw with Bun">
     To run onboarding under Bun and install the managed Gateway under Bun:

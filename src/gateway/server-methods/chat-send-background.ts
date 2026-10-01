@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -9,7 +9,6 @@ import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -21,19 +20,16 @@ export function resolveWebchatPromptCacheKey(params: {
   provider: string;
   sessionKey: string;
 }): string {
-  const digest = createHash("sha256")
-    .update(
-      [
-        "v1",
-        params.provider.trim().toLowerCase(),
-        params.model.trim(),
-        normalizeAgentId(params.agentId),
-        params.sessionKey,
-      ].join("\0"),
-      "utf8",
-    )
-    .digest("hex")
-    .slice(0, 32);
+  const digest = sha256HexPrefixCore(
+    [
+      "v1",
+      params.provider.trim().toLowerCase(),
+      params.model.trim(),
+      normalizeAgentId(params.agentId),
+      params.sessionKey,
+    ].join("\0"),
+    32,
+  );
   return `openclaw-webchat-${digest}`;
 }
 
@@ -44,12 +40,14 @@ type DashboardSessionTitleRequest = {
   context: GatewayRequestContext;
   request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage">;
   sessionKey: string;
-  sessionLoadOptions: Parameters<typeof loadSessionEntry>[1];
   storePath: string;
 };
 
-export function scheduleChatDashboardSessionTitle(params: DashboardSessionTitleRequest): void {
-  scheduleDashboardSessionTitle(params, "session");
+export function scheduleChatDashboardSessionTitle(
+  params: DashboardSessionTitleRequest,
+  ready: Promise<void>,
+): void {
+  scheduleDashboardSessionTitle(params, "session", ready);
 }
 
 export function scheduleCreatedDashboardSessionTitle(
@@ -77,7 +75,6 @@ export function scheduleCreatedDashboardSessionTitle(
       context,
       request: { rawMessage: titleSource, normalizedAttachments: [] },
       sessionKey: created.key,
-      sessionLoadOptions: { agentId: created.agentId },
       storePath: created.storePath,
     },
     "gateway",
@@ -87,6 +84,7 @@ export function scheduleCreatedDashboardSessionTitle(
 function scheduleDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
   admissionScope: "session" | "gateway",
+  ready?: Promise<void>,
 ): void {
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
@@ -99,14 +97,13 @@ function scheduleDashboardSessionTitle(
   }
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     const generateTitle = async () => {
-      const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
-      if (titleEntry?.sessionId !== params.admittedSessionId) {
-        return;
+      // Retain admission and the caller's context while reply progress releases the gate.
+      if (ready) {
+        await ready;
       }
       const updated = await maybeGenerateDashboardSessionTitle({
         cfg: params.cfg,
         agentId: params.agentId,
-        entry: titleEntry,
         sessionId: params.admittedSessionId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,

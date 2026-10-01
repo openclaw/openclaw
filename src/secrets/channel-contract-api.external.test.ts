@@ -82,10 +82,16 @@ module.exports = {
 `;
 }
 
-function writeExternalChannelPlugin(params: { pluginId: string; channelId: string }) {
+function writeExternalChannelPlugin(params: {
+  pluginId: string;
+  channelId: string;
+  directory?: string;
+}) {
   const rootDir = makeTrackedTempDir("openclaw-channel-secret-contract", tempDirs);
+  const contractDir = path.join(rootDir, params.directory ?? "");
+  fs.mkdirSync(contractDir, { recursive: true });
   fs.writeFileSync(
-    path.join(rootDir, "secret-contract-api.cjs"),
+    path.join(contractDir, "secret-contract-api.cjs"),
     channelSecretContractModuleSource(params.channelId),
     "utf8",
   );
@@ -110,24 +116,6 @@ describe("external channel secret contract api", () => {
     cleanupTrackedTempDirs(tempDirs);
   });
 
-  it("loads root secret-contract-api sidecars for external channel plugins", () => {
-    const record = writeExternalChannelPlugin({ pluginId: "discord", channelId: "discord" });
-    loadPluginMetadataSnapshotMock.mockReturnValue({
-      plugins: [record],
-    });
-
-    const api = loadChannelSecretContractApi({
-      channelId: "discord",
-      config: { channels: { discord: {} } },
-      env: {},
-      loadablePluginOrigins: new Map([["discord", "global"]]),
-    });
-
-    const contractApi = requireChannelSecretContractApi(api);
-    expectDiscordTokenRegistryEntry(contractApi);
-    expect(contractApi.collectRuntimeConfigAssignments).toBeTypeOf("function");
-  });
-
   it("keeps a healthy external contract available when another artifact fails to load", () => {
     const broken = writeExternalChannelPlugin({ pluginId: "custom", channelId: "custom" });
     const healthy = writeExternalChannelPlugin({ pluginId: "custom-alt", channelId: "custom" });
@@ -145,20 +133,11 @@ describe("external channel secret contract api", () => {
   });
 
   it("loads dist/ secret-contract-api sidecars for compiled npm-published external channel plugins", () => {
-    const rootDir = makeTrackedTempDir("openclaw-channel-secret-contract-dist", tempDirs);
-    fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
-    fs.writeFileSync(
-      path.join(rootDir, "dist", "secret-contract-api.cjs"),
-      channelSecretContractModuleSource("discord"),
-      "utf8",
-    );
-    const record = {
-      id: "discord",
-      origin: "global",
-      channels: ["discord"],
-      channelConfigs: {},
-      rootDir,
-    };
+    const record = writeExternalChannelPlugin({
+      pluginId: "discord",
+      channelId: "discord",
+      directory: "dist",
+    });
     loadPluginMetadataSnapshotMock.mockReturnValue({
       plugins: [record],
     });
@@ -178,23 +157,16 @@ describe("external channel secret contract api", () => {
   it.runIf(process.platform !== "win32")(
     "loads hardlinked external channel contracts when the plugin hardlink policy allows them",
     () => {
-      const rootDir = makeTrackedTempDir("openclaw-channel-secret-contract-hardlink", tempDirs);
+      const record = writeExternalChannelPlugin({ pluginId: "discord", channelId: "discord" });
       const outsideDir = makeTrackedTempDir(
         "openclaw-channel-secret-contract-hardlink-outside",
         tempDirs,
       );
-      const outsideContractPath = path.join(outsideDir, "secret-contract-api.cjs");
-      fs.writeFileSync(outsideContractPath, channelSecretContractModuleSource("discord"), "utf8");
-      fs.linkSync(outsideContractPath, path.join(rootDir, "secret-contract-api.cjs"));
+      fs.linkSync(
+        path.join(record.rootDir, "secret-contract-api.cjs"),
+        path.join(outsideDir, "secret-contract-api.cjs"),
+      );
       shouldRejectHardlinkedPluginFilesMock.mockReturnValue(false);
-
-      const record = {
-        id: "discord",
-        origin: "global",
-        channels: ["discord"],
-        channelConfigs: {},
-        rootDir,
-      };
       const env = { OPENCLAW_NIX_MODE: "1" };
       loadPluginMetadataSnapshotMock.mockReturnValue({
         plugins: [record],
@@ -209,7 +181,7 @@ describe("external channel secret contract api", () => {
 
       expect(shouldRejectHardlinkedPluginFilesMock).toHaveBeenCalledWith({
         origin: "global",
-        rootDir,
+        rootDir: record.rootDir,
         env,
       });
       const contractApi = requireChannelSecretContractApi(api);

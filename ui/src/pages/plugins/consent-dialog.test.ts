@@ -4,7 +4,7 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { i18n } from "../../i18n/index.ts";
-import { renderPluginConsentDialog } from "./consent-dialog.ts";
+import { renderArtTile, renderPluginConsentDialog } from "./consent-dialog.ts";
 import { createInspectResult } from "./plugins-page.test-support.ts";
 
 type ConsentProps = Parameters<typeof renderPluginConsentDialog>[0];
@@ -65,6 +65,7 @@ describe("renderPluginConsentDialog", () => {
       source: {
         kind: "git",
         spec: "https://***:***@example.com/calendar.git?token=***#main",
+        packageName: "@openclaw/calendar-plus",
         integrity: "0123456789abcdef0123456789abcdef01234567",
         integrityKind: "git-commit",
       },
@@ -72,7 +73,7 @@ describe("renderPluginConsentDialog", () => {
       integrityLabel: "Commit: 0123456789abcdef0123…",
     },
   ] as const)(
-    "presents capabilities, grants, safe $source.kind provenance, and trust before install",
+    "presents capabilities, grants, safe $source.kind provenance, and trust before enablement",
     ({ source, provenance, integrityLabel }) => {
       const inspection = createInspectResult({
         plugin: {
@@ -80,7 +81,7 @@ describe("renderPluginConsentDialog", () => {
           name: "Calendar Plus",
           version: "2.0.0",
           origin: "global",
-          installed: false,
+          installed: true,
           enabled: false,
         },
         source,
@@ -114,9 +115,9 @@ describe("renderPluginConsentDialog", () => {
       const container = mount({
         consent: {
           intent: {
-            kind: "install",
-            request: { source: "clawhub", packageName: "@openclaw/calendar-plus" },
-            installIdentity: "plugin:calendar-runtime",
+            kind: "enable",
+            pluginId: "calendar-runtime",
+            rowKey: "plugin:calendar-runtime",
           },
           pluginId: "calendar-runtime",
           fallback: { name: "Calendar Plus", version: "2.0.0" },
@@ -125,7 +126,7 @@ describe("renderPluginConsentDialog", () => {
         onConfirm,
       });
 
-      const dialog = container.querySelector('[data-plugin-consent="install"]');
+      const dialog = container.querySelector('[data-plugin-consent="enable"]');
       const text = normalizedText(dialog);
       for (const value of [
         "Calendar Plus",
@@ -150,7 +151,7 @@ describe("renderPluginConsentDialog", () => {
         "Off by default for external plugins.",
         "Allowed models: model-a, model-b",
         "Subagent model overrides Model override: Allowed",
-        "Install Calendar Plus",
+        "Enable Calendar Plus",
       ]) {
         expect(text).toContain(value);
       }
@@ -220,9 +221,9 @@ describe("renderPluginConsentDialog", () => {
     const container = mount({
       consent: {
         intent: {
-          kind: "install",
-          request: { source: "clawhub", packageName: "community-calendar" },
-          installIdentity: "clawhub:community-calendar",
+          kind: "enable",
+          pluginId: "community-calendar",
+          rowKey: "plugin:community-calendar",
         },
         pluginId: null,
         fallback: {
@@ -234,7 +235,7 @@ describe("renderPluginConsentDialog", () => {
       inspection: null,
     });
 
-    const dialog = container.querySelector('[data-plugin-consent="install"]');
+    const dialog = container.querySelector('[data-plugin-consent="enable"]');
     expect(normalizedText(dialog)).toContain("Community Calendar");
     expect(normalizedText(dialog)).toContain(
       "Capability details must be available before you can approve this plugin.",
@@ -264,4 +265,27 @@ describe("renderPluginConsentDialog", () => {
     confirm?.click();
     expect(onConfirm).not.toHaveBeenCalled();
   });
+});
+
+it("tries the author image after a broken package image, then retains initials until the source changes", () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const tile = (url: string) =>
+    renderArtTile("lossless-claw", "Lossless Context Management", {
+      iconUrl: url,
+      authorIconUrl: "blob:author",
+    });
+  render(tile("blob:package"), container);
+  expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:package");
+  container.querySelector("img")!.dispatchEvent(new Event("error"));
+  expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:author");
+  container.querySelector("img")!.dispatchEvent(new Event("error"));
+  expect(container.querySelector("img")).toBeNull();
+  expect(container.textContent?.trim()).toBe("LC");
+  render(tile("blob:package"), container);
+  expect(container.querySelector("img")).toBeNull();
+  render(tile("blob:updated"), container);
+  expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:updated");
+  render(nothing, container);
+  container.remove();
 });

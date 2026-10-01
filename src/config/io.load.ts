@@ -1,8 +1,15 @@
+import { isMainThread } from "node:worker_threads";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { ConfigIoContext } from "./io.context.js";
+import {
+  resolveConfigIoEffect,
+  runConfigIoAsync,
+  runConfigIoSync,
+  type ConfigIoOperation,
+} from "./io.effects.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import {
   maybeRecoverSuspiciousConfigRead,
@@ -12,12 +19,13 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
-  maybeLoadDotEnvForConfig,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
+import { materializeConfigSnapshotDefaults } from "./io.snapshot-preparation.js";
 import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import {
@@ -25,7 +33,7 @@ import {
   warnIfConfigFromFuture,
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
-import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
 import {
@@ -33,74 +41,34 @@ import {
   validateConfigObjectWithPluginsAsync,
 } from "./validation.js";
 
-type ConfigLoadEffect = {
-  sync: () => void;
-  async: () => Promise<void>;
-};
-
-type ConfigLoadOperation<T> = Generator<ConfigLoadEffect, T, void>;
-
-function* resolveConfigLoadEffect<T>(effect: {
-  sync: () => T;
-  async: () => Promise<T>;
-}): ConfigLoadOperation<T> {
-  // Each driver completes the yielded effect before resuming this continuation.
-  let result!: T;
-  yield {
-    sync: () => {
-      result = effect.sync();
-    },
-    async: async () => {
-      result = await effect.async();
-    },
-  };
-  return result;
-}
+type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
 
 export function loadConfigFromContext(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean } = {},
+  options: ConfigLoadOptions = {},
 ): OpenClawConfig {
-  const operation = loadConfigWithEffects(context, options);
-  let step = operation.next();
-  while (!step.done) {
-    try {
-      step.value.sync();
-      step = operation.next();
-    } catch (error) {
-      step = operation.throw(error);
-    }
-  }
-  return step.value;
+  return runConfigIoSync(loadConfigWithEffects(context, options), options.assertCurrent);
 }
 
 export async function loadConfigFromContextAsync(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void } = {},
+  options: ConfigLoadOptions = {},
 ): Promise<OpenClawConfig> {
-  const operation = loadConfigWithEffects(context, options);
-  let step = operation.next();
-  while (!step.done) {
-    try {
-      options.assertCurrent?.();
-      await step.value.async();
-      options.assertCurrent?.();
-      step = operation.next();
-    } catch (error) {
-      step = operation.throw(error);
-    }
+  // SDK callers already inside a worker use the same effects without a host broker.
+  if (!isMainThread) {
+    return loadConfigFromContext(context, options);
   }
-  return step.value;
+  return await runConfigIoAsync(loadConfigWithEffects(context, options), options.assertCurrent);
 }
 
 function* loadConfigWithEffects(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void },
-): ConfigLoadOperation<OpenClawConfig> {
+  options: ConfigLoadOptions,
+): ConfigIoOperation<OpenClawConfig> {
   const { deps, configPath, pathResolution } = context;
   let envBeforeRead: Record<string, string | undefined> | undefined;
   try {
-    yield* resolveConfigLoadEffect({
+    yield* resolveConfigIoEffect({
       sync: () => maybeLoadDotEnvForConfig(deps.env),
       async: async () => {
         if (deps.env === process.env) {
@@ -109,7 +77,7 @@ function* loadConfigWithEffects(
       },
     });
     envBeforeRead = snapshotEnv(deps.env);
-    const exists = yield* resolveConfigLoadEffect({
+    const exists = yield* resolveConfigIoEffect({
       sync: () => deps.fs.existsSync(configPath),
       async: () =>
         deps.fs.promises.access(configPath).then(
@@ -124,17 +92,10 @@ function* loadConfigWithEffects(
       // (compaction safeguard, session/cron defaults) silently diverges.
       const config = coerceConfig(migratePersistedImplicitMainRoster({}).config);
       const metadata = context.createValidationPluginMetadataSnapshotLoader({
-        effectiveConfigRaw: config,
         env: deps.env,
       });
-      const materialized = yield* resolveConfigLoadEffect({
-        sync: () =>
-          materializeRuntimeConfig(config, {
-            ...pathResolution,
-            ...(context.options.pluginValidation === "core-only"
-              ? { manifestRegistry: { plugins: [] } }
-              : { loadManifestRegistry: () => metadata.load(config).manifestRegistry }),
-          }),
+      const materialized = yield* resolveConfigIoEffect({
+        sync: () => materializeConfigSnapshotDefaults(context, config, metadata),
         async: async () =>
           materializeRuntimeConfig(config, {
             ...pathResolution,
@@ -144,13 +105,13 @@ function* loadConfigWithEffects(
                 : (await metadata.loadAsync(config)).manifestRegistry,
           }),
       });
-      return yield* resolveConfigLoadEffect({
+      return yield* resolveConfigIoEffect({
         sync: () => context.finalizeLoadedRuntimeConfig(materialized),
         async: () =>
           context.finalizeLoadedRuntimeConfigAsync(materialized, metadata, options.assertCurrent),
       });
     }
-    const raw = yield* resolveConfigLoadEffect({
+    const raw = yield* resolveConfigIoEffect({
       sync: () => deps.fs.readFileSync(configPath, "utf-8"),
       async: () => deps.fs.promises.readFile(configPath, "utf-8"),
     });
@@ -160,37 +121,27 @@ function* loadConfigWithEffects(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const contextBudgetMigration = migrateLegacyContextBudgetConfig(
-      readResolution.resolvedConfigRaw,
-    );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw, {
       env: deps.env,
       homedir: deps.homedir,
     });
     const effectiveConfigRaw = rosterMigration.config;
-    const validationConfigRaw = effectiveConfigRaw;
-    const snapshotRaw = raw;
-    const snapshotParsed = parsed;
-    const hash = hashConfigRaw(snapshotRaw);
+    const hash = hashConfigRaw(raw);
     for (const warning of readResolution.envWarnings) {
       deps.logger.warn(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
     }
-    for (const diagnostic of [
-      ...contextBudgetMigration.changes.map(({ message }) => message),
-      ...contextBudgetMigration.warnings.map(({ message }) => message),
-      ...rosterMigration.diagnostics,
-    ]) {
+    for (const diagnostic of rosterMigration.diagnostics) {
       deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
-    warnOnConfigMiskeys(validationConfigRaw, deps.logger);
+    warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
     // A scalar/null root (truncated or clobbered file) must fail validation
     // below like any invalid config — never load as an empty config marked
     // valid, which would run with defaults and poison lastKnownGood.
-    if (typeof validationConfigRaw === "object" && validationConfigRaw !== null) {
+    if (typeof effectiveConfigRaw === "object" && effectiveConfigRaw !== null) {
       const duplicates = findDuplicateAgentDirs(
-        validationConfigRaw as OpenClawConfig,
+        effectiveConfigRaw as OpenClawConfig,
         pathResolution,
       );
       if (duplicates.length > 0) {
@@ -198,22 +149,21 @@ function* loadConfigWithEffects(
       }
     }
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw,
       env: deps.env,
     });
     const validationParams = {
       ...pathResolution,
       pluginValidation: context.options.pluginValidation,
-      sourceRaw: snapshotParsed,
+      sourceRaw: parsed,
       preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
     };
-    const { deferredPluginMigrations, validated } = yield* resolveConfigLoadEffect({
+    const { deferredPluginMigrations, validated } = yield* resolveConfigIoEffect({
       sync: () =>
         withSynchronousArtifactPreservingStateSnapshot(() => {
           const pending = context.resolveDeferredPluginMigrations();
           return {
             deferredPluginMigrations: pending,
-            validated: validateConfigObjectWithPlugins(validationConfigRaw, {
+            validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
               ...validationParams,
               deferredPluginMigrations: pending,
               loadPluginMetadataSnapshot: pluginMetadata.load,
@@ -224,7 +174,7 @@ function* loadConfigWithEffects(
         const pending = await context.resolveDeferredPluginMigrationsAsync();
         return {
           deferredPluginMigrations: pending,
-          validated: await validateConfigObjectWithPluginsAsync(validationConfigRaw, {
+          validated: await validateConfigObjectWithPluginsAsync(effectiveConfigRaw, {
             ...validationParams,
             deferredPluginMigrations: pending,
             loadPluginMetadataSnapshotAsync: pluginMetadata.loadAsync,
@@ -236,8 +186,8 @@ function* loadConfigWithEffects(
       const invalidSnapshot = createConfigFileSnapshot({
         path: configPath,
         exists: true,
-        raw: snapshotRaw,
-        parsed: snapshotParsed,
+        raw,
+        parsed,
         sourceConfig: coerceConfig(effectiveConfigRaw),
         valid: false,
         runtimeConfig: coerceConfig(effectiveConfigRaw),
@@ -248,7 +198,7 @@ function* loadConfigWithEffects(
         resolutionFacts: readResolution.resolutionFacts,
         legacyIssues: [],
       });
-      yield* resolveConfigLoadEffect({
+      yield* resolveConfigIoEffect({
         sync: () => context.observeLoadConfigSnapshot(invalidSnapshot),
         async: () => context.observeLoadConfigSnapshotAsync(invalidSnapshot, options.assertCurrent),
       });
@@ -277,7 +227,7 @@ function* loadConfigWithEffects(
         parsed,
         prepareBackup: context.prepareRecoveryBackupCandidate,
       };
-      const recovery = yield* resolveConfigLoadEffect({
+      const recovery = yield* resolveConfigIoEffect({
         sync: () => maybeRecoverSuspiciousConfigReadSync(recoveryParams),
         async: () =>
           maybeRecoverSuspiciousConfigRead({
@@ -300,13 +250,13 @@ function* loadConfigWithEffects(
       manifestRegistry:
         context.options.pluginValidation === "core-only"
           ? { plugins: [] }
-          : pluginMetadata.getManifestRegistry(),
+          : pluginMetadata.getSnapshot()?.manifestRegistry,
     });
     const snapshot = createConfigFileSnapshot({
       path: configPath,
       exists: true,
-      raw: snapshotRaw,
-      parsed: snapshotParsed,
+      raw,
+      parsed,
       sourceConfig: coerceConfig(effectiveConfigRaw),
       valid: true,
       runtimeConfig: cfg,
@@ -317,11 +267,11 @@ function* loadConfigWithEffects(
       resolutionFacts: readResolution.resolutionFacts,
       legacyIssues: [],
     });
-    yield* resolveConfigLoadEffect({
+    yield* resolveConfigIoEffect({
       sync: () => context.observeLoadConfigSnapshot(snapshot),
       async: () => context.observeLoadConfigSnapshotAsync(snapshot, options.assertCurrent),
     });
-    return yield* resolveConfigLoadEffect({
+    return yield* resolveConfigIoEffect({
       sync: () => context.finalizeLoadedRuntimeConfig(cfg),
       async: () =>
         context.finalizeLoadedRuntimeConfigAsync(cfg, pluginMetadata, options.assertCurrent),

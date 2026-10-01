@@ -6,6 +6,7 @@ import {
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import {
   activityPolishFixture,
   activityPolishImages,
@@ -75,6 +76,14 @@ suite.define(() => {
         });
         const thumbnails = row.locator(".chat-message-image-button");
         await expect.poll(() => thumbnails.count()).toBe(4);
+        await thumbnails.first().focus();
+        for (let index = 1; index < 4; index++) {
+          await page.keyboard.press("Tab");
+          expect(
+            await thumbnails.nth(index).evaluate((element) => element === document.activeElement),
+          ).toBe(true);
+        }
+        await expect.poll(() => thumbnails.locator("img").count()).toBe(4);
         await expect
           .poll(() =>
             thumbnails
@@ -223,9 +232,7 @@ suite.define(() => {
             "Testing focus behavior",
           );
           expect(
-            await recap(activityPolishKeys.updating)
-              .locator(".activity-feed__recap-feedback")
-              .count(),
+            await recap(activityPolishKeys.updating).locator(".activity-feed__note").count(),
           ).toBe(0);
           expect(await recap(activityPolishKeys.unavailable).textContent()).toContain(
             "Couldn’t refresh recap",
@@ -273,10 +280,10 @@ suite.define(() => {
           ).toBeLessThanOrEqual(1);
           expect(boxes.every((box) => box.height <= 80 && box.width <= 128)).toBe(true);
           await pr.focus();
-          const card = page.locator(".github-link-hovercard");
+          const card = page.locator(".link-reader-hovercard");
           await expect.poll(() => card.textContent()).toContain(activityPolishPullRequest.title);
-          await gateway.waitForRequest("controlUi.githubPreview");
-          await gateway.rejectDeferred("controlUi.githubPreview", {
+          await gateway.waitForRequest(TEST_LINK_READER.linkReader.previewMethod!);
+          await gateway.rejectDeferred(TEST_LINK_READER.linkReader.previewMethod!, {
             code: "UNAVAILABLE",
             message: "Preview enrichment unavailable",
           });

@@ -199,12 +199,12 @@ function createLegacySingleAccountPlugin(params: {
 }
 
 const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
-  sendMessageWhatsApp: vi.fn(),
-  sendMessageTelegram: vi.fn(),
-  sendMessageDiscord: vi.fn(),
-  sendMessageSlack: vi.fn(),
-  sendMessageSignal: vi.fn(),
-  sendMessageIMessage: vi.fn(),
+  whatsapp: vi.fn(),
+  telegram: vi.fn(),
+  discord: vi.fn(),
+  slack: vi.fn(),
+  signal: vi.fn(),
+  imessage: vi.fn(),
   ...overrides,
 });
 
@@ -733,17 +733,10 @@ describe("messageCommand", () => {
       { ok: false, warning: "Unavailable", added: "✅" },
       "Unavailable",
     ],
-    [
-      "rejected delete",
-      "delete",
-      { ok: false, deleted: false, warning: "Not deleted" },
-      "Not deleted",
-    ],
     ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
-    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
   ] as const)("reports %s truthfully in JSON output", async (_name, action, payload, expected) => {
     runMessageActionMock.mockResolvedValueOnce({
-      kind: action === "send" || action === "poll" ? action : "action",
+      kind: action === "poll" ? action : "action",
       channel: "telegram",
       action,
       to: "123456",

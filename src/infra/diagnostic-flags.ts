@@ -1,35 +1,9 @@
-// Resolves diagnostics feature flags from config and environment.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
 
 const DIAGNOSTICS_ENV = "OPENCLAW_DIAGNOSTICS";
-
-type ParsedEnvFlags = {
-  flags: string[];
-  disablesAll: boolean;
-};
-
-function parseEnvFlags(raw?: string): ParsedEnvFlags {
-  if (!raw) {
-    return { flags: [], disablesAll: false };
-  }
-  const trimmed = raw.trim();
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (!lowered) {
-    return { flags: [], disablesAll: false };
-  }
-  if (["0", "false", "off", "none"].includes(lowered)) {
-    return { flags: [], disablesAll: true };
-  }
-  if (["1", "true", "all", "*"].includes(lowered)) {
-    return { flags: ["*"], disablesAll: false };
-  }
-  return {
-    flags: trimmed.split(/[,\s]+/),
-    disablesAll: false,
-  };
-}
 
 /** Resolves enabled diagnostic flags from config plus `OPENCLAW_DIAGNOSTICS` overrides. */
 export function resolveDiagnosticFlags(
@@ -37,7 +11,7 @@ export function resolveDiagnosticFlags(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const configFlags = Array.isArray(cfg?.diagnostics?.flags) ? cfg?.diagnostics?.flags : [];
-  const envFlags = parseEnvFlags(env[DIAGNOSTICS_ENV]);
+  const envFlags = parseDiagnosticEnvFlags(env[DIAGNOSTICS_ENV]);
   if (envFlags.disablesAll) {
     return [];
   }
@@ -52,9 +26,6 @@ export function matchesDiagnosticFlag(flag: string, enabledFlags: string[]): boo
   }
   for (const raw of enabledFlags) {
     const enabled = normalizeLowercaseStringOrEmpty(raw);
-    if (!enabled) {
-      continue;
-    }
     if (enabled === "*" || enabled === "all") {
       return true;
     }
@@ -83,6 +54,5 @@ export function isDiagnosticFlagEnabled(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const flags = resolveDiagnosticFlags(cfg, env);
-  return matchesDiagnosticFlag(flag, flags);
+  return matchesDiagnosticFlag(flag, resolveDiagnosticFlags(cfg, env));
 }

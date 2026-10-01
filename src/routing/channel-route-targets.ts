@@ -1,4 +1,3 @@
-// Channel route target helpers normalize channel route targets for delivery.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
@@ -19,10 +18,6 @@ const CHANNELS_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
 
 function normalizeConfiguredChannelKey(raw?: string | null): string {
   return normalizeChatChannelId(raw) ?? normalizeLowercaseStringOrEmpty(raw);
-}
-
-function normalizeRouteBindingChannelKey(raw?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(raw);
 }
 
 function listConfiguredChannelIds(cfg: OpenClawConfig): string[] {
@@ -73,7 +68,7 @@ export function collectChannelRouteTargets(cfg: OpenClawConfig): ChannelRouteTar
   const byAgent = new Map<string, Set<string>>();
 
   for (const binding of listRouteBindings(cfg)) {
-    addTarget(byAgent, binding.agentId, normalizeRouteBindingChannelKey(binding.match.channel));
+    addTarget(byAgent, binding.agentId, normalizeLowercaseStringOrEmpty(binding.match.channel));
   }
 
   for (const channel of listConfiguredChannelIds(cfg)) {

@@ -14,8 +14,13 @@ import {
   resolveForceKillDelayMs,
   resolveSpawnCommand,
 } from "../../scripts/run-with-env.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import { withinTest, withTestTimeout } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 // These subprocess fixtures expose explicit ready files. Cold tsx startup can exceed a few
@@ -48,9 +53,7 @@ function spawnWrapperFixture(
   const wrapper = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
-      "scripts/run-with-env.mts",
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
       ...assignments,
       "--",
       "node",
@@ -88,8 +91,9 @@ function spawnWrapperFixture(
 
   return {
     signal,
-    async waitForExit() {
-      const exit = await withTestTimeout(completion, 3_000, "timed out waiting for wrapper close");
+    async waitForExit(testSignal: AbortSignal) {
+      // Bind the body wait so a stall still reaches the fixture's process cleanup.
+      const exit = await withinTest(completion, testSignal);
       if (childError) {
         throw childError;
       }
@@ -101,7 +105,7 @@ function spawnWrapperFixture(
       if (!closed && !shutdownRequested) {
         signal("SIGTERM");
       }
-      // The assertion's exit wait still rejects; teardown owns bounded escalation.
+      // Bound the shutdown grace so a stuck wrapper still reaches SIGKILL below.
       await withTestTimeout(completion, 3_000, "wrapper still draining").catch(() => undefined);
       // The wrapper owns tsx helper processes in its group; the wrapped command
       // creates a separate group whose identity is recorded by the fixture.
@@ -136,11 +140,7 @@ function spawnWrapperFixture(
           5_000,
         );
       }
-      await withTestTimeout(
-        completion,
-        5_000,
-        `wrapper did not close; retained fixture: ${tempDir}`,
-      );
+      await completion;
       if (wrapper.pid) {
         await waitFor(
           () => inspectManagedProcessGroup(wrapper, { errorPolicy: "indeterminate" }) === "dead",
@@ -192,7 +192,10 @@ describe("run-with-env", () => {
   it("prints wrapper help without spawning a command", () => {
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "scripts/run-with-env.mts", "--help"],
+      [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
+        "--help",
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -214,9 +217,7 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        "scripts/run-with-env.mts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "1INVALID=value",
         "--",
         "node",
@@ -282,9 +283,7 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        "scripts/run-with-env.mts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",
@@ -305,9 +304,9 @@ describe("run-with-env", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP", "SIGINT"] as const)(
+  it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP", "SIGINT"] as const)(
     "forwards parent %s to the wrapped command",
-    async (signal) => {
+    async (parentSignal, { signal }) => {
       const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-signals-"));
       const readyFile = path.join(tempDir, "ready");
       const signaledFile = path.join(tempDir, "signaled");
@@ -332,18 +331,18 @@ describe("run-with-env", () => {
 
       await runQaGatewayFixture(async () => {
         await waitFor(() => existsSync(readyFile), "wrapped command readiness");
-        fixture.signal(signal);
+        fixture.signal(parentSignal);
 
-        const exit = await fixture.waitForExit();
-        expect(exit).toEqual({ code: null, signal });
-        expect(readFileSync(signaledFile, "utf8")).toBe(signal);
+        const exit = await fixture.waitForExit(signal);
+        expect(exit).toEqual({ code: null, signal: parentSignal });
+        expect(readFileSync(signaledFile, "utf8")).toBe(parentSignal);
       }, fixture.cleanup);
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "cleans up wrapped command descendants on wrapper shutdown",
-    async () => {
+    async ({ signal }) => {
       const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-descendants-"));
       const readyFile = path.join(tempDir, "ready");
       const grandchildReadyFile = path.join(tempDir, "grandchild-ready");
@@ -386,7 +385,7 @@ describe("run-with-env", () => {
         expect(isProcessAlive(grandchildPid)).toBe(true);
 
         fixture.signal("SIGTERM");
-        const exit = await fixture.waitForExit();
+        const exit = await fixture.waitForExit(signal);
         expect(exit).toEqual({ code: null, signal: "SIGTERM" });
         await waitFor(
           () => !isProcessAlive(grandchildPid),
@@ -399,7 +398,7 @@ describe("run-with-env", () => {
 
   it.runIf(process.platform !== "win32")(
     "lets wrapped command descendants finish during the shutdown grace period",
-    async () => {
+    async ({ signal }) => {
       const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-grace-"));
       const readyFile = path.join(tempDir, "ready");
       const gracefulFile = path.join(tempDir, "graceful");
@@ -445,7 +444,7 @@ describe("run-with-env", () => {
         );
         fixture.signal("SIGTERM");
 
-        const exit = await fixture.waitForExit();
+        const exit = await fixture.waitForExit(signal);
         expect(exit).toEqual({ code: null, signal: "SIGTERM" });
         expect(readFileSync(gracefulFile, "utf8")).toBe("done");
       }, fixture.cleanup);
@@ -456,9 +455,7 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        "scripts/run-with-env.mts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",
@@ -476,9 +473,7 @@ describe("run-with-env", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        "scripts/run-with-env.mts",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",

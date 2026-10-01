@@ -10,6 +10,7 @@ import {
 } from "./candidate-stores.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
+import { isSafeToCopyOAuthRoutingScope } from "./oauth-identity.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
 import {
   createFailedOAuthRefreshFence,
@@ -139,6 +140,8 @@ export async function fenceOAuthRefreshPeers(params: {
   generation: OAuthCredential;
   fence: OAuthCredential;
   rollbackOnFailure?: boolean;
+  /** Register before CAS; release the provisional observation if another owner wins. */
+  onFence?: (databasePath: string) => () => void;
 }): Promise<OAuthRefreshPeerClaim[]> {
   const claims: OAuthRefreshPeerClaim[] = [];
   try {
@@ -152,6 +155,7 @@ export async function fenceOAuthRefreshPeers(params: {
         continue;
       }
       if (isExactOAuthCredential(credential, params.fence)) {
+        params.onFence?.(candidate.databasePath);
         claims.push({ candidate });
         continue;
       }
@@ -174,6 +178,7 @@ export async function fenceOAuthRefreshPeers(params: {
       }
       let claimed = false;
       const original = { ...credential };
+      const releaseUnclaimedObservation = params.onFence?.(candidate.databasePath);
       const updated = updateCandidateAuthProfileStore({
         candidate,
         profileId: params.profileId,
@@ -193,6 +198,7 @@ export async function fenceOAuthRefreshPeers(params: {
           claims.push({ candidate });
           continue;
         }
+        releaseUnclaimedObservation?.();
         if (current?.type === "oauth") {
           assertCredentialAllowsClaim({
             candidate,
@@ -342,6 +348,7 @@ export function settleOAuthRefreshPeerClaims(params: {
             claim.original !== undefined &&
             inherited !== undefined &&
             inherited.provider === claim.original.provider &&
+            isSafeToCopyOAuthRoutingScope(claim.original, inherited) &&
             hasUsableOAuthCredential(inherited) &&
             (hasMatchingOAuthIdentity(claim.original, inherited) ||
               (!hasOAuthIdentity(claim.original) &&
@@ -396,14 +403,22 @@ export function failOAuthRefreshPeerClaims(params: {
   }
 }
 
-/** Remove one owner generation and its exact nonportable historical peers. */
-export async function removeOAuthRefreshGenerationPeers(params: {
+export type OAuthRefreshGenerationPeer = {
+  candidate: CandidateAuthProfileStore;
+  profileId: string;
+  credential: OAuthCredential;
+  generation: OAuthCredential;
+};
+
+/** Capture exact historical peers before removal updates their config references. */
+export async function listOAuthRefreshGenerationPeers(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;
-}): Promise<void> {
+}): Promise<OAuthRefreshGenerationPeer[]> {
+  const peers: OAuthRefreshGenerationPeer[] = [];
   for (const candidate of await listPeerCandidates(params)) {
     const store = loadCandidateAuthProfileStore(candidate);
     if (!store) {
@@ -422,12 +437,27 @@ export async function removeOAuthRefreshGenerationPeers(params: {
     if (!removable) {
       continue;
     }
+    peers.push({
+      candidate,
+      profileId: params.profileId,
+      credential,
+      generation: params.generation,
+    });
+  }
+  return peers;
+}
+
+/** Remove only captured generations; a reconnect during config cleanup survives. */
+export function removeOAuthRefreshGenerationPeers(
+  peers: readonly OAuthRefreshGenerationPeer[],
+): void {
+  for (const { candidate, profileId, credential, generation } of peers) {
     updateCandidateAuthProfileStore({
       candidate,
       preserveProfileState: true,
-      profileId: params.profileId,
+      profileId,
       updater: (currentStore) => {
-        const current = currentStore.profiles[params.profileId];
+        const current = currentStore.profiles[profileId];
         if (current?.type !== "oauth") {
           return false;
         }
@@ -435,14 +465,14 @@ export async function removeOAuthRefreshGenerationPeers(params: {
           !isExactOAuthCredential(current, credential) ||
           !isRemovableOAuthRefreshPeer({
             store: currentStore,
-            profileId: params.profileId,
+            profileId,
             credential: current,
-            generation: params.generation,
+            generation,
           })
         ) {
           return false;
         }
-        delete currentStore.profiles[params.profileId];
+        delete currentStore.profiles[profileId];
         return true;
       },
     });

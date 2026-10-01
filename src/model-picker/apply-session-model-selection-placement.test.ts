@@ -20,8 +20,11 @@ const runtimeChoiceMocks = vi.hoisted(() => ({
 
 // Runtime eligibility belongs to its owner; exercise its commit guard here.
 vi.mock("../agents/model-runtime-choice.js", () => ({
-  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
     kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
     validate: runtimeChoiceMocks.validate,
   })),
 }));
@@ -50,7 +53,7 @@ vi.mock("../logging/subsystem.js", factories.logging);
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
 vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
 
-import { applySessionModelSelection } from "./apply-session-model-selection.js";
+import { applySessionModelSelectionInternal as applySessionModelSelection } from "./apply-session-model-selection.js";
 
 const { createEntry, createParams } = createModelSelectionInputs();
 

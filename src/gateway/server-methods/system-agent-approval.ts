@@ -57,7 +57,7 @@ async function retireSystemAgentProposal(
     if (pending?.proposalHash === proposalHash) {
       // Retire the exact local owner before closing its record; storage failure cannot retain it.
       session.pendingApproval = undefined;
-      manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+      await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
     }
   } finally {
     await session.engine.resolveOperatorApproval(null, proposalHash, undefined, "cancelled");
@@ -73,8 +73,8 @@ async function reconcileSystemAgentApproval(
   if (!pending) {
     return undefined;
   }
-  const closed = manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
-  const snapshot = manager?.getSnapshot(pending.id);
+  const closed = await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+  const snapshot = await manager?.getSnapshot(pending.id);
   if (
     !closed &&
     snapshot &&
@@ -213,6 +213,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       ): Promise<Awaited<ReturnType<DelegatedProposalResolver>> | undefined> => {
         if (
           proposal.operation.kind !== "config-set" &&
+          proposal.operation.kind !== "config-unset" &&
           proposal.operation.kind !== "config-set-ref"
         ) {
           return undefined;
@@ -300,7 +301,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (callerIdentity?.approvalSignals?.length) {
         record.approvalSignals = callerIdentity.approvalSignals;
       }
-      void manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
+      await manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
       const requestEvent = buildRequestedApprovalEvent(record, "system-agent");
       const publishApplicationResult = (
         decision: ExecApprovalDecision,
@@ -321,6 +322,13 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           event: resolvedEvent,
         });
         params.context.approvalEvents?.publishResolved("system-agent", resolvedEvent);
+        void params.context
+          .forwardSystemAgentApprovalResolved?.(resolvedEvent)
+          .catch((error: unknown) => {
+            params.context.logGateway?.error?.(
+              `OpenClaw approval chat resolution failed: ${String(error)}`,
+            );
+          });
       };
       void handlePendingApprovalRequest({
         manager,
@@ -331,7 +339,20 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         requestEvent,
         twoPhase: true,
         approvalKind: "system-agent",
-        deliverRequest: () => false,
+        // Native cards own their channels; the forwarder answers every other
+        // requesting chat with a `/approve` fallback, so the user can decide in chat.
+        deliverRequest: async () => {
+          try {
+            return (
+              (await params.context.forwardSystemAgentApprovalRequest?.(requestEvent)) ?? false
+            );
+          } catch (error) {
+            params.context.logGateway?.error?.(
+              `OpenClaw approval chat delivery failed: ${String(error)}`,
+            );
+            return false;
+          }
+        },
         keepPendingWithoutRoute: true,
         requireDeliveryRoute: false,
         afterDecision: async (decision) => {

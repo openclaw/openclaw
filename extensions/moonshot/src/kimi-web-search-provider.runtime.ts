@@ -1,6 +1,6 @@
-// Moonshot provider module implements model/runtime integration.
 import {
   createProviderHttpError,
+  normalizeBaseUrl,
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -25,9 +25,9 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
+  asNonArrayRecord,
   isRecord,
   normalizeOptionalString,
-  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNativeMoonshotBaseUrl,
@@ -89,11 +89,6 @@ function throwMalformedKimiResponse(): never {
   throw new Error("Kimi API error: malformed JSON response");
 }
 
-function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
-  const kimi = searchConfig?.kimi;
-  return kimi && typeof kimi === "object" && !Array.isArray(kimi) ? (kimi as KimiConfig) : {};
-}
-
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
     readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
@@ -101,24 +96,15 @@ function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   );
 }
 
-function resolveKimiModel(kimi?: KimiConfig): string {
-  const model = normalizeOptionalString(kimi?.model) ?? "";
-  return model || DEFAULT_KIMI_SEARCH_MODEL;
-}
-
-function trimTrailingSlashes(url: string): string {
-  return url.replace(/\/+$/, "");
-}
-
 function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig): string {
-  const explicitBaseUrl = normalizeOptionalString(kimi?.baseUrl) ?? "";
+  const explicitBaseUrl = normalizeOptionalString(kimi?.baseUrl);
   if (explicitBaseUrl) {
-    return trimTrailingSlashes(explicitBaseUrl) || DEFAULT_KIMI_BASE_URL;
+    return normalizeBaseUrl(explicitBaseUrl) || DEFAULT_KIMI_BASE_URL;
   }
 
   const moonshotBaseUrl = openClawConfig?.models?.providers?.moonshot?.baseUrl;
   if (typeof moonshotBaseUrl === "string") {
-    const normalizedMoonshotBaseUrl = trimTrailingSlashes(moonshotBaseUrl.trim());
+    const normalizedMoonshotBaseUrl = normalizeBaseUrl(moonshotBaseUrl);
     if (normalizedMoonshotBaseUrl && isNativeMoonshotBaseUrl(normalizedMoonshotBaseUrl)) {
       return normalizedMoonshotBaseUrl;
     }
@@ -136,14 +122,17 @@ function extractKimiMessageText(message: KimiMessage | undefined): string | unde
   return reasoning || undefined;
 }
 
-function extractKimiCitations(data: KimiSearchResponse): string[] {
+function collectKimiCitations(data: KimiSearchResponse, citations: Set<string>): void {
   const searchResults = data.search_results ?? [];
   if (!Array.isArray(searchResults)) {
     throwMalformedKimiResponse();
   }
-  const citations = searchResults
-    .map((entry) => (isRecord(entry) && typeof entry.url === "string" ? entry.url.trim() : ""))
-    .filter((url): url is string => Boolean(url));
+  for (const entry of searchResults) {
+    const url = isRecord(entry) && typeof entry.url === "string" ? entry.url.trim() : "";
+    if (url) {
+      citations.add(url);
+    }
+  }
 
   const choices = data.choices ?? [];
   if (!Array.isArray(choices)) {
@@ -170,20 +159,18 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
       };
       const parsedUrl = normalizeOptionalString(parsed.url);
       if (parsedUrl) {
-        citations.push(parsedUrl);
+        citations.add(parsedUrl);
       }
       for (const result of parsed.search_results ?? []) {
         const resultUrl = normalizeOptionalString(result.url);
         if (resultUrl) {
-          citations.push(resultUrl);
+          citations.add(resultUrl);
         }
       }
     } catch {
       // ignore malformed tool arguments
     }
   }
-
-  return uniqueStrings(citations);
 }
 
 function hasKimiSearchResults(data: KimiSearchResponse): boolean {
@@ -258,9 +245,7 @@ async function runKimiSearch(params: {
         if (hasKimiSearchResults(data)) {
           hasGroundingEvidence = true;
         }
-        for (const citation of extractKimiCitations(data)) {
-          collectedCitations.add(citation);
-        }
+        collectKimiCitations(data, collectedCitations);
         if (collectedCitations.size > 0) {
           hasGroundingEvidence = true;
         }
@@ -352,7 +337,7 @@ export async function executeKimiWebSearchProviderTool(
     return unsupportedResponse;
   }
 
-  const kimiConfig = resolveKimiConfig(searchConfig);
+  const kimiConfig: KimiConfig = asNonArrayRecord(searchConfig?.kimi);
   const apiKey = resolveKimiApiKey(kimiConfig);
   if (!apiKey) {
     return {
@@ -368,7 +353,7 @@ export async function executeKimiWebSearchProviderTool(
     max: MAX_SEARCH_COUNT,
     message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
   });
-  const model = resolveKimiModel(kimiConfig);
+  const model = normalizeOptionalString(kimiConfig.model) ?? DEFAULT_KIMI_SEARCH_MODEL;
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
   const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, model]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
@@ -421,12 +406,12 @@ export async function runKimiSearchProviderSetup(
   ctx: WebSearchProviderSetupContext,
 ): Promise<WebSearchProviderSetupContext["config"]> {
   const existingPluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
-  const existingBaseUrl = normalizeOptionalString(existingPluginConfig?.baseUrl) ?? "";
   // Normalize trailing slashes so initialValue matches canonical option values.
-  const normalizedBaseUrl = existingBaseUrl.replace(/\/+$/, "");
+  const normalizedBaseUrl = normalizeBaseUrl(
+    normalizeOptionalString(existingPluginConfig?.baseUrl),
+  );
   const existingModel = normalizeOptionalString(existingPluginConfig?.model) ?? "";
 
-  // Region selection (baseUrl)
   const isCustomBaseUrl = normalizedBaseUrl && !isNativeMoonshotBaseUrl(normalizedBaseUrl);
   const regionOptions: Array<{ value: string; label: string; hint?: string }> = [];
   if (isCustomBaseUrl) {
@@ -449,14 +434,11 @@ export async function runKimiSearchProviderSetup(
     },
   );
 
-  const regionChoice = await ctx.prompter.select<string>({
+  const baseUrl = await ctx.prompter.select<string>({
     message: "Kimi API region",
     options: regionOptions,
     initialValue: normalizedBaseUrl || MOONSHOT_BASE_URL,
   });
-  const baseUrl = regionChoice;
-
-  // Model selection
   const currentModelLabel = existingModel
     ? `Keep current (moonshot/${existingModel})`
     : `Use default (moonshot/${DEFAULT_KIMI_SEARCH_MODEL})`;
@@ -493,7 +475,6 @@ export async function runKimiSearchProviderSetup(
     model = modelChoice;
   }
 
-  // Write baseUrl and model into plugins.entries.moonshot.config.webSearch
   const next = { ...ctx.config };
   setProviderWebSearchPluginConfigValue(next, "moonshot", "baseUrl", baseUrl);
   setProviderWebSearchPluginConfigValue(next, "moonshot", "model", model);

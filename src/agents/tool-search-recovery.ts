@@ -17,13 +17,15 @@ function tokenizeLookupValue(input: string): Set<string> {
   return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
 }
 
-function scoreUnknownToolSuggestion(needle: string, entry: ToolSearchCatalogEntry): number {
-  const normalizedNeedle = needle.toLowerCase();
+function scoreUnknownToolSuggestion(
+  normalizedNeedle: string,
+  needleTokens: ReadonlySet<string>,
+  entry: ToolSearchCatalogEntry,
+): number {
   const name = entry.name.toLowerCase();
   const id = entry.id.toLowerCase();
   const label = (entry.label ?? "").toLowerCase();
   const description = entry.description.toLowerCase();
-  const needleTokens = tokenizeLookupValue(needle);
   const entryTokens = tokenizeLookupValue(
     `${entry.name} ${entry.id} ${entry.label ?? ""} ${entry.description}`,
   );
@@ -67,22 +69,22 @@ export function formatUnknownToolIdError(
   for (const entry of entries) {
     nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
   }
+  const normalizedNeedle = needle.toLowerCase();
+  const needleTokens = tokenizeLookupValue(needle);
   const suggestions = uniqueStrings(
     entries
       .map((entry) => ({
         value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
-        score: scoreUnknownToolSuggestion(needle, entry),
+        score: scoreUnknownToolSuggestion(normalizedNeedle, needleTokens, entry),
       }))
       .filter((candidate) => candidate.score > 0)
       .toSorted((a, b) => b.score - a.score || a.value.localeCompare(b.value))
       .map((candidate) => candidate.value),
   ).slice(0, 3);
   const recoveryText =
-    options.recoverySurface === "code-mode"
-      ? "Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name."
-      : options.recoverySurface === "catalog"
-        ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
-        : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
+    options.recoverySurface === "catalog"
+      ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
+      : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
   if (suggestions.length === 0) {
     return `Unknown tool id: ${needle}. ${recoveryText}`;
   }

@@ -7,14 +7,6 @@ import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
-import {
-  resolveThreadBindingIntroText,
-  resolveThreadBindingThreadName,
-} from "../../../channels/thread-bindings-messages.js";
-import {
-  resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingMaxAgeMsForChannel,
-} from "../../../channels/thread-bindings-policy.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -32,13 +24,11 @@ import {
 } from "../../model-selection.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
 import { persistAcpSpawnSessionFileBestEffort } from "./acp-spawn-requester.js";
+import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
-export function resolveAcpSessionMode(mode: "run" | "session"): AcpRuntimeSessionMode {
-  return mode === "session" ? "persistent" : "oneshot";
-}
 
 export async function resolveRuntimeCwdForAcpSpawn(params: {
   resolvedCwd?: string;
@@ -78,13 +68,6 @@ type AcpSpawnRuntimeOptions = {
   timeoutSeconds?: number;
 };
 
-function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
-  if (!runTimeoutSeconds) {
-    return undefined;
-  }
-  return Math.min(runTimeoutSeconds, ACP_RUNTIME_TIMEOUT_MAX_SECONDS);
-}
-
 export function resolveAcpSpawnRuntimeOptions(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -107,6 +90,7 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     cfg: params.cfg,
     agentId: policyAgentId,
     modelOverride: params.model,
+    modelRuntime: "acp",
   });
   const modelSelection = splitTrailingAuthProfile(rawModel ?? "");
   if (modelExplicit && modelSelection.profile) {
@@ -144,7 +128,9 @@ export function resolveAcpSpawnRuntimeOptions(params: {
           })
         : targetAgentConfig?.thinkingDefault;
   }
-  const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
+  const timeoutSeconds = params.runTimeoutSeconds
+    ? Math.min(params.runTimeoutSeconds, ACP_RUNTIME_TIMEOUT_MAX_SECONDS)
+    : undefined;
   const runtimeOptions =
     model || thinking || timeoutSeconds
       ? {
@@ -222,51 +208,22 @@ export async function bindPreparedAcpThread(params: {
   label?: string;
   preparedBinding: PreparedSpawnThreadBinding;
   initializedRuntime: AcpSpawnInitializedRuntime;
-}): Promise<{
-  binding: SessionBindingRecord;
-  sessionEntry: SessionEntry | undefined;
-}> {
-  const binding = await getSessionBindingService().bind({
-    targetSessionKey: params.sessionKey,
-    targetKind: "session",
-    conversation: {
-      channel: params.preparedBinding.channel,
-      accountId: params.preparedBinding.accountId,
-      conversationId: params.preparedBinding.conversationId,
-      ...(params.preparedBinding.parentConversationId
-        ? { parentConversationId: params.preparedBinding.parentConversationId }
-        : {}),
-    },
-    placement: params.preparedBinding.placement,
-    metadata: {
-      threadName: resolveThreadBindingThreadName({
-        agentId: params.targetAgentId,
-        label: params.label || params.targetAgentId,
-      }),
+}): Promise<SessionBindingRecord> {
+  const binding = await getSessionBindingService().bind(
+    buildSpawnThreadBinding({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      targetKind: "session",
       agentId: params.targetAgentId,
-      label: params.label || undefined,
-      boundBy: "system",
-      introText: resolveThreadBindingIntroText({
-        agentId: params.targetAgentId,
-        label: params.label || undefined,
-        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
-          cfg: params.cfg,
-          channel: params.preparedBinding.channel,
-          accountId: params.preparedBinding.accountId,
-        }),
-        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
-          cfg: params.cfg,
-          channel: params.preparedBinding.channel,
-          accountId: params.preparedBinding.accountId,
-        }),
-        sessionCwd: resolveAcpSessionCwd(params.initializedRuntime.initialized.meta),
-        sessionDetails: resolveAcpThreadSessionDetailLines({
-          sessionKey: params.sessionKey,
-          meta: params.initializedRuntime.initialized.meta,
-        }),
+      label: params.label,
+      binding: params.preparedBinding,
+      sessionCwd: resolveAcpSessionCwd(params.initializedRuntime.initialized.meta),
+      sessionDetails: resolveAcpThreadSessionDetailLines({
+        sessionKey: params.sessionKey,
+        meta: params.initializedRuntime.initialized.meta,
       }),
-    },
-  });
+    }),
+  );
   params.assertActive?.();
   if (!binding.conversation.conversationId) {
     throw new Error(
@@ -276,15 +233,14 @@ export async function bindPreparedAcpThread(params: {
     );
   }
 
-  let sessionEntry = params.initializedRuntime.sessionEntry;
   if (params.initializedRuntime.sessionId && params.preparedBinding.placement === "child") {
     const boundThreadId = normalizeOptionalString(binding.conversation.conversationId);
     if (boundThreadId) {
-      sessionEntry = await persistAcpSpawnSessionFileBestEffort({
+      await persistAcpSpawnSessionFileBestEffort({
         sessionId: params.initializedRuntime.sessionId,
         sessionKey: params.sessionKey,
         storePath: params.initializedRuntime.storePath,
-        sessionEntry,
+        sessionEntry: params.initializedRuntime.sessionEntry,
         agentId: params.targetAgentId,
         threadId: boundThreadId,
         stage: "thread-bind",
@@ -292,5 +248,5 @@ export async function bindPreparedAcpThread(params: {
     }
   }
 
-  return { binding, sessionEntry };
+  return binding;
 }

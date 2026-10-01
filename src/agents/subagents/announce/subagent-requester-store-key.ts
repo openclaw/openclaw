@@ -15,13 +15,7 @@ export function resolveRequesterStoreKey(
   explicitAgentId?: string,
 ): string {
   const raw = (requesterSessionKey ?? "").trim();
-  if (!raw) {
-    return raw;
-  }
-  if (raw === "global" || raw === "unknown") {
-    return raw;
-  }
-  if (raw.startsWith("agent:")) {
+  if (!raw || raw === "global" || raw === "unknown" || raw.startsWith("agent:")) {
     return raw;
   }
   const agentId = resolveSessionAgentId({

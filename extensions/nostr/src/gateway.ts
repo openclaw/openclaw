@@ -1,23 +1,21 @@
-// Nostr plugin module implements gateway behavior.
-import {
-  resolveStableChannelMessageIngress,
-  type StableChannelIngressIdentityParams,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   runPassiveAccountLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { PluginRuntime } from "../runtime-api.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
@@ -35,19 +33,9 @@ type NostrOutboundAdapter = Pick<
   sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
 const activeBuses = new Map<string, NostrBusHandle>();
-const ACCESS_GROUP_PREFIX = "accessGroup:";
 
 function normalizeRelayLifecycleKey(relay: string): string {
   return new URL(relay).toString();
-}
-
-function parseNostrAccessGroupAllowFromEntry(entry: string): string | null {
-  const trimmed = entry.trim();
-  if (!trimmed.startsWith(ACCESS_GROUP_PREFIX)) {
-    return null;
-  }
-  const name = trimmed.slice(ACCESS_GROUP_PREFIX.length).trim();
-  return name || null;
 }
 
 function normalizeNostrAllowEntry(entry: string): string | null {
@@ -58,7 +46,7 @@ function normalizeNostrAllowEntry(entry: string): string | null {
   if (trimmed === "*") {
     return "*";
   }
-  const accessGroup = parseNostrAccessGroupAllowFromEntry(trimmed);
+  const accessGroup = parseAccessGroupAllowFromEntry(trimmed);
   if (accessGroup) {
     return `accessGroup:${accessGroup}`;
   }
@@ -113,7 +101,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     rawBody: string,
     contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
   ) =>
-    await resolveStableChannelMessageIngress({
+    await channelRuntime.inbound.ingress.resolveStable({
       channelId: "nostr",
       accountId: account.accountId,
       identity: nostrIngressIdentity,
@@ -186,7 +174,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             return;
           }
 
-          const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
+          const { dispatchInboundDirectDm } = await import("openclaw/plugin-sdk/channel-inbound");
           await dispatchInboundDirectDm({
             channelRuntime,
             resolveChannelIngress: async (contextBinding) => {
@@ -219,13 +207,9 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             turnAdoptionLifecycle:
               bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
             deliver: async (payload) => {
-              const outboundText =
-                payload && typeof payload === "object" && "text" in payload
-                  ? ((payload as { text?: string }).text ?? "")
-                  : "";
               // Inbound DM replies bypass the outbound adapter; sanitize before
               // Markdown conversion so private tool traces cannot reach a relay.
-              const sanitizedText = sanitizeAssistantVisibleText(outboundText);
+              const sanitizedText = sanitizeAssistantVisibleText(payload.text ?? "");
               if (!sanitizedText) {
                 return;
               }

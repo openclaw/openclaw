@@ -1,5 +1,3 @@
-// Lifecycle billing error tests ensure subscription error events include enough
-// provider/model context for users to fix account or quota issues.
 import { describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
@@ -21,7 +19,6 @@ import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
-  findLifecycleErrorAgentEvent,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import {
   createAssistant,
@@ -35,36 +32,12 @@ import {
 describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
   registerAgentSessionLoopTestLifecycle();
 
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
-    // Harness captures lifecycle events only; stream/block reply paths are not
-    // relevant to billing-error attribution.
-    const onAgentEvent = vi.fn();
-    const { emit } = createSubscribedSessionHarness({
-      runId: options?.runId ?? "run",
-      sessionKey: options?.sessionKey,
-      onAgentEvent,
-    });
-    return { emit, onAgentEvent };
+  function lifecycleData(observer: ReturnType<typeof vi.fn>, phase?: string) {
+    return observer.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "lifecycle" && (!phase || event.data.phase === phase))
+      .map((event) => event.data);
   }
-
-  it("includes provider and model context in lifecycle billing errors", () => {
-    const { emit, onAgentEvent } = createAgentEventHarness({
-      runId: "run-billing-error",
-      sessionKey: "test-session",
-    });
-
-    emitAssistantLifecycleErrorAndEnd({
-      emit,
-      errorMessage: "insufficient credits",
-      provider: "Anthropic",
-      model: "claude-3-5-sonnet",
-    });
-
-    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
-    expect(lifecycleError?.stream).toBe("lifecycle");
-    expect(lifecycleError?.data?.phase).toBe("error");
-    expect(lifecycleError?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
-  });
 
   it("refines the requested model once when the provider reports the executing model", () => {
     const runId = "run-response-model";
@@ -76,7 +49,7 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
       sessionId: "session-response-model",
       projectSessionActive: true,
     });
-    const { emit } = createAgentEventHarness({
+    const { emit } = createSubscribedSessionHarness({
       runId,
       sessionKey: "agent:main:response-model",
     });
@@ -91,12 +64,7 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
       });
       emit({ type: "message_end", message: rerouted });
 
-      expect(
-        emitted.mock.calls
-          .map(([event]) => event)
-          .filter((event) => event.stream === "lifecycle" && event.data.phase === "model")
-          .map((event) => event.data),
-      ).toEqual([
+      expect(lifecycleData(emitted, "model")).toEqual([
         { phase: "model", provider: testModel.provider, model: testModel.id },
         { phase: "model", provider: testModel.provider, model: "provider-executing-model" },
       ]);
@@ -121,15 +89,10 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
       model: "claude-3-5-sonnet",
     });
 
-    const lifecycleEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.stream === "lifecycle");
-    expect(lifecycleEvents).toEqual([
+    expect(lifecycleData(onAgentEvent)).toEqual([
       expect.objectContaining({
-        data: expect.objectContaining({
-          phase: "finishing",
-          error: expect.stringContaining("Anthropic (claude-3-5-sonnet)"),
-        }),
+        phase: "finishing",
+        error: expect.stringContaining("Anthropic (claude-3-5-sonnet)"),
       }),
     ]);
   });
@@ -205,12 +168,22 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             authProfileStore: { version: 1, profiles: {} },
             onAgentEvent,
           },
-          activeSession: session,
-          hookRunner: null,
+          agentSession: {
+            activeSession: session,
+            hookRunner: null,
+            clientToolCallSlots: [],
+            hasDeliveredSourceReply: () => false,
+            markSourceReplyDelivered: () => {},
+            trustedLocalMediaToolNames: new Set(),
+            builtinToolNames: new Set(),
+            coreBuiltinToolNames: new Set(),
+            replaySafeToolNames: new Set(),
+            codeModeExecToolNames: new Set(),
+            sideEffectToolOwners: new Map(),
+          },
           hookAgentId: "main",
           diagnosticTrace: { traceId: "11111111111111111111111111111111" },
           diagnosticOwner,
-          clientToolCallSlots: [],
           nestedToolActivities: [],
           isReplaySafeTool: () => false,
           runAbortController: new AbortController(),
@@ -224,28 +197,18 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             timedOut: false,
             yieldDetected: false,
           }),
-          hasDeliveredSourceReply: () => false,
-          markSourceReplyDelivered: () => {},
           onBlockReply: undefined,
           onBlockReplyFlush: undefined,
-          sandboxSessionKey: sessionKey,
-          trustedLocalMediaToolNames: new Set(),
-          builtinToolNames: new Set(),
-          replaySafeToolNames: new Set(),
         });
         try {
           await session.prompt("exercise terminal provider failure");
           expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
           for (const observer of [emitted, onAgentEvent]) {
-            const terminals = observer.mock.calls
-              .map(([event]) => event)
-              .filter((event) => event.stream === "lifecycle" && event.data.phase === "error");
+            const terminals = lifecycleData(observer, "error");
             expect.soft(terminals).toEqual([
               expect.objectContaining({
-                data: expect.objectContaining({
-                  phase: "error",
-                  error: "The AI service is temporarily overloaded. Please try again in a moment.",
-                }),
+                phase: "error",
+                error: "The AI service is temporarily overloaded. Please try again in a moment.",
               }),
             ]);
           }

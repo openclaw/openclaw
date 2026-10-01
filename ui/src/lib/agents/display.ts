@@ -1,4 +1,3 @@
-// Control UI view renders agents utils screen content.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { formatByteSize } from "@openclaw/normalization-core";
@@ -22,8 +21,6 @@ import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
-
-export { formatAgentRuntimeLabel };
 
 type AgentRosterEntry = {
   id: string;
@@ -51,6 +48,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  decisionModel?: string;
   models?: Record<string, { alias?: unknown }>;
   agentRuntime?: unknown;
   skills?: string[];
@@ -68,6 +66,7 @@ type ConfigSnapshot = {
     defaults?: {
       workspace?: string;
       model?: unknown;
+      decisionModel?: string;
       models?: Record<string, { alias?: unknown }>;
       skills?: string[];
     };
@@ -217,7 +216,6 @@ export function buildAgentContext(
     ? "custom"
     : (resolveAgentTextAvatar(agent, agentIdentity) ?? "—");
   const skillFilter = resolveAgentSkillsFilter(configForm, agent.id);
-  const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
     model: modelLabel,
@@ -225,7 +223,7 @@ export function buildAgentContext(
     identityName,
     identityAvatar,
     skillsLabel: skillFilter
-      ? t("agents.overview.selectedSkills", { count: String(skillCount) })
+      ? t("agents.overview.selectedSkills", { count: String(skillFilter.length) })
       : t("agents.overview.allSkills"),
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
@@ -238,7 +236,7 @@ export function resolveModelLabel(model?: unknown): string {
   if (typeof model === "string") {
     return normalizeOptionalString(model) || "-";
   }
-  if (typeof model === "object" && model) {
+  if (typeof model === "object") {
     const record = model as { primary?: string; fallbacks?: string[] };
     const primary = normalizeOptionalString(record.primary);
     if (primary) {
@@ -255,60 +253,42 @@ export function normalizeModelValue(label: string): string {
 }
 
 export function resolveModelPrimary(model?: unknown): string | null {
-  if (!model) {
+  if (typeof model === "string") {
+    return normalizeOptionalString(model) ?? null;
+  }
+  if (!model || typeof model !== "object") {
     return null;
   }
-  if (typeof model === "string") {
-    const trimmed = normalizeOptionalString(model);
-    return trimmed || null;
-  }
-  if (typeof model === "object" && model) {
-    const record = model as Record<string, unknown>;
-    const candidate =
-      typeof record.primary === "string"
-        ? record.primary
-        : typeof record.model === "string"
-          ? record.model
-          : typeof record.id === "string"
-            ? record.id
-            : typeof record.value === "string"
-              ? record.value
-              : null;
-    const primary = normalizeOptionalString(candidate);
-    return primary || null;
-  }
-  return null;
+  const record = model as Record<string, unknown>;
+  const candidate = [record.primary, record.model, record.id, record.value].find(
+    (value) => typeof value === "string",
+  );
+  return normalizeOptionalString(candidate) ?? null;
 }
 
 export function resolveModelFallbacks(model?: unknown): string[] | null {
-  if (!model || typeof model === "string") {
+  if (!model || typeof model !== "object") {
     return null;
   }
-  if (typeof model === "object" && model) {
-    const record = model as Record<string, unknown>;
-    const fallbacks = Array.isArray(record.fallbacks)
-      ? record.fallbacks
-      : Array.isArray(record.fallback)
-        ? record.fallback
-        : null;
-    return fallbacks
-      ? fallbacks.filter((entry): entry is string => typeof entry === "string")
+  const record = model as Record<string, unknown>;
+  const fallbacks = Array.isArray(record.fallbacks)
+    ? record.fallbacks
+    : Array.isArray(record.fallback)
+      ? record.fallback
       : null;
-  }
-  return null;
+  return fallbacks ? fallbacks.filter((entry): entry is string => typeof entry === "string") : null;
 }
 
 export function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
 ): string[] | null {
-  const entryFallbacks = resolveModelFallbacks(entryModel);
-  if (entryFallbacks !== null) {
-    return entryFallbacks;
-  }
   // An agent-owned primary is strict; only an inherited primary can use
   // the global fallback chain, matching the Gateway's model routing.
-  return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
+  return (
+    resolveModelFallbacks(entryModel) ??
+    (resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel))
+  );
 }
 
 type ConfiguredModelOption = {

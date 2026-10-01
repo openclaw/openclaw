@@ -1,5 +1,4 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
@@ -29,7 +28,7 @@ export function subscribeSessionCatalogBrowserEvents(
 }
 
 type SidebarSessionListOwner = {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
@@ -65,7 +64,9 @@ function pruneSidebarAgentSessionCaches(
   const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
   for (const agentId of Object.keys(owner.sessionResultsByAgent)) {
     if (!retainedAgentIds.has(agentId)) {
-      delete owner.sessionResultsByAgent[agentId];
+      const next = { ...owner.sessionResultsByAgent };
+      delete next[agentId];
+      owner.sessionResultsByAgent = next;
     }
   }
   if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
@@ -126,7 +127,10 @@ export function publishSidebarSessionList(
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
   if (snapshot.result && snapshot.agentId) {
-    owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
+    const agentId = normalizeAgentId(snapshot.agentId);
+    if (owner.sessionResultsByAgent[agentId] !== snapshot.result) {
+      owner.sessionResultsByAgent = { ...owner.sessionResultsByAgent, [agentId]: snapshot.result };
+    }
   }
 }
 
@@ -218,7 +222,7 @@ type SessionGatewayEventOwner = {
 };
 
 export function subscribeSessionDataGatewayEvents(
-  gateway: ApplicationContext<RouteId>["gateway"],
+  gateway: ApplicationContext["gateway"],
   owner: SessionGatewayEventOwner,
 ): () => void {
   return gateway.subscribeEvents((event) => {

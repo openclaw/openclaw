@@ -1,6 +1,7 @@
 // Commander registration for experimental Claws inspection and add previews.
 import type { Command } from "commander";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
+import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type ClawsInspectOptions = {
@@ -31,10 +32,6 @@ export type ClawsRemoveOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> 
   forceReferenced?: boolean;
 };
 export type ClawsExportOptions = { out: string; bootstrap?: string; json?: boolean };
-
-function collectOption(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
 
 export function registerClawsCli(program: Command) {
   if (!isExperimentalClawsEnabled()) {
@@ -132,7 +129,7 @@ export function registerClawsCli(program: Command) {
     .option("--plan-integrity <digest>", "Bind consent to an exact update plan")
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
-      const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");
+      const { runClawsUpdateCommand } = await import("./claws-update-cli.runtime.js");
       await runClawsUpdateCommand(target, opts);
     });
 

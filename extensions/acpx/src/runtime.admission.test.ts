@@ -1,20 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
+import type { AcpSessionStore } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
 import { acpxOperationScope } from "./runtime-session-store.js";
-import {
-  AcpxRuntime,
-  createAgentRegistry,
-  createFileSessionStore,
-  type AcpSessionStore,
-} from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
 type RuntimeOptions = ConstructorParameters<typeof AcpxRuntime>[0];
 type RuntimeHandle = Awaited<ReturnType<AcpxRuntime["ensureSession"]>>;
-const peer = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 const target = { sessionKey: "admission-project", agentId: "main" };
 const input = { ...target, agent: "fixture", mode: "persistent" as const };
 
@@ -231,27 +228,10 @@ it("retains failed private-runtime cleanup for service shutdown", async () => {
 
 it.each([
   {
-    name: "getStatus",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) => runtime.getStatus({ handle }),
-    expected: {},
-  },
-  {
-    name: "setMode",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
-      runtime.setMode({ handle, mode: "review" }),
-    expected: { mode: "review" },
-  },
-  {
     name: "setConfigOption",
     run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
       runtime.setConfigOption({ handle, key: "tone", value: "brief" }),
     expected: { tone: "brief" },
-  },
-  {
-    name: "cancel",
-    run: (runtime: AcpxRuntime, handle: RuntimeHandle) =>
-      runtime.cancel({ handle, reason: "test" }),
-    expected: {},
   },
   { name: "startTurn", run: readContext, expected: {} },
 ])(

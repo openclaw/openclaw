@@ -1,7 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { createThinkingCatalogResolver } from "../auto-reply/thinking.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import {
   PREPARED_THINKING_POLICY,
   type PreparedThinkingPolicy,
@@ -9,38 +12,111 @@ import {
 } from "../plugins/provider-thinking-catalog.js";
 import type { ProviderThinkingRegistry } from "../plugins/provider-thinking.types.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
+import { buildGatewaySessionRow } from "./session-utils-row.js";
 
-describe("Gateway all-null thinking map", () => {
-  it("does not advertise a default without selectable levels", () => {
-    const profile = resolveGatewayModelThinkingProfile({
-      cfg: {},
-      agentId: "main",
-      provider: "metadata-fixture",
-      model: "no-effort",
-      agentRuntime: "openclaw",
-      modelCatalog: [
-        {
-          provider: "metadata-fixture",
-          id: "no-effort",
-          name: "No selectable effort",
-          api: "openai-completions",
-          reasoning: true,
-          thinkingLevelMap: {
-            off: null,
-            minimal: null,
-            low: null,
-            medium: null,
-            high: null,
-            xhigh: null,
-            max: null,
+describe("Gateway stored thinking levels", () => {
+  it("keeps stored Ultra for supported harnesses and clamps unavailable native profiles", () => {
+    // A synthetic model lets observed native efforts define the capability set.
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/native-effort-fixture" },
+          models: {
+            "openai/native-effort-fixture": { agentRuntime: { id: "codex" } },
           },
         },
-      ],
-    });
+      },
+    };
+    const openaiPolicy = expectDefined(
+      resolveProviderPolicySurface("openai")?.resolveThinkingProfile,
+      "OpenAI public thinking policy",
+    );
+    const row = (
+      entry: SessionEntry,
+      catalog?: { reasoning?: boolean; compat?: { supportedReasoningEfforts: string[] } },
+    ) => {
+      const modelCatalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] | undefined = catalog
+        ? [
+            {
+              provider: "openai",
+              id: "native-effort-fixture",
+              name: "Native effort fixture",
+              [PREPARED_THINKING_POLICY]: openaiPolicy,
+              ...catalog,
+            },
+          ]
+        : undefined;
+      return buildGatewaySessionRow({
+        cfg,
+        agentId: "main",
+        lightweightListRow: true,
+        rowContext: buildSessionListRowMetadataContext({ now: 1 }),
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry,
+        modelCatalog,
+      });
+    };
 
-    expect(profile.thinkingLevels).toEqual([]);
-    expect(profile.thinkingDefault).toBeUndefined();
+    const stored: SessionEntry = { sessionId: "stored", updatedAt: 1, thinkingLevel: "ultra" };
+
+    expect(row(stored).thinkingLevel).toBe("ultra");
+    expect(row(stored, {}).thinkingLevel).toBe("ultra");
+    expect(row(stored, { reasoning: true }).thinkingLevel).toBe("ultra");
+    expect(row(stored, { reasoning: false }).thinkingLevel).toBe("off");
+    expect(
+      row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["off"] } })
+        .thinkingLevel,
+    ).toBe("off");
+    expect(
+      row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } })
+        .thinkingLevel,
+    ).toBe("ultra");
+    const nativeUltra = row(stored, {
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["max", "ultra"] },
+    });
+    expect(nativeUltra.thinkingLevel).toBe("ultra");
+    expect(nativeUltra.thinkingLevels).toContainEqual({ id: "ultra", label: "ultra" });
   });
+});
+
+describe("Gateway all-null thinking map", () => {
+  it.each([undefined, "ultra"] as const)(
+    "preserves the explicit default %s without native levels",
+    (thinkingDefault) => {
+      const profile = resolveGatewayModelThinkingProfile({
+        cfg: { agents: { defaults: { thinkingDefault } } },
+        agentId: "main",
+        provider: "metadata-fixture",
+        model: "no-effort",
+        agentRuntime: "openclaw",
+        modelCatalog: [
+          {
+            provider: "metadata-fixture",
+            id: "no-effort",
+            name: "No selectable effort",
+            api: "openai-completions",
+            reasoning: true,
+            thinkingLevelMap: {
+              off: null,
+              minimal: null,
+              low: null,
+              medium: null,
+              high: null,
+              xhigh: null,
+              max: null,
+            },
+          },
+        ],
+      });
+
+      expect(profile.thinkingLevels).toEqual([{ id: "ultra", label: "ultra" }]);
+      expect(profile.thinkingDefault).toBe(thinkingDefault);
+    },
+  );
 });
 
 describe("Gateway captured thinking defaults", () => {
@@ -205,11 +281,15 @@ describe.each([false, true])("Gateway thinking catalog indexed=%s", (indexed) =>
     });
     expect(profile.thinkingLevels).toEqual(
       scenario.configuredReasoning === false
-        ? [{ id: "off", label: "off" }]
+        ? [
+            { id: "off", label: "off" },
+            { id: "ultra", label: "ultra" },
+          ]
         : [
             { id: "off", label: "off" },
             { id: "low", label: "On" },
             { id: "high", label: "high" },
+            { id: "ultra", label: "ultra" },
           ],
     );
     expect(profile.thinkingDefault).toBe(scenario.expected);
@@ -249,6 +329,7 @@ describe.each([false, true])("Gateway thinking catalog indexed=%s", (indexed) =>
       "low",
       "medium",
       "high",
+      "ultra",
     ]);
     expect(profile.thinkingDefault).toBe("medium");
     expect(otherPolicy).not.toHaveBeenCalled();

@@ -29,6 +29,12 @@ describe("application router registration", () => {
       }
     }
   });
+
+  it("leaves the retired Tasks workspace URL unmatched", () => {
+    expect(router.routeIdFromPath("/tasks")).toBeNull();
+    expect(routeIdFromPath("/tasks")).toBeNull();
+    expect(routeIdFromPath("/control/tasks", "/control")).toBeNull();
+  });
 });
 
 it("compares optional route locations by pathname, search, and hash", () => {

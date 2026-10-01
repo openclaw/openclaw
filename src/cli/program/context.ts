@@ -6,6 +6,7 @@ import { resolveCliChannelOptions } from "../channel-options.js";
 /** Root CLI program context consumed by command registration and help rendering. */
 export type ProgramContext = {
   doctorDatabasePreflight?: DoctorDatabasePreflight;
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
   programVersion: string;
   messageChannelOptions: string;
   agentChannelOptions: string;
@@ -13,15 +14,10 @@ export type ProgramContext = {
 
 /** Create a program context that resolves channel options once on first use. */
 export function createProgramContext(
-  prepared: Pick<ProgramContext, "doctorDatabasePreflight"> = {},
+  prepared: Pick<ProgramContext, "doctorDatabasePreflight" | "runtimeRecoveryEnv"> = {},
 ): ProgramContext {
   let cachedChannelOptions: string[] | undefined;
-  const getChannelOptions = (): string[] => {
-    if (cachedChannelOptions === undefined) {
-      cachedChannelOptions = resolveCliChannelOptions();
-    }
-    return cachedChannelOptions;
-  };
+  const getChannelOptions = () => (cachedChannelOptions ??= resolveCliChannelOptions());
 
   return {
     ...prepared,

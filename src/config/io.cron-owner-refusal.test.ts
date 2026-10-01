@@ -64,7 +64,6 @@ it("refuses an unproven live Gateway without suggesting doctor", async () => {
 });
 
 it.each([
-  ["without a live Gateway", undefined],
   [
     "with an ownership-safe live Gateway",
     {

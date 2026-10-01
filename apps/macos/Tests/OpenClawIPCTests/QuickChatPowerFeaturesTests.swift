@@ -125,7 +125,7 @@ struct QuickChatPowerFeaturesTests {
             AgentsListResult.self,
             from: Data(Self.agentsFixture.utf8))
         let snapshot = QuickChatModelControlLogic.snapshot(
-            target: QuickChatRoutingTarget(sessionKey: "agent:main:main", agentID: nil),
+            target: OpenClawChatSessionTarget(sessionKey: "agent:main:main", agentID: nil),
             models: models,
             sessions: sessions,
             agents: agents)
@@ -150,7 +150,7 @@ struct QuickChatPowerFeaturesTests {
             AgentsListResult.self,
             from: Data(Self.agentsFixture.utf8))
         let snapshot = QuickChatModelControlLogic.snapshot(
-            target: QuickChatRoutingTarget(sessionKey: "agent:work:main", agentID: nil),
+            target: OpenClawChatSessionTarget(sessionKey: "agent:work:main", agentID: nil),
             models: [.init(
                 modelID: "deepseek-v4", name: "Fixture", provider: "deepseek", contextWindow: nil,
                 thinkingLevels: [.init(id: "off", label: "off"), .init(id: "high", label: "high")],
@@ -162,6 +162,27 @@ struct QuickChatPowerFeaturesTests {
         #expect(snapshot.currentThinkingLevel == "high")
         #expect(snapshot.thinkingOptions.map(\.id) == ["off", "high"])
         #expect(snapshot.defaultProvider == "deepseek")
+    }
+
+    @Test(arguments: [false, true])
+    func `restricted controls project a saved forbidden model onto the server default`(hasDefault: Bool) throws {
+        let policy = try JSONDecoder().decode(OpenClawChatModelSelectionPolicy.self, from: Data(
+            """
+            {"restricted":true,"defaultModel":\(hasDefault ? "\"fixture/allowed\"" : "null")}
+            """.utf8))
+        let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(
+            #"{"sessions":[{"key":"agent:main:main","model":"historical","modelProvider":"fixture"}]}"#.utf8))
+        let snapshot = QuickChatModelControlLogic.snapshot(
+            target: .init(sessionKey: "agent:main:main", agentID: nil),
+            models: [.init(modelID: "allowed", name: "Allowed", provider: "fixture", contextWindow: nil)],
+            sessions: sessions,
+            agents: nil,
+            modelSelectionPolicy: policy)
+
+        #expect(snapshot.currentModelSelectionID == (hasDefault ? "fixture/allowed" : nil))
+        #expect(snapshot.defaultProvider == (hasDefault ? "fixture" : nil))
+        #expect(sessions.sessions.first?.model == "historical")
+        #expect(sessions.sessions.first?.modelProvider == "fixture")
     }
 
     @Test func `model patch decision only patches an explicit unapplied selection`() {
@@ -381,7 +402,7 @@ struct QuickChatPowerFeaturesTests {
         let targetBControlsStarted = AsyncTestGate()
         var agentsCallCount = 0
         var patchCompleted = false
-        var controlTargets: [QuickChatRoutingTarget] = []
+        var controlTargets: [OpenClawChatSessionTarget] = []
         let choice = Self.solModelChoice
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:a:main" },
@@ -416,7 +437,7 @@ struct QuickChatPowerFeaturesTests {
                     defaultProvider: nil)
             },
             settingsPatchProvider: { target, _ in
-                #expect(target == QuickChatRoutingTarget(sessionKey: "agent:a:main", agentID: nil))
+                #expect(target == OpenClawChatSessionTarget(sessionKey: "agent:a:main", agentID: nil))
                 patchStarted.open()
                 await finishPatch.wait()
                 patchCompleted = true
@@ -459,7 +480,7 @@ struct QuickChatPowerFeaturesTests {
         #expect(!patchCompleted)
         #expect(!model.isUpdatingModel)
         #expect(model.canSend)
-        #expect(controlTargets.contains(QuickChatRoutingTarget(
+        #expect(controlTargets.contains(OpenClawChatSessionTarget(
             sessionKey: "agent:b:main",
             agentID: nil)))
 

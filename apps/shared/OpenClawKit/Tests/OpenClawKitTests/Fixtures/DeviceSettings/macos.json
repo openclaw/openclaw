@@ -26,7 +26,7 @@
       {"id": "notifications", "status": "granted"}, {"id": "accessibility", "status": "denied"},
       {"id": "screenRecording", "status": "notDetermined"}, {"id": "microphone", "status": "unavailable"},
       {"id": "camera", "status": "granted"}, {"id": "speechRecognition", "status": "denied"},
-      {"id": "location", "status": "notDetermined"}, {"id": "automation", "status": "unavailable"}
+      {"id": "location", "status": "notDetermined"}
     ],
     "location": {"mode": "whileUsing", "precise": true}
   },

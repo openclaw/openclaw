@@ -3,10 +3,13 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { useTriageLeaseDatabaseFixture } from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+
+useTriageLeaseDatabaseFixture();
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 

@@ -133,20 +133,6 @@ function normalizeManifestAuthDescriptorId(value: string): string {
   return sanitizeForLog(value).trim();
 }
 
-function toSetupProviderAuthChoiceCandidate(params: {
-  plugin: PluginManifestRecord;
-  providerId: string;
-  methodId: string;
-}): ProviderAuthChoiceCandidate {
-  return {
-    pluginId: params.plugin.id,
-    origin: params.plugin.origin,
-    providerId: params.providerId,
-    methodId: params.methodId,
-    choiceId: `${params.providerId}-${params.methodId}`,
-  };
-}
-
 function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
   if (plugin.setup?.requiresRuntime !== false && plugin.setupSource) {
     return [];
@@ -163,13 +149,13 @@ function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
       .map(normalizeManifestAuthDescriptorId)
       .filter(Boolean)
       .filter((methodId) => !explicitProviderMethods.has(`${providerId}::${methodId}`))
-      .map((methodId) =>
-        toSetupProviderAuthChoiceCandidate({
-          plugin,
-          providerId,
-          methodId,
-        }),
-      );
+      .map((methodId) => ({
+        pluginId: plugin.id,
+        origin: plugin.origin,
+        providerId,
+        methodId,
+        choiceId: `${providerId}-${methodId}`,
+      }));
   });
 }
 

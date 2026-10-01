@@ -135,38 +135,35 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
 ] as const satisfies readonly PluginSdkSubpathSeed[];
 
 function buildPluginSdkSubpathRecord(seed: (typeof PLUGIN_SDK_SUBPATH_SEEDS)[number]) {
+  const shared = {
+    code: seed.code,
+    owner: seed.owner,
+    introduced: "2026-07-06",
+    replacement: seed.replacement,
+    docsPath: "/plugins/sdk-migration",
+    surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
+    tests: ["src/plugins/compat/registry.test.ts"],
+  };
   // Pending removals keep their dated migration metadata; only retired paths are tombstones.
   if ("status" in seed && seed.status === "removed") {
     return {
-      code: seed.code,
+      ...shared,
       status: seed.status,
-      owner: seed.owner,
-      introduced: "2026-07-06",
-      replacement: seed.replacement,
-      docsPath: "/plugins/sdk-migration",
-      surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
       diagnostics: ["plugin SDK compatibility registry and migration guide"],
-      tests: ["src/plugins/compat/registry.test.ts"],
       releaseNote: seed.releaseNote,
     } satisfies PluginCompatRecord;
   }
 
   return {
-    code: seed.code,
+    ...shared,
     status: "status" in seed ? seed.status : "deprecated",
-    owner: seed.owner,
-    introduced: "2026-07-06",
     deprecated: "2026-07-06",
     warningStarts: "2026-07-06",
     removeAfter: "removeAfter" in seed ? seed.removeAfter : undefined,
     removalGate: "removalGate" in seed ? seed.removalGate : undefined,
-    replacement: seed.replacement,
-    docsPath: "/plugins/sdk-migration",
-    surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
     diagnostics: [
       "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
     ],
-    tests: ["src/plugins/compat/registry.test.ts"],
   } satisfies PluginCompatRecord;
 }
 

@@ -27,6 +27,7 @@ vi.mock("../config/config.js", () => ({
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
 import {
@@ -45,7 +46,14 @@ import {
 import { SessionManager } from "./sessions/session-manager.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 registerAgentSessionLoopTestLifecycle();
 beforeEach(() => {
   resetGatewayWorkAdmission();
@@ -59,15 +67,13 @@ afterEach(() => {
 });
 
 it.each([
-  { supportsTranscriptCommitWait: true },
   { supportsTranscriptCommitWait: false },
-  { supportsTranscriptCommitWait: true, mode: "steer" as const },
+  { supportsTranscriptCommitWait: true },
   { supportsTranscriptCommitWait: true, mode: "steer" as const, alternateStore: true },
   { supportsTranscriptCommitWait: true, mode: "steer" as const, hiddenRun: true },
 ])(
   "sessions_send persists steered provenance with transcript wait support $supportsTranscriptCommitWait and mode $mode, alternate store $alternateStore, hidden run $hiddenRun",
   async ({ supportsTranscriptCommitWait, mode, alternateStore, hiddenRun }) => {
-    const calls: Array<{ method?: string }> = [];
     const runId = "hidden-sessions-send-steering-run";
     const runScopedCallerKey =
       mode === "steer"
@@ -144,7 +150,6 @@ it.each([
       }
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string };
-        calls.push(request);
         if (request.method === "agent") {
           throw new Error("fallback agent should not start");
         }
@@ -166,37 +171,51 @@ it.each([
         },
       });
 
-      const send = tool
-        .execute("call-run-scoped-caller", {
-          mode,
-          sessionKey: runScopedCallerKey,
-          message: "[TASK-COMPLETE] re-portal occupancy ready",
-          timeoutSeconds: 0,
-        })
-        .then((result) => {
-          expect(result.details).toEqual(
-            expect.objectContaining({ status: "accepted", targetDisposition: "steered" }),
-          );
-          return result;
-        });
+      if (mode === "steer") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const send = tool.execute("call-run-scoped-caller", {
+        mode,
+        sessionKey: runScopedCallerKey,
+        message: "[TASK-COMPLETE] re-portal occupancy ready",
+        timeoutSeconds: 0,
+      });
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
+      if (mode === "steer") {
+        // The active response is still held: an admission-only send must not
+        // withdraw guidance when the unrelated reply-wait deadline expires.
+        await vi.advanceTimersByTimeAsync(30_000);
+        vi.useRealTimers();
+        expect((await send).details).toMatchObject({ status: "accepted" });
+        expect(session.pendingMessageCount).toBe(1);
+        expect(
+          SessionManager.open(scope, dir)
+            .getEntries()
+            .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+        ).toHaveLength(1);
+      }
       finishInitialResponse?.();
       const [result] = await Promise.all([send, prompt]);
 
-      expect(result.details).toEqual(
-        expect.objectContaining({
-          sessionKey: runScopedCallerKey,
-          delivery: expect.objectContaining({ status: "skipped", mode: "announce" }),
-        }),
-      );
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        targetDisposition: "steered",
+        sessionKey: runScopedCallerKey,
+        delivery: { status: "skipped", mode: "announce" },
+      });
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
-        supportsTranscriptCommitWait ? true : undefined,
+        mode === "steer" ? false : supportsTranscriptCommitWait ? true : undefined,
       );
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
-      expect(SessionManager.open(scope, dir).getEntries()).toContainEqual(
+      const entries = SessionManager.open(scope, dir).getEntries();
+      expect(
+        entries.filter((entry) => entry.type === "message" && entry.message.role === "user"),
+      ).toHaveLength(2);
+      expect(session.pendingMessageCount).toBe(0);
+      expect(entries).toContainEqual(
         expect.objectContaining({
           type: "message",
           message: expect.objectContaining({
@@ -210,7 +229,9 @@ it.each([
           }),
         }),
       );
-      expect(calls.some((call) => call.method === "agent")).toBe(false);
+      expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(
+        false,
+      );
       expect(listSessionParticipantsReadOnly(scope).get(runScopedCallerKey)).toEqual([
         expect.objectContaining({
           identity: { type: "agent", id: "re-portal" },
@@ -218,6 +239,7 @@ it.each([
         }),
       ]);
     } finally {
+      vi.useRealTimers();
       // Release even a late provider callback, then join work before fixture teardown.
       closing = true;
       unsubscribe();

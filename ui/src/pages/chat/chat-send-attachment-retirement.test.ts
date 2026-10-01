@@ -14,8 +14,8 @@ import {
   reloadChatDocumentStorage,
 } from "./chat-delivery-attachments.test-support.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
-import { subscribeChatOutboxProjection } from "./chat-queue.ts";
-import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -115,7 +115,7 @@ describe("chat attachment terminal retirement", () => {
       chatAttachments: presentedAttachments,
     });
     sessionStorage.setItem("openclaw.control.outboxTab.v1", "test-outbox-tab");
-    const stopSource = subscribeChatOutboxProjection(source);
+    const stopSource = chatOutboxOwner(source).subscribe(source);
     let stopVisible = () => {};
     let stopInactive = () => {};
     const hydration = createDeferred();
@@ -183,13 +183,13 @@ describe("chat attachment terminal retirement", () => {
           return pending;
         });
       if (handoff !== "live") {
-        stopVisible = subscribeChatOutboxProjection(visible);
+        stopVisible = chatOutboxOwner(visible).subscribe(visible);
         expect(visible.chatQueue[0]?.attachments?.map(getChatAttachmentDataUrl)).toEqual([
           null,
           null,
         ]);
       }
-      stopInactive = subscribeChatOutboxProjection(inactive);
+      stopInactive = chatOutboxOwner(inactive).subscribe(inactive);
       const removePayloads = outboxPayloadStore.removeOutboxPayloads;
       const cleanup = vi
         .spyOn(outboxPayloadStore, "removeOutboxPayloads")
@@ -268,7 +268,7 @@ describe("chat attachment terminal retirement", () => {
           expect(result.status).toBe("ready");
         }
         consumedRunId = item.sendRunId;
-        await retryReconnectableQueuedChatSends(visible);
+        await resumeStoredChatOutboxes(visible);
         expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
       }
       hydration.resolve();
@@ -315,7 +315,7 @@ describe("chat attachment terminal retirement", () => {
 
       consumedRunId = item.sendRunId;
       history.resolve(consumedHistory());
-      await retryReconnectableQueuedChatSends(visible);
+      await resumeStoredChatOutboxes(visible);
 
       expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
       expect(cleanup).toHaveBeenCalledWith([item.attachmentPayload]);

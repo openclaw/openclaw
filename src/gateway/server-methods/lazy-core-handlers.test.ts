@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 const runStackLoaded = vi.hoisted(() => vi.fn());
 const sessionCreateStackLoaded = vi.hoisted(() => vi.fn());
+const optionalMediaRuntimesLoaded = vi.hoisted(() => vi.fn());
+const titleRuntimeLoaded = vi.hoisted(() => vi.fn());
 
 vi.mock("./agent-run-handler.js", () => {
   runStackLoaded();
@@ -15,7 +17,49 @@ vi.mock("../session-create-service.js", () => {
 });
 
 vi.mock("./chat.js", () => {
-  throw new Error("Cancellation must not load chat history or send handlers");
+  throw new Error("Chat history handlers are unavailable");
+});
+
+vi.mock("../../agents/sandbox/context.js", () => {
+  optionalMediaRuntimesLoaded("sandbox-context");
+  return {
+    resolveSandboxContext: () => {
+      throw new Error("Sandbox context is unavailable");
+    },
+    ensureSandboxWorkspaceForSession: () => {
+      throw new Error("Sandbox workspace runtime is unavailable");
+    },
+  };
+});
+
+vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => {
+  optionalMediaRuntimesLoaded("stage-sandbox-media");
+  return {
+    SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
+    stageSandboxMedia: () => {
+      throw new Error("Sandbox media staging is unavailable");
+    },
+  };
+});
+
+vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => {
+  optionalMediaRuntimesLoaded("reply-media-paths");
+  return {
+    createReplyMediaContext: () => {
+      throw new Error("Reply media context is unavailable");
+    },
+    createReplyMediaPathNormalizer: () => {
+      throw new Error("Reply media normalization is unavailable");
+    },
+  };
+});
+
+vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => {
+  titleRuntimeLoaded();
+  return {
+    generateConversationLabel: vi.fn(async () => null),
+    generateConversationLabelWithFallback: vi.fn(async () => null),
+  };
 });
 
 vi.mock("../../tts/tts-synthesis.js", () => {
@@ -32,7 +76,7 @@ describe("lazy core handler families", () => {
     { method: "plugins.inspect", params: { pluginId: 42 } },
     { method: "plugins.search", params: { query: 42 } },
   ])("validates $method without importing plugin installers", async ({ method, params }) => {
-    const { coreGatewayHandlers } = await import("../server-methods.js");
+    const { coreGatewayHandlers } = await import("./core-handlers.js");
     const respond = vi.fn();
     await expectDefined(
       coreGatewayHandlers[method],
@@ -83,7 +127,7 @@ describe("lazy core handler families", () => {
       errorCode: "INVALID_REQUEST",
     },
   ])("handles Talk mode for $name without loading speech synthesis", async (testCase) => {
-    const { coreGatewayHandlers } = await import("../server-methods.js");
+    const { coreGatewayHandlers } = await import("./core-handlers.js");
     const respond = vi.fn();
     const broadcast = vi.fn();
     await expectDefined(
@@ -120,7 +164,7 @@ describe("lazy core handler families", () => {
   });
 
   it("dispatches cancellation without importing unrelated chat workflows", async () => {
-    const { coreGatewayHandlers } = await import("../server-methods.js");
+    const { coreGatewayHandlers } = await import("./core-handlers.js");
     const respond = vi.fn();
     await expectDefined(
       coreGatewayHandlers["chat.abort"],
@@ -142,7 +186,7 @@ describe("lazy core handler families", () => {
   });
 
   it("loads agent identity without importing the agent run stack", async () => {
-    const { coreGatewayHandlers } = await import("../server-methods.js");
+    const { coreGatewayHandlers } = await import("./core-handlers.js");
     const respond = vi.fn();
     await expectDefined(
       coreGatewayHandlers["agent.identity.get"],
@@ -165,7 +209,7 @@ describe("lazy core handler families", () => {
   });
 
   it("loads session reads without importing the session create stack", async () => {
-    const { coreGatewayHandlers } = await import("../server-methods.js");
+    const { coreGatewayHandlers } = await import("./core-handlers.js");
     const respond = vi.fn();
     await expectDefined(
       coreGatewayHandlers["sessions.list"],
@@ -185,5 +229,29 @@ describe("lazy core handler families", () => {
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
     expect(sessionCreateStackLoaded).not.toHaveBeenCalled();
+  });
+
+  it("validates chat.send without importing history, media, or title runtimes", async () => {
+    const { coreGatewayHandlers } = await import("./core-handlers.js");
+    const respond = vi.fn();
+    await expectDefined(
+      coreGatewayHandlers["chat.send"],
+      "chat.send lazy handler",
+    )({
+      req: { type: "req", id: "send-light-family", method: "chat.send" },
+      params: { sessionKey: 42 },
+      respond,
+      context: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(optionalMediaRuntimesLoaded).not.toHaveBeenCalled();
+    expect(titleRuntimeLoaded).not.toHaveBeenCalled();
   });
 });

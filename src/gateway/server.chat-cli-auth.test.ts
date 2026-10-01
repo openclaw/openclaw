@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { captureConfigHealthStateStore } from "../config/io.health-state.js";
 import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,84 +16,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createClaudeAuthFixture } from "./server.chat-cli-auth.test-support.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
 
 // Only the external executable is a fixture. The registered Gateway, Anthropic
 // plugin, profile selection, credential transport, and transcript writer are real.
-const CLAUDE_AUTH_FIXTURE = String.raw`
-const assert = require("node:assert/strict");
-const { randomUUID } = require("node:crypto");
-const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
-const { join } = require("node:path");
-const { createInterface } = require("node:readline");
-const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
-const nativeRoot = process.env.CLAUDE_CONFIG_DIR;
-const nativeLogin = existsSync(join(nativeRoot, ".credentials.json"));
-if (process.argv.includes("--version")) {
-  process.stdout.write("2.1.226 (Claude Code fixture)\n");
-  process.exit(0);
-}
-if (process.argv.includes("auth")) {
-  send({ loggedIn: nativeLogin });
-  process.exit(0);
-}
-const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
-let reply = "No managed credential supplied.";
-if (nativeLogin) {
-  reply = "Native account reply.";
-}
-if (descriptor !== undefined) {
-  assert.equal(descriptor, "3");
-  const token = readFileSync(3, "utf8");
-  assert.ok(["synthetic-pasted-anthropic-token", "synthetic-replacement-anthropic-token"].includes(token));
-  reply = token === "synthetic-replacement-anthropic-token"
-    ? "Replacement account reply." : "Saved account reply.";
-}
-for (const name of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"]) {
-  assert.equal(process.env[name], undefined);
-}
-let currentHistory;
-createInterface({ input: process.stdin }).on("line", (line) => {
-  const message = JSON.parse(line);
-  if (message.type === "control_request" && message.request.subtype === "initialize") {
-    send({ type: "control_response", response: {
-      subtype: "success", request_id: message.request_id, response: { commands: [], models: [] },
-    } });
-  } else if (message.type === "user") {
-    const resumeIndex = process.argv.indexOf("--resume");
-    const sessionId = process.argv[(resumeIndex >= 0 ? resumeIndex : process.argv.indexOf("--session-id")) + 1];
-    const projectDir = join(nativeRoot, "projects", process.cwd().replace(/[^a-zA-Z0-9]/g, "-"));
-    mkdirSync(projectDir, { recursive: true });
-    const historyPath = join(projectDir, sessionId + ".jsonl");
-    const resumedHistory = currentHistory ?? (resumeIndex >= 0
-      ? readFileSync(historyPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
-    appendFileSync(join(nativeRoot, "turns.jsonl"), JSON.stringify({
-      sessionId, resume: resumeIndex >= 0, savedToken: descriptor !== undefined,
-      resumedHistory,
-    }) + "\n");
-    const remembered = JSON.stringify(resumedHistory).match(/native-history-[a-f0-9-]+/);
-    const turnReply = nativeLogin && descriptor === undefined && remembered
-      ? "Native history: " + remembered[0] + "." : reply;
-    const userUuid = message.uuid;
-    const assistantUuid = randomUUID();
-    const assistantMessage = {
-      role: "assistant", content: [{ type: "text", text: turnReply }],
-    };
-    const rows = [
-      { type: "user", uuid: userUuid, parentUuid: resumedHistory.at(-1)?.uuid ?? null,
-        message: message.message },
-      { type: "assistant", uuid: assistantUuid, parentUuid: userUuid, message: assistantMessage },
-    ].map((row) => ({ ...row, sessionId, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false }));
-    currentHistory = [...resumedHistory, ...rows];
-    writeFileSync(historyPath, currentHistory.map((row) => JSON.stringify(row)).join("\n") + "\n");
-    send({ type: "assistant", uuid: assistantUuid, message: assistantMessage });
-    send({ type: "result", subtype: "success", is_error: false,
-      result: turnReply, session_id: sessionId });
-  }
-});
-`;
-
 const cases: {
   name: string;
   order: NonNullable<OpenClawConfig["auth"]>["order"];
@@ -222,9 +151,23 @@ async function prepareCliAuthFixture(
   let gateway: CliAuthGateway | undefined;
   try {
     signal.throwIfAborted();
+    // Persisted native continuity must exercise Claude's hashed long-path key,
+    // including on CI hosts whose temporary roots would otherwise be short.
+    const workspaceDir =
+      nativeContinuity && state.workspaceDir.length <= 200
+        ? path.join(state.workspaceDir, "w".repeat(201 - state.workspaceDir.length))
+        : state.workspaceDir;
+    await fs.mkdir(workspaceDir, { recursive: true });
     const binDir = state.path("bin");
     const scriptPath = path.join(binDir, "claude.cjs");
     const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+    const fixtureScript = createClaudeAuthFixture(
+      (await fs.realpath(workspaceDir)).normalize("NFC"),
+      resolveClaudeCliProjectDirForWorkspace({
+        workspaceDir,
+        homeDir: state.home,
+      }),
+    );
     await fs.mkdir(binDir);
     if (process.platform === "win32") {
       await createWindowsCmdShimFixture({
@@ -233,11 +176,11 @@ async function prepareCliAuthFixture(
         shimLine: `"${process.execPath}" "%~dp0\\claude.cjs" %*`,
       });
     } else {
-      await fs.writeFile(executable, `#!${process.execPath}\n${CLAUDE_AUTH_FIXTURE}`, {
+      await fs.writeFile(executable, `#!${process.execPath}\n${fixtureScript}`, {
         mode: 0o755,
       });
     }
-    await fs.writeFile(scriptPath, CLAUDE_AUTH_FIXTURE);
+    await fs.writeFile(scriptPath, fixtureScript);
     setTestEnvValue("PATH", binDir);
     const nativeRoot = path.join(state.home, ".claude");
     setTestEnvValue("CLAUDE_CONFIG_DIR", nativeRoot);
@@ -266,8 +209,9 @@ async function prepareCliAuthFixture(
       ...(order ? { auth: { order } } : {}),
       agents: {
         defaults: {
-          workspace: state.workspaceDir,
+          workspace: workspaceDir,
           skipBootstrap: true,
+          utilityModel: "",
           heartbeat: { every: "0m" },
           model: { primary: modelRef },
           models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },

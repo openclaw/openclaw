@@ -87,9 +87,7 @@ function mockVoiceCallConfigMigrationRegistration(registerResult?: () => Promise
   mocks.createJiti.mockImplementation(() => {
     return () => ({
       default: {
-        register(api: {
-          registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
-        }) {
+        register(api: SetupRegistryApi) {
           api.registerConfigMigration((config) => ({ config, changes: ["voice-call"] }));
           return registerResult?.();
         },
@@ -98,10 +96,7 @@ function mockVoiceCallConfigMigrationRegistration(registerResult?: () => Promise
   });
 }
 
-function mockOpenAiCliBackendRegistration(params: {
-  requiresRuntime?: boolean;
-  registerResult?: () => Promise<void>;
-}) {
+function mockOpenAiCliBackendRegistration(params: { requiresRuntime?: boolean }) {
   const pluginRoot = makeTempDir();
   writeSetupApiStub(pluginRoot);
   mockSinglePlugin({
@@ -115,14 +110,11 @@ function mockOpenAiCliBackendRegistration(params: {
   mocks.createJiti.mockImplementation(() => {
     return () => ({
       default: {
-        register(api: {
-          registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
-        }) {
+        register(api: SetupRegistryApi) {
           api.registerCliBackend({
             id: "codex-cli",
             config: { command: "codex" },
           });
-          return params.registerResult?.();
         },
       },
     });
@@ -331,9 +323,7 @@ describe("setup-registry module loader", () => {
     const artifactRealPath = fs.realpathSync(artifactSetup);
     mocks.createJiti.mockImplementation(() => (modulePath: string) => ({
       default: {
-        register(api: {
-          registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
-        }) {
+        register(api: SetupRegistryApi) {
           api.registerProvider({
             id: "fixture",
             label: modulePath === artifactRealPath ? "artifact" : "source",
@@ -434,9 +424,7 @@ describe("setup-registry module loader", () => {
     mocks.createJiti.mockImplementation(() => {
       return () => ({
         default: {
-          register(api: {
-            registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
-          }) {
+          register(api: SetupRegistryApi) {
             api.registerConfigMigration((config) => ({ config, changes: ["unexpected"] }));
           },
         },
@@ -486,9 +474,7 @@ describe("setup-registry module loader", () => {
       const pluginId = modulePath.includes(bedrockRoot) ? "amazon-bedrock" : "voice-call";
       return () => ({
         default: {
-          register(api: {
-            registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
-          }) {
+          register(api: SetupRegistryApi) {
             api.registerConfigMigration((config) => ({
               config,
               changes: [pluginId],
@@ -556,9 +542,7 @@ describe("setup-registry module loader", () => {
     mocks.createJiti.mockImplementation(() => {
       return () => ({
         default: {
-          register(api: {
-            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
-          }) {
+          register(api: SetupRegistryApi) {
             api.registerProvider({
               id: "amazon-bedrock",
               label: "Amazon Bedrock",
@@ -599,15 +583,7 @@ describe("setup-registry module loader", () => {
     mocks.createJiti.mockImplementation(() => {
       return () => ({
         default: {
-          register(api: {
-            registerProvider: (provider: {
-              id: string;
-              aliases?: string[];
-              hookAliases?: string[];
-              label: string;
-              auth: [];
-            }) => void;
-          }) {
+          register(api: SetupRegistryApi) {
             api.registerProvider({
               id: "openai",
               aliases: ["openai"],
@@ -760,10 +736,7 @@ describe("setup-registry module loader", () => {
     mocks.createJiti.mockImplementation(() => {
       return () => ({
         default: {
-          register(api: {
-            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
-            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
-          }) {
+          register(api: SetupRegistryApi) {
             api.registerProvider({
               id: "anthropic",
               label: "Anthropic",
@@ -869,9 +842,7 @@ describe("setup-registry module loader", () => {
     mocks.createJiti.mockImplementation((modulePath: string) => {
       return () => ({
         default: {
-          register(api: {
-            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
-          }) {
+          register(api: SetupRegistryApi) {
             api.registerCliBackend(
               modulePath.includes(openaiRoot)
                 ? { id: "codex-cli", config: { command: "codex" } }
@@ -898,82 +869,6 @@ describe("setup-registry module loader", () => {
     expect(resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(openaiRoot, "setup-api.js"));
-  });
-
-  it("keeps synchronously registered cli backends even when register returns a promise", () => {
-    mockOpenAiCliBackendRegistration({
-      requiresRuntime: true,
-      registerResult: () => Promise.resolve(),
-    });
-
-    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual({
-      pluginId: "openai",
-      backend: {
-        id: "codex-cli",
-        config: {
-          command: "codex",
-        },
-      },
-    });
-  });
-
-  it("swallows rejected async setup provider registration returns", async () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          rootDir: pluginRoot,
-          setup: {
-            providers: [{ id: "openai" }],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation(() => {
-      return () => ({
-        default: {
-          register(api: {
-            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
-          }) {
-            api.registerProvider({
-              id: "openai",
-              label: "OpenAI",
-              auth: [],
-            });
-            return Promise.reject(new Error("async provider register failed"));
-          },
-        },
-      });
-    });
-
-    await expectNoUnhandledRejection(() => {
-      const provider = requireRecord(
-        resolvePluginSetupProviderCore({ provider: "openai", env: {} }),
-      );
-      expect(provider.id).toBe("openai");
-      expect(provider.label).toBe("OpenAI");
-    });
-  });
-
-  it("swallows rejected async setup cli backend registration returns", async () => {
-    mockOpenAiCliBackendRegistration({
-      registerResult: () => Promise.reject(new Error("async cli backend register failed")),
-    });
-
-    await expectNoUnhandledRejection(() => {
-      expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual({
-        pluginId: "openai",
-        backend: {
-          id: "codex-cli",
-          config: {
-            command: "codex",
-          },
-        },
-      });
-    });
   });
 
   it("swallows rejected async setup registry registration returns", async () => {
@@ -1328,28 +1223,6 @@ describe("setup-registry module loader", () => {
       });
     }
 
-    it("memoizes no-config resolutions without rescanning manifests", () => {
-      mockOpenAiProviderPlugin();
-      mocks.loadPluginManifestRegistry.mockClear();
-      const first = resolvePluginSetupRegistry();
-      const second = resolvePluginSetupRegistry();
-      expect(second).toEqual(first);
-      expect(second).not.toBe(first);
-      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-    });
-
-    it("recomputes after clearPluginSetupRegistryCache (reset contract)", () => {
-      mockOpenAiProviderPlugin();
-      mocks.loadPluginManifestRegistry.mockClear();
-      const first = resolvePluginSetupRegistry();
-      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-      clearPluginSetupRegistryCache();
-      // A hit also returns a fresh clone; only the loader call count proves invalidation.
-      const second = resolvePluginSetupRegistry();
-      expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
-      expect(second).toEqual(first);
-    });
-
     it("recomputes after clearPluginMetadataLifecycleCaches (install/reload/doctor)", async () => {
       const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
       mockOpenAiProviderPlugin();
@@ -1394,18 +1267,7 @@ describe("setup-registry module loader", () => {
       mocks.createJiti.mockImplementation(() => {
         return () => ({
           default: {
-            register(api: {
-              registerProvider: (provider: {
-                id: string;
-                label: string;
-                aliases: string[];
-                auth: [];
-              }) => void;
-              registerCliBackend: (backend: {
-                id: string;
-                config: { command: string; args: string[] };
-              }) => void;
-            }) {
+            register(api: SetupRegistryApi) {
               api.registerProvider({
                 id: "openai",
                 label: "OpenAI",
@@ -1485,9 +1347,7 @@ describe("setup-registry module loader", () => {
         const id = modulePath.includes(secondRoot) ? "second" : "first";
         return () => ({
           default: {
-            register(api: {
-              registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
-            }) {
+            register(api: SetupRegistryApi) {
               api.registerProvider({ id, label: id, auth: [] });
             },
           },

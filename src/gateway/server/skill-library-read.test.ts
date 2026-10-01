@@ -50,10 +50,11 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { setTestEnvValue } from "../../test-utils/env.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "../device-auth.js";
 import { startGatewayServer } from "../server.js";
-import { getGatewayE2ePortBlock } from "../test-helpers.e2e.js";
+import { startClaimedGateway } from "../test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
 
 type Frame = {
@@ -352,8 +353,11 @@ describe("Gateway pinned manual library read", () => {
             const aliceProfile = ensureProfileForEmail("alice@example.test");
             const bobProfile = ensureProfileForEmail("bob@example.test");
             expect(aliceProfile.id).not.toBe(bobProfile.id);
-            const port = await getGatewayE2ePortBlock();
-            gateway = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
+            const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+            const { port } = portClaim;
+            gateway = await startClaimedGateway(portClaim, () =>
+              startGatewayServer(port, { bind: "loopback", controlUiEnabled: false }),
+            );
             await gateway.startupSettled;
             const alice = await connectProfile(
               port,

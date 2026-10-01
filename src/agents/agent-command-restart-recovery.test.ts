@@ -284,12 +284,15 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     expect(evidence?.messagingToolSentTargetsTruncated).toBe(true);
   });
 
-  it("does not mark reasoning payloads as visible terminal replies", () => {
-    const evidence = buildRestartRecoveryTerminalDeliveryEvidence({
-      payloads: [{ isReasoning: true, mediaUrls: ["/tmp/private.png"] }],
-    });
-
-    expect(evidence?.payloads).toEqual([{ mediaUrls: ["/tmp/private.png"], visible: false }]);
+  it.each([
+    ["reasoning", { text: "Working", isReasoning: true }],
+    ["commentary", { text: "Working", isCommentary: true }],
+    ["status notice", { text: "Working", isStatusNotice: true }],
+    ["error", { text: "Failed", isError: true }],
+    ["silent reply", { text: "NO_REPLY" }],
+  ])("does not turn %s into a durable visible-final receipt", (_name, payload) => {
+    const evidence = buildRestartRecoveryTerminalDeliveryEvidence({ payloads: [payload] });
+    expect(evidence.payloads).toEqual([{ visible: false }]);
   });
 
   it("preserves explicit hidden-payload visibility", () => {

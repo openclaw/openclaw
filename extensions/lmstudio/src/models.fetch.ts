@@ -1,4 +1,3 @@
-// Lmstudio plugin module implements models.fetch behavior.
 import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -7,14 +6,12 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
-  buildLmstudioModelName,
-  mapLmstudioWireEntry,
+  mapLmstudioWireModels,
   resolveLmstudioCanonicalModelKey,
   resolveLmstudioServerBase,
   resolveLoadedContextWindow,
@@ -219,26 +216,7 @@ export async function discoverLmstudioModels(
     return [];
   }
 
-  return fetched.models
-    .map((entry): ModelDefinitionConfig | null => {
-      const base = mapLmstudioWireEntry(entry);
-      if (!base) {
-        return null;
-      }
-      return {
-        id: base.id,
-        // Runtime display: include format/vision/tool-use/loaded tags in the name.
-        name: buildLmstudioModelName(base),
-        reasoning: base.reasoning,
-        input: base.input,
-        cost: SELF_HOSTED_DEFAULT_COST,
-        compat: { ...base.compat, supportsUsageInStreaming: true },
-        contextWindow: base.contextWindow,
-        contextTokens: base.contextTokens,
-        maxTokens: base.maxTokens,
-      };
-    })
-    .filter((entry): entry is ModelDefinitionConfig => entry !== null);
+  return mapLmstudioWireModels(fetched.models, "runtime");
 }
 
 type LmstudioModelLoadParams = {

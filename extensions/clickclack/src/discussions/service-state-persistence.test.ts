@@ -4,6 +4,7 @@ import path from "node:path";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateCompareIntent,
   PluginStateSyncKeyedStore,
@@ -21,20 +22,16 @@ import type { ClickClackChannel } from "../types.js";
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { getClickClackDiscussionInstallationId } from "./installation.js";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
-import { createHarness, testExternalRef } from "./service-test-support.js";
+import { discussionChannel, createHarness, testExternalRef } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
 
 function legacyCreateResponse(
   input: Parameters<ClickClackClient["createChannel"]>[1],
 ): ClickClackChannel {
-  const response: ClickClackChannel = {
-    id: "chn_discussion",
-    route_id: "discussion-route",
-    workspace_id: "wsp_team",
+  const response: ClickClackChannel = discussionChannel({
     ...input,
     kind: "public",
-    created_at: "2026-07-19T00:00:00.000Z",
-  };
+  });
   Reflect.deleteProperty(response, "display_title");
   return response;
 }
@@ -57,7 +54,7 @@ describe("ClickClack discussion state persistence", () => {
 
     try {
       const harness = createHarness({ label: "Persisted legacy title" }, { openSyncKeyedStore });
-      harness.runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      harness.runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests<T>("clickclack", { ...options, env });
       const service = new ClickClackDiscussionService(harness.runtime, {
         clientFactory: () => harness.client,
@@ -142,18 +139,15 @@ describe("ClickClack discussion state persistence", () => {
     expect(harness.store.lookup(sessionKey)).toMatchObject({ displayTitle: "Original title" });
 
     harness.setSessionEntry({ label: "Updated title" });
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (_channelId, patch) => ({
-      id: "chn_discussion",
-      route_id: "discussion-route",
-      workspace_id: "wsp_team",
-      name: patch.name ?? "updated-title",
-      kind: "public",
-      external_managed: true,
-      external_ref: testExternalRef(sessionKey),
-      external_url: "https://control.example/control/chat/main/stale-title-confirmation",
-      sidebar_section: "Sessions",
-      created_at: "2026-07-19T00:00:00.000Z",
-    }));
+    vi.mocked(harness.updateChannel).mockImplementationOnce(async (_channelId, patch) =>
+      discussionChannel({
+        name: patch.name ?? "updated-title",
+        external_managed: true,
+        external_ref: testExternalRef(sessionKey),
+        external_url: "https://control.example/control/chat/main/stale-title-confirmation",
+        sidebar_section: "Sessions",
+      }),
+    );
 
     await harness.service.reconcile(sessionKey);
 
@@ -184,7 +178,7 @@ function generationFixture(
       },
     },
   );
-  harness.runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => {
+  harness.runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
     const store = createPluginStateKeyedStoreForTests<T>("clickclack", { ...storeOptions, env });
     return {
       ...store,

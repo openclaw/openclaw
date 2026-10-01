@@ -12,6 +12,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -122,12 +123,18 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       tailResume.resolve();
       await Promise.allSettled(tails);
       await host.close();
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
+      clearPluginMetadataLifecycleCaches();
+      try {
+        const cleanup = await waitForPluginCacheRetirement();
+        expect(cleanup.failures).toEqual([]);
+      } finally {
+        for (const { database } of connections) {
+          if (database.isOpen) {
+            database.close();
+          }
         }
+        Reflect.deleteProperty(globalThis, key);
       }
-      Reflect.deleteProperty(globalThis, key);
     },
   };
 }
@@ -385,17 +392,11 @@ describe("async speech preparation resources", () => {
           await fixture.host.close();
           expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
           expect(fixture.state.connections[0]?.disposals).toBe(0);
-          if (registry) {
-            const lifecycle = registry.runtimeLifecycles.find(
-              (entry) => entry.lifecycle.id === "speech-preparation-resource",
-            );
-            await lifecycle?.lifecycle.cleanup?.({ reason: "restart" });
-            expect(fixture.state.connections[0]?.cleanups).toBe(1);
-          }
         });
       } finally {
         await fixture.cleanup();
       }
+      expect(fixture.state.connections[0]?.cleanups).toBe(1);
     },
   );
 

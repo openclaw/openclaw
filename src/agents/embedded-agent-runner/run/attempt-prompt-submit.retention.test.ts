@@ -8,7 +8,6 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { pruneAllSessionTranscriptArchivesToHighWater } from "../../../config/sessions/session-history-archive-pruning.js";
@@ -68,7 +67,7 @@ async function publishChild(runId: string, answer: string) {
       __openclaw: { runId },
     },
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId,
     childSessionKey,
     requesterSessionKey,
@@ -128,17 +127,12 @@ it("submits deferred child results after canonical archive pruning without poiso
   });
 
   const scope = resolveSqliteReadScope(archived.target);
-  const pruned = await runExclusiveSqliteSessionWrite(
-    scope,
-    () =>
-      pruneAllSessionTranscriptArchivesToHighWater({
-        archiveDirectory: path.dirname(archivePath),
-        databaseOptions: toDatabaseOptions(scope),
-        highWaterBytes: 0,
-        storePath: archived.target.storePath,
-      }),
-    "session.history.archive-prune",
-  );
+  const pruned = await pruneAllSessionTranscriptArchivesToHighWater({
+    archiveDirectory: path.dirname(archivePath),
+    databaseOptions: toDatabaseOptions(scope),
+    highWaterBytes: 0,
+    storePath: archived.target.storePath,
+  });
   expect(pruned.removedFiles).toBe(1);
   await expect(access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
   expect(

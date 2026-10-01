@@ -36,6 +36,8 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `--json` returns a local account inventory from plugin metadata without contacting the Gateway or executing channel setup/runtime code. Configured accounts remain visible even when their plugin has a setup entry. Use `channels status --probe` for live checks.
 
+Disabling a plugin does not uninstall it. Its channels remain `installed: true` in the inventory; with `--all`, an installed channel without configured accounts has `origin: "available"` even when its plugin is disabled.
+
 In an explicit multi-agent setup, workspace-scoped channel plugins come from
 `agents.defaults.systemAgent.agentId`. Without that owner, `channels list`
 returns the shared bundled, managed, and global inventory with a diagnostic;
@@ -63,15 +65,15 @@ With `--json`, every channel entry includes `label` alongside its accounts, inst
 values. Omit the option to keep each command's default or broader account scope;
 do not pass an empty shell variable to request that scope.
 
-- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
+- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `60000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
 
 `channels logs --lines` requires a positive integer. Omit `--lines` to use the default of `200`; explicitly empty values are rejected.
 
-`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
-or `gateway/channels/<name>`, including slash-separated descendants. Similar names
+`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`,
+`channels/<name>`, or `gateway/channels/<name>`, including slash-separated descendants. Similar names
 such as `discord-archive` do not match `discord`.
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
@@ -79,6 +81,13 @@ such as `discord-archive` do not match `discord`.
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
+
+If the Gateway answers with an error, such as an unknown `--channel`, the command
+reports that error and exits nonzero instead of showing an unreachable fallback.
+
+Before probing channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is a non-failing result, not an unreachable Gateway. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
+
+The command reads existing local device authentication without creating an identity or persisting tokens returned by the Gateway, including when `--probe` is enabled.
 
 `channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status probe.
 
@@ -172,7 +181,7 @@ openclaw channels add telegram
 openclaw channels add --channel telegram
 ```
 
-Guided setup requires an interactive terminal. In a non-TTY shell, OpenClaw exits immediately instead of waiting for input; use `openclaw channels add --channel <id> --use-env` or pass the selected plugin's credential flags.
+Guided setup requires an interactive terminal. In a non-TTY shell, OpenClaw exits immediately instead of waiting for input. Run `openclaw channels add --channel <id> --help` to list the setup flags that channel declares, then pass them for non-interactive setup. `--use-env` appears there only where it is registered: a modern channel declares the matching field in its setup contract, and a plugin still on the legacy shared setup adapter gets it from the compatibility set described above. When the selected channel leaves `--use-env` out, the exit message points at that channel's `--help` instead of at `--use-env`.
 
 The wizard can prompt for:
 

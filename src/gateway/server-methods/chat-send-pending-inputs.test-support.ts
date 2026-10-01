@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Static } from "typebox";
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { ChatSendParamsSchema } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -30,6 +30,7 @@ export function useBrowserFollowupFixture() {
     options: {
       active?: boolean;
       createdActor?: SessionCreatedActor;
+      sandbox?: "required";
       preserveContent?: boolean;
       transientProjectionFailures?: number;
       persistDuringDispatch?: boolean;
@@ -51,6 +52,7 @@ export function useBrowserFollowupFixture() {
           updatedAt: Date.now(),
           status: active ? "running" : "done",
           ...(options.createdActor ? { createdActor: options.createdActor } : {}),
+          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
         },
         unrelated: {
           sessionId: "unrelated-browser-session",
@@ -163,17 +165,13 @@ export function useBrowserFollowupFixture() {
       return respond;
     };
     const finishDispatch = async () => {
-      dispatchRelease.resolve();
-      activeRun?.complete();
-      let settled = false;
       const completion = getSessionWorkAdmissionRelease({
         scope: storePath,
         identities: [scope.sessionKey, scope.sessionId],
       });
-      void Promise.resolve(completion).then(() => {
-        settled = true;
-      });
-      await vi.waitFor(() => expect(settled).toBe(true), { timeout: 5_000 });
+      dispatchRelease.resolve();
+      activeRun?.complete();
+      await completion;
     };
     return {
       scope,

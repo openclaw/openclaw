@@ -21,7 +21,7 @@ const OWNED_REQUEST = {
 export type ChromeStoreInstallRequest = {
   browser: string;
   path: string;
-  state: "missing" | "requested" | "foreign" | "invalid";
+  state: "missing" | "requested" | "foreign" | "invalid" | null;
   issue?: string;
 };
 

@@ -78,15 +78,12 @@ const tabAccessReady = (async () => {
   }
 })();
 
-const custodyError = () =>
-  new Error(
-    "Automation is paused to protect a pre-upgrade copilot session. Open Settings to disconnect before reconnecting.",
-  );
-
 async function requireAutomationAllowed() {
   await tabAccessReady;
   if (retiredCopilotCustodyBlocked) {
-    throw custodyError();
+    throw new Error(
+      "Automation is paused to protect a pre-upgrade copilot session. Open Settings to disconnect before reconnecting.",
+    );
   }
 }
 
@@ -612,7 +609,7 @@ const handlePopupMessage = createPopupMessageHandler({
 });
 nativeBootstrap = createNativeBootstrapController({
   getPairing: getConfig,
-  applyPairing: async (request) => await handlePopupMessage.applyPairing(request),
+  applyPairing: handlePopupMessage.applyPairing,
 });
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => handlePopupMessage(msg, reply));
 

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRecord } from "../plugins/registry.js";
@@ -20,6 +21,7 @@ import {
   listControlUiPluginTabAuthGrants,
   listControlUiPluginWidgetKinds,
 } from "./control-ui-plugin-tabs.js";
+import { resolveControlUiPluginAuthCookieGeneration } from "./http-auth-plugin-cookie.js";
 import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
@@ -51,6 +53,7 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
     origin,
     rootDir,
     controlUi: { entry: "dist/control-ui/index.js", styles: ["dist/control-ui/theme.css"] },
+    uiCapabilities: ["page", "widget"],
   });
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
@@ -58,6 +61,7 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
       id: record.id,
       configSchema: { type: "object", additionalProperties: false },
       controlUi: record.controlUi,
+      uiCapabilities: record.uiCapabilities,
     }),
   );
   registry.plugins.push(record);
@@ -80,7 +84,12 @@ function cookieForGrant(overrides: { pluginId?: string; generation?: string } = 
     response.res,
     [{ ...grant, pluginId: overrides.pluginId ?? grant.pluginId }],
     {
-      generation: overrides.generation ?? resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+      generation:
+        overrides.generation ??
+        resolveControlUiPluginAuthCookieGeneration(
+          resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+          getRuntimeConfig(),
+        ),
     },
   );
   const value = response.setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
@@ -105,38 +114,41 @@ describe("native Control UI browser assets", () => {
     await import("./control-ui.js");
   });
 
-  it.each(["global", "workspace", "config"] as const)(
-    "keeps Custom plugin UI off by default for %s plugins",
-    async (origin) => {
-      await withTempConfig({
-        cfg: {},
-        run: async () => {
-          const fixture = activateFixture(origin);
-          fixture.record.trustedOfficialInstall = true;
-          const catalog = await listControlUiPluginCatalog();
-          expect(catalog.plugins).toEqual([]);
-          expect(catalog.diagnostics).toEqual([
-            {
-              pluginId: fixture.record.id,
-              code: "custom-plugin-ui-disabled",
-              message: expect.stringContaining("Settings > Labs"),
-            },
-          ]);
-          expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
-          expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
-            expect.objectContaining({ pluginId: fixture.record.id }),
-          );
-          expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
-        },
-      });
-    },
-  );
-
-  it("withdraws Custom plugin UI assets and receipts when the applied lab setting turns off", async () => {
+  it("keeps Custom plugin UI off by default for nonbundled plugins", async () => {
     await withTempConfig({
-      cfg: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      cfg: {},
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        fixture.record.trustedOfficialInstall = true;
+        const catalog = await listControlUiPluginCatalog();
+        expect(catalog.plugins).toEqual([]);
+        expect(catalog.diagnostics).toEqual([
+          {
+            pluginId: fixture.record.id,
+            code: "custom-plugin-ui-disabled",
+            message: expect.stringContaining("Settings > Labs"),
+          },
+        ]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+        expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
+          expect.objectContaining({ pluginId: fixture.record.id }),
+        );
+        expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
+      },
+    });
+  });
+
+  it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
+    await withTempConfig({
+      cfg: {},
       run: async () => {
         activateFixture("workspace");
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
         const entry = (await listControlUiPluginCatalog()).plugins[0]!;
         expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
           expect.objectContaining({ pluginId: entry.pluginId }),
@@ -161,7 +173,6 @@ describe("native Control UI browser assets", () => {
           gateway: { controlUi: { experimental: { customPlugins: false } } },
         });
 
-        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
         expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
         expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
           expect.objectContaining({ pluginId: entry.pluginId }),
@@ -177,15 +188,35 @@ describe("native Control UI browser assets", () => {
             expect((await sendRequest(server, { path: asset, headers })).res.statusCode).toBe(404);
           }
         }
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([entry]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toContainEqual(
+          expect.objectContaining({ pluginId: entry.pluginId }),
+        );
+        expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
+          expect.objectContaining({ pluginId: entry.pluginId }),
+        );
+        expect(listControlUiPluginActivations(browser)).toEqual([]);
+        expect(reportControlUiPluginActivation(browser, report)).toBe(true);
+        expect(listControlUiPluginActivations(browser)).toEqual([report]);
+        for (const asset of [entry.entryUrl, ...entry.styles]) {
+          expect(
+            (await sendRequest(server, { path: asset, headers: { cookie } })).res.statusCode,
+          ).toBe(200);
+        }
       },
     });
   });
 
-  it.each(
-    [AUTH_NONE, AUTH_TOKEN].flatMap((auth) =>
-      ["", "/openclaw"].map((basePath) => ({ auth, basePath })),
-    ),
-  )(
+  it.each([
+    { auth: AUTH_NONE, basePath: "" },
+    { auth: AUTH_TOKEN, basePath: "" },
+    { auth: AUTH_TOKEN, basePath: "/openclaw" },
+  ])(
     "reports and enforces native asset authentication for $auth.mode Gateways at '$basePath'",
     async ({ auth, basePath }) => {
       const requiresAuth = auth.mode !== "none";
@@ -354,6 +385,7 @@ describe("native Control UI browser assets", () => {
                 "token",
                 false,
                 resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+                getRuntimeConfig(),
                 ["operator.read"],
               );
               const cookies = response.setHeader.mock.calls
@@ -415,6 +447,7 @@ describe("native Control UI browser assets", () => {
     const first = await listControlUiPluginCatalog();
     expect(first.diagnostics).toEqual([]);
     const entry = first.plugins[0]!;
+    expect(entry.uiCapabilities).toEqual(["page", "widget"]);
     const browser = {};
     expect(
       reportControlUiPluginActivation(browser, {
@@ -423,12 +456,12 @@ describe("native Control UI browser assets", () => {
         status: "activated",
       }),
     ).toBe(true);
-    const cookie = cookieForGrant();
     await withGatewayServer({
       prefix: "native-ui-http-",
       resolvedAuth: AUTH_TOKEN,
       overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
+        const cookie = cookieForGrant();
         const read = (url: string, method = "GET") =>
           sendRequest(server, {
             path: url,
@@ -514,7 +547,6 @@ describe("native Control UI browser assets", () => {
       status: "activated" as const,
     };
     expect(reportControlUiPluginActivation(browser, report)).toBe(true);
-    const cookie = cookieForGrant();
     const retained = createEmptyPluginRegistry();
     retained.plugins.push(fixture.record, createPluginRecord({ id: "unrelated" }));
     retained.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
@@ -525,6 +557,7 @@ describe("native Control UI browser assets", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
+        const cookie = cookieForGrant();
         const oldChunk = first.entryUrl.replace(/index\.js$/u, "lazy.js");
         const read = () => sendRequest(server, { path: oldChunk, headers: { cookie } });
         const response = await read();
@@ -665,7 +698,6 @@ describe("native Control UI browser assets", () => {
     fs.writeFileSync(path.join(fixture.directory, "index.js.map"), "private sourcemap");
     fs.writeFileSync(path.join(fixture.directory, ".secret.js"), "private hidden file");
     const entry = (await listControlUiPluginCatalog()).plugins[0]!;
-    const cookie = cookieForGrant();
     const prefix = entry.entryUrl.slice(0, -"index.js".length);
     expect(listControlUiPluginTabAuthGrants(["operator.approvals"])).toEqual([]);
     expect(authorizeOperatorScopesForMethod("plugins.controlUi.list", ["operator.read"])).toEqual({
@@ -679,6 +711,7 @@ describe("native Control UI browser assets", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
+        const cookie = cookieForGrant();
         const unauthorizedHeaders: Record<string, string>[] = [
           {},
           { cookie: cookieForGrant({ pluginId: "another-owner" }) },
@@ -751,12 +784,15 @@ describe("native Control UI browser assets", () => {
         id: "native-ui",
         configSchema: { type: "object" },
         controlUi: { entry: "dist/control-ui/published/index.js" },
+        uiCapabilities: ["page", "navigation"],
       }),
     );
     expect(await listControlUiPluginCatalog()).toEqual(first);
     const second = await reloadControlUiPluginCatalog("native-ui");
     expect(second.diagnostics).toEqual([]);
     expect(second.plugins[0]!.revision).not.toBe(report.revision);
+    expect(second.plugins[0]!.uiCapabilities).toEqual(["page", "navigation"]);
+    expect(fixture.record.uiCapabilities).toEqual(["page", "widget"]);
     expect(fixture.record.controlUi?.entry).toBe("dist/control-ui/index.js");
     expect(listControlUiPluginActivations(browser)).toEqual([]);
     expect(reportControlUiPluginActivation(browser, report)).toBe(false);
@@ -770,6 +806,44 @@ describe("native Control UI browser assets", () => {
     expect(listControlUiPluginActivations(browser)).toEqual([pending]);
     setActivePluginRegistry(createEmptyPluginRegistry());
     expect(reportControlUiPluginActivation(browser, pending)).toBe(false);
+  });
+
+  it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {
+    const fixture = activateFixture();
+    const first = await listControlUiPluginCatalog();
+    const browser = {};
+    const report = {
+      pluginId: fixture.record.id,
+      revision: first.plugins[0]!.revision,
+      status: "activated" as const,
+    };
+    expect(reportControlUiPluginActivation(browser, report)).toBe(true);
+    fs.writeFileSync(
+      path.join(fixture.rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: fixture.record.id,
+        configSchema: { type: "object" },
+        controlUi: fixture.record.controlUi,
+        uiCapabilities: [],
+      }),
+    );
+    expect(await listControlUiPluginCatalog()).toEqual(first);
+    const next = await reloadControlUiPluginCatalog(fixture.record.id);
+    expect(next.plugins[0]!.uiCapabilities).toEqual([]);
+    expect(next.plugins[0]!.revision).not.toBe(first.plugins[0]!.revision);
+    expect(listControlUiPluginActivations(browser)).toEqual([]);
+    expect(reportControlUiPluginActivation(browser, report)).toBe(false);
+    fs.writeFileSync(
+      path.join(fixture.rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: fixture.record.id,
+        configSchema: { type: "object" },
+        controlUi: fixture.record.controlUi,
+      }),
+    );
+    const undeclared = await reloadControlUiPluginCatalog(fixture.record.id);
+    expect(undeclared.plugins[0]).not.toHaveProperty("uiCapabilities");
+    expect(undeclared.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
   });
 
   it("fences a queued reload after registry replacement and builds a fresh backend owner", async () => {

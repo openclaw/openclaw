@@ -1,14 +1,10 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
+import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import {
   createBrowserAnnotationAttachment,
   findChatSendPayload,
@@ -16,41 +12,11 @@ import {
 } from "./chat-host.test-support.ts";
 import { retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
-const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
-
-afterEach(async () => {
-  releaseChatAttachmentPayloads(attachmentsToRelease);
-  attachmentsToRelease.length = 0;
-  await Promise.resolve();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
-function createStagedAttachment(id: string): ChatAttachment {
-  const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
-  const attachment = registerChatAttachmentPayload({
-    attachment: {
-      id,
-      mimeType: "application/pdf",
-      fileName: "brief.pdf",
-      sizeBytes: file.size,
-    },
-    dataUrl: attachmentDataUrl,
-    file,
-  });
-  attachmentsToRelease.push(attachment);
-  return attachment;
-}
+useChatSendBrowserFixture();
 
 describe("composeBrowserAnnotationContext", () => {
   it("preserves attachment order across two annotations", () => {
@@ -344,7 +310,7 @@ describe("handleSendChat browser annotation context", () => {
         .fn()
         .mockResolvedValueOnce({ status: "timeout" })
         .mockResolvedValue({ status: "started" });
-      let workContext = "Stable browser context";
+      let workContext = { page: "chat", title: "Stable browser context" };
       const attachment = createBrowserAnnotationAttachment("delayed", "Stable browser context");
       const replacement = createBrowserAnnotationAttachment("replacement", "New browser context");
       const mentions = [{ profileId: "profile-alex", start: 5, end: 10 }];
@@ -357,11 +323,11 @@ describe("handleSendChat browser annotation context", () => {
         pendingSettingsPatches: { "agent:main": settingsPatch.promise },
       });
 
-      // Annotation context is prepended by the attachment path; Home work context
-      // trails the message so session titles derive from what the person asked.
+      // Browser annotations prepend model text; Home snapshots remain separate
+      // and retain their original value through navigation, delivery, and retry.
       const expected =
         source === "home"
-          ? "🔎 @Alex Use the marked area\n\nStable browser context"
+          ? "🔎 @Alex Use the marked area"
           : "Stable browser context\n\n🔎 @Alex Use the marked area";
       const expectedMentions = [
         {
@@ -381,11 +347,14 @@ describe("handleSendChat browser annotation context", () => {
       host.chatMessage = "@Carol New draft";
       host.chatMentions = [{ profileId: "profile-carol", start: 0, end: 6 }];
       host.chatAttachments = [replacement];
-      workContext = "A different task is now visible";
+      workContext = { page: "chat", title: "A different task is now visible" };
       settingsPatch.resolve(true);
       await send;
 
       expect(findChatSendPayload(host).message).toBe(expected);
+      expect(findChatSendPayload(host).workContext).toEqual(
+        source === "home" ? { page: "chat", title: "Stable browser context" } : undefined,
+      );
       expect(findChatSendPayload(host).mentions).toEqual(expectedMentions);
       expect(host.chatQueue[0]).toMatchObject({ sendState: "failed", text: expected });
       expect(host.chatMessage).toBe("@Carol New draft");

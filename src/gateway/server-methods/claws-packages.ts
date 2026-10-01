@@ -13,11 +13,11 @@ import {
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../../claws/package-remove.js";
 import { readClawInstallRecord } from "../../claws/provenance.js";
 import { projectPluginRuntimeFailure } from "../../plugins/lifecycle.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import {
   captureGatewayPluginRuntimeApplications,
   pluginLifecycleError,
-  withGatewayPluginLifecycleLease,
 } from "./plugins-lifecycle-error.js";
 import type {
   GatewayRequestContext,
@@ -54,6 +54,7 @@ export const clawsPackageHandlers = {
     }
     const input = parsed.data;
     let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
+    let entered = false;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
@@ -81,9 +82,11 @@ export const clawsPackageHandlers = {
       };
       captured = captureGatewayPluginRuntimeApplications(applyRuntime, assertCurrent);
       const applyOwnedRuntime = captured.applyRuntime;
-      const { runtimeFailure, ...removed } = await withGatewayPluginLifecycleLease(
-        signal,
+      // A request must not wait on a config reload that is draining that request.
+      const { runtimeFailure, ...removed } = await withPluginLifecycleLease(
+        { signal, waitMs: 0 },
         async (lease) => {
+          entered = true;
           const beforePersistentApply = () => {
             assertCurrent();
             lease.assertOwned();
@@ -145,7 +148,11 @@ export const clawsPackageHandlers = {
         undefined,
       );
     } catch (error) {
-      respond(false, undefined, pluginLifecycleError(error, captured?.application));
+      respond(
+        false,
+        undefined,
+        pluginLifecycleError(error, { application: captured?.application, entered, signal }),
+      );
     }
   },
 } satisfies GatewayRequestHandlers;

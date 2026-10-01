@@ -15,6 +15,7 @@ import {
   REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
+import { initializeScriptGitWorkspace } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -507,30 +508,7 @@ process.kill = function(pid, signal) {
     const workspace = path.join(root, "workspace");
     await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
     await fs.writeFile(path.join(workspace, ".gitignore"), "");
-    for (const args of [
-      ["init", "--quiet"],
-      ["add", ".gitignore"],
-      [
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=test@openclaw.invalid",
-        "commit",
-        "--quiet",
-        "-m",
-        "base",
-      ],
-    ]) {
-      const result = await runCommandWithTimeout(["git", "-C", workspace, ...args], {
-        timeoutMs: 10_000,
-      });
-      expect(result.code).toBe(0);
-    }
-    const baseCommit = (
-      await runCommandWithTimeout(["git", "-C", workspace, "rev-parse", "HEAD"], {
-        timeoutMs: 10_000,
-      })
-    ).stdout.trim();
+    const baseCommit = await initializeScriptGitWorkspace(workspace, ".gitignore");
     const env = { ...process.env, HOME: home };
     const initial = await runCommandWithTimeout(
       [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, workspace, baseCommit, "eligible"],
@@ -712,30 +690,7 @@ process.kill = function(pid, signal) {
     await fs.mkdir(home);
     await fs.mkdir(workspace);
     await fs.writeFile(path.join(workspace, ".gitignore"), "");
-    for (const args of [
-      ["init", "--quiet"],
-      ["add", ".gitignore"],
-      [
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=test@openclaw.invalid",
-        "commit",
-        "--quiet",
-        "-m",
-        "base",
-      ],
-    ]) {
-      const result = await runCommandWithTimeout(["git", "-C", workspace, ...args], {
-        timeoutMs: 10_000,
-      });
-      expect(result.code).toBe(0);
-    }
-    const baseCommit = (
-      await runCommandWithTimeout(["git", "-C", workspace, "rev-parse", "HEAD"], {
-        timeoutMs: 10_000,
-      })
-    ).stdout.trim();
+    const baseCommit = await initializeScriptGitWorkspace(workspace, ".gitignore");
     const env = { ...process.env, HOME: home };
     await fs.writeFile(path.join(workspace, "artifact.txt"), "base artifact\n");
     const base = await runCommandWithTimeout(
@@ -790,40 +745,10 @@ process.kill = function(pid, signal) {
     await fs.mkdir(home);
     await fs.mkdir(path.join(workspace, "src"), { recursive: true });
     await fs.writeFile(path.join(workspace, "src", "old.txt"), "old");
-    for (const args of [
-      ["init", "--quiet"],
-      ["add", "."],
-      [
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=test@openclaw.invalid",
-        "commit",
-        "--quiet",
-        "-m",
-        "base",
-      ],
-    ]) {
-      const result = await runCommandWithTimeout(["git", "-C", workspace, ...args], {
-        timeoutMs: 10_000,
-      });
-      expect(result.code).toBe(0);
-    }
-    const base = await runCommandWithTimeout(["git", "-C", workspace, "rev-parse", "HEAD"], {
-      timeoutMs: 10_000,
-    });
-    expect(base.code).toBe(0);
+    const baseCommit = await initializeScriptGitWorkspace(workspace, ".");
     const env = { ...process.env, HOME: home };
     const initial = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        REMOTE_WORKSPACE_MANIFEST_JS,
-        workspace,
-        base.stdout.trim(),
-        "eligible",
-        "",
-      ],
+      [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, workspace, baseCommit, "eligible", ""],
       { timeoutMs: 10_000, baseEnv: env },
     );
     expect(initial.code).toBe(0);
@@ -836,7 +761,7 @@ process.kill = function(pid, signal) {
         "-e",
         REMOTE_WORKSPACE_MANIFEST_JS,
         workspace,
-        base.stdout.trim(),
+        baseCommit,
         "eligible",
         initial.stdout.trim().slice("sha256:".length),
       ],

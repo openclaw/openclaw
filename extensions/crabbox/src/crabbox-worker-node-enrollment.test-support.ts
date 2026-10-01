@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { expect } from "vitest";
 import type {
   CrabboxWorkerNodeEnrollment,
   CrabboxWorkerNodeRuntimePreparation,
@@ -24,5 +27,20 @@ export function createNodeBootstrapFixture(
     openclawVersion: "2026.8.1",
     enabledPluginIds: ["demo"],
     ...overrides,
+  };
+}
+
+export async function readLaunch(stateDir: string) {
+  const target = path.join(stateDir, "launch.json");
+  // File watchers can miss a fast atomic rename before their subscription is ready.
+  await expect.poll(() => fs.existsSync(target), { timeout: 30_000 }).toBe(true);
+  return JSON.parse(fs.readFileSync(target, "utf8")) as {
+    build: string;
+    cli: string;
+    args: string[];
+    token?: string;
+    setupCode?: string;
+    environment: Record<string, string>;
+    enabledPlugins: string[];
   };
 }

@@ -1,4 +1,3 @@
-// Pixverse provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -30,6 +29,7 @@ import type {
 import {
   DEFAULT_PIXVERSE_MODEL_ID,
   DEFAULT_PIXVERSE_REGION,
+  normalizePixVerseRegion,
   PIXVERSE_BASE_URL_BY_REGION,
   PIXVERSE_PROVIDER_ID,
   type PixVerseApiRegion,
@@ -92,20 +92,11 @@ function resolvePixVerseBaseUrl(req: VideoGenerationRequest): string {
 
 function resolvePixVerseApiRegion(value: unknown): PixVerseApiRegion {
   const region = normalizeOptionalString(value)?.toLowerCase();
-  switch (region) {
-    case "cn":
-    case "china":
-    case "mainland":
-    case "pai":
-      return "cn";
-    case "global":
-    case "intl":
-    case "international":
-    case undefined:
-      return DEFAULT_PIXVERSE_REGION;
-    default:
-      throw new Error(`Unsupported PixVerse API region "${region}". Use "international" or "cn".`);
+  const normalized = normalizePixVerseRegion(region);
+  if (normalized || region === undefined) {
+    return normalized ?? DEFAULT_PIXVERSE_REGION;
   }
+  throw new Error(`Unsupported PixVerse API region "${region}". Use "international" or "cn".`);
 }
 
 function normalizePixVerseModel(model: string | undefined): string {
@@ -134,29 +125,8 @@ function resolvePixVerseDurationSeconds(value: number | undefined): number {
   return Math.max(1, Math.min(MAX_DURATION_SECONDS, Math.round(value)));
 }
 
-function appendOptionalNumber(body: Record<string, unknown>, key: string, value: unknown): void {
-  const numberValue = asFiniteNumber(value);
-  if (numberValue != null) {
-    body[key] = numberValue;
-  }
-}
-
-function appendOptionalInt32Seed(body: Record<string, unknown>, value: unknown): void {
-  const seed = asSafeIntegerInRange(value, { min: 0, max: PIXVERSE_SEED_MAX });
-  if (seed !== undefined) {
-    body.seed = seed;
-  }
-}
-
 function readPixVerseSeed(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: PIXVERSE_SEED_MAX });
-}
-
-function appendOptionalString(body: Record<string, unknown>, key: string, value: unknown): void {
-  const stringValue = normalizeOptionalString(value);
-  if (stringValue) {
-    body[key] = stringValue;
-  }
 }
 
 function buildPixVerseHeaders(headers: Headers, contentType?: string): Headers {
@@ -185,38 +155,21 @@ function readPixVerseSuccess<T>(payload: PixVerseEnvelope<T>, label: string): T 
   return payload.Resp;
 }
 
-// Reads a PixVerse JSON response through the shared provider JSON reader so a
-// provider that streams an unbounded body cannot force the runtime to buffer the
-// whole payload before parsing it on the success path. The shared helper applies
-// the established 16 MiB provider JSON cap and the standard malformed-JSON
-// wrapping; PixVerse envelope validation stays local via readPixVerseSuccess.
 async function readPixVerseJson<T>(response: Response, label: string): Promise<T> {
-  const payload = await readProviderJsonResponse(response, label);
-  return readPixVerseSuccess(payload as PixVerseEnvelope<T>, label);
+  const payload = await readProviderJsonResponse<PixVerseEnvelope<T>>(response, label);
+  return readPixVerseSuccess(payload, label);
 }
 
-function readPixVerseVideoId(payload: PixVerseVideoCreateResponse): number {
-  const videoId = asSafeIntegerInRange(payload.video_id, { min: 0 });
-  if (videoId == null) {
-    throw new Error("PixVerse video generation response missing video_id");
+function readPixVerseInteger(value: unknown, label: string): number {
+  const integer = asSafeIntegerInRange(value, { min: 0 });
+  if (integer === undefined) {
+    throw new Error(label);
   }
-  return videoId;
-}
-
-function readPixVerseImageId(payload: PixVerseUploadImageResponse): number {
-  const imageId = asSafeIntegerInRange(payload.img_id, { min: 0 });
-  if (imageId == null) {
-    throw new Error("PixVerse image upload response missing img_id");
-  }
-  return imageId;
+  return integer;
 }
 
 function readPixVerseStatus(payload: PixVerseVideoResultResponse): number {
-  const status = asSafeIntegerInRange(payload.status, { min: 0 });
-  if (status == null) {
-    throw new Error("PixVerse video status response missing status");
-  }
-  return status;
+  return readPixVerseInteger(payload.status, "PixVerse video status response missing status");
 }
 
 function buildUploadImageForm(asset: VideoGenerationSourceAsset): FormData {
@@ -258,24 +211,26 @@ function buildVideoBody(
   } else {
     body.aspect_ratio = normalizeOptionalString(req.aspectRatio) ?? "16:9";
   }
-  appendOptionalString(
-    body,
-    "negative_prompt",
+  const negativePrompt =
     normalizeOptionalString(options.negative_prompt) ??
-      normalizeOptionalString(options.negativePrompt),
-  );
-  appendOptionalString(
-    body,
-    "camera_movement",
+    normalizeOptionalString(options.negativePrompt);
+  if (negativePrompt) {
+    body.negative_prompt = negativePrompt;
+  }
+  const cameraMovement =
     normalizeOptionalString(options.camera_movement) ??
-      normalizeOptionalString(options.cameraMovement),
-  );
-  appendOptionalNumber(
-    body,
-    "template_id",
-    asFiniteNumber(options.template_id) ?? asFiniteNumber(options.templateId),
-  );
-  appendOptionalInt32Seed(body, options.seed);
+    normalizeOptionalString(options.cameraMovement);
+  if (cameraMovement) {
+    body.camera_movement = cameraMovement;
+  }
+  const templateId = asFiniteNumber(options.template_id) ?? asFiniteNumber(options.templateId);
+  if (templateId != null) {
+    body.template_id = templateId;
+  }
+  const seed = readPixVerseSeed(options.seed);
+  if (seed !== undefined) {
+    body.seed = seed;
+  }
   if (req.audio !== undefined) {
     body.generate_audio_switch = req.audio;
   }
@@ -457,11 +412,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         });
         try {
           await assertOkOrThrowHttpError(upload.response, "PixVerse image upload failed");
-          imageId = readPixVerseImageId(
-            await readPixVerseJson<PixVerseUploadImageResponse>(
-              upload.response,
-              "PixVerse image upload failed",
-            ),
+          const uploaded = await readPixVerseJson<PixVerseUploadImageResponse>(
+            upload.response,
+            "PixVerse image upload failed",
+          );
+          imageId = readPixVerseInteger(
+            uploaded.img_id,
+            "PixVerse image upload response missing img_id",
           );
         } finally {
           await upload.release();
@@ -483,11 +440,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(create.response, "PixVerse video generation failed");
-        const videoId = readPixVerseVideoId(
-          await readPixVerseJson<PixVerseVideoCreateResponse>(
-            create.response,
-            "PixVerse video generation failed",
-          ),
+        const submitted = await readPixVerseJson<PixVerseVideoCreateResponse>(
+          create.response,
+          "PixVerse video generation failed",
+        );
+        const videoId = readPixVerseInteger(
+          submitted.video_id,
+          "PixVerse video generation response missing video_id",
         );
         const completed = await pollPixVerseVideo({
           videoId,

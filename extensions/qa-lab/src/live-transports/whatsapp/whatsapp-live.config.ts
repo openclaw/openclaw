@@ -1,17 +1,11 @@
-// QA Lab WhatsApp credential, config, and channel setup.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";
+import { requireLiveQaEnv } from "../shared/live-credential-env.js";
 import type { WhatsAppQaConfigOverrides, WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
-const WHATSAPP_QA_ENV_KEYS = [
-  "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
-  "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164",
-  "OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64",
-  "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64",
-] as const;
 const whatsappQaCredentialPayloadSchema = z.object({
   driverPhoneE164: z.string().trim().min(1),
   sutPhoneE164: z.string().trim().min(1),
@@ -19,14 +13,6 @@ const whatsappQaCredentialPayloadSchema = z.object({
   sutAuthArchiveBase64: z.string().trim().min(1),
   groupJid: z.string().trim().min(1).optional(),
 });
-
-function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
-  const value = env[key]?.trim();
-  if (!value) {
-    throw new Error(`Missing ${key}.`);
-  }
-  return value;
-}
 
 function normalizePhone(value: string, label: string) {
   const normalized = normalizeE164(value);
@@ -57,13 +43,13 @@ export function resolveWhatsAppQaRuntimeEnv(
 ): WhatsAppQaRuntimeEnv {
   return validateWhatsAppQaRuntimeEnv(
     {
-      driverPhoneE164: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164"),
-      sutPhoneE164: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164"),
-      driverAuthArchiveBase64: resolveEnvValue(
+      driverPhoneE164: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164"),
+      sutPhoneE164: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164"),
+      driverAuthArchiveBase64: requireLiveQaEnv(
         env,
         "OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64",
       ),
-      sutAuthArchiveBase64: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64"),
+      sutAuthArchiveBase64: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64"),
       groupJid: env.OPENCLAW_QA_WHATSAPP_GROUP_JID?.trim() || undefined,
     },
     "OPENCLAW_QA_WHATSAPP",
@@ -90,7 +76,7 @@ function buildNonMatchingWhatsAppQaAllowFrom(existingAllowFrom: string[]) {
   throw new Error("Unable to derive a WhatsApp QA groupAllowFrom entry outside allowFrom.");
 }
 
-type WhatsAppQaAgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type WhatsAppQaAgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 
 function buildWhatsAppQaScenarioAgent(agentId: string): WhatsAppQaAgentConfig {
   const identityName =
@@ -100,7 +86,6 @@ function buildWhatsAppQaScenarioAgent(agentId: string): WhatsAppQaAgentConfig {
         ? "Second WhatsApp QA"
         : `WhatsApp QA ${agentId}`;
   return {
-    id: agentId,
     identity: {
       name: identityName,
     },
@@ -114,17 +99,33 @@ function appendWhatsAppQaAgents(
   if (agentIds.length === 0) {
     return agents;
   }
-  const list = [...(agents?.list ?? [])];
-  const existingIds = new Set(list.map((agent) => agent.id));
+  const entries = { ...agents?.entries };
+  const originalIds = Object.keys(entries);
   for (const agentId of agentIds) {
-    if (!existingIds.has(agentId)) {
-      list.push(buildWhatsAppQaScenarioAgent(agentId));
-      existingIds.add(agentId);
+    if (!Object.hasOwn(entries, agentId)) {
+      entries[agentId] = buildWhatsAppQaScenarioAgent(agentId);
     }
+  }
+  const needsExplicitOwnership =
+    Object.keys(entries).length > 1 && !Object.values(entries).some((entry) => entry.default);
+  const soleAgentId = originalIds.length === 1 ? originalIds[0] : undefined;
+  const defaults = { ...agents?.defaults };
+  if (needsExplicitOwnership && soleAgentId) {
+    // Expanding the roster must preserve the original QA route and seeded workspace.
+    defaults.systemAgent = {
+      ...defaults.systemAgent,
+      agentId: defaults.systemAgent?.agentId ?? soleAgentId,
+    };
+    entries[soleAgentId] = {
+      ...entries[soleAgentId],
+      workspace: entries[soleAgentId]?.workspace ?? defaults.workspace,
+    };
   }
   return {
     ...agents,
-    list,
+    ...(needsExplicitOwnership ? { ownership: "explicit" as const } : {}),
+    defaults,
+    entries,
   };
 }
 
@@ -247,6 +248,8 @@ export function buildWhatsAppQaConfig(
       : {}),
     ...(statusReactionsEnabled
       ? {
+          ackReaction: "👀",
+          ackReactionScope: "direct" as const,
           statusReactions: {
             ...baseCfg.messages?.statusReactions,
             enabled: true,
@@ -283,15 +286,6 @@ export function buildWhatsAppQaConfig(
         enabled: true,
         defaultAccount: params.sutAccountId,
         ...whatsappHistoryLimit,
-        ...(statusReactionsEnabled
-          ? {
-              ackReaction: {
-                ...baseCfg.channels?.whatsapp?.ackReaction,
-                direct: true,
-                emoji: "👀",
-              },
-            }
-          : {}),
         ...(params.overrides?.actions
           ? {
               actions: {

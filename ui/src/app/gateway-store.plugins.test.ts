@@ -67,43 +67,49 @@ it("refreshes plugin methods and surfaces on the existing connection", async () 
   gateway.stop();
 });
 
-it.each(["replacement", "same-client reconnect"] as const)(
-  "discards a capability response after %s",
-  async (boundary) => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    gateway.start();
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    let resolve!: (value: unknown) => void;
-    current().request.mockReturnValue(
-      new Promise((done) => {
-        resolve = done;
-      }),
-    );
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 7 }));
-    await vi.waitFor(() =>
-      expect(current().request).toHaveBeenCalledWith("plugins.uiDescriptors", {}),
-    );
-    if (boundary === "replacement") {
-      gateway.connect();
-    } else {
-      current().opts.onClose?.({ code: 1006, reason: "disconnected", willRetry: true });
-    }
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    resolve({
-      ok: true,
-      generation: 7,
-      descriptors: [],
-      methods: ["plugin.retired.read"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [],
-      pluginSurfaceUrls: {},
-    });
-    await vi.dynamicImportSettled();
-    expect(gateway.snapshot.pluginCapabilities).toBeNull();
-    expect(gateway.snapshot.hello?.features?.methods).toBeUndefined();
-    gateway.stop();
-  },
-);
+it.each(
+  ["replacement", "same-client reconnect"].flatMap((boundary) =>
+    ["plugins.changed", "plugins.controlUi.changed"].map((event) => ({ boundary, event })),
+  ),
+)("discards a $event capability response after $boundary", async ({ boundary, event }) => {
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  let resolve!: (value: unknown) => void;
+  current().request.mockReturnValue(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  current().opts.onEvent?.(
+    createGatewayEvent(
+      event,
+      event === "plugins.changed" ? { generation: 7 } : { revision: "off" },
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(current().request).toHaveBeenCalledWith("plugins.uiDescriptors", {}),
+  );
+  if (boundary === "replacement") {
+    gateway.connect();
+  } else {
+    current().opts.onClose?.({ code: 1006, reason: "disconnected", willRetry: true });
+  }
+  current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  resolve({
+    ok: true,
+    generation: 7,
+    descriptors: [],
+    methods: ["plugin.retired.read"],
+    controlUiTabs: [],
+    controlUiWidgetKinds: [],
+    pluginSurfaceUrls: {},
+  });
+  await vi.dynamicImportSettled();
+  expect(gateway.snapshot.pluginCapabilities).toBeNull();
+  expect(gateway.snapshot.hello?.features?.methods).toBeUndefined();
+  gateway.stop();
+});
 
 it("keeps the latest capability refresh through invalid events and older failures", async () => {
   const { gateway, current } = createGatewayStoreTestStore();
@@ -146,6 +152,19 @@ it("keeps the latest capability refresh through invalid events and older failure
   await vi.dynamicImportSettled();
   expect(gateway.snapshot.pluginCapabilities?.generation).toBe(9);
   expect(gateway.snapshot.lastError).toBeNull();
+
+  current().opts.onEvent?.(createGatewayEvent("plugins.controlUi.changed", { revision: "off" }));
+  await vi.waitFor(() => expect(pending).toHaveLength(4));
+  current().opts.onEvent?.(createGatewayEvent("plugins.controlUi.changed", { revision: 42 }));
+  await vi.dynamicImportSettled();
+  expect(pending).toHaveLength(4);
+  pending[3]!.resolve(capabilities(8));
+  await vi.waitFor(() =>
+    expect(gateway.snapshot.lastError).toBe(
+      "Plugin capabilities did not reach the applied generation.",
+    ),
+  );
+  expect(gateway.snapshot.pluginCapabilities?.generation).toBe(9);
   gateway.stop();
 });
 

@@ -3,7 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
-import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { loadDeliveryQueueEntryInDatabase } from "./delivery-queue-sqlite-bound.js";
+import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./outbound/delivery-queue.test-helpers.js";
 import {
   createLegacyStateMigrationStepReceipt,
@@ -73,6 +74,69 @@ describe("legacy delivery queue file retention", () => {
       expect(fs.statSync(source.sourcePath + suffix).mode & 0o777).toBe(0o600);
     }
   }
+
+  it.each(QUEUES)(
+    "$queueName: round-trips normalized rows and historical failure times with original backups",
+    async (queue) => {
+      const payload = legacyEntry(queue, "pending", NOW - 123);
+      const pending = writeEntry(queue, "pending.json", {
+        ...payload,
+        retryCount: -1,
+        lastAttemptAt: "invalid",
+        platformSendStartedAt: -2,
+        lastError: { message: "old error" },
+        recoveryState: ["invalid"],
+      });
+      const failures = [
+        { id: "explicit", failedAt: NOW - 600, lastAttemptAt: NOW - 900, expected: NOW - 600 },
+        { id: "attempt", lastAttemptAt: NOW - 900, expected: NOW - 900 },
+        { id: "enqueue", expected: NOW - 1200 },
+      ];
+      const sources = failures.map(({ expected: _expected, ...failure }) =>
+        writeEntry(queue, `failed/${failure.id}.json`, {
+          ...legacyEntry(queue, failure.id, NOW - 1200),
+          ...failure,
+          retryCount: 3,
+          retainOnFailure: true,
+        }),
+      );
+      const claimedPending = `${pending.sourcePath}.doctor-importing-4242-12345678-1234-4234-8234-123456789abc`;
+      const claimedFailure = `${sources[0]!.sourcePath}.doctor-importing`;
+      fs.renameSync(pending.sourcePath, claimedPending);
+      fs.renameSync(sources[0]!.sourcePath, claimedFailure);
+
+      expect((await migrate()).warnings).toEqual([]);
+      expect(fs.existsSync(claimedPending)).toBe(false);
+      expect(fs.existsSync(claimedFailure)).toBe(false);
+      const state = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+      });
+      expect(loadDeliveryQueueEntryInDatabase(state, queue.queueName, "pending")).toEqual(payload);
+      for (const { id, expected } of failures) {
+        expect(loadDeliveryQueueEntryInDatabase(state, queue.queueName, id)).toEqual({
+          id,
+          enqueuedAt: expected,
+          failedAt: expected,
+          retryCount: 3,
+          completionRetention: "permanent",
+          recoveryState: "completed_permanent",
+        });
+        expect(
+          database()
+            .prepare("SELECT failed_at FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+            .get(queue.queueName, id),
+        ).toEqual({ failed_at: expected });
+      }
+      for (const source of [pending, ...sources]) {
+        expectArchived(source);
+      }
+      const rows = database().prepare("SELECT * FROM delivery_queue_entries ORDER BY id").all();
+      expect((await migrate()).warnings).toEqual([]);
+      expect(database().prepare("SELECT * FROM delivery_queue_entries ORDER BY id").all()).toEqual(
+        rows,
+      );
+    },
+  );
 
   it.each(QUEUES)(
     "$queueName: uses enqueue age and retains unverified timestamps without runnable rows",
@@ -150,7 +214,7 @@ describe("legacy delivery queue file retention", () => {
     "$queueName: retains canonical conflicts, equal duplicate IDs, and unknown files",
     async (queue) => {
       const canonical = { ...legacyEntry(queue, "conflict"), enqueuedAt: NOW - 1, retryCount: 2 };
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: queue.queueName,
         entry: canonical,
         stateDir: tmpDir(),
@@ -207,7 +271,10 @@ describe("legacy delivery queue file retention", () => {
         .run(queue.queueName);
       fault.mockRestore();
       migrationTime = NOW + AGE_LIMIT;
+      const claimed = `${source.sourcePath}.doctor-importing-4242-12345678-1234-4234-8234-123456789abc`;
+      fs.renameSync(source.sourcePath, claimed);
       const resumed = await migrate();
+      expect(fs.existsSync(claimed)).toBe(false);
       expect(resumed.warnings).toHaveLength(1);
       expect(resumed.warnings[0]).toContain("old.json");
       expect(database().prepare("SELECT count(*) AS n FROM delivery_queue_entries").get()).toEqual({
@@ -255,6 +322,7 @@ describe("legacy delivery queue file retention", () => {
     expect(db.prepare("SELECT count(*) AS n FROM delivery_queue_entries").get()).toEqual({ n: 0 });
     expect(receipts()).toEqual([]);
     expect(fs.readFileSync(source.sourcePath)).toEqual(source.bytes);
+    expect(fs.readFileSync(source.sourcePath + ".migrated")).toEqual(source.bytes);
     db.exec("DROP TRIGGER reject_queue_receipt");
     await migrate();
     expect(db.prepare("SELECT id FROM delivery_queue_entries").all()).toEqual([{ id: "fresh" }]);

@@ -257,7 +257,7 @@ suite.define(() => {
         const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
         const url = new URL(browserUrl);
         url.pathname = "/chat/main/stop-finished";
-        url.search = "?nav=collapsed";
+        url.search = "";
         try {
           await suite.withPage(
             { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },

@@ -137,10 +137,7 @@ function getTextContent(text?: unknown): string {
 }
 
 export function parsePollStart(content: PollStartContent): ParsedPollStart | null {
-  const poll =
-    (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START] ??
-    (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START] ??
-    (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
+  const poll = content[M_POLL_START] ?? content[ORG_POLL_START] ?? content["m.poll"];
   if (!poll) {
     return null;
   }
@@ -179,30 +176,12 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
   };
 }
 
-export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const parsed = parsePollStart(content);
-  if (!parsed) {
-    return null;
-  }
-
-  return {
-    eventId: "",
-    roomId: "",
-    sender: "",
-    senderName: "",
-    question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
-    kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
-  };
-}
-
-export function formatPollAsText(summary: PollSummary): string {
+export function formatPollAsText(summary: ParsedPollStart): string {
   const lines = [
     "[Poll]",
     summary.question,
     "",
-    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer}`),
+    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer.text}`),
   ];
   return lines.join("\n");
 }
@@ -272,16 +251,9 @@ export function buildPollResultsSummary(params: {
   }
 
   const answerIds = new Set(parsed.answers.map((answer) => answer.id));
-  const latestVoteBySender = new Map<
-    string,
-    {
-      ts: number;
-      eventId: string;
-      answerIds: string[];
-    }
-  >();
+  const latestVoteBySender = new Map<string, string[]>();
 
-  const orderedRelationEvents = [...params.relationEvents].toSorted((left, right) => {
+  const orderedRelationEvents = params.relationEvents.toSorted((left, right) => {
     const leftTs = asFiniteNumber(left.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     const rightTs = asFiniteNumber(right.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (leftTs !== rightTs) {
@@ -314,11 +286,7 @@ export function buildPollResultsSummary(params: {
           .slice(0, parsed.maxSelections),
       ),
     );
-    latestVoteBySender.set(senderId, {
-      ts: eventTs,
-      eventId: typeof event.event_id === "string" ? event.event_id : "",
-      answerIds: normalizedAnswers,
-    });
+    latestVoteBySender.set(senderId, normalizedAnswers);
   }
 
   const voteCounts = new Map<string, number>(
@@ -326,11 +294,11 @@ export function buildPollResultsSummary(params: {
   );
   let totalVotes = 0;
   for (const latestVote of latestVoteBySender.values()) {
-    if (latestVote.answerIds.length === 0) {
+    if (latestVote.length === 0) {
       continue;
     }
     totalVotes += 1;
-    for (const answerId of latestVote.answerIds) {
+    for (const answerId of latestVote) {
       voteCounts.set(answerId, (voteCounts.get(answerId) ?? 0) + 1);
     }
   }

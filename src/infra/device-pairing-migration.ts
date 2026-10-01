@@ -9,6 +9,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preserveLegacyDesktopStreamOptOut } from "./device-pairing-node-desktop-migration.js";
 import { withPairedDeviceRecords, type PairedDevice } from "./device-pairing.js";
 import {
   coercePairingStateRecord,
@@ -90,6 +92,7 @@ async function fileExists(filePath: string): Promise<boolean> {
  */
 export async function migrateLegacyDevicePairingStore(params?: {
   baseDir?: string;
+  cfg?: OpenClawConfig;
   log?: { info: (message: string) => void; warn: (message: string) => void };
 }): Promise<LegacyDevicePairingMigrationResult | null> {
   const { dir, pendingPath, pairedPath } = resolvePairingPaths(params?.baseDir, "devices");
@@ -123,7 +126,9 @@ export async function migrateLegacyDevicePairingStore(params?: {
           continue;
         }
         omittedInvalidFields += normalized.omittedFields;
-        pairedByDeviceId[deviceId] = { ...normalized.device, deviceId };
+        const device = { ...normalized.device, deviceId };
+        preserveLegacyDesktopStreamOptOut(device, params?.cfg ?? {}, Date.now());
+        pairedByDeviceId[deviceId] = device;
         imported += 1;
       }
       return { value: undefined, persist: imported > 0 };

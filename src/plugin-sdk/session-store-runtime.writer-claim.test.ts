@@ -6,12 +6,9 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
-  projectPluginSessionStore,
-  reconcilePluginSessionStore,
 } from "./session-store-runtime-internal.js";
 import {
   patchSessionEntry,
-  updateSessionStore,
   upsertSessionEntry,
   type SessionEntry,
 } from "./session-store-runtime.js";
@@ -69,7 +66,7 @@ const sessionFallbackKeepsThinkingSelectionPrivate: "prevThinkingLevelSelection"
 void sessionFallbackKeepsThinkingSelectionPrivate;
 
 describe("plugin session writer claim projection", () => {
-  it.each(["patch", "upsert", "whole-store"] as const)(
+  it.each(["patch", "upsert"] as const)(
     "preserves server publication through %s lifecycle changes while rejecting forged grants",
     async (method) => {
       const sessionKey = "agent:main:plugin-publication";
@@ -92,12 +89,8 @@ describe("plugin session writer claim projection", () => {
             replaceEntry: true,
             update: () => entry,
           });
-        } else if (method === "upsert") {
-          await upsertSessionEntry({ sessionKey, storePath, entry });
         } else {
-          await updateSessionStore(storePath, (store) => {
-            store[sessionKey] = entry;
-          });
+          await upsertSessionEntry({ sessionKey, storePath, entry });
         }
       };
       await mutate({
@@ -250,23 +243,5 @@ describe("plugin session writer claim projection", () => {
     const entry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry | undefined;
     expect(entry).toMatchObject({ lifecycleRevision: "generation-2", sessionId: "session-1" });
     expectGenerationPrivateFieldsCleared(entry);
-  });
-
-  it("clears private generation fields when whole-store reconciliation rotates lifecycle revision", () => {
-    const sessionKey = "agent:main:reconcile-rotate-generation";
-    const internalStore = { [sessionKey]: privateGenerationEntry() };
-    const publicStore = projectPluginSessionStore(internalStore);
-    publicStore[sessionKey] = {
-      ...publicStore[sessionKey]!,
-      lifecycleRevision: "generation-2",
-    };
-
-    reconcilePluginSessionStore({ internalStore, publicStore });
-
-    expect(internalStore[sessionKey]).toMatchObject({
-      lifecycleRevision: "generation-2",
-      sessionId: "session-1",
-    });
-    expectGenerationPrivateFieldsCleared(internalStore[sessionKey]);
   });
 });

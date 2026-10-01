@@ -35,7 +35,7 @@ beforeEach(() => {
 });
 
 describe("Fireworks manifest provider alias", () => {
-  const modelId = "accounts/fireworks/routers/glm-5p2-fast";
+  const modelId = "accounts/fireworks/routers/glm-5p3-fast";
   const providerBaseUrl = "https://fireworks-proxy.example/v1";
   const modelBaseUrl = "https://fireworks-proxy.example/model";
 

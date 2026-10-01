@@ -707,13 +707,8 @@ suite.define(() => {
       // Uninterrupted narration no longer separates tool cards. Expand the
       // real grouped activity before counting its retained invocation rows.
       const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
-      const activity = page.getByRole("button", {
-        name: Array.from(
-          { length: TOOL_STREAM_LIMIT_CONTRACT },
-          (_, index) => `Edit in src/file-${firstRetainedCall + index}.ts`,
-        ).join(", "),
-        exact: true,
-      });
+      // The live disclosure shows a purpose headline; count its retained rows below.
+      const activity = page.locator(".chat-activity-group > .chat-activity-group__summary");
       await activity.waitFor();
       await activity.click();
       const floodCards = page.locator('[data-message-id^="tool:assistant:call-"]');

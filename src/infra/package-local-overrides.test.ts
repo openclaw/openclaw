@@ -10,10 +10,11 @@ import {
   captureLocalPackageOverrides,
 } from "./package-local-overrides.js";
 import {
-  writePackageRoot,
   expectPathMissing,
   useLocalOverrideTestState,
 } from "./package-local-overrides.test-support.js";
+import { writePackageRoot } from "./package-update-steps.test-support.js";
+
 useLocalOverrideTestState();
 
 describe("local package overrides", () => {

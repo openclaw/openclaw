@@ -93,7 +93,6 @@ export function registerMatrixClientBridge(params: {
 }
 
 export function emitMatrixMembershipForRoom(params: {
-  client: MatrixJsClient;
   emitter: EventEmitter;
   room: Room;
   selfUserId: string;

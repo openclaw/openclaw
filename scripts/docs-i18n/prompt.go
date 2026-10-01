@@ -75,24 +75,6 @@ func protectedProductNameRule() string {
 	)
 }
 
-func isAlwaysProtectedProductName(value string) bool {
-	for _, name := range alwaysProtectedProductNames {
-		if value == name {
-			return true
-		}
-	}
-	return false
-}
-
-func contextualProtectedProductName(value string) (string, bool) {
-	for _, name := range contextualProtectedProductNames {
-		if value == name {
-			return name, true
-		}
-	}
-	return "", false
-}
-
 var localeRules = map[string]string{
 	"zh-cn": `Locale rules:
 - Use Simplified Chinese, mainland technical terminology, and simplified characters. Use “你/你的”, not “您/您的”.

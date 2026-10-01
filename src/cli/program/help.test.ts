@@ -35,14 +35,6 @@ vi.mock("../../infra/git-commit.js", () => ({
   resolveCommitHash: resolveCommitHashMock,
 }));
 
-vi.mock("./command-registry.js", () => ({
-  getCoreCliCommandsWithSubcommands: () => ["models", "message"],
-}));
-
-vi.mock("./register.subclis.js", () => ({
-  getSubCliCommandsWithSubcommands: () => ["gateway"],
-}));
-
 const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
@@ -157,6 +149,7 @@ describe("configureProgramHelp", () => {
     expect(version).toBe(testProgramContext.programVersion);
     expect(options?.mode).toBe("default");
     expect(help).toContain("Examples:");
+    expect(help).toContain("openclaw setup --baseline");
     expect(help).toContain("https://docs.openclaw.ai/cli");
   });
 

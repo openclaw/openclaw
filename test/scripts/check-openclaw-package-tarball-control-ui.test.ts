@@ -2,11 +2,9 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -14,9 +12,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 const CONTROL_UI_INDEX = "dist/control-ui/index.html";
 const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
@@ -27,9 +27,6 @@ const CONTROL_UI_ASSETS = [
 ] as const;
 const CONTROL_UI_FILES = [CONTROL_UI_INDEX, ...CONTROL_UI_ASSETS];
 const CHECK_SCRIPT = resolve("scripts/check-openclaw-package-tarball.mjs");
-const TYPESCRIPT_PACKAGE_ROOT = fileURLToPath(
-  new URL("../../node_modules/typescript", import.meta.url),
-);
 
 function writeFixtureFile(packageRoot: string, relativePath: string, content: string): void {
   const filePath = join(packageRoot, relativePath);
@@ -59,12 +56,6 @@ function withPackedPackage(
   try {
     mkdirSync(packageRoot, { recursive: true });
     const version = "2026.7.2";
-    const typescriptRoot = resolve("node_modules/typescript");
-    const typescriptVersion = (
-      JSON.parse(readFileSync(join(typescriptRoot, "package.json"), "utf8")) as {
-        version: string;
-      }
-    ).version;
     writeFixtureFile(
       packageRoot,
       "package.json",
@@ -76,8 +67,6 @@ function withPackedPackage(
           ? {}
           : {
               scripts: { postinstall: "node scripts/postinstall-bundled-plugins.mjs" },
-              dependencies: { typescript: typescriptVersion },
-              bundledDependencies: ["typescript"],
             }),
       }),
     );
@@ -94,7 +83,7 @@ function withPackedPackage(
       '<!doctype html><script type="module" src="./assets/app.js"></script>\n',
     );
     for (const assetPath of CONTROL_UI_ASSETS) {
-      writeFixtureFile(packageRoot, assetPath, "shipped Control UI asset\n");
+      writeFixtureFile(packageRoot, assetPath, "export {};\n");
     }
     writeFixtureFile(packageRoot, ".openclaw-lifecycle-pending", "pending\n");
     for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
@@ -102,22 +91,13 @@ function withPackedPackage(
     }
     for (const relativePath of [
       "scripts/postinstall-bundled-plugins.mjs",
-      "scripts/lib/guard-inventory-utils.mjs",
-      "scripts/lib/package-dist-imports.mjs",
+      "scripts/lib/fs-safe-prebuild.mjs",
+      "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/package-lifecycle-marker.mjs",
     ]) {
       const destination = join(packageRoot, relativePath);
       mkdirSync(dirname(destination), { recursive: true });
       copyFileSync(resolve(relativePath), destination);
-    }
-    if (options.postinstall !== false) {
-      // Offline npm must exercise the same bundled TypeScript AST dependency
-      // that the real postinstall uses. Dereference pnpm's package-root link so
-      // mode normalization stays inside the fixture instead of touching the source.
-      cpSync(typescriptRoot, join(packageRoot, "node_modules/typescript"), {
-        dereference: true,
-        recursive: true,
-      });
     }
     chmodTreeWorldReadable(packageRoot);
 
@@ -143,6 +123,12 @@ function withPackedPackage(
 
 function checkPackedPackage(tarball: string) {
   return spawnSync(process.execPath, [CHECK_SCRIPT, tarball], {
+    env: preparedScriptWrapperEnv([
+      [
+        new URL("../../scripts/check-openclaw-package-tarball.mts", import.meta.url),
+        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.packageTarball),
+      ],
+    ]),
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -172,7 +158,6 @@ function installPackedPackage(root: string, tarball: string) {
       "--no-audit",
       "--no-fund",
       "--offline",
-      TYPESCRIPT_PACKAGE_ROOT,
       tarball,
     ],
     {

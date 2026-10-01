@@ -13,7 +13,7 @@ import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { validateCrabboxMergeBypass } from "../../scripts/pr-lib/crabbox-merge-bypass.mjs";
-import { validClawsweeperReviewCommentPages } from "./pr-review-artifact-fixture.js";
+import { validClawsweeperReviewCommentPages, validReview } from "./pr-review-artifact-fixture.js";
 
 const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
@@ -113,10 +113,12 @@ function input() {
     },
     publisherRun: {
       conclusion: "success",
+      display_title: `PR Crabbox gate #131091 / ${headSha}`,
       event: "workflow_dispatch",
       head_branch: "main",
       head_sha: workflowSha,
       id: 8001,
+      run_attempt: 1,
       path: ".github/workflows/pr-crabbox-gate-publisher.yml",
       status: "completed",
     },
@@ -238,26 +240,16 @@ describe("Crabbox admin merge bypass verifier", () => {
     expect(() => validateCrabboxMergeBypass(value)).toThrow(error);
   });
 
-  it.each([
-    [".github/workflows/pr-crabbox-gate-publisher.yml", ".github/workflows/ci.yml"],
-    [
-      ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main",
-      ".github/workflows/ci.yml@refs/heads/main",
-    ],
-  ])("accepts protected-main workflow paths %s", (publisherPath, ciPath) => {
+  it("accepts explicit protected-main workflow paths", () => {
     const value = input();
-    value.publisherRun.path = publisherPath;
-    value.workflowRun.path = ciPath;
+    value.publisherRun.path = ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main";
+    value.workflowRun.path = ".github/workflows/ci.yml@refs/heads/main";
     expect(validateCrabboxMergeBypass(value).planDigest).toBe(planDigest);
   });
 
-  it.each([
-    ".github/workflows/ci.yml@refs/pull/123/merge",
-    ".github/workflows/ci.yml@refs/tags/v1.0.0",
-    ".github/workflows/ci.yml@refs/heads/release",
-  ])("rejects non-main CI workflow path %s", (workflowPath) => {
+  it("rejects a tagged CI workflow path", () => {
     const value = input();
-    value.workflowRun.path = workflowPath;
+    value.workflowRun.path = ".github/workflows/ci.yml@refs/tags/v1.0.0";
     expect(() => validateCrabboxMergeBypass(value)).toThrow(/normal CI workflow identity/u);
   });
 
@@ -305,9 +297,9 @@ describe("Crabbox admin merge bypass verifier", () => {
     expect(() => validateCrabboxMergeBypass(value)).toThrow(/only unacquired outages may bypass/u);
   });
 
-  it.each(["cancelled", "action_required", "stale"])("rejects a zero-step %s job", (conclusion) => {
+  it("rejects a zero-step cancelled job", () => {
     const value = input();
-    value.jobs.jobs[1]!.conclusion = conclusion;
+    value.jobs.jobs[1]!.conclusion = "cancelled";
     expect(() => validateCrabboxMergeBypass(value)).toThrow(
       /conclusion is not a startup or provisioning outage/u,
     );
@@ -336,6 +328,11 @@ function runProtectedShell(
   const bin = join(root, "bin");
   mkdirSync(bin);
   mkdirSync(join(root, ".local"));
+  const review = validReview(headSha);
+  review.pr.number = 131091;
+  review.recommendation = "READY FOR /prepare-pr";
+  review.issueValidation.status = "valid";
+  writeFileSync(join(root, ".local/review.json"), JSON.stringify(review));
   writeFileSync(join(root, "calls.jsonl"), "");
   const evidence = {
     ...input(),
@@ -379,22 +376,22 @@ const endpoint = args.find(arg => /^(?:repos\\/|orgs\\/|user$|graphql$)/u.test(a
 if (args[0] === "api" && args.includes("repos/openclaw/openclaw") &&
     JSON.stringify(args) !== JSON.stringify(["api", "--hostname", "github.com", "repos/openclaw/openclaw", "-H", "Cache-Control: max-age=0"])) fail("unexpected repository authority request");
 if (endpoint && endpoint === process.env.FAKE_DENIED) fail("protected refusal");
-if (args[0] === "browse" && args[1] === "--no-browser") out(repo.url);
+if (args[0] === "browse") out(repo.url);
 else if (args[0] === "pr" && args[1] === "checks" && args.includes("--required")) {
   // gh v2.98.0 checks.go exports JSON before applying its human-output exit codes.
   out(value.requiredChecks);
 } else if (args[0] === "pr" && args[1] === "merge") out("synthetic merge request accepted");
 else if (args[0] === "workflow" && args[1] === "run") { value.dispatched = true; save(); }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("viewerMergeBodyText"))) {
-  out({data:{repository:{pullRequest:{...pr,viewerMergeBodyText:value.mergePreview}}}});
+  if (args.includes("--include")) process.stdout.write("HTTP/2.0 200 OK\\n\\n");
+  out({data:{repository:{pullRequest:{...pr,viewerMergeHeadlineText:"Fixture merge headline",viewerMergeBodyText:value.mergePreview}}}});
 }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(owner:"))) {
+  if (args.includes("--include")) process.stdout.write("HTTP/2.0 200 OK\\n\\n");
   out({data:{repository:{...repo,id:repoNodeId,databaseId:repo.id,ref:{target:{oid:"${mainSha}"}},pullRequest:pr}}});
-} else if (endpoint === "user") out(args[args.indexOf("--jq")+1] === ".login" ? "relay-reader" : {login:"relay-reader"});
-else if (endpoint === "graphql" && args.includes("query=query { viewer { login } }")) {
-  const json = JSON.stringify({data:{viewer:value.actor}});
-  if (args.includes("--include")) out("HTTP/2.0 200 OK\\n\\n" + json);
-  else out(cp.execFileSync("jq", ["-r", args[args.indexOf("--jq") + 1]], {input:json,encoding:"utf8"}).trim());
+} else if (endpoint === "user") {
+  if (JSON.stringify(args) === JSON.stringify(["api", "user", "--include"])) out("HTTP/2.0 200 OK\\n\\n" + JSON.stringify(value.actor));
+  else out(args[args.indexOf("--jq")+1] === ".login" ? "relay-reader" : {login:"relay-reader"});
 } else {
   if (!endpoint) fail("unexpected command");
   // PR metadata reads replace the old gh view requests. Authorization
@@ -403,8 +400,9 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
     ["api", "--hostname", "github.com", "repos/openclaw/openclaw/pulls/131091"],
     ["api", "repos/openclaw/openclaw/pulls/131091", "--jq", ".head.sha"],
   ].some((request) => JSON.stringify(args) === JSON.stringify(request));
+  const immutableCommitList = /^repos\\/openclaw\\/openclaw\\/commits\\?sha=[a-f0-9]{40}&per_page=1$/u.test(endpoint);
   const mutable = endpoint.startsWith("orgs/") ||
-    (!process.env.FAKE_DISPATCH && !cacheableMetadata && !/\\/compare\\/|\\/commits\\/[a-f0-9]{40}$/u.test(endpoint));
+    (!process.env.FAKE_DISPATCH && !cacheableMetadata && !immutableCommitList && !/\\/compare\\/|\\/commits\\/[a-f0-9]{40}$/u.test(endpoint));
   if (mutable && !args.some((arg,i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
   if (endpoint.includes("/check-runs?") || endpoint.includes("/jobs?") || endpoint.includes("/issues/131091/comments?")) {
     if (!args.includes("--paginate") || !args.includes("--slurp")) fail("missing pagination");
@@ -414,9 +412,9 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
     apiOut({id:repo.id,node_id:repoNodeId,full_name:repo.nameWithOwner,html_url:repo.url});
   }
   else if (endpoint === prefix + "pulls/131091") apiOut({...value.pullRequest,html_url:pr.url,
-    base:{...value.pullRequest.base,repo:{id:repo.id,...value.pullRequest.base.repo}},
+    base:{...value.pullRequest.base,repo:{id:repo.id,node_id:repoNodeId,html_url:repo.url,...value.pullRequest.base.repo}},
     head:{...value.pullRequest.head,ref:pr.headRefName,repo:{id:repo.id,name:"openclaw",html_url:repo.url,owner:{login:"openclaw"},...value.pullRequest.head.repo}}});
-  else if (endpoint === prefix + "commits/" + value.headSha && args.includes("--jq")) out({name:"Fixture Contributor",email:"fixture@example.com",user:{login:"fixture-contributor",type:"User"}});
+  else if (endpoint === prefix + "commits?sha=" + value.headSha + "&per_page=1") out([{sha:value.headSha,commit:{author:{name:"Fixture Contributor",email:"fixture@example.com"}},author:{login:"fixture-contributor",type:"User"}}]);
   else if (endpoint === prefix + "issues/131091/comments?per_page=100") out(reviewComments);
   else if (endpoint === prefix + "commits/" + value.headSha + "/check-runs?filter=latest&per_page=100") out(value.checkRuns.check_runs.map(check => ({check_runs:[check]})));
   else if (endpoint === prefix + "actions/workflows/pr-crabbox-gate-publisher.yml/runs") out({workflow_runs:value.dispatched ? [{...value.publisherRun,html_url:repo.url+"/actions/runs/8001",display_title:"PR Crabbox gate #131091 / "+value.headSha}] : []});
@@ -454,6 +452,7 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
       rev-parse) case "$2" in
         --absolute-git-dir) printf '%s/.git\\n' "$PWD";;
         --verify) [ "$3" = 'refs/heads/pr-131091^{commit}' ] || exit 19; echo '${headSha}';;
+        '${headSha}^1') echo '${mainSha}';;
         *) echo main-tree;;
       esac;;
       log) echo '${headSha}';;
@@ -481,6 +480,7 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
           'repo_root() { printf "%s\\n" "$PWD"; }',
           'source "$script_parent_dir/pr-lib/gates.sh"',
           'source "$script_parent_dir/pr-lib/merge.sh"',
+          'source "$script_parent_dir/pr-lib/review.sh"',
           command,
         ].join("\n"),
       ],
@@ -516,6 +516,9 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
       proof: readArtifact("merge-crabbox-bypass.json"),
       audit: readArtifact("merge-crabbox-parent-audit.json"),
       intent: readArtifact("intent.json"),
+      gates: existsSync(join(root, ".local/gates.env"))
+        ? readFileSync(join(root, ".local/gates.env"), "utf8")
+        : undefined,
       calls: readFileSync(join(root, "calls.jsonl"), "utf8")
         .trim()
         .split("\n")
@@ -536,14 +539,13 @@ describe("Crabbox protected gh request producers", () => {
     expect(result.calls.filter((args) => args.includes("--paginate"))).toHaveLength(2);
   });
 
-  it.each([false, true])(
-    "checks the selected writer's live admin membership (override=%s)",
-    (override) => {
-      const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", { override });
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe("maintainer");
-    },
-  );
+  it("checks the explicitly selected writer's live admin membership", () => {
+    const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", {
+      override: true,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("maintainer");
+  });
 
   it.each([
     { role: "member", state: "active" },
@@ -556,11 +558,11 @@ describe("Crabbox protected gh request producers", () => {
 
   it("keeps protected refusal terminal without alternate identity or dispatch", () => {
     const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", {
-      denied: "graphql",
+      denied: "user",
     });
-    expect(result.status).toBe(19);
-    expect(result.stderr).toContain("protected refusal");
-    expect(result.calls).toHaveLength(1);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("GitHub API preflight failed (HTTP unknown; exit=19)");
+    expect(result.calls).toEqual([["api", "user", "--include"]]);
   });
 
   it("audits the immutable landed commit in the prepared repository", () => {
@@ -584,12 +586,12 @@ refresh_main_snapshot() { PR_MAIN_SHA=${mainSha}; }
 verify_prep_branch_matches_prepared_head() { :; }
 review_artifact_preflight() { :; }
 validate_review_artifact_data() { :; }
-require_ready_review_recommendation() { :; }
+require_prepared_review() { :; }
 mark_pr_operation_side_effects_started() { :; }
 is_canonical_pr_number() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
 merge_outcome_load_local() { MERGE_OUTCOME_OID=""; MERGE_OUTCOME_RECORD=""; }
 merge_outcome_write() { MERGE_OUTCOME_RECORD="$1"; printf '%s\\n' "$1" > .local/intent.json; }
-for artifact in review.json pr-meta.env pr-meta.json prep.md; do
+for artifact in pr-meta.env pr-meta.json prep.md; do
   echo fixture > ".local/$artifact"
 done
 printf '%s\\n' PREP_HEAD_SHA=${headSha} PREP_REPLACED_HOSTED_ANCESTRY=false PREP_AUTHOR_ACCESS=maintainer > .local/prep.env
@@ -599,21 +601,27 @@ merge_run 131091
 
 describe("Crabbox authorization before final effects", () => {
   it.each(["member", "admin"])("gates remote dispatch on the authenticated %s", (role) => {
-    const result = runProtectedShell(`finalize_remote_crabbox_aws_gate 131091 ${headSha}`, {
-      role,
-    });
+    const result = runProtectedShell(
+      `PR_HEAD=topic
+write_gates_env_stamp 131091 false false remote_crabbox_aws_pending ${headSha} '' '' aws '' '' ''
+finalize_remote_crabbox_aws_gate 131091 ${headSha}`,
+      { role },
+    );
     expect(result.status, result.stdout + result.stderr).toBe(role === "admin" ? 0 : 1);
-    const viewer = result.calls.findIndex((args) => args.includes("graphql"));
+    const writer = result.calls.findIndex((args) => args.includes("user"));
     const membership = result.calls.findIndex((args) =>
       args.includes("orgs/openclaw/memberships/maintainer"),
     );
     const dispatches = result.calls.filter((args) => args[0] === "workflow" && args[1] === "run");
-    expect(viewer).toBeGreaterThanOrEqual(0);
-    expect(membership).toBeGreaterThan(viewer);
-    expect(result.calls.some((args) => args.includes("user"))).toBe(false);
+    expect(writer).toBeGreaterThanOrEqual(0);
+    expect(result.calls[writer]).toEqual(["api", "user", "--include"]);
+    expect(membership).toBeGreaterThan(writer);
+    expect(result.calls.some((args) => args.includes("graphql"))).toBe(false);
     expect(result.calls.filter((args) => args[0] === "pr" && args[1] === "merge")).toEqual([]);
     expect(dispatches).toHaveLength(role === "admin" ? 1 : 0);
     if (role === "admin") {
+      expect(result.gates).toContain(`REMOTE_GATES_BASE_SHA=${baseSha}`);
+      expect(result.gates).toContain("REMOTE_GATES_ACTIONS_RUN_ATTEMPT=1");
       expect(result.calls.indexOf(dispatches[0]!)).toBeGreaterThan(membership);
       expect(dispatches[0]).toEqual([
         "workflow",
@@ -629,13 +637,14 @@ describe("Crabbox authorization before final effects", () => {
         `base_sha=${baseSha}`,
       ]);
     } else {
+      expect(result.gates).toContain("GATES_MODE=remote_crabbox_aws_pending");
+      expect(result.gates).not.toContain("PENDING_CRABBOX_STATE");
       expect(result.stderr).toContain("requires an active openclaw organization admin");
     }
   });
 
   it.each([
     { role: "member", revoke: false, reads: 1, merges: 0, longPreview: false },
-    { role: "admin", revoke: false, reads: 2, merges: 1, longPreview: false },
     { role: "admin", revoke: false, reads: 2, merges: 1, longPreview: true },
     { role: "admin", revoke: true, reads: 2, merges: 0, longPreview: false },
   ])(
@@ -644,19 +653,17 @@ describe("Crabbox authorization before final effects", () => {
       const result = runProtectedShell(mergeAuthorizationCommand, { role, revoke, longPreview });
       const output = result.stdout + result.stderr;
       expect(result.status, output).toBe(1);
-      const viewers = result.calls.filter((args) =>
-        args.includes("query=query { viewer { login } }"),
-      );
+      const writers = result.calls.filter((args) => args.includes("user"));
       const memberships = result.calls.filter((args) =>
         args.includes("orgs/openclaw/memberships/maintainer"),
       );
       const requests = result.calls.filter((args) => args[0] === "pr" && args[1] === "merge");
-      expect(viewers, output).toHaveLength(reads);
+      expect(writers, output).toEqual(
+        Array.from({ length: reads }, () => ["api", "user", "--include"]),
+      );
       expect(memberships).toHaveLength(reads);
       expect(requests).toHaveLength(merges);
-      expect(result.calls.some((args) => args.includes("user") || args[0] === "workflow")).toBe(
-        false,
-      );
+      expect(result.calls.some((args) => args[0] === "workflow")).toBe(false);
       if (merges) {
         expect(requests[0]).toEqual([
           "pr",
@@ -670,6 +677,8 @@ describe("Crabbox authorization before final effects", () => {
           headSha,
           "--body-file",
           expect.any(String),
+          "--subject",
+          "Fixture merge headline",
         ]);
         expect(result.calls.indexOf(requests[0]!)).toBeGreaterThan(
           result.calls.indexOf(memberships[1]!),

@@ -1,10 +1,10 @@
-.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+.chat-split-view.chat-split-view--active-cell
   > .chat-split-view__column
   > .chat-split-view__cell:not(.chat-split-view__cell--active) {
   filter: saturate(0.45);
 }
 
-.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+.chat-split-view.chat-split-view--active-cell
   > .chat-split-view__column
   > .chat-split-view__cell:not(.chat-split-view__cell--active)
   .chat-pane__header
@@ -27,6 +27,21 @@
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
+}
+
+.chat-split-view__unbound {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.chat-split-view__unbound strong {
+  color: var(--text);
 }
 
 .chat-pane-cache__pane {
@@ -405,26 +420,6 @@
   stroke-width: 1.6px;
 }
 
-.chat-pane__actions .chat-tasks-toggle {
-  position: relative;
-}
-
-.chat-tasks-toggle__badge {
-  position: absolute;
-  top: 0;
-  right: -2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-full);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 14px;
-  text-align: center;
-}
-
 .chat-pane__sharing-menu {
   flex: 0 0 auto;
 }
@@ -497,24 +492,12 @@
   padding: 6px 12px;
 }
 
-.chat-pane__sharing-members-title {
-  margin-top: 8px;
-}
-
+.chat-pane__sharing-members-title,
 .chat-pane__sharing-owner-title {
   margin-top: 8px;
 }
 
-.chat-pane__sharing-owner {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  min-height: 36px;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  font-size: 12px;
-}
-
+.chat-pane__sharing-owner,
 .chat-pane__sharing-member-skeleton {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -522,6 +505,10 @@
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
+}
+
+.chat-pane__sharing-owner {
+  font-size: 12px;
 }
 
 .chat-pane__sharing-member-skeleton-icon {
@@ -603,7 +590,6 @@
   .chat-pane__actions .chat-pane__split-right,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__participants,

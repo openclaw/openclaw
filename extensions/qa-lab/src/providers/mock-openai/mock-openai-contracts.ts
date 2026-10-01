@@ -1,9 +1,10 @@
-// QA Lab mock provider contracts, wire helpers, and scenario constants.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import type { MockProviderVariant } from "../shared/mock-provider-variant.js";
+import type { QaMockRequestSnapshot } from "../shared/types.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
@@ -23,6 +24,7 @@ export type QaMockProviderDispatchRequest = {
   route: "responses" | "anthropic-messages";
   body: Record<string, unknown>;
   raw: string;
+  headers?: IncomingMessage["headers"];
 };
 
 export type QaMockProviderFailure = {
@@ -151,96 +153,40 @@ export type MockToolCallItem = { id: string; call_id: string; name: string; name
   | { type: "custom_tool_call"; input: string; status: "completed" }
 );
 
-/**
- * Provider variant tag for `body.model`. The mock previously ignored
- * `body.model` for dispatch and only echoed it in the prose output, which
- * made the parity gate tautological when run against the mock alone
- * (both providers produced identical scenario plans by construction).
- * Tagging requests with a normalized variant lets individual scenario
- * branches opt into provider-specific behavior while the rest of the
- * dispatcher stays shared, and lets `/debug/requests` consumers verify
- * which provider lane a given request came from without re-parsing the
- * raw model string.
- *
- * Policy:
- * - `openai/*`, `gpt-*`, `o1-*`, anything starting with `gpt-` → `"openai"`
- * - `anthropic/*`, `claude-*` → `"anthropic"`
- * - Everything else (including empty strings) → `"unknown"`
- *
- * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.6-luna` model string is still
- * classified as `"openai"`. That matches the parity program's convention
- * where the provider label is the source of truth, not the HTTP route.
- */
-type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
+export type MockOpenAiCodeModeExecSurface = "native" | "guest";
 
-export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
-  if (typeof model !== "string") {
-    return "unknown";
-  }
-  const trimmed = model.trim().toLowerCase();
-  if (trimmed.length === 0) {
-    return "unknown";
-  }
-  // Prefer the explicit `provider/model` or `provider:model` prefix when
-  // the caller supplied one — that's the most reliable signal.
-  const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
-  const provider = separatorMatch?.[1] ?? trimmed;
-  if (provider === "openai") {
-    return "openai";
-  }
-  if (provider === "anthropic" || provider === "claude-cli") {
-    return "anthropic";
-  }
-  // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.6-luna` or `claude-opus-4-8`.
-  if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
-    return "openai";
-  }
-  if (/^(?:claude-|anthropic-)/.test(trimmed)) {
-    return "anthropic";
-  }
-  return "unknown";
-}
-
-export type MockOpenAiRequestSnapshot = {
+export type MockOpenAiRequestSnapshot = QaMockRequestSnapshot & {
   cursor: number;
-  raw: string;
-  body: Record<string, unknown>;
-  prompt: string;
-  allInputText: string;
+  sessionId?: string;
   instructions?: string;
-  toolOutput: string;
-  model: string;
-  providerVariant: MockOpenAiProviderVariant;
-  imageInputCount: number;
+  codeModeExecSurface?: MockOpenAiCodeModeExecSurface;
   requestKind: MockOpenAiRequestKind;
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   outcome: MockOpenAiRequestOutcome;
   errorCode?: string;
   rawByteLength: number;
-  plannedToolCallId?: string;
   plannedToolItemId?: string;
-  plannedToolName?: string;
   plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
-  toolOutputCallId?: string;
-  toolOutputStructuredError?: true;
 };
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
-// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
-// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
-export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+/** Snapshot fields known before the mock decides an outcome or plans a tool. */
+export type MockOpenAiRequestSnapshotBase = Omit<
+  MockOpenAiRequestSnapshotInput,
+  | "outcome"
+  | "errorCode"
+  | "plannedToolCallId"
+  | "plannedToolItemId"
+  | "plannedToolName"
+  | "plannedWireToolName"
+  | "plannedToolArgs"
+  | "toolOutputCallId"
+  | "toolOutputStructuredError"
+>;
 
-// Anthropic /v1/messages request/response shapes the mock actually needs.
-// This is a subset of the real Anthropic Messages API — just enough so the
-// QA suite can run its parity pack against a "baseline" Anthropic provider
-// without needing real API keys. The scenarios drive their dispatch through
-// the shared mock scenario logic (buildResponsesPayload), with `model`
-// preserved so provider-aware branches can intentionally diverge.
+// Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {
@@ -288,6 +234,9 @@ export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
+export const QA_STALLED_TURN_RECOVERY_PROMPT_RE = /stalled turn recovery qa check/i;
+export const QA_STALLED_TURN_RECOVERY_NEEDLE = "previous turn stopped making progress";
+export const QA_STALLED_TURN_RECOVERY_MARKER = "STALLED-TURN-RECOVERED-OK";
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
@@ -343,6 +292,13 @@ export const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
 export const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 export const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+// A message-tool-only group turn that starts detached image generation, calls
+// sessions_yield (which cannot wait for detached media), sends a progress ack,
+// and ends empty. The delayed image keeps the media run pending meanwhile.
+export const QA_YIELD_REJECTION_PROMPT_RE = /yield rejection qa check/i;
+export const QA_YIELD_REJECTION_ACK_MARKER = "QA-YIELD-REJECTION-ACK";
+export const QA_YIELD_REJECTION_IMAGE_PROMPT = "QA yield rejection pending lighthouse image.";
+export const QA_YIELD_REJECTION_IMAGE_DELAY_MS = 4_000;
 // A subagent that yields on its own behalf, then finishes on a later follow-up
 // dispatched to the same paused child session. The worker regex must not match
 // the follow-up text, so the two turns carry deliberately disjoint wording: the
@@ -434,23 +390,24 @@ export type MockScenarioState = {
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   repeatedRequestRecoveryAttempts: number;
+  stalledTurnRecoveryAttempts: number;
   toolLoopReadAttempts: number;
 };
 
-export function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
+export function sourceDiscoveryReadPathForProvider(providerVariant: MockProviderVariant) {
   return providerVariant === "anthropic"
     ? "repo/docs/help/testing.md"
     : "repo/qa/scenarios/index.yaml";
 }
 
-export function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
+export function subagentHandoffTaskForProvider(providerVariant: MockProviderVariant) {
   return providerVariant === "anthropic"
     ? "Inspect the QA docs fixture and return one concise protocol note."
     : "Inspect the QA workspace and return one concise protocol note.";
 }
 
 export function subagentFanoutTaskForProvider(
-  providerVariant: MockOpenAiProviderVariant,
+  providerVariant: MockProviderVariant,
   worker: "alpha" | "beta",
 ) {
   const marker = worker === "alpha" ? "ALPHA-OK" : "BETA-OK";

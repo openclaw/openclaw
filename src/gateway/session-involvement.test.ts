@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { readMentionStoreSnapshot } from "./mention-inbox-store.js";
 import {
   SESSION_KEY,
   SESSION_ID,
@@ -12,8 +13,6 @@ import {
 } from "./mention-inbox.test-support.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
-
-afterEach(() => vi.useRealTimers());
 
 describe("personal session involvement", () => {
   it("includes a mentioned recipient without recording an authored contribution", async () => {
@@ -60,8 +59,8 @@ describe("personal session involvement", () => {
         displayName: "Renamed",
       });
       expect((await list()).sessions).toEqual([]);
-      vi.useFakeTimers();
-      await vi.advanceTimersByTimeAsync(8 * 24 * 60 * 60_000);
+      await f.clock.advanceBy(8 * 24 * 60 * 60_000);
+      expect(readMentionStoreSnapshot(-1)?.sources).toHaveLength(0);
       f.inbox.dispose();
       const restarted = f.openInbox("after-retention");
       f.post("source-one", {}, restarted);

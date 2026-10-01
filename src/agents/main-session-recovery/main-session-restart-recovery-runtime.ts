@@ -7,11 +7,7 @@ import {
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
-import {
-  beginSessionWorkAdmission,
-  cancelSessionWorkAdmissionHandoff,
-} from "../../sessions/session-lifecycle-admission.js";
-import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery-admission.js";
+import { runWithMainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import { createMainSessionRecoveryCapacity } from "./main-session-recovery-capacity.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
@@ -27,8 +23,6 @@ import {
   discoverRestartRecoveryStoreTargets,
 } from "./main-session-restart-recovery-shared.js";
 import {
-  type ExpectedRestartRecoveryClaim,
-  loadExpectedRestartRecoveryClaim,
   loadExpectedRestartRecoveryTarget,
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
@@ -130,31 +124,25 @@ export async function retryRestartAbortedMainSessionRecovery(
     gatewayRuntime: GatewayRecoveryRuntime;
   },
 ): Promise<RecoveryCounts> {
-  const expected = {
-    agentId: params.agentId,
-    canonicalSessionKey: params.canonicalSessionKey,
-    sessionId: params.expectedSessionId,
-    sessionKey: params.sessionKey,
-  };
-  const expectedClaim: ExpectedRestartRecoveryClaim | undefined =
-    params.expectedRecoveryRunId && params.expectedRecoverySourceRunId
-      ? {
-          ...expected,
-          recoveryRunId: params.expectedRecoveryRunId,
-          recoverySourceRunId: params.expectedRecoverySourceRunId,
-        }
-      : undefined;
   return await recoverExpectedRestartRecovery({
     ...params,
-    ...(expectedClaim ? { expectedClaim } : { expectedTarget: expected }),
+    expectedTarget: {
+      agentId: params.agentId,
+      canonicalSessionKey: params.canonicalSessionKey,
+      sessionId: params.expectedSessionId,
+      sessionKey: params.sessionKey,
+      claim:
+        params.expectedRecoveryRunId && params.expectedRecoverySourceRunId
+          ? { runId: params.expectedRecoveryRunId, sourceRunId: params.expectedRecoverySourceRunId }
+          : undefined,
+    },
   });
 }
 
 async function recoverExpectedRestartRecovery(
   params: MainSessionRecoveryStoreTarget & {
     cfg?: OpenClawConfig;
-    expectedClaim?: ExpectedRestartRecoveryClaim;
-    expectedTarget?: ExpectedRestartRecoveryTarget;
+    expectedTarget: ExpectedRestartRecoveryTarget;
     lifecycleGeneration?: string;
     observationOnly?: boolean;
     shouldContinue?: () => boolean;
@@ -162,49 +150,27 @@ async function recoverExpectedRestartRecovery(
     gatewayRuntime: GatewayRecoveryRuntime;
   },
 ): Promise<RecoveryCounts> {
+  const expected = params.expectedTarget;
   const loadExpected = () =>
-    params.expectedClaim
-      ? loadExpectedRestartRecoveryClaim({
-          expected: params.expectedClaim,
-          storePath: params.storePath,
-        })
-      : params.expectedTarget
-        ? loadExpectedRestartRecoveryTarget({
-            expected: params.expectedTarget,
-            storePath: params.storePath,
-          })
-        : undefined;
+    loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath });
   if (!loadExpected()) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
-  const assertExpectedCurrent = () => {
-    if (!loadExpected()) {
-      throw new Error("restart recovery session ownership changed before dispatch");
-    }
-  };
-  const expectedSessionId = (params.expectedClaim ?? params.expectedTarget)!.sessionId;
-  // Keep lifecycle replacement behind accepted recovery dispatch. The RPC
-  // adopts this lease, so another admission cannot deadlock behind its active work.
-  const admission = await beginSessionWorkAdmission({
-    scope: params.storePath,
-    identities: [params.sessionKey, params.expectedClaim?.canonicalSessionKey, expectedSessionId],
-    owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-    assertAllowed: assertExpectedCurrent,
-    revalidateAllowed: assertExpectedCurrent,
-  });
-  const handoffId = admission.createHandoff();
-  try {
-    return await admission.run(
-      async () =>
-        await recoverStore({
+  return (
+    (await runWithMainSessionRecoveryAdmission({
+      ...params,
+      canonicalSessionKey: expected.canonicalSessionKey,
+      sessionId: expected.sessionId,
+      isCurrent: () => Boolean(loadExpected()),
+      run: (recoveryAdmission) =>
+        recoverStore({
           ...params,
+          shouldContinue: recoveryAdmission.shouldContinue,
           handledSessionKeys: new Set<string>(),
-          sessionWorkAdmissionHandoffId: handoffId,
+          recoveryAdmission,
         }),
-    );
-  } finally {
-    cancelSessionWorkAdmissionHandoff(handoffId);
-  }
+    })) ?? { started: 0, settled: 0, failed: 0, skipped: 1 }
+  );
 }
 
 export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(

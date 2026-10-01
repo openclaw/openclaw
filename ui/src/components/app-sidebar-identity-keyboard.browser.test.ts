@@ -47,6 +47,7 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
         !item.hasAttribute("disabled"),
     );
     const theme = menu?.querySelector<HTMLButtonElement>(".theme-mode-toggle");
+    expect(theme?.getAttribute("role")).toBe("menuitem");
     const build = document.createElement("a");
     build.href = "#build";
     build.textContent = "Build details";

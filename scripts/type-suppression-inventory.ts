@@ -4,13 +4,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import {
   REPO_SCAN_ROOTS,
   REPO_SCAN_SKIPPED_DIR_NAMES,
   listRepoFilesSync,
   toPosixPath,
 } from "./check-file-utils.js";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { collectTypeScriptCommentRanges } from "./lib/ts-guard-utils.mts";
 
 type TypeSuppressionKind = "as-any" | "expect-error" | "type-assertion-any";
@@ -113,7 +114,7 @@ function addAnyCastFindings(
     const kind =
       ts.isAsExpression(node) && node.type.kind === ts.SyntaxKind.AnyKeyword
         ? "as-any"
-        : ts.isTypeAssertionExpression(node) && node.type.kind === ts.SyntaxKind.AnyKeyword
+        : ts.isTypeAssertion(node) && node.type.kind === ts.SyntaxKind.AnyKeyword
           ? "type-assertion-any"
           : null;
     if (kind) {
@@ -125,7 +126,7 @@ function addAnyCastFindings(
         line: line + 1,
       });
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
 }
@@ -139,7 +140,7 @@ function addExpectErrorFindings(
   if (!source.includes("@ts-expect-error")) {
     return;
   }
-  for (const range of collectTypeScriptCommentRanges(ts, sourceFile)) {
+  for (const range of collectTypeScriptCommentRanges(sourceFile)) {
     const comment = source.slice(range.pos, range.end);
     const markerPattern = /@ts-expect-error[^\r\n]*/gu;
     for (const match of comment.matchAll(markerPattern)) {
@@ -166,21 +167,25 @@ export function collectTypeSuppressionReport(params: {
     .map(toPosixPath)
     .toSorted((left, right) => left.localeCompare(right));
   const findings: TypeSuppressionFinding[] = [];
-
-  for (const file of files) {
-    const absolutePath = path.join(params.repoRoot, file);
-    if (!fs.existsSync(absolutePath)) {
-      continue;
+  const parser = createNativeTypeScriptParser({ cwd: params.repoRoot });
+  try {
+    for (const file of files) {
+      const absolutePath = path.join(params.repoRoot, file);
+      if (!fs.existsSync(absolutePath)) {
+        continue;
+      }
+      const source = fs.readFileSync(absolutePath, "utf8");
+      // Full AST parsing dominates the repository ratchet. This syntax-shaped text
+      // gate keeps false positives cheap; the AST remains the source of truth.
+      if (!hasTypeSuppressionTextCandidate(source)) {
+        continue;
+      }
+      const sourceFile = parser.parseSourceFile(file, source);
+      addAnyCastFindings(sourceFile, file, findings);
+      addExpectErrorFindings(sourceFile, file, findings);
     }
-    const source = fs.readFileSync(absolutePath, "utf8");
-    // Full AST parsing dominates the repository ratchet. This syntax-shaped text
-    // gate keeps false positives cheap; the AST remains the source of truth.
-    if (!hasTypeSuppressionTextCandidate(source)) {
-      continue;
-    }
-    const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest);
-    addAnyCastFindings(sourceFile, file, findings);
-    addExpectErrorFindings(sourceFile, file, findings);
+  } finally {
+    parser.close();
   }
 
   findings.sort(

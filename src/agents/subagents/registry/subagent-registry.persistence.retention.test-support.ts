@@ -39,7 +39,7 @@ export function registerSubagentDismissedRetentionCases({
         });
         saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
-        mod.initSubagentRegistry();
+        await mod.initSubagentRegistry();
         await mod.testing.sweepOnceForTests();
 
         expect(announceSpy).not.toHaveBeenCalled();

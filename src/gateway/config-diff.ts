@@ -1,4 +1,3 @@
-// Config path diff helper used by gateway mutation diagnostics.
 import { isDeepStrictEqual } from "node:util";
 import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -74,7 +73,24 @@ export function diffGatewayReloadPaths(
   nextConfig: OpenClawConfig,
   reloadPrefixes: Iterable<string>,
 ): string[] {
-  const changedPaths = diffConfigPaths(prevConfig, nextConfig, "", [...reloadPrefixes]);
+  const refinementPrefixes = new Set(reloadPrefixes);
+  // Preserve individual plugin owners when the entries dictionary is added or removed.
+  for (const config of [prevConfig, nextConfig]) {
+    for (const pluginId of Object.keys(config.plugins?.entries ?? {})) {
+      refinementPrefixes.add(`plugins.entries.${pluginId}`);
+    }
+  }
+  // Decision selectors refine to authored leaves; other wildcard owners retain parent lifecycle rules.
+  if (refinementPrefixes.delete("agents.entries.*.decisionModel")) {
+    for (const config of [prevConfig, nextConfig]) {
+      for (const [agentId, agent] of Object.entries(config.agents?.entries ?? {})) {
+        if (agent.decisionModel !== undefined) {
+          refinementPrefixes.add(`agents.entries.${agentId}.decisionModel`);
+        }
+      }
+    }
+  }
+  const changedPaths = diffConfigPaths(prevConfig, nextConfig, "", [...refinementPrefixes]);
   const boundaryPaths = diffConfigPaths(
     projectGatewayReloadBoundaries(prevConfig),
     projectGatewayReloadBoundaries(nextConfig),

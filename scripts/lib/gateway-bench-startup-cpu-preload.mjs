@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Console } from "node:console";
 import { writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
@@ -54,6 +55,14 @@ if (
       }
       return original(chunk, ...args);
     };
+  }
+  if (process.versions.bun) {
+    // Bun's native console bypasses stream.write; use the same observed streams
+    // for console methods captured later by the Gateway's logging owner.
+    const outputConsole = new Console({ stdout: process.stdout, stderr: process.stderr });
+    for (const method of ["log", "info", "warn", "error", "debug"]) {
+      console[method] = outputConsole[method];
+    }
   }
   process.once("exit", (code) => {
     writeFileSync(

@@ -102,7 +102,7 @@ describe("mcp cli OAuth", () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      countMcpOAuthPrincipals.mockReturnValue(2);
+      countMcpOAuthPrincipals.mockResolvedValue(2);
 
       await runMcpCommand([
         "mcp",

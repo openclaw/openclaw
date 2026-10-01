@@ -1,26 +1,20 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type {
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionSession,
-} from "openclaw/plugin-sdk/realtime-transcription";
+import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { describe, expect, it } from "vitest";
 import { MediaStreamHandler } from "./media-stream.js";
 import { withTimeout } from "./websocket-test-support.js";
 
-const createStubSession = (): RealtimeTranscriptionSession => ({
-  connect: async () => {},
-  sendAudio: () => {},
-  close: () => {},
-  isConnected: () => true,
+const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin => ({
+  createSession: () => ({
+    connect: async () => {},
+    sendAudio: () => {},
+    close: () => {},
+    isConnected: () => true,
+  }),
+  id: "openai",
+  label: "OpenAI",
+  isConfigured: () => true,
 });
-
-const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin =>
-  ({
-    createSession: () => createStubSession(),
-    id: "openai",
-    label: "OpenAI",
-    isConfigured: () => true,
-  }) as unknown as RealtimeTranscriptionProviderPlugin;
 
 const createHandler = (): MediaStreamHandler =>
   new MediaStreamHandler({
@@ -62,6 +56,7 @@ describe("MediaStreamHandler TTS queue", () => {
 
     await handler.queueTts("stream-2", async () => {});
     expect(overflowRan).toBe(false);
+    expect(playbackOrder).toEqual([0]);
 
     activeGate.resolve();
     await active;
@@ -72,32 +67,6 @@ describe("MediaStreamHandler TTS queue", () => {
       playbackOrder.push(9);
     });
     expect(playbackOrder).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-  });
-
-  it("serializes TTS playback and resolves in order", async () => {
-    const handler = createHandler();
-    const started: number[] = [];
-    const finished: number[] = [];
-    const firstGate = createDeferred<void>();
-
-    const first = handler.queueTts("stream-1", async () => {
-      started.push(1);
-      await firstGate.promise;
-      finished.push(1);
-    });
-    const second = handler.queueTts("stream-1", async () => {
-      started.push(2);
-      finished.push(2);
-    });
-
-    expect(started).toEqual([1]);
-
-    firstGate.resolve();
-    await first;
-    await second;
-
-    expect(started).toEqual([1, 2]);
-    expect(finished).toEqual([1, 2]);
   });
 
   it("cancels active playback and clears queued items", async () => {

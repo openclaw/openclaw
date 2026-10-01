@@ -79,3 +79,36 @@ export async function openSidebarCustomizationPage(
   await page.locator("openclaw-app-sidebar").waitFor();
   return { context, page };
 }
+
+export async function openSidebarMoreMenu(page: Page): Promise<Locator> {
+  const sidebar = page.locator("openclaw-app-sidebar");
+  // Under load, Playwright can sample a stable frame while the scale-in animation
+  // still moves items between pointer-down and pointer-up. Arm before opening.
+  const transition = await sidebar.evaluateHandle((element) => {
+    const controller = new AbortController();
+    const shown = new Promise<void>((resolve) => {
+      element.addEventListener(
+        "wa-after-show",
+        (event) => {
+          if (
+            event.target instanceof Element &&
+            event.target.matches("wa-dropdown.sidebar-more-menu")
+          ) {
+            controller.abort();
+            resolve();
+          }
+        },
+        { signal: controller.signal },
+      );
+    });
+    return { shown, dispose: () => controller.abort() };
+  });
+  try {
+    await sidebar.locator(".sidebar-nav__head-action").click();
+    await transition.evaluate(({ shown }) => shown);
+  } finally {
+    await transition.evaluate(({ dispose }) => dispose());
+    await transition.dispose();
+  }
+  return sidebar.locator("wa-dropdown.sidebar-more-menu");
+}

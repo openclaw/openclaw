@@ -513,34 +513,6 @@ describe("createChannelNativeOriginTargetResolver", () => {
       }),
     ).toEqual({ to: "channel:C1", threadId: "171234.567890" });
   });
-
-  it("keeps custom target matchers generic", () => {
-    type ProviderTarget = { id: string; shard?: string };
-
-    const resolveOriginTarget = createChannelNativeOriginTargetResolver<ProviderTarget>({
-      channel: "custom",
-      resolveTurnSourceTarget: () => ({ id: "room-1", shard: "a" }),
-      resolveSessionTarget: () => ({ id: "room-1", shard: "b" }),
-      targetsMatch: (left, right) => left.id === right.id,
-    });
-
-    expect(
-      resolveOriginTarget({
-        cfg: EMPTY_SESSION_CFG,
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            sessionKey: "agent:main:custom:room-1",
-            turnSourceChannel: "custom",
-            turnSourceTo: "room-1",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toEqual({ id: "room-1", shard: "a" });
-  });
 });
 
 describe("createChannelApproverDmTargetResolver", () => {

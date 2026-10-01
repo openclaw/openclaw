@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { once } from "node:events";
 // MCP framing and disposal preserve the spawn owner's independent cleanup receipt.
 import fs from "node:fs/promises";
@@ -555,7 +556,7 @@ describe("OpenClawStdioClientTransport", () => {
     fixture.root.resolve({ code: 0, signal: null });
     fixture.extinction.resolve();
     await transport.close();
-    expect(Buffer.concat(received)).toEqual(Buffer.alloc(chunk.length * 64, 0xad));
+    deepStrictEqual(Buffer.concat(received), Buffer.alloc(chunk.length * 64, 0xad));
   });
 
   it("keeps default malformed-frame recovery when the caller does not retire", async () => {

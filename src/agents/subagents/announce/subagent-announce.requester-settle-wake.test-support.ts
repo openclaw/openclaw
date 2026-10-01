@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import type { SubagentAnnounceDeliveryResult as Result } from "./subagent-announce-dispatch.js";
-import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-wake.js";
+import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-state.js";
 
 export const REQUESTER = "agent:main:main";
 export const requesterSettleKey = (suffix: string) =>

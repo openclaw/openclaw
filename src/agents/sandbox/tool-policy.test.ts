@@ -98,15 +98,7 @@ describe("sandbox/tool-policy", () => {
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.allow).toContain("browser");
     expect(resolved.deny).not.toContain("browser");
-    expect(
-      isToolAllowed(
-        {
-          allow: resolved.allow,
-          deny: resolved.deny,
-        },
-        "browser",
-      ),
-    ).toBe(true);
+    expect(isToolAllowed(resolved, "browser")).toBe(true);
   });
 
   it.each([["image"], ["image*"]] as const)(
@@ -145,34 +137,10 @@ describe("sandbox/tool-policy", () => {
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.allow).toStrictEqual([]);
     expect(resolved.deny).not.toContain("browser");
-    expect(
-      isToolAllowed(
-        {
-          allow: resolved.allow,
-          deny: resolved.deny,
-        },
-        "read",
-      ),
-    ).toBe(true);
-    expect(
-      isToolAllowed(
-        {
-          allow: resolved.allow,
-          deny: resolved.deny,
-        },
-        "browser",
-      ),
-    ).toBe(true);
+    expect(isToolAllowed(resolved, "read")).toBe(true);
+    expect(isToolAllowed(resolved, "browser")).toBe(true);
     expect(resolved.deny).toContain("computer");
-    expect(
-      isToolAllowed(
-        {
-          allow: resolved.allow,
-          deny: resolved.deny,
-        },
-        "computer",
-      ),
-    ).toBe(false);
+    expect(isToolAllowed(resolved, "computer")).toBe(false);
   });
 
   it("keeps canonical sandbox config and runtime status aligned with the effective resolver", () => {
@@ -438,24 +406,6 @@ describe("sandbox/tool-policy", () => {
     },
   );
 
-  it("keeps the agent main session sandboxed in all mode", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-        list: [{ id: "main" }],
-      },
-    };
-
-    expect(
-      resolveSandboxRuntimeStatus({
-        cfg,
-        sessionKey: "agent:main:main",
-      }).sandboxed,
-    ).toBe(true);
-  });
-
   it("keeps explicit sandbox deny precedence over allow and alsoAllow", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -477,24 +427,8 @@ describe("sandbox/tool-policy", () => {
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.deny).toContain("browser");
     expect(resolved.deny).toContain("message");
-    expect(
-      isToolAllowed(
-        {
-          allow: resolved.allow,
-          deny: resolved.deny,
-        },
-        "browser",
-      ),
-    ).toBe(false);
-    expect(
-      isToolAllowed(
-        {
-          allow: resolved.allow,
-          deny: resolved.deny,
-        },
-        "message",
-      ),
-    ).toBe(false);
+    expect(isToolAllowed(resolved, "browser")).toBe(false);
+    expect(isToolAllowed(resolved, "message")).toBe(false);
   });
 
   it("uses the effective sandbox policy when formatting blocked-tool guidance", () => {

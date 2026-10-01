@@ -1,8 +1,50 @@
+import { zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 describe("read-only SQLite transcript readers", () => {
+  it("preserves exact compressed payloads in label and header repair snapshots", () => {
+    const database = openNodeSqliteDatabase(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE transcript_events (
+          session_id TEXT, seq INTEGER, created_at INTEGER, event_json TEXT,
+          event_zstd BLOB, event_utf8_bytes INTEGER
+        );
+        CREATE TABLE session_windows (session_id TEXT, session_key TEXT);
+        INSERT INTO session_windows VALUES ('compressed', 'agent:main:compressed');
+      `);
+      const originals = [
+        ' { "type": "message", "id": "first", "message": {"role":"user","content":"🦞"} } ',
+        '{"type":"message","id":"second","message":{"role":"assistant","content":"kept"}}',
+      ];
+      const insert = database.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, NULL, ?, ?)");
+      for (const [seq, eventJson] of originals.entries()) {
+        const bytes = Buffer.from(eventJson, "utf8");
+        insert.run("compressed", seq, 20 + seq, zstdCompressSync(bytes), bytes.byteLength);
+      }
+      const reader = new ReadOnlySqliteTranscriptReader(database);
+      expect(
+        reader.repairSnapshot(
+          "compressed",
+          () => true,
+          () => true,
+        ),
+      ).toEqual({
+        ok: true,
+        rows: originals.map((eventJson, seq) => ({ eventJson, seq })),
+      });
+      expect(reader.headerlessSnapshot("compressed", () => true)).toEqual({
+        ok: true,
+        sessionKey: "agent:main:compressed",
+        rows: originals.map((eventJson, seq) => ({ eventJson, seq, createdAt: 20 + seq })),
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it("closes a rejected header snapshot before the next database operation", () => {
     const database = openNodeSqliteDatabase(":memory:");
     try {

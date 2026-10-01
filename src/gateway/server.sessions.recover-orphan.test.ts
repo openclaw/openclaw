@@ -2,7 +2,11 @@ import { afterEach, expect, test } from "vitest";
 import { claimAgentSessionWriter } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -20,9 +24,18 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test.each([false, true])(
-  "sessions.recover reconciles an interrupted writer only without a live owner (live=%s)",
-  async (live) => {
+test.each([
+  { status: "running", live: false },
+  { status: "running", live: true },
+  { status: "failed", live: false },
+  { status: "failed", live: true },
+  { status: undefined, live: false },
+  { status: undefined, live: true },
+  { status: "done", live: false },
+  { status: "killed", live: false },
+] as const)(
+  "sessions.recover reconciles a $status interrupted writer only without a live owner (live=$live)",
+  async ({ status, live }) => {
     const { dir, storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:dashboard:orphaned-recovery";
     const sessionId = "orphaned-recovery-session";
@@ -87,12 +100,22 @@ test.each([false, true])(
       sessionId,
       messages: [{ role: "user", content: "preserve this conversation" }],
     });
+    if (status !== "running") {
+      await patchSessionEntryCore(target, () => ({
+        status,
+        ...(status === undefined ? { abortedLastRun: undefined } : {}),
+        lifecycleRunId: undefined,
+        lastRunId: "rejected-foreground-turn",
+        restartRecoveryDeliveryRunId: "rejected-foreground-turn",
+        restartRecoveryDeliverySourceRunId: "rejected-foreground-turn",
+      }));
+    }
     const stranded = loadSessionEntry(target);
+    expect(stranded?.status).toBe(status);
+    expect(stranded?.abortedLastRun).toBe(status === undefined ? undefined : false);
     expect(stranded).toMatchObject({
-      status: "running",
       activeWriterRunId: runId,
-      lifecycleRunId: runId,
-      abortedLastRun: false,
+      ...(status === "running" ? { lifecycleRunId: runId } : {}),
       mainRestartRecovery: { cycleId, revision: 4, chargedAttempts: 1, startedAttempt: 1 },
       restartRecoveryRuns: [{ runId, lifecycleGeneration }],
     });
@@ -109,7 +132,7 @@ test.each([false, true])(
         agentId: "main",
         key: sessionKey,
       });
-      if (live) {
+      if (live || status === "done" || status === "killed") {
         expect(recovered.ok).toBe(false);
         expect(loadSessionEntry(target)).toEqual(stranded);
         return;

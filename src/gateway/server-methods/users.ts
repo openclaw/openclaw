@@ -1,9 +1,10 @@
-// Gateway methods for durable user profile administration.
+import { isValidBase64 } from "@openclaw/media-core/base64";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
   errorShape,
   validateUsersLinkEmailParams,
+  validateUsersMergeParams,
   validateUsersListParams,
   validateUsersPrefsGetParams,
   validateUsersPrefsSetParams,
@@ -12,43 +13,52 @@ import {
   validateUsersSetDisplayNameParams,
   validateUsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
-import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
+import {
+  linkCanonicalUserProfileEmail,
+  mergeCanonicalUserProfiles,
+  setCanonicalUserProfileRole,
+} from "../../state/user-profile-writes.js";
+import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
   getUserProfileDisplay,
   getUserProfileListItem,
-  linkEmail,
   listProfiles,
-  resolveUserProfileId,
   setAvatar,
   setDisplayName,
-  setUserProfileRole,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
+import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { usersAuthConnectHandlers } from "./users-auth-connect.js";
+import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
 import { usersGitHubHandlers } from "./users-github.js";
+import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
-  requireProfileMutationAccess,
-  resolveAuthenticatedProfileId,
+  prepareAuthenticatedProfile,
+  prepareProfileMutationAccess,
+  prepareUserProfileAdministration,
 } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
   profile: { id: string; updatedAt: number },
+  display = getUserProfileDisplay(profile.id),
 ): ReturnType<typeof getUserProfileDisplay> {
-  const display = getUserProfileDisplay(profile.id);
   context.refreshConnectedUserProfile?.({
     ...display,
     updatedAt: profile.updatedAt,
@@ -56,35 +66,50 @@ function refreshConnectedProfile(
   return display;
 }
 
-function decodeBase64(value: string): Uint8Array | undefined {
-  const trimmed = value.trim();
-  if (
-    !trimmed ||
-    trimmed.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(trimmed)
-  ) {
-    return undefined;
-  }
-  return Buffer.from(trimmed, "base64");
-}
-
 function profileError(error: unknown) {
-  if (error instanceof UserProfileNotFoundError || error instanceof UserProfileOwnerError) {
+  if (
+    error instanceof UserProfileNotFoundError ||
+    error instanceof UserProfileOwnerError ||
+    error instanceof UserProfileMergeError
+  ) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
+function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client"]) {
+  const unavailable =
+    "Personal settings are unavailable in this turn. Ask in your own Control UI turn with a new message.";
+  try {
+    const participant = resolveGatewayPersonalToolParticipant(
+      client?.internal?.agentRuntimeIdentity,
+      { requireSingleParticipant: true },
+    );
+    return () => {
+      try {
+        participant?.assertCurrent();
+      } catch {
+        throw new Error(unavailable);
+      }
+    };
+  } catch {
+    throw new Error(unavailable);
+  }
+}
+
 export const usersHandlers: GatewayRequestHandlers = {
   ...usersAuthConnectHandlers,
+  ...usersChannelIdentityHandlers,
   ...usersGitHubHandlers,
-  "users.list": ({ params, respond }) => {
+  ...usersPersonalFileHandlers,
+  "users.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
     }
-    respond(true, { profiles: listProfiles() });
+    respond(true, { profiles: await listProfiles() });
   },
-  "users.self": async ({ client, params, respond }) => {
+  "users.self": async (options) => {
+    const { client, params, respond } = options;
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
@@ -104,7 +129,9 @@ export const usersHandlers: GatewayRequestHandlers = {
           // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
         }
       }
-      const profileId = resolveAuthenticatedProfileId(client);
+      const profile = await prepareAuthenticatedProfile(options);
+      profile.assertCurrent();
+      const profileId = profile.profileId;
       if (!profileId) {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
@@ -114,7 +141,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.get": async ({ client, params, respond }) => {
+  "users.prefs.get": async ({ client, params, respond, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateUsersPrefsGetParams, "users.prefs.get", respond)) {
       return;
     }
@@ -128,13 +155,19 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertCurrent = preparePersonalPreferences(client);
       const preferences = await getCanonicalUserPreferences(profileId, params.keys);
+      assertCurrent();
+      sessionMutationAuthorization?.assertCurrent();
       if (!preferences) {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(true, { status: "ok", entries: preferences.entries }, undefined);
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
       respond(false, undefined, profileError(error));
     }
   },
@@ -152,8 +185,10 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertCurrent = preparePersonalPreferences(client);
       const result = await setCanonicalUserPreferences(profileId, params.entries, {
         expectedEntries: params.expectedEntries,
+        assertCurrent,
       });
       if (!result) {
         respond(false, undefined, authenticatedProfileUnavailableError());
@@ -194,34 +229,13 @@ export const usersHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(true, { status: "ok" }, undefined);
-      const keys = Object.keys(params.entries);
-      if (keys.length === 0 || !context.getClientConnIds) {
-        return;
-      }
-      const canonicalProfileId = resolveUserProfileId(result.value.profileId);
-      if (!canonicalProfileId) {
-        return;
-      }
-      const connIds = context.getClientConnIds((connectedClient) => {
-        const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
-        return Boolean(
-          connectedProfileId &&
-          (connectedProfileId === canonicalProfileId ||
-            resolveUserProfileId(connectedProfileId) === canonicalProfileId),
-        );
-      });
-      if (connIds?.size) {
-        context.broadcastToConnIds(
-          "users.prefs.changed",
-          { profileId: canonicalProfileId, keys },
-          connIds,
-        );
-      }
+      publishUserPreferencesChanged(context, result.value.profileId, Object.keys(params.entries));
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.linkEmail": ({ context, params, respond }) => {
+  "users.linkEmail": async (options) => {
+    const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersLinkEmailParams, "users.linkEmail", respond)) {
       return;
     }
@@ -230,25 +244,60 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "email must not be empty"));
       return;
     }
+    const targetProfileId = params.targetProfileId;
     try {
-      const profile = linkEmail(email, params.targetProfileId);
-      refreshConnectedProfile(context, profile);
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      const { profile, display } = await linkCanonicalUserProfileEmail(email, targetProfileId, {
+        assertCurrent,
+      });
+      refreshConnectedProfile(context, profile, display);
       broadcastChatMetadataChanged(context);
       respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setDisplayName": ({ client, context, params, respond }) => {
+  "users.merge": async (options) => {
+    const { context, params, respond } = options;
+    if (!assertValidParams(params, validateUsersMergeParams, "users.merge", respond)) {
+      return;
+    }
+    try {
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      holdGatewayPolicyResponse(respond);
+      const { profile, display, movedAliasKinds } = await mergeCanonicalUserProfiles(
+        params.sourceProfileId,
+        params.targetProfileId,
+        {
+          assertCurrent,
+          onCommitted: (profileIds) => {
+            for (const profileId of profileIds) {
+              invalidateOperatorRolePolicy(profileId);
+              context.disconnectClientsForUserProfile?.(profileId);
+            }
+          },
+        },
+      );
+      refreshConnectedProfile(context, profile, display);
+      broadcastChatMetadataChanged(context);
+      respond(true, { profile, movedAliasKinds });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.setDisplayName": async (options) => {
+    const { context, params, respond } = options;
     if (
       !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
     ) {
       return;
     }
     try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
+      if (!assertCurrent) {
         return;
       }
+      assertCurrent();
       const profile = setDisplayName(params.profileId, params.displayName);
       refreshConnectedProfile(context, profile);
       respond(true, { profile });
@@ -256,40 +305,48 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setRole": ({ context, params, respond }) => {
+  "users.setRole": async (options) => {
+    const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {
       return;
     }
-    const roleDefinitions = context.getRuntimeConfig().gateway?.roles?.definitions;
-    if (
-      params.role !== null &&
-      (!roleDefinitions || !Object.hasOwn(roleDefinitions, params.role))
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unknown operator role "${params.role}"; define it under gateway.roles.definitions before assigning it`,
-        ),
-      );
+    const { profileId, role } = params;
+    const isConfiguredRole = () => {
+      const definitions = context.getRuntimeConfig().gateway?.roles?.definitions;
+      return role === null || (definitions !== undefined && Object.hasOwn(definitions, role));
+    };
+    const unknownRoleMessage = `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
+    if (!isConfiguredRole()) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, unknownRoleMessage));
       return;
     }
     try {
-      const profile = setUserProfileRole(params.profileId, params.role);
-      invalidateOperatorRolePolicy(profile.id);
-      context.disconnectClientsForUserProfile?.(profile.id);
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      holdGatewayPolicyResponse(respond);
+      const profile = await setCanonicalUserProfileRole(profileId, role, {
+        assertCurrent: () => {
+          assertCurrent();
+          if (!isConfiguredRole()) {
+            throw new Error(unknownRoleMessage);
+          }
+        },
+        onCommitted: (canonicalProfileId) => {
+          invalidateOperatorRolePolicy(canonicalProfileId);
+          context.disconnectClientsForUserProfile?.(canonicalProfileId);
+        },
+      });
       respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ client, context, params, respond }) => {
+  "users.setAvatar": async (options) => {
+    const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
-    const bytes = decodeBase64(params.avatarBase64);
-    if (!bytes) {
+    const avatarBase64 = params.avatarBase64.trim();
+    if (!isValidBase64(avatarBase64)) {
       respond(
         false,
         undefined,
@@ -297,10 +354,13 @@ export const usersHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const bytes = Buffer.from(avatarBase64, "base64");
     try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
+      if (!assertCurrent) {
         return;
       }
+      assertCurrent();
       const result = setAvatar(params.profileId, bytes, params.mime);
       if (!result.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));

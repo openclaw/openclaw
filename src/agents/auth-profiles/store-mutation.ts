@@ -1,16 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
+import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
 import { runtimeAuthMetadataState } from "./runtime-snapshot-owner.js";
 import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
 import type { AuthProfileStore } from "./types.js";
 
 const INLINE_OAUTH_TOKEN_FIELDS = ["access", "refresh", "idToken"] as const;
-
-function hasInlineOAuthTokenMaterial(credential: object): boolean {
-  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => Reflect.get(credential, field) !== undefined);
-}
 
 function hasChangedInlineOAuthTokenMaterial(params: {
   credential: object;
@@ -45,10 +42,7 @@ function preserveLegacyOAuthRefsOnSave(params: {
     ) {
       continue;
     }
-    if (
-      hasInlineOAuthTokenMaterial(credential) &&
-      hasChangedInlineOAuthTokenMaterial({ credential, existingCredential })
-    ) {
+    if (hasChangedInlineOAuthTokenMaterial({ credential, existingCredential })) {
       continue;
     }
     // Preserve legacy oauthRef ownership when current save data did not replace
@@ -85,6 +79,35 @@ export function prepareAuthProfileStoreMutation(params: {
     (profileId) =>
       Object.hasOwn(existingProfiles, profileId) !== Object.hasOwn(payload.profiles, profileId),
   );
+  const { statePayload, stateChanged, selectionChanged } = prepareAuthProfileStateMutation({
+    existingState,
+    store,
+    selectionProfiles,
+  });
+  return {
+    payload,
+    statePayload,
+    publication: {
+      profileIds: changedProfileIds,
+      profileSetChanged,
+      credentialsChanged: !isDeepStrictEqual(existingRaw, payload),
+      stateChanged,
+      selectionChanged,
+      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
+        payload.profiles,
+        changedProfileIds,
+      ),
+    },
+  };
+}
+
+/** Classify state-only writes without changing credential ownership. */
+export function prepareAuthProfileStateMutation(params: {
+  existingState: unknown;
+  store: AuthProfileStore;
+  selectionProfiles: AuthProfileStore["profiles"];
+}) {
+  const { existingState, store, selectionProfiles } = params;
   const statePayload = buildPersistedAuthProfileState(store);
   const stateChanged = !isDeepStrictEqual(existingState, statePayload);
   const previousState = coerceAuthProfileState(existingState);
@@ -104,13 +127,5 @@ export function prepareAuthProfileStoreMutation(params: {
         usageStats: statePayload?.usageStats,
       }),
     );
-  return {
-    payload,
-    changedProfileIds,
-    profileSetChanged,
-    credentialsChanged: !isDeepStrictEqual(existingRaw, payload),
-    statePayload,
-    stateChanged,
-    selectionChanged,
-  };
+  return { statePayload, stateChanged, selectionChanged };
 }

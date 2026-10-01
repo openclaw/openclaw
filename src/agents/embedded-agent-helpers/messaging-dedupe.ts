@@ -54,7 +54,9 @@ export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boo
   if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) {
     return false;
   }
-  return isMessagingToolDuplicateNormalized(normalized, sentTexts.map(normalizeTextForComparison));
+  return sentTexts.some((sentText) =>
+    isMessagingToolDuplicateNormalized(normalized, [normalizeTextForComparison(sentText)]),
+  );
 }
 
 export function resolveCurrentSourceMessagingToolPartial(

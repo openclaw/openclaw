@@ -8,9 +8,35 @@ type IndexedClient = {
 export class GatewayClientRegistry extends Set<GatewayWsClient> {
   readonly #byConnectionId = new Map<string, IndexedClient>();
   #nextOrder = 0;
+  readonly #onRemove?: (client: GatewayWsClient) => void;
+  readonly #activeRequests = new Map<GatewayWsClient, number>();
+  // Revocation covers retained requests; presence and fanout still see live transports only.
+  get authorityClients(): Iterable<GatewayWsClient> {
+    return {
+      [Symbol.iterator]: () => new Set([...this, ...this.#activeRequests.keys()]).values(),
+    };
+  }
 
-  constructor(clients?: Iterable<GatewayWsClient>) {
+  retainRequest(client: GatewayWsClient): () => void {
+    this.#activeRequests.set(client, (this.#activeRequests.get(client) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const remaining = this.#activeRequests.get(client)! - 1;
+      if (remaining === 0) {
+        this.#activeRequests.delete(client);
+      } else {
+        this.#activeRequests.set(client, remaining);
+      }
+    };
+  }
+
+  constructor(clients?: Iterable<GatewayWsClient>, onRemove?: (client: GatewayWsClient) => void) {
     super();
+    this.#onRemove = onRemove;
     for (const client of clients ?? []) {
       this.add(client);
     }
@@ -27,6 +53,7 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
     if (!super.delete(client)) {
       return false;
     }
+    this.#onRemove?.(client);
     if (this.#byConnectionId.get(client.connId)?.client === client) {
       this.#byConnectionId.delete(client.connId);
     }
@@ -34,6 +61,9 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
   }
 
   override clear(): void {
+    for (const client of this) {
+      this.#onRemove?.(client);
+    }
     super.clear();
     this.#byConnectionId.clear();
   }

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -9,11 +10,15 @@ import type {
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
+  captureOpenClawAgentDatabaseValidationTransfer,
   clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidationForTransfer,
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidationsForAgent,
   markOpenClawAgentCanonicalValidation,
+  releaseOpenClawAgentDatabaseReadValidation,
   setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
@@ -61,6 +66,177 @@ describe("canonical proof on physical database validation", () => {
       expect(database.db.prepare("SELECT canonical_ready FROM session_key_contract").get()).toEqual(
         { canonical_ready: null },
       );
+    });
+  });
+
+  function independentWorkerReceipt(database: OpenClawAgentDatabase) {
+    const receipt = getOpenClawAgentDatabaseValidation(database);
+    if (!receipt) {
+      throw new Error("Expected physical validation receipt");
+    }
+    // A native first opener can establish proof before the host has any receipt.
+    return {
+      ...receipt,
+      valid: receipt.valid.slice(0),
+      canonicalReady: receipt.canonicalReady.slice(0),
+    };
+  }
+
+  it.each(["exact", "sibling-family"] as const)(
+    "releases closed reader metadata by %s without revoking parent proof or unselected aliases",
+    async (selection) => {
+      await withReceiptFixture(false, (database) => {
+        const receipt = getOpenClawAgentDatabaseValidation(database)!;
+        const source = path.parse(database.path);
+        const family = path.join(source.dir, `${source.name}.secondary${source.ext}`);
+        const sibling = path.join(source.dir, `${source.name}-other${source.ext}`);
+        const alias = path.join(source.dir, `alias${source.ext}`);
+        const target = (pathname: string) => ({ agentId: database.agentId, path: pathname });
+        // These admitted locators share one physical receipt, as a worker's aliases can.
+        for (const pathname of [family, sibling, alias]) {
+          const adopt = captureOpenClawAgentDatabaseValidationTransfer(target(pathname));
+          expect(adopt(receipt.identity, receipt)).toBe(true);
+        }
+        closeOpenClawAgentDatabaseByPath(database.path);
+        const candidates = [
+          { path: database.path, ...(selection === "sibling-family" ? { scope: selection } : {}) },
+        ];
+
+        releaseOpenClawAgentDatabaseReadValidation(candidates);
+
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+        if (selection === "sibling-family") {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(target(family))).toBeUndefined();
+        } else {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(target(family))?.valid).toBe(
+            receipt.valid,
+          );
+        }
+        for (const pathname of [sibling, alias]) {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(target(pathname))?.valid).toBe(
+            receipt.valid,
+          );
+        }
+        expect(Atomics.load(new Int32Array(receipt.valid), 0)).toBe(1);
+        expect(Atomics.load(new Int32Array(receipt.canonicalReady), 0)).toBe(1);
+
+        // A retired reader's path tombstone must not clear a later owner's ready receipt.
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        releaseOpenClawAgentDatabaseReadValidation(candidates);
+        const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
+        expect(adopt(receipt.identity, receipt)).toBe(true);
+        expect(Atomics.load(new Int32Array(receipt.canonicalReady), 0)).toBe(1);
+      });
+    },
+  );
+
+  describe("native integrity proof handoff", () => {
+    it("accepts proof without a host handle and shares subsequent host revocation", async () => {
+      await withReceiptFixture(false, (database) => {
+        const received = independentWorkerReceipt(database);
+        closeOpenClawAgentDatabaseByPath(database.path);
+        clearOpenClawAgentDatabaseValidationCache(database.path);
+        const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
+
+        expect(adopt(received.identity, received)).toBe(true);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)?.valid).toBe(received.valid);
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        expect(Atomics.load(new Int32Array(received.valid), 0)).toBe(0);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+      });
+    });
+
+    it("does not restore delayed proof after path, repeated, cache, or agent revocation", async () => {
+      await withReceiptFixture(false, (database) => {
+        const received = independentWorkerReceipt(database);
+        clearOpenClawAgentDatabaseValidationCache(database.path);
+
+        const beforeInvalidation = captureOpenClawAgentDatabaseValidationTransfer(database);
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        expect(beforeInvalidation(received.identity, received)).toBe(false);
+
+        const beforeRepeatedInvalidation = captureOpenClawAgentDatabaseValidationTransfer(database);
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        expect(beforeRepeatedInvalidation(received.identity, received)).toBe(false);
+
+        const beforeClear = captureOpenClawAgentDatabaseValidationTransfer(database);
+        clearOpenClawAgentDatabaseValidationCache(database.path);
+        expect(beforeClear(received.identity, received)).toBe(false);
+
+        // A path can be revoked before its first native opener associates an agent.
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        const beforeAgentInvalidation = captureOpenClawAgentDatabaseValidationTransfer(database);
+        invalidateOpenClawAgentDatabaseValidationsForAgent(database.agentId, []);
+        expect(beforeAgentInvalidation(received.identity, received)).toBe(false);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+        expect(Atomics.load(new Int32Array(received.valid), 0)).toBe(1);
+
+        const afterInvalidation = captureOpenClawAgentDatabaseValidationTransfer(database);
+        expect(afterInvalidation(received.identity, received)).toBe(true);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)?.valid).toBe(received.valid);
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        const successor = { path: database.path, agentId: "successor" };
+        const beforeOwnerRevocation = captureOpenClawAgentDatabaseValidationTransfer(successor);
+        invalidateOpenClawAgentDatabaseValidationsForAgent(successor.agentId, []);
+        const successorReceipt = {
+          ...received,
+          agentId: successor.agentId,
+          identity: "successor-file",
+          valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+        };
+        Atomics.store(new Int32Array(successorReceipt.valid), 0, 1);
+        expect(beforeOwnerRevocation(successorReceipt.identity, successorReceipt)).toBe(false);
+      });
+    });
+
+    it("rejects delayed proof when a peer revokes the captured shared receipt", async () => {
+      await withReceiptFixture(false, (database) => {
+        const received = independentWorkerReceipt(database);
+        const original = getOpenClawAgentDatabaseValidation(database)!;
+        const peer = structuredClone(original);
+        const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
+
+        Atomics.store(new Int32Array(peer.valid), 0, 0);
+
+        expect(Atomics.load(new Int32Array(original.valid), 0)).toBe(0);
+        expect(Atomics.load(new Int32Array(received.valid), 0)).toBe(1);
+        expect(adopt(received.identity, received)).toBe(false);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+      });
+    });
+
+    it("rejects foreign, revoked, and malformed receipts without accepting their proof", async () => {
+      await withReceiptFixture(false, (database) => {
+        const received = independentWorkerReceipt(database);
+        clearOpenClawAgentDatabaseValidationCache(database.path);
+        const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
+        for (const invalid of [
+          { ...received, agentId: "another-agent" },
+          { ...received, identity: "another-file" },
+          { ...received, valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT) },
+          { ...received, valid: new SharedArrayBuffer(1) },
+          { ...received, valid: new ArrayBuffer(Int32Array.BYTES_PER_ELEMENT) },
+          { ...received, canonicalReady: new SharedArrayBuffer(1) },
+        ]) {
+          expect(adopt(received.identity, invalid)).toBe(false);
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+        }
+        expect(adopt(received.identity, received)).toBe(true);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)?.valid).toBe(received.valid);
+      });
+    });
+
+    it("keeps durable canonical proof readable during a pending native handoff", async () => {
+      await withReceiptFixture(false, (database, options) => {
+        runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+        clearOpenClawAgentDatabaseValidationCache(database.path);
+        captureOpenClawAgentDatabaseValidationTransfer(database);
+
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+      });
     });
   });
 

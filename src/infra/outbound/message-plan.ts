@@ -22,21 +22,11 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
   deliveryPartCount?: number;
 };
 
-/**
- * Planned outbound delivery unit after text chunking or media expansion.
- */
-type OutboundMessageUnit =
-  | {
-      kind: "text";
-      text: string;
-      overrides: OutboundMessageSendOverrides;
-    }
-  | {
-      kind: "media";
-      caption?: string;
-      mediaUrl: string;
-      overrides: OutboundMessageSendOverrides;
-    };
+type OutboundTextMessageUnit = {
+  kind: "text";
+  text: string;
+  overrides: OutboundMessageSendOverrides;
+};
 
 /**
  * Splits outbound text with optional formatting-aware context.
@@ -108,12 +98,12 @@ export function planOutboundTextMessageUnits(params: {
   chunkMode?: ChunkMode;
   formatting?: OutboundDeliveryFormattingOptions;
   consumeReplyTo?: PlanReplyToConsumption;
-}): OutboundMessageUnit[] {
+}): OutboundTextMessageUnit[] {
   const planTextUnit = (
     text: string,
     deliveryPartIndex: number,
     chunkedTextFormatting?: OutboundDeliveryFormattingOptions,
-  ): OutboundMessageUnit => {
+  ): OutboundTextMessageUnit => {
     const overrides = {
       ...withPlannedReplyTo(params.overrides, params.consumeReplyTo),
       deliveryPartIndex,
@@ -127,7 +117,7 @@ export function planOutboundTextMessageUnits(params: {
     };
   };
 
-  const withDeliveryTopology = (units: OutboundMessageUnit[]): OutboundMessageUnit[] => {
+  const withDeliveryTopology = (units: OutboundTextMessageUnit[]): OutboundTextMessageUnit[] => {
     const deliveryPartCount = units.length;
     // These units are planner-owned until return; finalize them in place rather
     // than cloning every chunk solely to attach the shared fan-out count.
@@ -141,39 +131,29 @@ export function planOutboundTextMessageUnits(params: {
     return withDeliveryTopology([planTextUnit(params.text, 0)]);
   }
 
-  if (params.chunkMode === "newline") {
-    const blockChunks =
-      (params.chunkerMode ?? "text") === "markdown"
+  const blockChunks =
+    params.chunkMode !== "newline"
+      ? [params.text]
+      : (params.chunkerMode ?? "text") === "markdown"
         ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline")
         : chunkByParagraph(params.text, params.textLimit);
-
-    if (!blockChunks.length && params.text) {
-      blockChunks.push(params.text);
-    }
-
-    const units: OutboundMessageUnit[] = [];
-    for (const blockChunk of blockChunks) {
-      const chunks = chunkTextForPlan({
-        text: blockChunk,
-        limit: params.textLimit,
-        chunker: params.chunker,
-        formatting: params.formatting,
-      });
-      for (const chunk of chunks) {
-        units.push(planTextUnit(chunk, units.length, params.chunkedTextFormatting));
-      }
-    }
-    return withDeliveryTopology(units);
+  if (!blockChunks.length && params.text) {
+    blockChunks.push(params.text);
   }
 
-  return withDeliveryTopology(
-    chunkTextForPlan({
-      text: params.text,
+  const units: OutboundTextMessageUnit[] = [];
+  for (const blockChunk of blockChunks) {
+    const chunks = chunkTextForPlan({
+      text: blockChunk,
       limit: params.textLimit,
       chunker: params.chunker,
       formatting: params.formatting,
-    }).map((chunk, index) => planTextUnit(chunk, index, params.chunkedTextFormatting)),
-  );
+    });
+    for (const chunk of chunks) {
+      units.push(planTextUnit(chunk, units.length, params.chunkedTextFormatting));
+    }
+  }
+  return withDeliveryTopology(units);
 }
 
 /**
@@ -184,7 +164,7 @@ export function planOutboundMediaMessageUnits(params: {
   mediaUrls: readonly string[];
   overrides: OutboundMessageSendOverrides;
   consumeReplyTo?: PlanReplyToConsumption;
-}): OutboundMessageUnit[] {
+}) {
   const deliveryPartCount = params.mediaUrls.length;
   return params.mediaUrls.map((mediaUrl, index) => ({
     kind: "media" as const,

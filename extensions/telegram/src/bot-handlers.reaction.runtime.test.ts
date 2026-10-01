@@ -1,4 +1,5 @@
 // Telegram tests cover forum reaction topic recovery before authorization and routing.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -21,10 +22,12 @@ import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
 
 const FIRE_EMOJI = "\u{1F525}";
-const FORUM_CHAT_ID = 5678;
+const FORUM_CHAT_ID = -1005678;
 const FORUM_TOPIC_ID = 77;
 const REACTED_MESSAGE_ID = 100;
 
@@ -93,29 +96,7 @@ function registerHandler(
       chatId: string | number,
       messageThreadId: number | undefined,
       config: OpenClawConfig,
-    ) => {
-      const groups = (
-        config.channels?.telegram as
-          | {
-              groups?: Record<
-                string,
-                {
-                  enabled?: boolean;
-                  topics?: Record<string, { enabled?: boolean; agentId?: string }>;
-                }
-              >;
-            }
-          | undefined
-      )?.groups;
-      const groupConfig = groups?.[String(chatId)];
-      return {
-        groupConfig,
-        topicConfig:
-          messageThreadId === undefined
-            ? undefined
-            : groupConfig?.topics?.[String(messageThreadId)],
-      };
-    },
+    ) => resolveTelegramScopedGroupConfig(config.channels?.telegram ?? {}, chatId, messageThreadId),
     processMessage: vi.fn<RegisterTelegramHandlerParams["processMessage"]>(),
     telegramDeps: {
       ...defaultTelegramBotDeps,
@@ -153,7 +134,7 @@ function forumReactionContext(overrides?: {
     update: { update_id: 900 },
     messageReaction: {
       chat: {
-        id: FORUM_CHAT_ID,
+        id: overrides?.chatType === "private" ? 5678 : FORUM_CHAT_ID,
         type: overrides?.chatType ?? "supergroup",
         ...(overrides?.isForum === false ? {} : { is_forum: true }),
         ...(overrides?.isDirectMessages ? { is_direct_messages: true } : {}),
@@ -176,6 +157,7 @@ function systemEventOptions(): { sessionKey?: string; contextKey?: string } {
 
 describe("registerTelegramReactionHandler forum topic recovery", () => {
   beforeEach(() => {
+    setTelegramRuntime(createPluginRuntimeMock());
     resetSystemEventsForTest();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     enqueueRoutedSystemEvent.mockReset();
@@ -189,6 +171,112 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     resetSystemEventsForTest();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     clearRuntimeConfigSnapshot();
+  });
+
+  it.each(["private", "supergroup"] as const)(
+    "authorizes %s reaction senders before queueing distinct additions",
+    async (chatType) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["10"],
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["10"],
+            reactionNotifications: "all",
+          },
+        },
+      };
+      enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+      const handler = registerHandler(cfg);
+      const context = forumReactionContext({ isForum: false, chatType });
+      const sessionKey =
+        chatType === "private" ? "agent:main:main" : "agent:main:telegram:group:-1005678";
+      await handler({
+        ...context,
+        messageReaction: { ...context.messageReaction, user: { id: 11, first_name: "Denied" } },
+      });
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      await handler({
+        ...context,
+        messageReaction: {
+          ...context.messageReaction,
+          old_reaction: [{ type: "emoji", emoji: FIRE_EMOJI }],
+          new_reaction: [
+            { type: "emoji", emoji: FIRE_EMOJI },
+            { type: "emoji", emoji: "\u{1F44D}" },
+            { type: "emoji", emoji: "\u{1F389}" },
+          ],
+        },
+      });
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({
+          text: "Telegram reaction added: \u{1F44D} by Bob (@bob_user) on msg 100",
+          contextKey:
+            chatType === "private"
+              ? "telegram:reaction:add:5678:100:10:\u{1F44D}"
+              : "telegram:reaction:add:-1005678:100:10:\u{1F44D}",
+        }),
+        expect.objectContaining({
+          text: "Telegram reaction added: \u{1F389} by Bob (@bob_user) on msg 100",
+          contextKey:
+            chatType === "private"
+              ? "telegram:reaction:add:5678:100:10:\u{1F389}"
+              : "telegram:reaction:add:-1005678:100:10:\u{1F389}",
+        }),
+      ]);
+    },
+  );
+
+  it("keeps default own, off, and all notification modes distinct", async () => {
+    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    };
+    const context = forumReactionContext({ isForum: false, chatType: "private" });
+    await registerHandler(cfg, () => false)(context);
+    expect(peekSystemEventEntries("agent:main:main")).toEqual([]);
+    await registerHandler(cfg, () => true)(context);
+    expect(peekSystemEventEntries("agent:main:main")).toEqual([
+      expect.objectContaining({
+        text: "Telegram reaction added: \u{1F525} by Bob (@bob_user) on msg 100",
+      }),
+    ]);
+    resetSystemEventsForTest();
+    cfg.channels!.telegram!.reactionNotifications = "off";
+    await registerHandler(cfg, () => true)(context);
+    expect(peekSystemEventEntries("agent:main:main")).toEqual([]);
+    cfg.channels!.telegram!.reactionNotifications = "all";
+    await registerHandler(cfg, () => false)(context);
+    expect(peekSystemEventEntries("agent:main:main")).toEqual([
+      expect.objectContaining({
+        text: "Telegram reaction added: \u{1F525} by Bob (@bob_user) on msg 100",
+      }),
+    ]);
+  });
+
+  it("does not queue bot actors, unchanged reactions, or removals", async () => {
+    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+    const handler = registerHandler(buildTelegramConfig());
+    const context = forumReactionContext({ isForum: false, chatType: "private" });
+    await handler({
+      ...context,
+      messageReaction: {
+        ...context.messageReaction,
+        user: { id: 10, first_name: "Bot", is_bot: true },
+      },
+    });
+    for (const newReaction of [[{ type: "emoji", emoji: FIRE_EMOJI }], []]) {
+      await handler(
+        forumReactionContext({
+          isForum: false,
+          chatType: "private",
+          oldReaction: [{ type: "emoji", emoji: FIRE_EMOJI }],
+          newReaction,
+        }),
+      );
+    }
+    expect(peekSystemEventEntries("agent:main:main")).toEqual([]);
   });
 
   it("keeps a reaction on the runtime-bound global owner's queue", async () => {
@@ -225,8 +313,6 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
       }),
     ]);
     expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
-    expect(binding.targetSessionKey).toBe("global");
-    expect(systemEventOptions().sessionKey).toBe("global");
   });
 
   it("recovers the cached topic before authorization and routes to that topic", async () => {

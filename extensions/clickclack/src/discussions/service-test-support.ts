@@ -51,16 +51,36 @@ export function createDiscussionMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
 }
 
 export function asyncDiscussionTestStore<T>(
-  store: PluginStateSyncKeyedStore<T>,
+  openStore: PluginRuntime["state"]["openSyncKeyedStore"],
+  options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
 ): PluginStateKeyedStore<T> {
+  if (options.retention === "retained") {
+    throw new Error("ClickClack discussion fixture expects a bounded store");
+  }
+  const store = openStore<T>(options);
   return {
     register: async (...args) => store.register(...args),
     registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
     lookup: async (...args) => store.lookup(...args),
     consume: async (...args) => store.consume(...args),
-    delete: async (...args) => store.delete(...args),
+    delete: async (key, opts) => {
+      opts?.assertCurrent?.();
+      return store.delete(key);
+    },
     entries: async () => store.entries(),
     clear: async () => store.clear(),
+  };
+}
+
+export function discussionChannel<T extends Partial<ClickClackChannel>>(fields: T) {
+  return {
+    id: "chn_discussion",
+    route_id: "discussion-route",
+    workspace_id: "wsp_team",
+    name: "discussion",
+    kind: "public",
+    created_at: "2026-07-19T00:00:00.000Z",
+    ...fields,
   };
 }
 
@@ -123,7 +143,7 @@ export function createHarness(
     state: {
       openSyncKeyedStore,
       openKeyedStore: <T>(storeOptions: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0]) =>
-        asyncDiscussionTestStore(openSyncKeyedStore<T>(storeOptions)),
+        asyncDiscussionTestStore<T>(openSyncKeyedStore, storeOptions),
     },
     agent: {
       session: {

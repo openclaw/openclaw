@@ -38,19 +38,23 @@ function createThreadLifecycleAppServerOptions(): ReturnType<typeof createAppSer
   };
 }
 
+function readEmptyNativeConfig(method: string) {
+  if (method === "config/read") {
+    return { config: {}, origins: {}, layers: [] };
+  }
+  if (method === "configRequirements/read") {
+    return { requirements: null };
+  }
+  throw new Error(`unexpected method: ${method}`);
+}
+
 async function seedAdoptedThreadBinding(params: EmbeddedRunAttemptParams, cwd: string) {
   const threadId = "thread-adopted";
   const request = vi.fn(async (method: string) => {
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
     if (method === "thread/start") {
       return threadStartResult(threadId);
     }
-    throw new Error(`unexpected method: ${method}`);
+    return readEmptyNativeConfig(method);
   });
   await startOrResumeThread({
     client: { request } as never,
@@ -115,15 +119,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         persistedThreads: [threadId],
-        respond: (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
-          throw new Error(`unexpected method: ${method}`);
-        },
+        respond: readEmptyNativeConfig,
       });
       try {
         await expect(
@@ -175,16 +171,10 @@ describe("Codex app-server adopted thread lifecycle", () => {
         agentDir: path.join(tempDir, "agent"),
         persistedThreads: [threadId],
         respond: (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (method === "thread/resume") {
             return nativeModel;
           }
-          throw new Error(`unexpected method: ${method}`);
+          return readEmptyNativeConfig(method);
         },
       });
       const resuming = startOrResumeThread({
@@ -227,12 +217,6 @@ describe("Codex app-server adopted thread lifecycle", () => {
     const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
     let resumeCount = 0;
     const respond = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
       if (method === "thread/resume") {
         resumeCount += 1;
         return {
@@ -241,7 +225,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
           modelProvider: resumeCount === 1 ? "lmstudio" : "ollama",
         };
       }
-      throw new Error(`unexpected method: ${method}`);
+      return readEmptyNativeConfig(method);
     });
 
     const fixture = await createLeasedCodexLifecycleHarness({
@@ -313,15 +297,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
       const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
       const harness = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
-        respond: (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
-          throw new Error(`unexpected method: ${method}`);
-        },
+        respond: readEmptyNativeConfig,
       });
       harness.seed(
         {

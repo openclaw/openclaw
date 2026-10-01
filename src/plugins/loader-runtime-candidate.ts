@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
@@ -41,6 +41,7 @@ import {
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginModuleExport } from "./module-export.js";
 import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
+import { openPluginRootFileSync } from "./path-safety.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
@@ -427,12 +428,10 @@ export function loadRuntimePluginCandidate(params: {
   });
   let safeSource = moduleLoadSource;
   if (!recovery) {
-    const opened = openRootFileSync({
-      absolutePath: moduleLoadSource,
+    const opened = openPluginRootFileSync({
+      filePath: moduleLoadSource,
       rootPath: moduleRoot,
-      boundaryLabel: "plugin root",
       rejectHardlinks,
-      skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
       pushPluginLoadError(

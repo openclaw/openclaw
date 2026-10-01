@@ -1,4 +1,3 @@
-// watchOS direct-node transport.
 // Apple Watch cannot use generic WebSockets on-device, so node events use bounded HTTPS polls.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -44,6 +43,7 @@ import {
   resolveNodePairingState,
 } from "../infra/device-pairing.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   isNodePairingSetupBootstrapProfile,
   isVoiceNodePairingSetupBootstrapProfile,
@@ -203,10 +203,7 @@ function resolveWatchClientAddress(
 function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
   let aborted = false;
   let settled = false;
-  let resolveCompleted: (completed: boolean) => void = () => undefined;
-  const completed = new Promise<boolean>((resolve) => {
-    resolveCompleted = resolve;
-  });
+  const completion = createDeferredCore<boolean>();
   const settle = (value: boolean) => {
     if (settled) {
       return;
@@ -214,7 +211,7 @@ function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
     settled = true;
     res.off("finish", onFinish);
     res.off("close", onClose);
-    resolveCompleted(value);
+    completion.resolve(value);
   };
   const onFinish = () => settle(true);
   const onClose = () => {
@@ -223,7 +220,7 @@ function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
   };
   res.once("finish", onFinish);
   res.once("close", onClose);
-  return { completed, isAborted: () => aborted };
+  return { completed: completion.promise, isAborted: () => aborted };
 }
 
 function hasOnlyBoundedWatchSurface(connect: ConnectParams): boolean {
@@ -531,10 +528,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const handleChallenge = (req: IncomingMessage, res: ServerResponse) => {
-    if ((req.method ?? "GET").toUpperCase() !== "GET") {
-      sendMethodNotAllowed(res, "GET");
-      return;
-    }
     const { rateLimitKey: clientKey } = resolveWatchClientAddress(req, options.getConfig());
     const rateLimit = options.rateLimiter?.check(clientKey, AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE);
     if (rateLimit && !rateLimit.allowed) {
@@ -548,10 +541,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const handleConnect = async (req: IncomingMessage, res: ServerResponse) => {
-    if ((req.method ?? "").toUpperCase() !== "POST") {
-      sendMethodNotAllowed(res);
-      return;
-    }
     const responseLifecycle = trackResponseLifecycle(res);
     const body = await readJsonBodyOrError(req, res, MAX_BODY_BYTES);
     if (body === undefined) {
@@ -1077,10 +1066,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const handlePoll = async (req: IncomingMessage, res: ServerResponse) => {
-    if ((req.method ?? "").toUpperCase() !== "POST") {
-      sendMethodNotAllowed(res);
-      return;
-    }
     await withCurrentSession(req, res, (session) => {
       const queued = session.queue.shift();
       if (queued) {
@@ -1116,10 +1101,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const handleDisconnect = async (req: IncomingMessage, res: ServerResponse) => {
-    if ((req.method ?? "").toUpperCase() !== "POST") {
-      sendMethodNotAllowed(res);
-      return;
-    }
     await withCurrentSession(req, res, (session) => {
       closeSession(session, "watch disconnected");
       sendJson(res, 200, { ok: true });
@@ -1127,10 +1108,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const handleResult = async (req: IncomingMessage, res: ServerResponse) => {
-    if ((req.method ?? "").toUpperCase() !== "POST") {
-      sendMethodNotAllowed(res);
-      return;
-    }
     if (!(await getSession(req, res))) {
       return;
     }
@@ -1164,6 +1141,17 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     });
   };
 
+  const handlers = new Map<
+    string,
+    (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+  >([
+    [CHALLENGE_PATH, handleChallenge],
+    [CONNECT_PATH, handleConnect],
+    [DISCONNECT_PATH, handleDisconnect],
+    [POLL_PATH, handlePoll],
+    [RESULT_PATH, handleResult],
+  ]);
+
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const path = normalizePath(req);
     if (!path?.startsWith(`${BASE_PATH}/`)) {
@@ -1174,26 +1162,18 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       return true;
     }
     res.setHeader("Cache-Control", "no-store");
-    switch (path) {
-      case CHALLENGE_PATH:
-        handleChallenge(req, res);
-        return true;
-      case CONNECT_PATH:
-        await handleConnect(req, res);
-        return true;
-      case DISCONNECT_PATH:
-        await handleDisconnect(req, res);
-        return true;
-      case POLL_PATH:
-        await handlePoll(req, res);
-        return true;
-      case RESULT_PATH:
-        await handleResult(req, res);
-        return true;
-      default:
-        sendJson(res, 404, { ok: false, error: "not found" });
-        return true;
+    const handler = handlers.get(path);
+    if (!handler) {
+      sendJson(res, 404, { ok: false, error: "not found" });
+      return true;
     }
+    const method = path === CHALLENGE_PATH ? "GET" : "POST";
+    if ((req.method ?? (method === "GET" ? "GET" : "")).toUpperCase() !== method) {
+      sendMethodNotAllowed(res, method);
+      return true;
+    }
+    await handler(req, res);
+    return true;
   };
 
   return {

@@ -12,6 +12,7 @@ import {
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { GatewayClientRegistry } from "../client-registry.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const { loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
 vi.mock("../../../infra/system-presence.js", () => ({
+  commitPresence: vi.fn(),
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));
@@ -100,6 +102,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
   });
 
   attachGatewayWsMessageHandler({
+    clients: new GatewayClientRegistry(),
     socket,
     prepareAuthenticatedReceive: () => ({ ok: true, value: vi.fn() }),
     connectionWork,

@@ -13,6 +13,7 @@ const TSDOWN_PACKAGE_NAMES = [
   "net-policy",
   "normalization-core",
   "retry",
+  "sdk",
   "terminal-core",
   "acp-core",
 ] as const;

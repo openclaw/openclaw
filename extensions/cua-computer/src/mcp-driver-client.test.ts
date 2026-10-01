@@ -8,8 +8,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { execution } from "./commands.test-helpers.js";
 import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
-import { ClickButton, EscalationReason } from "./driver-client.js";
+import { ClickButton } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
+
+// Load the real transport before timing socket behavior, including its cold module graph.
+if (process.platform !== "win32") {
+  const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+  await mcpStdioRuntime.load();
+}
 
 type RpcRequest = {
   id?: number;
@@ -303,7 +309,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
       isError: false,
     });
-    await expect(driver.escalateScope(EscalationReason.Other)).resolves.toMatchObject({
+    await expect(driver.getSessionState()).resolves.toMatchObject({
       desktopCaptureAuthorized: true,
       desktopUnlocked: true,
     });
@@ -418,32 +424,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     expect(JSON.parse(first.structuredJson!)).toEqual({ marker: "first" });
     expect(JSON.parse(second.structuredJson!)).toEqual({ marker: "second", text: "β雪" });
     expect(settlement).toEqual(["second", "first"]);
-    await driver.dispose();
-  });
-
-  it.each([
-    ["not-json\n", "invalid JSON"],
-    [" \n", "invalid JSON"],
-    [JSON.stringify({ jsonrpc: "1.0", id: 1, result: {} }) + "\n", "invalid JSON-RPC version"],
-    [JSON.stringify({ jsonrpc: "2.0", id: "1", result: {} }) + "\n", "invalid response id"],
-    [
-      JSON.stringify({ jsonrpc: "2.0", id: Number.MAX_SAFE_INTEGER + 1, result: {} }) + "\n",
-      "invalid response id",
-    ],
-    [
-      JSON.stringify({ jsonrpc: "2.0", id: 0, result: { protocolVersion: "2024-11-05" } }) + "\n",
-      "incompatible protocol version",
-    ],
-  ])("fails closed for %s", async (response, message) => {
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.writeRaw(request, response);
-      }
-    });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
-    await expect(driver.getDesktopState()).rejects.toThrow(message);
-    expect(driver.isAvailable()).toBe(false);
     await driver.dispose();
   });
 

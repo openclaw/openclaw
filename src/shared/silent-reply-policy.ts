@@ -9,7 +9,7 @@ export type SilentReplyPolicyShape = Partial<
 
 const DEFAULT_SILENT_REPLY_POLICY: Record<SilentReplyConversationType, SilentReplyPolicy> = {
   direct: "disallow",
-  group: "allow",
+  group: "disallow",
   internal: "allow",
 };
 

@@ -11,34 +11,6 @@ import { TELEPHONY_DEFAULT_TTS_TIMEOUT_MS } from "./telephony-tts.js";
 const VOICE_CALL_CONTINUE_OPERATION_BUFFER_MS = 30000;
 const VOICE_CALL_CONTINUE_OPERATION_CLEANUP_MS = 5 * 60 * 1000;
 
-/** Internal lifecycle state for one continue-call operation. */
-type VoiceCallContinueOperation =
-  | {
-      operationId: string;
-      status: "pending";
-      callId: string;
-      startedAtMs: number;
-      pollTimeoutMs: number;
-    }
-  | {
-      operationId: string;
-      status: "completed";
-      callId: string;
-      startedAtMs: number;
-      completedAtMs: number;
-      pollTimeoutMs: number;
-      result: { success: true; transcript?: string };
-    }
-  | {
-      operationId: string;
-      status: "failed";
-      callId: string;
-      startedAtMs: number;
-      completedAtMs: number;
-      pollTimeoutMs: number;
-      error: string;
-    };
-
 /** Payload returned immediately when a continue operation starts. */
 type VoiceCallContinueOperationStartPayload = {
   operationId: string;
@@ -48,11 +20,7 @@ type VoiceCallContinueOperationStartPayload = {
 
 /** Payload returned while polling a continue operation. */
 type VoiceCallContinueOperationResultPayload =
-  | {
-      operationId: string;
-      status: "pending";
-      pollTimeoutMs: number;
-    }
+  | VoiceCallContinueOperationStartPayload
   | {
       operationId: string;
       status: "completed";
@@ -67,7 +35,6 @@ type VoiceCallContinueOperationResultPayload =
 /** Request needed to start a continue-call operation. */
 type VoiceCallContinueOperationRequest = {
   rt: VoiceCallRuntime;
-  callId: string;
   run: () => Promise<{ success: true; transcript?: string }>;
 };
 
@@ -76,7 +43,7 @@ export function createVoiceCallContinueOperationStore(params: {
   config: VoiceCallConfig;
   coreConfig: OpenClawConfig;
 }) {
-  const operations = new Map<string, VoiceCallContinueOperation>();
+  const operations = new Map<string, VoiceCallContinueOperationResultPayload>();
 
   const resolvePollTimeoutMs = (rt: VoiceCallRuntime): number => {
     const ttsTimeoutMs =
@@ -104,13 +71,10 @@ export function createVoiceCallContinueOperationStore(params: {
     request: VoiceCallContinueOperationRequest,
   ): VoiceCallContinueOperationStartPayload => {
     const operationId = randomUUID();
-    const startedAtMs = Date.now();
     const pollTimeoutMs = resolvePollTimeoutMs(request.rt);
     operations.set(operationId, {
       operationId,
       status: "pending",
-      callId: request.callId,
-      startedAtMs,
       pollTimeoutMs,
     });
 
@@ -124,10 +88,6 @@ export function createVoiceCallContinueOperationStore(params: {
         operations.set(operationId, {
           operationId,
           status: "completed",
-          callId: request.callId,
-          startedAtMs,
-          completedAtMs: Date.now(),
-          pollTimeoutMs,
           result: { success: true, transcript: result.transcript },
         });
       })
@@ -139,10 +99,6 @@ export function createVoiceCallContinueOperationStore(params: {
         operations.set(operationId, {
           operationId,
           status: "failed",
-          callId: request.callId,
-          startedAtMs,
-          completedAtMs: Date.now(),
-          pollTimeoutMs,
           error: formatErrorMessage(err),
         });
       })
@@ -162,36 +118,10 @@ export function createVoiceCallContinueOperationStore(params: {
     if (!operation) {
       return { ok: false, error: "operation not found" };
     }
-    if (operation.status === "pending") {
-      return {
-        ok: true,
-        payload: {
-          operationId,
-          status: "pending",
-          pollTimeoutMs: operation.pollTimeoutMs,
-        },
-      };
-    }
-    if (operation.status === "failed") {
+    if (operation.status !== "pending") {
       operations.delete(operationId);
-      return {
-        ok: true,
-        payload: {
-          operationId,
-          status: "failed",
-          error: operation.error,
-        },
-      };
     }
-    operations.delete(operationId);
-    return {
-      ok: true,
-      payload: {
-        operationId,
-        status: "completed",
-        result: operation.result,
-      },
-    };
+    return { ok: true, payload: { ...operation } };
   };
 
   return { start, read };

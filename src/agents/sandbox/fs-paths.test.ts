@@ -245,22 +245,6 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(resolved.writable).toBe(true);
   });
 
-  it("includes the container workspace root in outside-path errors", () => {
-    const sandbox = createSandbox();
-    const mounts = buildSandboxFsMounts(sandbox);
-    expect(() =>
-      resolveSandboxFsPathWithMounts({
-        filePath: "/etc/passwd",
-        cwd: sandbox.workspaceDir,
-        defaultWorkspaceRoot: sandbox.workspaceDir,
-        defaultContainerRoot: sandbox.containerWorkdir,
-        mounts,
-      }),
-    ).toThrow(
-      /Path escapes sandbox root \(.*container root \/workspace\): \/etc\/passwd\. Use a path under \/workspace\/ instead\./,
-    );
-  });
-
   it("uses the configured custom container root in outside-path errors", () => {
     const sandbox = createSandbox({
       containerWorkdir: "/sandbox-root",

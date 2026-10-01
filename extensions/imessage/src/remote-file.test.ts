@@ -146,7 +146,8 @@ describe("withIMessageRemoteFile", () => {
     );
   });
 
-  it.each(["rpc failure", "rpc timeout", "cancellation"])("cleans after %s", async (message) => {
+  it("cleans after the remote file consumer fails", async () => {
+    const message = "rpc failure";
     const runCommand = vi
       .fn()
       .mockResolvedValueOnce(result())

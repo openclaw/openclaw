@@ -34,7 +34,8 @@ vi.mock("../session-transcript-readers.js", async () => {
   const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
     "../session-transcript-readers.js",
   );
-  return { ...actual, visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync };
+  const { withArtifactFixtureReader } = await import("./artifacts.test-support.js");
+  return withArtifactFixtureReader(actual, hoisted.visitSessionMessagesAsync);
 });
 
 vi.mock("../managed-image-attachments.js", async () => {
@@ -336,7 +337,6 @@ describe("managed artifact lifecycle", () => {
 
   it.each([
     { runId: "run-output" },
-    { taskId: "task-output" },
     { messageRole: "assistant" },
     { runId: "run-output", messageRole: "assistant" },
   ])("keeps scoped managed downloads bound to their exact artifact id: %j", async (filter) => {
@@ -349,7 +349,7 @@ describe("managed artifact lifecycle", () => {
         {
           role: "assistant",
           content: [{ type: "file", artifactId, title: "stale-name.txt", ...payload }],
-          __openclaw: { seq: 3, runId: "run-output", taskId: "task-output" },
+          __openclaw: { seq: 3, runId: "run-output" },
         },
       ]);
       hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
@@ -380,7 +380,6 @@ describe("managed artifact lifecycle", () => {
           mimeType: "text/csv",
           sizeBytes: 8,
           runId: "run-output",
-          taskId: "task-output",
           messageSeq: 3,
           source: "session-transcript",
           download: { mode: "url" },

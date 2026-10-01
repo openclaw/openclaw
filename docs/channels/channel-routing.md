@@ -28,6 +28,11 @@ Explicit outbound targets may include a provider prefix, such as `telegram:123` 
 
 Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `room:<id>`, `thread:<id>`, `imessage:<handle>`, and `sms:<number>` stay inside the selected channel's grammar. They do not select the provider by themselves.
 
+Plugin send receipts that report failure, suppression, or dry run leave the
+conversation's stored route and delivery transcript unchanged. Confirmed partial
+sends can establish a route, but requested content is not mirrored as fully
+delivered.
+
 ## Session key shapes (examples)
 
 Direct messages collapse to the agent's **main** session by default:

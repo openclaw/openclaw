@@ -1,16 +1,26 @@
 import path from "node:path";
-import { expect } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { expect, vi } from "vitest";
+import * as containerEnvironment from "../../infra/container-environment.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
+import * as versionManagerPath from "../../shared/version-manager-path.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 
-export const expectedNpmProbes = [
-  ["npm", "--version"],
-  expect.toBeOneOf([
-    ["npm", "prefix", "-g"],
-    [process.execPath, expect.stringMatching(/[/\\]npm-cli\.js$/u), "prefix", "-g"],
-  ]),
+export function mockNonContainerSystemRuntime(): void {
+  vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
+  vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
+}
+
+export const alreadyCurrentConvergenceCases = [
+  { restart: true, running: true, failure: undefined },
+  { restart: false, running: true, failure: undefined },
+  { restart: true, running: false, failure: undefined },
+  { restart: true, running: true, failure: "doctor" },
+  { restart: true, running: true, failure: "stop" },
+  { restart: true, running: true, failure: undefined, platform: "linux" as const },
+  { restart: true, running: true, failure: "changed owner" },
 ];
 
 export function expectedRuntimeSelectionCommand(manager: "nvm" | "fnm", version: string): string {
@@ -137,4 +147,36 @@ export function currentGitCoreFixture(root: string, version: string) {
       failedStep: { recoverySteps },
     },
   };
+}
+
+export function expectInterruptedDoctorPackageRollback(runs: UpdateRunRecord[]): void {
+  expect(runs).toMatchObject([
+    {
+      phase: "finished",
+      status: "failed",
+      reason: "doctor-failed",
+      verification: {
+        recovery: {
+          serviceRestartSafe: false,
+          packageRollbackVerified: true,
+          reason: "runtime-verification-failed",
+        },
+        rollbackOutcome: { status: "succeeded" },
+      },
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "openclaw doctor",
+          status: "failed",
+          detail: expect.stringContaining("interrupted lifecycle"),
+          failureFacts: expect.arrayContaining([
+            expect.objectContaining({
+              check: "openclaw doctor",
+              code: "Error",
+              message: "interrupted lifecycle",
+            }),
+          ]),
+        }),
+      ]),
+    },
+  ]);
 }

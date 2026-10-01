@@ -2,18 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import {
-  emitTrustedDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../infra/diagnostic-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
-  normalizeSessionDeliveryState,
-  type DeliveryContext,
-} from "../utils/delivery-context.shared.js";
+  completeRun,
+  recordMutation,
+  seedSession,
+} from "./client-voice-session.fixture.test-support.js";
 import {
   closeClientVoiceSession,
   closeStaleClientVoiceSessions,
@@ -33,50 +29,6 @@ vi.mock("../channels/message/runtime.js", () => ({
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;
 
-async function seedSession(sessionKey: string, context: DeliveryContext = {}): Promise<void> {
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey },
-    {
-      sessionId: `session-${sessionKey.replaceAll(":", "-")}`,
-      updatedAt: Date.now(),
-      delivery: normalizeSessionDeliveryState({ context }),
-    },
-  );
-}
-
-function recordMutation(voiceSessionId: string, runId = `run-${voiceSessionId}`): void {
-  registerClientVoiceConsultRun({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    voiceSessionId,
-    runId,
-  });
-  emitTrustedDiagnosticEvent({
-    type: "tool.execution.started",
-    runId,
-    toolCallId: `call-${runId}`,
-    toolName: "message",
-    mutatingAction: true,
-  });
-  emitTrustedDiagnosticEvent({
-    type: "tool.execution.completed",
-    runId,
-    toolCallId: `call-${runId}`,
-    toolName: "message",
-    durationMs: 5,
-  });
-}
-
-async function completeRun(runId: string): Promise<void> {
-  emitTrustedDiagnosticEvent({
-    type: "run.completed",
-    runId,
-    durationMs: 5,
-    outcome: "completed",
-  });
-  await waitForDiagnosticEventsDrained();
-}
-
 describe("client voice session digest retry", () => {
   beforeEach(async () => {
     tempDir = await fs.realpath(
@@ -88,8 +40,7 @@ describe("client voice session digest retry", () => {
 
   afterEach(async () => {
     clientVoiceSessionTesting.reset();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
   });

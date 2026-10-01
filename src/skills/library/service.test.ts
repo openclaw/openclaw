@@ -7,14 +7,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { declareAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.js";
 import {
   ensureProfileForEmail,
-  getProfileAvatar,
   linkEmail,
   setAvatar,
   setDisplayName,
@@ -38,7 +40,8 @@ import {
 import type { SkillLibraryAuthority } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
@@ -622,6 +625,14 @@ describe("profile-owned skill publication and selection", () => {
     const delivery = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
       prepareSkillResourceDelivery(snapshot, () => {}),
     );
+    // Library bytes belong to Gateway even when the workspace host is offline.
+    const remoteWorkspace = path.join(stateDir, "remote-workspace");
+    declareAgentWorkspaceAccess(remoteWorkspace);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await expect(
+        prepareSkillResourceDelivery(snapshot, () => {}, [], remoteWorkspace),
+      ).resolves.toEqual(delivery);
+    });
     expect(delivery).toBeDefined();
     const materialized = await materializeSkillResources(delivery!, () => {});
     try {

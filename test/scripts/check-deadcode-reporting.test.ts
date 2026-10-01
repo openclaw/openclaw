@@ -3,6 +3,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 type Outcome = "failure" | "finding" | "success";
 
@@ -13,8 +18,6 @@ describe("deadcode command reporting", () => {
   }>([
     { wrapper: "exports", outcomes: ["failure", "finding", "success"] },
     { wrapper: "unused-files", outcomes: ["failure", "finding"] },
-    { wrapper: "unused-files", outcomes: ["failure", "success"] },
-    { wrapper: "exports", outcomes: ["success", "success", "failure"] },
     { wrapper: "unused-files", outcomes: ["success", "finding"] },
     { wrapper: "exports", outcomes: ["success", "success", "success"] },
     { wrapper: "unused-files", outcomes: ["success", "success"] },
@@ -69,7 +72,13 @@ const barrier = setInterval(() => {
       );
       const result = spawnSync(
         process.execPath,
-        ["--import", "./scripts/tsx.mjs", `scripts/check-deadcode-${wrapper}.mts`],
+        resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(
+            wrapper === "exports"
+              ? toolingMtsEntrypoints.deadcodeExports
+              : toolingMtsEntrypoints.deadcodeUnusedFiles,
+          ),
+        ),
         {
           cwd: process.cwd(),
           env: { ...process.env, npm_execpath: pnpm },

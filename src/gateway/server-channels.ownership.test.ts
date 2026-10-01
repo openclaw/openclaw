@@ -10,6 +10,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -68,6 +69,7 @@ describe("channel ownership startup", () => {
     const runtimeConfig = JSON.parse(await readFile(state.configPath, "utf8")) as OpenClawConfig;
     const log = createSubsystemLogger("gateway/channel-ownership-test");
     manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => runtimeConfig,
       getPluginRegistry: () => registry,
       channelLogs: { discord: log },
@@ -91,7 +93,10 @@ describe("channel ownership startup", () => {
       },
       bindings: [{ agentId: "patricia", match: { channel: "discord", accountId: "patricia" } }],
     });
-    const healthMonitor = startChannelHealthMonitor({ channelManager: manager });
+    const healthMonitor = startChannelHealthMonitor({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      channelManager: manager,
+    });
     try {
       await vi.advanceTimersByTimeAsync(18 * 60_000);
       const accounts = manager.getRuntimeSnapshot().channelAccounts.discord;

@@ -32,9 +32,7 @@ export function decodeSlackQuestionAction(value: unknown): SlackQuestionAction |
 }
 
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
-type QuestionResolver = (
-  params: ResolveQuestionParams,
-) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
+type QuestionResolver = typeof questionGatewayRuntime.resolveOption;
 
 export async function resolveSlackQuestionAction(params: {
   action: SlackQuestionAction;

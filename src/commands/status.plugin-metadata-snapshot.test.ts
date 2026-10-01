@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 
 const registryLoads = vi.hoisted(() => ({ count: 0 }));
 
@@ -75,7 +76,7 @@ it("builds plugin metadata once for a status scan", async () => {
 
       const overview = await collectStatusScanOverview({
         commandName: "status --json",
-        opts: {},
+        opts: createStatusGatewayProbeBudget(),
         showSecrets: false,
         includeChannelsData: false,
         skipUpdateCheck: true,

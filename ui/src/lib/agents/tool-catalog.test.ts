@@ -80,8 +80,9 @@ describe("resolveToolSections", () => {
     expect(ids(fallback)).toEqual(ids(fetched));
     expect(ids(fallback)).toContain("openclaw");
     expect(ids(fallback)).not.toContain("agents_wait");
-    expect(ids(fallback)).not.toContain("github_publish");
-    expect(ids(fallback)).not.toContain("github_identity_status");
+    expect(ids(fallback)).toEqual(
+      expect.arrayContaining(["github_publish", "github_identity_status", "transcripts"]),
+    );
     expect(
       fallback.flatMap((section) => section.tools).find((tool) => tool.id === "openclaw")
         ?.description,
@@ -177,4 +178,12 @@ describe("resolveToolProfileOptions", () => {
       await i18n.setLocale("en");
     }
   });
+});
+
+it("does not advertise personal instructions in the capability-unknown fallback catalog", () => {
+  expect(
+    resolveToolSections(null)
+      .flatMap((section) => section.tools)
+      .some((tool) => tool.id === "personal_instructions"),
+  ).toBe(false);
 });

@@ -23,6 +23,7 @@ import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixReactionEvent,
+  createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
 
 beforeEach(() => {
@@ -59,7 +60,15 @@ describe("Matrix reaction ownership", () => {
     });
     const { handler, recordInboundSession, runPrepared } = createMatrixHandlerTestHarness({
       cfg,
-      client: { getEvent: async () => ({ sender: "@bot:example.org" }) },
+      client: {
+        getEvent: async (_roomId, eventId) =>
+          createMatrixTextMessageEvent({
+            eventId,
+            sender: "@bot:example.org",
+            body: "Bot response",
+            originServerTs: 0,
+          }),
+      },
       getMemberDisplayName: async () => "sender",
     });
 
@@ -88,7 +97,13 @@ describe("Matrix reaction ownership", () => {
     const api = builder.createApi(record, { config: cfg });
     builder.registry.plugins.push(record);
     const targetLookup = createDeferred<void>();
-    const target = createDeferred<{ sender: string }>();
+    const targetEvent = createMatrixTextMessageEvent({
+      eventId: "$msg1",
+      sender: "@bot:example.org",
+      body: "Bot response",
+      originServerTs: 0,
+    });
+    const target = createDeferred<typeof targetEvent>();
     const runtime = { error: vi.fn(), log: vi.fn(), exit: vi.fn() };
     const { handler } = createMatrixHandlerTestHarness({
       cfg,
@@ -112,7 +127,7 @@ describe("Matrix reaction ownership", () => {
     try {
       await targetLookup.promise;
       builder.rollbackPluginGlobalSideEffects(record.id, record);
-      target.resolve({ sender: "@bot:example.org" });
+      target.resolve(targetEvent);
       await reaction;
 
       expect(peekSystemEventEntries("agent:ops:main")).toEqual([]);
@@ -120,7 +135,7 @@ describe("Matrix reaction ownership", () => {
         expect.stringContaining('Plugin "matrix" runtime is no longer active'),
       );
     } finally {
-      target.resolve({ sender: "@bot:example.org" });
+      target.resolve(targetEvent);
       await reaction;
       await disposePluginRegistryInstances(builder.registry);
     }

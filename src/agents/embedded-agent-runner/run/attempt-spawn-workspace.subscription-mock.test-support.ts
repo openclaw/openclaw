@@ -67,6 +67,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
     getSourceReplyDelivered: () => undefined,
+    getSourceReplyDeliveryState: () => undefined,
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
     getToolAutoDeliveryMediaUrls: () => [] as string[],

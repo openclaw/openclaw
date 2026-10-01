@@ -1,8 +1,6 @@
-// Matrix tests cover sync cache plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -12,7 +10,10 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
@@ -100,7 +101,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
     const firstStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
     expect(firstStore.hasSavedSync()).toBe(false);
-    await firstStore.setSyncData(syncResponse);
+    await firstStore.setSyncData(structuredClone(syncResponse));
     await firstStore.flush();
     expect(fs.existsSync(path.join(storageRoot, "bot-storage.json"))).toBe(false);
 
@@ -115,29 +116,8 @@ describe("SqliteBackedMatrixSyncStore", () => {
       roomsData: {
         join: {
           "!room:example.org": {
-            summary: {
-              "m.heroes": [],
-            },
-            state: { events: [] },
+            ...syncResponse.rooms.join["!room:example.org"],
             "org.matrix.msc4222.state_after": { events: [] },
-            timeline: {
-              events: [
-                {
-                  content: {
-                    body: "hello",
-                    msgtype: "m.text",
-                  },
-                  event_id: "$message",
-                  origin_server_ts: 1,
-                  sender: "@user:example.org",
-                  type: "m.room.message",
-                },
-              ],
-              prev_batch: "t0",
-            },
-            ephemeral: { events: [] },
-            account_data: { events: [] },
-            unread_notifications: {},
           },
         },
         invite: {},
@@ -150,13 +130,8 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("loads, persists, deletes and closes the sync cache without host SQLite", async () => {
     const storageRoot = createStorageRoot();
-    const sql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const observation = observeHostDataSql();
+    const sql = observation.calls;
     const timings: Record<string, number> = {};
     try {
       let started = performance.now();
@@ -189,7 +164,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
       }
       console.log("matrix-sync-cache-worker timings", JSON.stringify(timings));
     } finally {
-      sql.forEach((method) => method.mockRestore());
+      observation.restore();
     }
   });
 

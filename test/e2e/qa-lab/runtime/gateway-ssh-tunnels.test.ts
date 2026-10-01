@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { waitForFile } from "../../../helpers/process-wait.js";
+import { waitForDead, waitForFile } from "../../../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { runGatewaySshTunnels } from "./gateway-ssh-tunnels.js";
 
@@ -231,8 +231,44 @@ describeOnTestbox("Gateway SSH tunnel QA producer", () => {
     expect(namespacePid).toBeGreaterThan(1);
     await killPrivilegedProcessGroup(namespacePid);
     await expect(killed.completion).rejects.toThrow(
-      /namespaced Gateway SSH tunnel producer exited/,
+      "namespaced Gateway SSH tunnel producer exited null/SIGKILL",
     );
+
+    for (const failureMode of ["readiness-write", "parent-exit"]) {
+      const artifactBase = tempDirs.make(`openclaw-gateway-ssh-${failureMode}-`);
+      const root = tempDirs.make(`openclaw-gateway-ssh-${failureMode}-root-`);
+      const processPath = path.join(artifactBase, "namespace-pid");
+      const readyPath =
+        failureMode === "readiness-write"
+          ? artifactBase
+          : path.join(artifactBase, "trust-prepared");
+      const failed = startProducer(artifactBase, { processPath, readyPath, root });
+      await failed.ready;
+      failed.start();
+      if (failureMode === "parent-exit") {
+        await waitForFile(readyPath, 10_000);
+        const pid = Number.parseInt(await fs.readFile(processPath, "utf8"), 10);
+        expect(pid).toBeGreaterThan(1);
+        await failed.kill();
+        await waitForDead(pid, 10_000);
+      } else {
+        await expect(failed.completion).rejects.toThrow(
+          "Gateway SSH tunnel producer exited 1/none",
+        );
+      }
+      const failureEvidence: Awaited<ReturnType<typeof runGatewaySshTunnels>> = JSON.parse(
+        await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8"),
+      );
+      expect(failureEvidence.entries[0]?.result).toMatchObject({
+        status: "fail",
+        failure: {
+          reason: expect.stringContaining(
+            failureMode === "readiness-write" ? "EISDIR" : "lost its parent before termination",
+          ),
+        },
+      });
+      await expect(fs.access(root)).rejects.toMatchObject({ code: "ENOENT" });
+    }
     expect(await readOptionalFile(accountKnownHostsPath)).toEqual(accountKnownHostsBefore);
   }, 180_000);
 });

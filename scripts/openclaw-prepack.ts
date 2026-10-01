@@ -157,10 +157,16 @@ function collectPreparedFilePaths(reader: PreparedFileReader = { existsSync, rea
   };
 }
 
+export function collectPreparedPrepackErrorsFromDisk(
+  reader: PreparedFileReader = { existsSync, readdirSync },
+): string[] {
+  const preparedFiles = collectPreparedFilePaths(reader);
+  return collectPreparedPrepackErrors(preparedFiles.files, preparedFiles.assets);
+}
+
 function ensurePreparedArtifacts(): void {
   try {
-    const preparedFiles = collectPreparedFilePaths();
-    const errors = collectPreparedPrepackErrors(preparedFiles.files, preparedFiles.assets);
+    const errors = collectPreparedPrepackErrorsFromDisk();
     if (errors.length === 0) {
       console.error("prepack: using existing prepared artifacts.");
       return;

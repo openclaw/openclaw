@@ -93,13 +93,7 @@ export function collectEntriesForBranchSummaryFromBranches<TEntry extends Branch
   targetBranch: readonly TEntry[],
 ): CollectBranchPathEntriesResult<TEntry> {
   const oldPath = new Set(oldBranch.map((entry) => entry.id));
-  let commonAncestorId: string | null = null;
-  for (const targetEntry of targetBranch.toReversed()) {
-    if (oldPath.has(targetEntry.id)) {
-      commonAncestorId = targetEntry.id;
-      break;
-    }
-  }
+  const commonAncestorId = targetBranch.findLast((entry) => oldPath.has(entry.id))?.id ?? null;
 
   const firstSummarizedIndex =
     commonAncestorId === null

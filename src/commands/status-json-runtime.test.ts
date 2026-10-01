@@ -1,6 +1,7 @@
 // Status JSON runtime tests cover runtime status payload construction and command dependencies.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { createStatusScanResultFixture } from "./status.test-support.ts";
 
 const mocks = vi.hoisted(() => ({
@@ -75,6 +76,7 @@ function requireStatusPayloadInput() {
 describe("status-json-runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValue({
       securityAudit: { summary: { critical: 1 } },
       usage: { providers: [] },
@@ -85,6 +87,10 @@ describe("status-json-runtime", () => {
     });
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("records requested local inspections as not collected for online JSON", async () => {
     const scan = createScan();
     scan.collection = {
@@ -93,7 +99,7 @@ describe("status-json-runtime", () => {
     };
     const result = await resolveStatusJsonOutput({
       scan,
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
       includeSecurityAudit: true,
       includePluginCompatibility: true,
     });
@@ -117,7 +123,7 @@ describe("status-json-runtime", () => {
     const scan = createScan();
     const result = await resolveStatusJsonOutput({
       scan,
-      opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234 },
+      opts: { ...createStatusGatewayProbeBudget(1234), deep: true, usage: true, agent: "beta" },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
     });
@@ -126,6 +132,7 @@ describe("status-json-runtime", () => {
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },
       timeoutMs: 1234,
+      gatewayProbeDeadlineMs: 1234,
       agentId: "beta",
       usage: true,
       deep: true,
@@ -177,7 +184,7 @@ describe("status-json-runtime", () => {
     const { env: _env, ...scanWithoutEnv } = createScan();
     await resolveStatusJsonOutput({
       scan: scanWithoutEnv,
-      opts: { deep: false, usage: false, timeoutMs: 500 },
+      opts: { ...createStatusGatewayProbeBudget(500), deep: false, usage: false },
       includeSecurityAudit: false,
       includePluginCompatibility: false,
     });
@@ -186,6 +193,7 @@ describe("status-json-runtime", () => {
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },
       timeoutMs: 500,
+      gatewayProbeDeadlineMs: 500,
       usage: false,
       deep: false,
       gatewayReachable: true,
@@ -215,7 +223,7 @@ describe("status-json-runtime", () => {
 
     await resolveStatusJsonOutput({
       scan: createScan(),
-      opts: { deep: true, timeoutMs: 500 },
+      opts: { ...createStatusGatewayProbeBudget(500), deep: true },
       includeSecurityAudit: false,
       suppressHealthErrors: true,
     });
@@ -228,6 +236,7 @@ describe("status-json-runtime", () => {
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },
       timeoutMs: 500,
+      gatewayProbeDeadlineMs: 500,
       usage: undefined,
       deep: true,
       gatewayReachable: true,

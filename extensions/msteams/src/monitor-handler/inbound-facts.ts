@@ -1,4 +1,3 @@
-// Msteams plugin module assembles stable inbound activity facts.
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
   resolveMSTeamsAdvertisedMedia,
@@ -157,6 +156,8 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
     teamId,
     graphChannelId: activity.channelData?.channel?.id?.trim() || conversationId,
     threadId,
+    // Pending history must follow the channel thread through recording, reads, and cleanup.
+    historyKey: threadId ? `${conversationId}:thread:${threadId}` : conversationId,
     conversationRef: buildStoredConversationReference({
       activity,
       conversationId,

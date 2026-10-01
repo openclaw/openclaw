@@ -172,6 +172,27 @@ it("returns only bounded matching lease IDs for source descendants and canonical
   }
 });
 
+it("ignores native claims not attached to any repository", async () => {
+  const context = fixture();
+  nativeResponse(
+    output([
+      { leaseId: "cbx_unattached", repoRoot: "" },
+      { leaseId: "cbx_neighbor", repoRoot: context.source + "-neighbor" },
+    ]),
+  );
+  expect(await verifyNoStagingClaims(context)).toEqual({ ok: true });
+  nativeResponse(
+    output([
+      { leaseId: "cbx_unattached", repoRoot: "" },
+      { leaseId: "cbx_stage", repoRoot: context.source },
+    ]),
+  );
+  expect(await verifyNoStagingClaims(context)).toMatchObject({
+    ok: false,
+    matchingLeaseIds: ["cbx_stage"],
+  });
+});
+
 it.each([
   ["nonzero partial inventory", output(), 2],
   [

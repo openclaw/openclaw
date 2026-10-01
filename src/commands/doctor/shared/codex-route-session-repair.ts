@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalLowercaseString as normalizeString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../../agents/agent-scope.js";
 import {
   areOAuthCredentialsEquivalent,
@@ -15,22 +13,27 @@ import {
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
-import { getCliSessionBinding } from "../../../config/sessions/cli-session-binding.js";
 import {
   applySessionEntryReplacements,
   iterateDoctorSessionKeyBatches,
   scanDoctorSessionEntriesStrict,
   scanDoctorSessionEntriesTolerant,
 } from "../../../config/sessions/session-accessor.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { readDeferredPluginMigrations } from "../../../infra/deferred-plugin-migrations.js";
+import { preserveDeferredPluginSessionSource } from "../../../infra/deferred-plugin-session-sources.js";
 import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../../../infra/state-migrations.legacy-session-store.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
+import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletion-discovery.js";
 import { resolveLegacyAuthProfilesPath } from "../../doctor-auth-legacy-paths.js";
 import {
   isOpenAICodexAuthProfileRef,
@@ -38,7 +41,6 @@ import {
   isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
   isProviderlessModelRef,
-  normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
   toOpenAIModelId,
   resolveRuntimeModelRef,
@@ -48,22 +50,14 @@ import type {
   CodexSessionRouteRepairSummary,
   SessionRouteRepairResult,
 } from "./codex-route-types.js";
+import { migrateLegacyClaudeSessionField } from "./legacy-cli-session-binding.js";
 import {
   migrateLegacyRuntimeModelRef,
   resolveLegacyRuntimeModelProviderAlias,
 } from "./legacy-runtime-model-providers.js";
-import {
-  createRetiredModelRefRepairResolver,
-  type ModelRefRepairResolver,
-} from "./retired-model-ref-repair.js";
+import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
+import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
-
-type SessionModelRetirement = {
-  agentId: string;
-  resolve: ModelRefRepairResolver;
-  defaultModelRef?: string;
-  warnings: string[];
-};
 
 function rewriteSessionModelPair(params: {
   entry: SessionEntry;
@@ -145,7 +139,7 @@ function isCodexSessionRoute(entry: SessionEntry): boolean {
       isOpenAICodexModelRef(entry.model)) ||
     (sessionProviderAllowsScopedModelRef(normalizeString(entry.providerOverride)) &&
       isOpenAICodexModelRef(entry.modelOverride)) ||
-    normalizeRuntimeString(entry.agentRuntimeOverride) === "codex"
+    normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) === "codex"
   );
 }
 
@@ -159,13 +153,13 @@ function normalizeCodexSessionHarness(
   }
   let changed = false;
   if (
-    normalizeRuntimeString(entry.agentHarnessId) === "codex-cli" ||
+    normalizeOptionalAgentRuntimeId(entry.agentHarnessId) === "codex-cli" ||
     (legacyCodexHarness && entry.agentHarnessId === undefined)
   ) {
     entry.agentHarnessId = "codex";
     changed = true;
   }
-  if (normalizeRuntimeString(entry.agentRuntimeOverride) === "codex-cli") {
+  if (normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) === "codex-cli") {
     entry.agentRuntimeOverride = "codex";
     changed = true;
   }
@@ -197,13 +191,12 @@ function clearStaleCodexFallbackNotice(
 }
 
 function clearRepairedCodexSessionHarness(entry: SessionEntry): boolean {
-  const harnessRuntime = normalizeRuntimeString(entry.agentHarnessId);
-  let changed = false;
-  if (entry.agentHarnessId !== undefined && harnessRuntime !== "openclaw") {
-    delete entry.agentHarnessId;
-    changed = true;
+  const harnessId = entry.agentHarnessId;
+  if (harnessId === undefined || normalizeOptionalAgentRuntimeId(harnessId) === "openclaw") {
+    return false;
   }
-  return changed;
+  delete entry.agentHarnessId;
+  return true;
 }
 
 function repairProviderlessCodexSessionOverride(
@@ -243,37 +236,6 @@ function repairProviderlessCodexSessionOverride(
   if (entry.contextBudgetStatus !== undefined) {
     delete entry.contextBudgetStatus;
   }
-  return true;
-}
-
-function migrateLegacyClaudeSessionField(
-  entry: SessionEntry,
-  sessionKey: string,
-  warnings?: string[],
-): boolean {
-  if (entry.claudeCliSessionId === undefined) {
-    return false;
-  }
-  if (!getCliSessionBinding(entry, "claude-cli")) {
-    const sessionId = normalizeOptionalString(entry.claudeCliSessionId);
-    // An incomplete binding can carry account/checkpoint metadata for another
-    // conversation. Preserve it rather than attaching that metadata to a guessed ID.
-    const hasUnboundMetadata = Object.entries(entry.cliSessionBindings?.["claude-cli"] ?? {}).some(
-      ([key, value]) => key !== "sessionId" && value !== undefined,
-    );
-    if (!sessionId || hasUnboundMetadata) {
-      const warning = `Session ${sessionKey}: legacy Claude CLI binding needs manual reconciliation; legacy binding state was preserved.`;
-      if (warnings && !warnings.includes(warning)) {
-        warnings.push(warning);
-      }
-      return false;
-    }
-    entry.cliSessionBindings = {
-      ...entry.cliSessionBindings,
-      "claude-cli": { sessionId },
-    };
-  }
-  delete entry.claudeCliSessionId;
   return true;
 }
 
@@ -340,12 +302,13 @@ function repairCodexSessionStoreRoutes(params: {
       }
       continue;
     }
-    const legacyCodexHarness = normalizeRuntimeString(entry.agentHarnessId) === "codex-cli";
+    const legacyCodexHarness =
+      normalizeOptionalAgentRuntimeId(entry.agentHarnessId) === "codex-cli";
     const wasCodexRoute = isCodexSessionRoute(entry);
     const hasSelectedOverride = Boolean(entry.modelOverride?.trim());
     const runtimeWasExplicit =
       entry.agentRuntimeOverride !== undefined &&
-      normalizeRuntimeString(entry.agentRuntimeOverride) !== "auto";
+      normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) !== "auto";
     const runtimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",
@@ -536,7 +499,13 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const authProfileOnly = !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
-  const sessionTargets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const pending = readDeferredPluginMigrations({ env });
+  const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
+    resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
+  );
+  const sessionTargets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }).filter(
+    (target) => !isRetained(target.storePath, target.agentId),
+  );
   const resolveRetired = authProfileOnly
     ? undefined
     : createRetiredModelRefRepairResolver({
@@ -598,7 +567,10 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const sqliteEntryCount = shouldRepair
       ? scanDoctorSessionEntriesStrict(sessionScope, scanEntry)
       : scanDoctorSessionEntriesTolerant(sessionScope, scanEntry);
-    const hasLegacyStore = !target.storePath.endsWith(".sqlite") && fs.existsSync(target.storePath);
+    const hasLegacyStore =
+      !target.storePath.endsWith(".sqlite") &&
+      fs.existsSync(target.storePath) &&
+      !preserveDeferredPluginSessionSource({ cfg: params.cfg, env, target, pending });
     return sqliteEntryCount > 0 || hasLegacyStore
       ? [
           {

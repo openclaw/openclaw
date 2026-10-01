@@ -1,4 +1,5 @@
-import { UI_APPEARANCE_TYPEFACE_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { UI_APPEARANCE_TYPEFACE_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts";
+import { isBuiltinThemeId } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 import type { ThemeName } from "./theme.ts";
 
@@ -42,7 +43,7 @@ export const TYPEFACES = Object.fromEntries(
   { label: string; stack: string; asset: `fonts/${TypefaceId}.css` | undefined }
 >;
 
-export const THEME_TYPEFACES = {
+const THEME_TYPEFACES = {
   claw: { ui: "instrument-sans", chat: "instrument-sans" },
   knot: { ui: "geist", chat: "geist" },
   dash: { ui: "dm-sans", chat: "fraunces" },
@@ -68,7 +69,7 @@ export function resolveTypefaces(
   ui?: TypefaceId,
   chat?: TypefaceId,
 ): TypefacePair {
-  const defaults = THEME_TYPEFACES[theme];
+  const defaults = THEME_TYPEFACES[isBuiltinThemeId(theme) ? theme : "custom"];
   return { ui: ui ?? defaults.ui, chat: chat ?? defaults.chat };
 }
 

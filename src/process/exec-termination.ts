@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import process from "node:process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
@@ -9,14 +10,11 @@ import {
   spawnCommand,
 } from "./exec-spawn.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 
 const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
 
-type TerminationChild = {
-  pid?: number;
-  exitCode: number | null;
-  signalCode: NodeJS.Signals | null;
-};
+type TerminationChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "once">;
 
 export function createCommandTerminationController(params: {
   child: TerminationChild;
@@ -68,9 +66,9 @@ export function createCommandTerminationController(params: {
     windowsTerminationPromise = (async () => {
       if (graceful) {
         taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
+        // Awaited cleanup stays live after both the child and taskkill handles close.
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, params.killGraceMs);
-          timer.unref();
+          setTimeout(resolve, params.killGraceMs);
         });
         if (isDirectChildAlive()) {
           taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
@@ -123,13 +121,18 @@ export function createCommandTerminationController(params: {
         }
         cleanup = "forced";
         terminateProcessTree(childPid, { force: true, detached: true });
+        scheduleAdoptedChildZombieReapAfterExit(params.child, true);
         const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
         // Signal delivery is not exit. Observe only this group; never re-signal a retired PID.
         while (groupAlive()) {
           const currentStart = getFileLockProcessStartTime(childPid);
           const remaining = deadline - Date.now();
-          if ((currentStart !== null && currentStart !== originalStart) || remaining <= 0) {
+          if (currentStart !== null && currentStart !== originalStart) {
             cleanup = "uncertain";
+            return;
+          }
+          if (remaining <= 0) {
+            cleanup = groupAlive() ? "uncertain" : "forced";
             return;
           }
           await new Promise<void>((resolve) => {
@@ -137,13 +140,13 @@ export function createCommandTerminationController(params: {
           });
         }
       };
-      if (force) {
-        processTreeSettlement = forceAndObserve();
+      // A timeout signal is policy, not evidence of forced cleanup. Once the
+      // root and its group are gone, do not signal or relabel that normal exit.
+      if (!directChildAlive && !groupAlive()) {
         return false;
       }
-      // Failed roots can finish without descendants. Record graceful cleanup only
-      // when this invocation still owns a live or unproven tree to terminate.
-      if (!directChildAlive && !groupAlive()) {
+      if (force) {
+        processTreeSettlement = forceAndObserve();
         return false;
       }
       cleanup = "cooperative";
@@ -155,6 +158,12 @@ export function createCommandTerminationController(params: {
           cleanup = "uncertain";
         }
       }
+      // The first registration must outlive graceful cleanup and its force fallback.
+      scheduleAdoptedChildZombieReapAfterExit(
+        params.child,
+        true,
+        params.killGraceMs + COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+      );
       processTreeSettlement = new Promise<void>((resolve) => {
         const deadline = Date.now() + params.killGraceMs;
         const check = () => {

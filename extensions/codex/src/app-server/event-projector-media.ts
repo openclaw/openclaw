@@ -1,12 +1,16 @@
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import {
+  normalizeMediaReferenceForComparison,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readItemString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
@@ -14,7 +18,7 @@ const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
-  private readonly urlsByItemId = new Map<string, string>();
+  private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
 
@@ -39,17 +43,20 @@ export class CodexGeneratedMediaProjection {
     // Image generation is already a billable side effect even if its remote
     // artifact cannot be transferred into this gateway's media store.
     this.itemIds.add(item.id);
-    const result = readItemString(item, "result");
+    const savedPath = readString(item, "savedPath")?.trim();
+    if (savedPath) {
+      this.mediaByItemId.set(item.id, { ...this.mediaByItemId.get(item.id), savedPath });
+    }
+    const result = readString(item, "result");
     if (result) {
       await this.recordImage({
         itemId: item.id,
         result,
-        revisedPrompt: readItemString(item, "revisedPrompt"),
+        revisedPrompt: readString(item, "revisedPrompt"),
         source: "native",
       });
       return;
     }
-    const savedPath = readItemString(item, "savedPath")?.trim();
     if (savedPath) {
       if (this.remote?.remoteWorkspaceRoot) {
         if (!this.remote.readFile) {
@@ -74,7 +81,7 @@ export class CodexGeneratedMediaProjection {
           await this.recordImage({
             itemId: item.id,
             result: response.dataBase64,
-            revisedPrompt: readItemString(item, "revisedPrompt"),
+            revisedPrompt: readString(item, "revisedPrompt"),
             source: "native",
           });
         } catch (error) {
@@ -194,33 +201,71 @@ export class CodexGeneratedMediaProjection {
     }
   }
 
-  buildToolMediaUrls(params: {
+  projectDelivery(params: {
     toolMediaUrls?: string[];
-    messagingToolSentMediaUrls?: string[];
-  }): string[] | undefined {
-    const mediaUrls = new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []);
-    if ((params.messagingToolSentMediaUrls?.length ?? 0) === 0) {
-      for (const mediaUrl of this.urlsByItemId.values()) {
-        mediaUrls.add(mediaUrl);
+    messagingToolSentMediaUrls: string[];
+    messagingToolSentTargets: MessagingToolSend[];
+    confirmedMediaDeliveries?: Readonly<
+      AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
+    >;
+  }) {
+    const generatedUrls = new Set<string>();
+    const generatedUrlBySource = new Map<string, string>();
+    for (const { mediaUrl, savedPath } of this.mediaByItemId.values()) {
+      if (!mediaUrl) {
+        continue;
+      }
+      generatedUrls.add(mediaUrl);
+      generatedUrlBySource.set(normalizeMediaReferenceForComparison(mediaUrl), mediaUrl);
+      if (savedPath) {
+        generatedUrlBySource.set(normalizeMediaReferenceForComparison(savedPath), mediaUrl);
       }
     }
-    return mediaUrls.size > 0 ? [...mediaUrls] : params.toolMediaUrls;
-  }
-
-  buildHostOwnedMediaUrls(params: { messagingToolSentMediaUrls?: string[] }): string[] | undefined {
-    if ((params.messagingToolSentMediaUrls?.length ?? 0) > 0) {
-      return undefined;
+    const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
+    const generatedUrlsByTarget = new Map<MessagingToolSend, Set<string>>();
+    for (const delivery of params.confirmedMediaDeliveries ?? []) {
+      for (const sourceUrl of delivery.sourceUrls) {
+        const generatedUrl = generatedUrlBySource.get(
+          normalizeMediaReferenceForComparison(sourceUrl),
+        );
+        if (!generatedUrl) {
+          continue;
+        }
+        if (delivery.kind === "sourceReply") {
+          // The source reply already owns its real attachment and transcript mirror.
+          generatedUrls.delete(generatedUrl);
+        } else {
+          const targetUrls = generatedUrlsByTarget.get(delivery.target) ?? new Set<string>();
+          targetUrls.add(generatedUrl);
+          generatedUrlsByTarget.set(delivery.target, targetUrls);
+          sentMediaUrls.add(generatedUrl);
+        }
+      }
     }
-    const mediaUrls = [...this.urlsByItemId.values()];
-    return mediaUrls.length > 0 ? mediaUrls : undefined;
+    const mediaUrls = new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []);
+    for (const mediaUrl of generatedUrls) {
+      mediaUrls.add(mediaUrl);
+    }
+    return {
+      toolMediaUrls: mediaUrls.size > 0 ? [...mediaUrls] : params.toolMediaUrls,
+      hostOwnedToolMediaUrls: generatedUrls.size > 0 ? [...generatedUrls] : undefined,
+      messagingToolSentMediaUrls: [...sentMediaUrls],
+      messagingToolSentTargets: params.messagingToolSentTargets.map((target) => {
+        const aliases = generatedUrlsByTarget.get(target);
+        return aliases
+          ? { ...target, mediaUrls: [...new Set([...(target.mediaUrls ?? []), ...aliases])] }
+          : target;
+      }),
+    };
   }
 
   private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
-    if (this.urlsByItemId.has(params.itemId) && params.replaceExisting !== true) {
+    const existing = this.mediaByItemId.get(params.itemId);
+    if (existing?.mediaUrl && params.replaceExisting !== true) {
       this.itemIds.add(params.itemId);
       return;
     }
-    this.urlsByItemId.set(params.itemId, params.mediaUrl);
+    this.mediaByItemId.set(params.itemId, { ...existing, mediaUrl: params.mediaUrl });
     this.itemIds.add(params.itemId);
   }
 }

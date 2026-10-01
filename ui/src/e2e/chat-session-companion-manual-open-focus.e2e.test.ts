@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -22,7 +23,10 @@ suite.define(() => {
         );
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           const gateway = await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -84,7 +88,10 @@ suite.define(() => {
         const artifacts = createControlUiE2eArtifactDir(
           `companion-manual-${target.replaceAll(" ", "-")}`,
         );
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           const gateway = await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -101,7 +108,9 @@ suite.define(() => {
             side = panes.first().getByRole("textbox", { name: "Ask in side chat", exact: true });
           } else {
             await page.keyboard.press("ControlOrMeta+k");
-            foreground = page.getByRole("combobox", { name: "Search chats and commands…" });
+            foreground = page
+              .locator("openclaw-command-palette")
+              .getByRole("textbox", { name: "Search or start a task…" });
           }
           await foreground.click();
           await page.keyboard.type("Keep typing here");
@@ -157,7 +166,10 @@ suite.define(() => {
         );
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           const gateway = await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}settings/appearance`);

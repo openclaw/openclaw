@@ -1,6 +1,42 @@
 // Text file tail helpers for E2E assertions.
 import fs from "node:fs";
 
+export function textFileContains(file, needle) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
+  }
+
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(64 * 1024, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      const pattern = needle instanceof RegExp;
+      if (pattern ? needle.test(text) : text.includes(needle)) {
+        return true;
+      }
+      carry = text.slice(-(pattern ? 256 : Math.max(256, needle.length - 1)));
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function decodeUtf8Tail(buffer, truncated) {
   let start = 0;
   if (truncated) {

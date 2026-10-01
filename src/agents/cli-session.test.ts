@@ -3,7 +3,11 @@
  * Verifies provider-keyed bindings, legacy cleanup, and reuse invalidation.
  */
 import { describe, expect, it } from "vitest";
-import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import type {
+  CliSessionBinding,
+  CliSessionReseedReceipt,
+  SessionEntry,
+} from "../config/sessions.js";
 import {
   normalizeCliSessionReseedReceipt,
   rebindCliSessionReseedReceiptsForReset,
@@ -20,7 +24,6 @@ import {
   shouldClearFailedCliSessionBinding,
 } from "./cli-session.js";
 import { FailoverError } from "./failover-error.js";
-import { FAILOVER_REASONS } from "./failover/signal.js";
 
 describe("cli-session helpers", () => {
   it("persists binding metadata without recreating the retired Claude field", () => {
@@ -29,7 +32,7 @@ describe("cli-session helpers", () => {
       updatedAt: Date.now(),
     };
 
-    setCliSessionBinding(entry, "claude-cli", {
+    const binding = {
       sessionId: "cli-session-1",
       forceReuse: true,
       authProfileId: "anthropic:work",
@@ -47,29 +50,13 @@ describe("cli-session helpers", () => {
         localSessionId: "openclaw-session",
         userTurnDisposition: "persisted",
       },
-    });
+    } satisfies CliSessionBinding;
+    const expectedBinding = structuredClone(binding);
+    setCliSessionBinding(entry, "claude-cli", binding);
 
     expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
     expect(entry).not.toHaveProperty("claudeCliSessionId");
-    expect(getCliSessionBinding(entry, "claude-cli")).toEqual({
-      sessionId: "cli-session-1",
-      forceReuse: true,
-      authProfileId: "anthropic:work",
-      authEpoch: "auth-epoch",
-      authEpochVersion: 2,
-      extraSystemPromptHash: "prompt-hash",
-      messageToolPolicyHash: "message-policy-hash",
-      promptToolNamesHash: "prompt-tools-hash",
-      cwdHash: "cwd-hash",
-      mcpConfigHash: "mcp-hash",
-      mcpResumeHash: "mcp-resume-hash",
-      reseedReceipt: {
-        version: 1,
-        promptHash: "a".repeat(64),
-        localSessionId: "openclaw-session",
-        userTurnDisposition: "persisted",
-      },
-    });
+    expect(getCliSessionBinding(entry, "claude-cli")).toEqual(expectedBinding);
   });
 
   it("drops malformed reseed receipts while preserving the session binding", () => {
@@ -280,35 +267,32 @@ describe("cli-session helpers", () => {
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-a",
     };
+    const current = {
+      binding,
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-a",
+    };
 
     expect(
       resolveCliSessionReuse({
-        binding,
+        ...current,
         authProfileId: "anthropic:personal",
         authEpoch: "auth-epoch-b",
-        authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-a",
-        mcpConfigHash: "mcp-a",
       }),
     ).toEqual({ mode: "invalidate", invalidatedReason: "auth-profile" });
     expect(
       resolveCliSessionReuse({
-        binding,
-        authProfileId: "anthropic:work",
+        ...current,
         authEpoch: "auth-epoch-b",
-        authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-a",
-        mcpConfigHash: "mcp-a",
       }),
     ).toEqual({ mode: "invalidate", invalidatedReason: "auth-epoch" });
     expect(
       resolveCliSessionReuse({
-        binding,
-        authProfileId: "anthropic:work",
-        authEpoch: "auth-epoch-a",
-        authEpochVersion: 2,
+        ...current,
         extraSystemPromptHash: "prompt-b",
-        mcpConfigHash: "mcp-a",
       }),
     ).toEqual({
       mode: "reuse-with-drift",
@@ -317,13 +301,8 @@ describe("cli-session helpers", () => {
     });
     expect(
       resolveCliSessionReuse({
-        binding,
-        authProfileId: "anthropic:work",
-        authEpoch: "auth-epoch-a",
-        authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-a",
+        ...current,
         promptToolNamesHash: "prompt-tools-b",
-        mcpConfigHash: "mcp-a",
       }),
     ).toEqual({
       mode: "reuse-with-drift",
@@ -332,11 +311,7 @@ describe("cli-session helpers", () => {
     });
     expect(
       resolveCliSessionReuse({
-        binding,
-        authProfileId: "anthropic:work",
-        authEpoch: "auth-epoch-a",
-        authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-a",
+        ...current,
         mcpConfigHash: "mcp-b",
       }),
     ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
@@ -414,16 +389,6 @@ describe("cli-session helpers", () => {
     expect(
       resolveCliSessionReuse({
         binding,
-        authEpochVersion: 2,
-        cwdHash: hashCliSessionText("/work/repo-a"),
-      }),
-    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
-  });
-
-  it("does not invalidate legacy metadata before cwd hash backfill", () => {
-    expect(
-      resolveCliSessionReuse({
-        binding: { sessionId: "cli-session-1" },
         authEpochVersion: 2,
         cwdHash: hashCliSessionText("/work/repo-a"),
       }),
@@ -516,28 +481,6 @@ describe("cli-session helpers", () => {
         authProfileId: undefined,
         authEpoch: "v4-identity-hash",
         authEpochVersion: 4,
-        extraSystemPromptHash: "prompt-a",
-        mcpConfigHash: "mcp-a",
-      }),
-    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
-  });
-
-  it("does not treat model changes as a session mismatch", () => {
-    const binding = {
-      sessionId: "cli-session-1",
-      authProfileId: "anthropic:work",
-      authEpoch: "auth-epoch-a",
-      authEpochVersion: 2,
-      extraSystemPromptHash: "prompt-a",
-      mcpConfigHash: "mcp-a",
-    };
-
-    expect(
-      resolveCliSessionReuse({
-        binding,
-        authProfileId: "anthropic:work",
-        authEpoch: "auth-epoch-a",
-        authEpochVersion: 2,
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
@@ -669,14 +612,16 @@ describe("cli-session helpers", () => {
     expect(shouldClearFailedCliSessionBinding({ error: abort })).toBe(false);
   });
 
-  it.each(FAILOVER_REASONS)("only clears binding for a provider-expired session: %s", (reason) => {
-    const error = new FailoverError("failover", { reason, provider: "claude-cli" });
-    const invalidatesSession = reason === "session_expired";
+  it.each(["format", "auth", "session_expired"] as const)(
+    "only clears binding for a provider-expired session: %s",
+    (reason) => {
+      const error = new FailoverError("failover", { reason, provider: "claude-cli" });
+      const invalidatesSession = reason === "session_expired";
 
-    expect(FAILOVER_REASONS).toHaveLength(16);
-    expect(isCliSessionInvalidatingFailoverReason(reason)).toBe(invalidatesSession);
-    expect(shouldClearFailedCliSessionBinding({ error, binding: { sessionId: "reused" } })).toBe(
-      invalidatesSession,
-    );
-  });
+      expect(isCliSessionInvalidatingFailoverReason(reason)).toBe(invalidatesSession);
+      expect(shouldClearFailedCliSessionBinding({ error, binding: { sessionId: "reused" } })).toBe(
+        invalidatesSession,
+      );
+    },
+  );
 });

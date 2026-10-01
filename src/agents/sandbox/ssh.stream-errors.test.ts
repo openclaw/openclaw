@@ -55,9 +55,79 @@ function fakeSession(): import("./ssh.js").SshSandboxSession {
 }
 
 describe("SSH sandbox stream errors", () => {
-  it.each(["tar.stdout", "tar.stderr", "ssh.stdin", "ssh.stdout", "ssh.stderr"] as const)(
-    "rejects and terminates both upload children once when %s fails",
-    async (stream) => {
+  it.each([
+    { process: "tar", code: "EMFILE" },
+    { process: "tar", code: "ENFILE" },
+    { process: "ssh", code: "EMFILE" },
+    { process: "ssh", code: "ENFILE" },
+  ] as const)(
+    "preserves $process $code without streams and waits for both children to close",
+    async ({ process: childName, code }) => {
+      const failed = Object.assign(new EventEmitter(), { kill: vi.fn(() => false) });
+      const peer = createMockChildProcess();
+      const tar = childName === "tar" ? failed : peer;
+      const ssh = childName === "ssh" ? failed : peer;
+      const nativeError = Object.assign(new Error(`spawn ${childName} ${code}`), { code });
+      const errorEmitted = createDeferred();
+      // Keep the intentionally broken baseline from crashing this test worker.
+      failed.on("error", () => errorEmitted.resolve());
+      const returnChild = (child: typeof failed | MockChildProcess) => {
+        if (child === failed) {
+          queueMicrotask(() => failed.emit("error", nativeError));
+        }
+        return child;
+      };
+      spawnMock
+        .mockImplementationOnce(() => returnChild(tar))
+        .mockImplementationOnce(() => returnChild(ssh));
+      let completed = false;
+      const result = uploadDirectoryToSshTarget({
+        session: fakeSession(),
+        localDir,
+        remoteDir: "/remote/workspace",
+      }).then(
+        () => {
+          completed = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          completed = true;
+          return error;
+        },
+      );
+      try {
+        await withTestTimeout(errorEmitted.promise, 10_000, "native spawn error did not arrive");
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(completed).toBe(false);
+        expect(peer.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+        failed.emit("close", code === "EMFILE" ? -24 : -23, null);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(completed).toBe(false);
+        peer.emit("close", null, "SIGKILL");
+        expect(await result).toBe(nativeError);
+      } finally {
+        failed.emit("close", code === "EMFILE" ? -24 : -23, null);
+        peer.emit("close", null, "SIGKILL");
+        await result;
+      }
+    },
+  );
+
+  it.each([
+    { process: "tar", stream: "stdout" },
+    { process: "tar", stream: "stderr" },
+    { process: "ssh", stream: "stdin" },
+    { process: "ssh", stream: "stdout" },
+    { process: "ssh", stream: "stderr" },
+    { process: "tar", stream: "error" },
+    { process: "ssh", stream: "error" },
+  ] as const)(
+    "reaps both upload children before rejecting $process $stream failure",
+    async ({ process: childName, stream: streamName }) => {
       const tar = createMockChildProcess();
       const ssh = createMockChildProcess();
       const childrenSpawned = createDeferred();
@@ -65,7 +135,8 @@ describe("SSH sandbox stream errors", () => {
         childrenSpawned.resolve();
         return ssh as unknown as ChildProcess;
       });
-      const expected = `${stream} failed`;
+      const expected = `${childName}.${streamName} failed`;
+      let completed = false;
       const result = uploadDirectoryToSshTarget({
         session: fakeSession(),
         localDir,
@@ -76,6 +147,7 @@ describe("SSH sandbox stream errors", () => {
           throw new Error(`expected rejection: ${expected}`);
         },
         (error: unknown) => {
+          completed = true;
           expect(error).toEqual(expect.objectContaining({ message: expected }));
         },
       );
@@ -85,18 +157,32 @@ describe("SSH sandbox stream errors", () => {
         "tar/ssh upload children did not spawn",
       );
       expect(spawnMock).toHaveBeenCalledTimes(2);
-      const [childName, streamName] = stream.split(".") as ["tar" | "ssh", keyof MockChildProcess];
-      const failedStream = { tar, ssh }[childName][streamName] as PassThrough;
+      const failedChild = { tar, ssh }[childName];
+      const emitError = (message: string) => {
+        if (streamName === "error") {
+          failedChild.emit("error", new Error(message));
+        } else {
+          failedChild[streamName].emit("error", new Error(message));
+        }
+      };
 
-      failedStream.emit("error", new Error(expected));
-
-      await rejection;
+      emitError(expected);
+      emitError("later upload failure");
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(completed).toBe(false);
       expect(tar.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
       expect(ssh.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
 
-      tar.emit("close", 0);
-      ssh.emit("close", 0);
-      failedStream.emit("error", new Error("late stream error"));
+      tar.emit("close", null, "SIGKILL");
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(completed).toBe(false);
+      ssh.emit("close", null, "SIGKILL");
+      await rejection;
+      emitError("late stream error");
       expect(tar.kill).toHaveBeenCalledOnce();
       expect(ssh.kill).toHaveBeenCalledOnce();
     },

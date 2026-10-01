@@ -1,4 +1,3 @@
-// Matrix tests cover reaction events plugin behavior.
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -22,10 +21,19 @@ const touchedTargets = new Map<
   Parameters<typeof unregisterMatrixApprovalReactionTarget>[0]
 >();
 
+const defaultApprovalTarget: RegisterTargetParams = {
+  accountId: "default",
+  roomId: "!ops:example.org",
+  eventId: "$approval-msg",
+  approvalId: "req-123",
+  approvalKind: "exec",
+  allowedDecisions: ["allow-once", "deny"],
+};
+
 async function registerMatrixApprovalReactionTarget(
-  params: Omit<RegisterTargetParams, "accountId"> & { accountId?: string },
+  params: Partial<RegisterTargetParams>,
 ): Promise<void> {
-  const { accountId = "default", ...target } = params;
+  const { accountId, ...target } = { ...defaultApprovalTarget, ...params };
   const targetRef = { accountId, roomId: target.roomId, eventId: target.eventId };
   touchedTargets.set(JSON.stringify(targetRef), targetRef);
   await registerMatrixApprovalReactionTargetRaw({ ...target, accountId });
@@ -174,42 +182,6 @@ async function handleReaction(params: {
 }
 
 describe("matrix approval reactions", () => {
-  it("resolves approval reactions instead of enqueueing a generic reaction event", async () => {
-    const core = buildCore();
-    const cfg = buildConfig();
-    await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    });
-    const client = createReactionClient(
-      vi.fn().mockResolvedValue({
-        event_id: "$approval-msg",
-        sender: "@bot:example.org",
-        content: { body: "approval prompt" },
-      }),
-    );
-
-    await handleReaction({
-      client,
-      core,
-      cfg,
-    });
-
-    expect(resolveMatrixApproval).toHaveBeenCalledWith({
-      cfg,
-      approvalId: "req-123",
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "matrix",
-      accountId: "default",
-      senderId: "@owner:example.org",
-    });
-    expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
-  });
-
   it("keeps ordinary reactions on bot messages as generic reaction events", async () => {
     const core = buildCore();
     const client = createReactionClient(
@@ -247,10 +219,6 @@ describe("matrix approval reactions", () => {
     }
     matrixCfg.reactionNotifications = "off";
     await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      approvalKind: "exec",
       allowedDecisions: ["deny"],
     });
     const client = createReactionClient(
@@ -283,10 +251,6 @@ describe("matrix approval reactions", () => {
   it("resolves registered approval reactions without fetching the target event", async () => {
     const core = buildCore();
     await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      approvalKind: "exec",
       allowedDecisions: ["allow-once"],
     });
     const client = createReactionClient(vi.fn().mockRejectedValue(new Error("boom")));
@@ -318,11 +282,9 @@ describe("matrix approval reactions", () => {
     }
     matrixCfg.dm = { allowFrom: ["@owner:example.org"] };
     await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
       eventId: "$plugin-approval-msg",
       approvalId: "plugin:req-123",
       approvalKind: "plugin",
-      allowedDecisions: ["allow-once", "deny"],
     });
     const client = createReactionClient();
 
@@ -352,10 +314,6 @@ describe("matrix approval reactions", () => {
       new Error("unknown or expired approval id req-123"),
     );
     await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      approvalKind: "exec",
       allowedDecisions: ["deny"],
     });
     const client = createReactionClient();
@@ -380,10 +338,6 @@ describe("matrix approval reactions", () => {
     const core = buildCore();
     const cfg = buildConfig();
     await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      approvalKind: "exec",
       allowedDecisions: ["allow-once"],
     });
     const client = createReactionClient();
@@ -425,19 +379,10 @@ describe("matrix approval reactions", () => {
   it("terminalizes every sibling prompt when this surface wins", async () => {
     const core = buildCore();
     const cfg = buildConfig();
-    await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
-    });
+    await registerMatrixApprovalReactionTarget({});
     await registerMatrixApprovalReactionTarget({
       roomId: "!approvals:example.org",
       eventId: "$approval-dm",
-      approvalId: "req-123",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
     });
     const client = createReactionClient();
 
@@ -480,19 +425,10 @@ describe("matrix approval reactions", () => {
       applied: false,
       approval: { id: "req-123", status: "denied", decision: "deny" },
     });
-    await registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
-    });
+    await registerMatrixApprovalReactionTarget({});
     await registerMatrixApprovalReactionTarget({
       roomId: "!approvals:example.org",
       eventId: "$approval-dm",
-      approvalId: "req-123",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
     });
     const client = createReactionClient();
 

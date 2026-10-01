@@ -9,16 +9,25 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { prepareCurrentGitHubPublicationOptionsIdentity } from "../github-publication-availability.js";
+import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
+import { prepareControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
+import {
+  prepareCurrentGitHubPublicationOptionsIdentity,
+  type PublicationSessionIdentity,
+} from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
+import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
+import { captureGitHubPublicationRequester } from "../github-publication-requester.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.js";
 import {
   prepareGitHubPublicationOptionsRead,
   preparePersonalGitHubSessionAction,
 } from "./github-personal-authorization.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
 type SessionGitHubMethod = Extract<keyof GatewayCoreRequestParams, `sessions.github.${string}`>;
@@ -54,22 +63,74 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       if (publishing && error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
+      const acquisition =
+        error instanceof OpenClawStateLeaseAcquisitionError ? error.outcome : undefined;
+      const busy = error instanceof SessionWorkspaceReservationBusyError;
+      const forbidden = acquisition ? acquisition.kind === "held" : !publishing && !busy;
       options.respond(
         false,
         undefined,
         errorShape(
-          publishing ? ErrorCodes.UNAVAILABLE : ErrorCodes.FORBIDDEN,
+          forbidden ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE,
           error instanceof Error ? error.message : sessionGitHubFailureMessages[method],
-          publishing &&
-            error instanceof GitHubPublicationKnownFailure &&
-            "idempotencyKey" in options.params &&
-            error.rejection?.idempotencyKey === options.params.idempotencyKey
-            ? { details: error.rejection }
-            : undefined,
+          acquisition
+            ? {
+                retryable: acquisition.kind === "store-unavailable",
+                details: { leaseAcquisition: acquisition },
+              }
+            : busy
+              ? { retryable: true }
+              : publishing &&
+                  error instanceof GitHubPublicationKnownFailure &&
+                  "idempotencyKey" in options.params &&
+                  error.rejection?.idempotencyKey === options.params.idempotencyKey
+                ? { details: error.rejection }
+                : undefined,
         ),
       );
     }
   });
+}
+
+async function isSessionPublicationSuperseded(
+  options: Pick<GatewayRequestHandlerOptions, "client" | "context">,
+  session: PublicationSessionIdentity,
+  snapshot: Parameters<typeof isGitHubPublicationSuperseded>[0],
+  assertCurrent: () => void,
+): Promise<boolean> {
+  const { client, context } = options;
+  const prOwner = context.controlUiSessionPullRequests;
+  if (!client || !prOwner) {
+    return false;
+  }
+  const readTarget = await prepareControlUiSessionPrRead({
+    client,
+    sessionKey: session.sessionKey,
+    agentId: session.agentId,
+    getRuntimeConfig: context.getRuntimeConfig,
+    getSessionRowProjection: () => getSessionRowProjection(context),
+    isCurrentClient: () => {
+      assertCurrent();
+      return true;
+    },
+  });
+  assertCurrent();
+  const target = await readTarget?.();
+  assertCurrent();
+  if (!target) {
+    return false;
+  }
+  const assertReadCurrent = () => {
+    assertCurrent();
+    target.assertCurrent?.();
+  };
+  const published = await prOwner.read(target, assertReadCurrent, "publication");
+  assertReadCurrent();
+  return published.status === "ready" && !published.rateLimited
+    ? isGitHubPublicationSuperseded(snapshot, published.pullRequests, {
+        assertCurrent: assertReadCurrent,
+      })
+    : false;
 }
 
 export const sessionsGitHubHandlers: GatewayRequestHandlers = {
@@ -128,19 +189,25 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         return;
       }
       sessionMutationAuthorization?.assertCurrent();
-      const result = await coordinator.requestForSession({
-        ...params,
+      const session = {
         sessionKey: loaded.canonicalKey,
         agentId: caller?.agentId ?? loaded.agentId,
-        ...(caller?.operationalRunInstance?.runId
-          ? { expectedRunId: caller.operationalRunInstance.runId }
-          : {}),
-        ...(sessionMutationAuthorization
-          ? { assertCurrent: sessionMutationAuthorization.assertCurrent }
-          : {}),
-      });
-      sessionMutationAuthorization?.assertCurrent();
-      respond(true, result);
+      };
+      const admitted = await captureGitHubPublicationRequester(options, session);
+      try {
+        const result = await coordinator.requestForSession({
+          ...params,
+          ...session,
+          requester: admitted.requester,
+          ...(caller?.operationalRunInstance?.runId
+            ? { expectedRunId: caller.operationalRunInstance.runId }
+            : {}),
+        });
+        sessionMutationAuthorization?.assertCurrent();
+        respond(true, result);
+      } finally {
+        admitted.release();
+      }
     },
   ),
   "sessions.github.options": defineSessionGitHubMethod(
@@ -176,18 +243,30 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
       }
       const action = read.personal.kind === "eligible" ? read.personal.action : null;
-      const personal = action ? await service!.status(action) : null;
+      let personal = action ? await service!.status(action) : null;
       const session = read.currentSession();
-      const pendingPersonal = action ? coordinator.personalPending(action, session) : null;
-      const latestShared = coordinator.latestShared(session, options.params.idempotencyKey);
+      const pendingPersonal = action ? await coordinator.personalPending(action, session) : null;
       read.currentSession();
+      if (action && personal) {
+        personal = service!.revalidateStatus(action, personal);
+      }
+      const latestShared = await coordinator.latestShared(
+        session,
+        options.params.idempotencyKey,
+        (snapshot) =>
+          isSessionPublicationSuperseded(options, session, snapshot, read.currentSession),
+      );
+      read.currentSession();
+      if (action && personal) {
+        personal = service!.revalidateStatus(action, personal);
+      }
       options.respond(true, { personal, shared, pendingPersonal, latestShared });
     },
   ),
   "sessions.github.status": defineSessionGitHubMethod(
     "sessions.github.status",
     validateSessionGitHubStatusParams,
-    (options) => {
+    async (options) => {
       const read = prepareGitHubPublicationOptionsRead(options, options.params);
       const service = options.context.githubPublicationService;
       if (!service) {
@@ -201,8 +280,9 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const prepared = await service.preparePersonalStatus(options.params.requestId);
       const session = read.currentSession();
-      const shared = service.sharedStatus(session, options.params.requestId);
+      const shared = await service.sharedStatus(session, options.params.requestId);
       if (shared) {
         read.currentSession();
         options.respond(true, shared);
@@ -215,6 +295,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         read.personal.action,
         session,
         options.params.requestId,
+        prepared,
       );
       read.currentSession();
       options.respond(true, result);

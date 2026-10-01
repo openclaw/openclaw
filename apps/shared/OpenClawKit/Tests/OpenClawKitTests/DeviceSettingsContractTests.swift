@@ -18,19 +18,36 @@ struct DeviceSettingsContractTests {
         let availability = try #require(DeviceSettingsSnapshot.DesktopAvailability.State(rawValue: state))
         let snapshot = DeviceSettingsSnapshot(
             device: .init(appVersion: "1", appBuild: "2"),
-            capabilities: .init(unattendedDesktopEnabled: false),
+            capabilities: .init(
+                desktopSharingEnabled: true, computerControlEnabled: false, unattendedDesktopEnabled: false),
             desktopAvailability: .init(state: availability),
             permissions: .init(entries: [], location: .init(mode: .off, precise: false)),
             voice: .init(supported: false, wakeEnabled: false))
         let encoded = try JSONEncoder().encode(snapshot)
         let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(actual["desktopAvailability"] as? [String: String] == ["state": state])
-        #expect(actual["capabilities"] as? [String: Bool] == ["unattendedDesktopEnabled": false])
+        #expect(actual["capabilities"] as? [String: Bool] == [
+            "desktopSharingEnabled": true, "computerControlEnabled": false, "unattendedDesktopEnabled": false,
+        ])
     }
 
     @Test func `Chrome extension setup accepts only the exact action payload`() {
+        for action in ChromeExtensionSetupAction.allCases {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": action.rawValue,
+            ]) == .chromeExtensionSetup(action))
+        }
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-status"]) == .chromeExtensionStatus)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-status", "command": "other"]) == nil)
         #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension"]) == .installChromeExtension)
-        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "command": "other"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "profile": "other"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup", "action": "pair"]) == nil)
+        for field in ["command", "profile", "url", "host"] {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": "install", field: "other",
+            ]) == nil)
+        }
     }
 
     @Test(arguments: ["macos", "ios"])
@@ -120,7 +137,7 @@ struct DeviceSettingsContractTests {
                     .init(id: .notifications, status: .granted), .init(id: .accessibility, status: .denied),
                     .init(id: .screenRecording, status: .notDetermined), .init(id: .microphone, status: .unavailable),
                     .init(id: .camera, status: .granted), .init(id: .speechRecognition, status: .denied),
-                    .init(id: .location, status: .notDetermined), .init(id: .automation, status: .unavailable),
+                    .init(id: .location, status: .notDetermined),
                 ],
                 location: .init(mode: .whileUsing, precise: true)),
             voice: .init(

@@ -1,11 +1,12 @@
 // Exercises the real update owner across successful config runtime finalization.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
   createManagedHandoffLeaseDatabase,
@@ -18,6 +19,7 @@ import {
   refreshActiveSecretsRuntimeSnapshotForConfig,
 } from "../secrets/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import * as configFactory from "./io.factory.js";
 import { writeConfigFile } from "./io.runtime.js";
 import {
@@ -58,6 +60,15 @@ const oldConfig = { gateway: { mode: "local" as const, port: 18789 } };
 const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
 
 describe("runtime finalization retains original authority", () => {
+  const roots = createSuiteTempRootTracker({ prefix: "config-authority-coordinator-" });
+  beforeAll(async () => await roots.setup());
+  beforeEach(async () => {
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      await roots.make("coordinator"),
+    );
+  });
+  afterAll(async () => await roots.cleanup());
+
   afterEach(() => {
     vi.restoreAllMocks();
     clearSecretsRuntimeSnapshot();
@@ -104,8 +115,8 @@ describe("runtime finalization retains original authority", () => {
               const realIO = createIO(options);
               return {
                 ...realIO,
-                readConfigFileSnapshot: async () => {
-                  const actual = await realIO.readConfigFileSnapshot();
+                readConfigFileSnapshotForWrite: async (readOptions) => {
+                  const actual = await realIO.readConfigFileSnapshotForWrite(readOptions);
                   atBoundary();
                   return actual;
                 },

@@ -1,39 +1,78 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { isDeepStrictEqual } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import {
+  beginPreparedModelRuntimePluginDrain,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
-
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-  await resetPreparedModelRuntimeHarness(state);
-});
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
-});
+const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
+const { mocks } = fixture;
 
 describe("prepared model runtime reload auth adoption", () => {
+  it.each(["rollback", "replacement"] as const)(
+    "revokes changed auth immediately and publishes it after plugin drain %s",
+    async (outcome) => {
+      mocks.configuredAgentIds = ["default"];
+      const initialConfig = {};
+      const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+      await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
+      const input = fixture.agentInput("default", initialConfig);
+      const original = await prepareModelRuntimeSnapshot(input);
+      const drain = beginPreparedModelRuntimePluginDrain();
+      let draining = true;
+      mocks.prepareStaticCatalog.mockClear();
+      mocks.prepareStaticCatalog.mockImplementation(async () => {
+        expect(draining).toBe(false);
+        return { entries: [] };
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let read: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+      let publication: Promise<void> | undefined;
+      try {
+        mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+        expect(original.isCurrent()).toBe(false);
+        let readSettled = false;
+        read = prepareModelRuntimeSnapshot(input, { readPublished: true });
+        void read.then(
+          () => {
+            readSettled = true;
+          },
+          () => {
+            readSettled = true;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocks.prepareStaticCatalog).not.toHaveBeenCalled();
+        expect(readSettled).toBe(false);
+        draining = false;
+        drain.release();
+        if (outcome === "replacement") {
+          publication = refreshPreparedModelRuntimeSnapshots({ plugins: {} }, options);
+          await publication;
+        }
+        const refreshed = await read;
+        expect(refreshed).not.toBe(original);
+        expect(refreshed.isCurrent()).toBe(true);
+        expect(mocks.prepareStaticCatalog).toHaveBeenCalled();
+      } finally {
+        draining = false;
+        drain.release();
+        vi.useRealTimers();
+        await Promise.allSettled([read, publication]);
+      }
+    },
+  );
+
   it("releases a rejected replacement's cached registry after the old catalog finishes", async () => {
     mocks.configuredAgentIds = ["default"];
     const cache = getPluginLoaderCacheState();
@@ -56,7 +95,7 @@ describe("prepared model runtime reload auth adoption", () => {
     await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
     const original = await prepareModelRuntimeSnapshot({
       agentId: "default",
-      agentDir: state.agentDir("default"),
+      agentDir: fixture.state.agentDir("default"),
       config: initialConfig,
     });
     if (!original.loadFullModelCatalog) {
@@ -121,15 +160,24 @@ describe("prepared model runtime reload auth adoption", () => {
       events.push(event.phase);
     });
     mocks.ensureOpenClawModelsJson.mockImplementation(async (config, agentDir) => {
-      if (isDeepStrictEqual(config, initialConfig) && agentDir === state.agentDir("worker")) {
+      if (
+        isDeepStrictEqual(config, initialConfig) &&
+        agentDir === fixture.state.agentDir("worker")
+      ) {
         workerAuthStarted.resolve();
         return await workerAuthBuild.promise;
       }
-      if (isDeepStrictEqual(config, initialConfig) && agentDir === state.agentDir("research")) {
+      if (
+        isDeepStrictEqual(config, initialConfig) &&
+        agentDir === fixture.state.agentDir("research")
+      ) {
         researchAuthStarted.resolve();
         return await researchAuthBuild.promise;
       }
-      if (isDeepStrictEqual(config, replacementConfig) && agentDir === state.agentDir("worker")) {
+      if (
+        isDeepStrictEqual(config, replacementConfig) &&
+        agentDir === fixture.state.agentDir("worker")
+      ) {
         replacementWorkerStarted.resolve();
         return await replacementWorkerBuild.promise;
       }
@@ -141,17 +189,17 @@ describe("prepared model runtime reload auth adoption", () => {
     let reload: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
     try {
       mocks.mutationListener?.({
-        agentDir: state.agentDir("worker"),
+        agentDir: fixture.state.agentDir("worker"),
         affectsInheritedStores: false,
       });
       await workerAuthStarted.promise;
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4);
       firstWorkerRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
       mocks.mutationListener?.({
-        agentDir: state.agentDir("research"),
+        agentDir: fixture.state.agentDir("research"),
         affectsInheritedStores: false,
       });
-      workerAuthBuild.resolve({ agentDir: state.agentDir("worker"), wrote: false });
+      workerAuthBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
       await researchAuthStarted.promise;
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5);
       await expect(firstWorkerRead).resolves.toMatchObject({ config: initialConfig });
@@ -170,10 +218,10 @@ describe("prepared model runtime reload auth adoption", () => {
       await Promise.resolve();
       expect(adoptedWorkerSettled).toBe(false);
 
-      researchAuthBuild.resolve({ agentDir: state.agentDir("research"), wrote: false });
+      researchAuthBuild.resolve({ agentDir: fixture.state.agentDir("research"), wrote: false });
       await replacementWorkerStarted.promise;
       expect(adoptedWorkerSettled).toBe(false);
-      replacementWorkerBuild.resolve({ agentDir: state.agentDir("worker"), wrote: false });
+      replacementWorkerBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
       await expect(reload).resolves.toBeUndefined();
       await expect(adoptedWorkerRead).resolves.toMatchObject({ config: replacementConfig });
       unregister();
@@ -181,9 +229,9 @@ describe("prepared model runtime reload auth adoption", () => {
       expect(events.filter((phase) => phase === "published")).toHaveLength(1);
       expect(events).not.toContain("failed");
     } finally {
-      workerAuthBuild.resolve({ agentDir: state.agentDir("worker"), wrote: false });
-      researchAuthBuild.resolve({ agentDir: state.agentDir("research"), wrote: false });
-      replacementWorkerBuild.resolve({ agentDir: state.agentDir("worker"), wrote: false });
+      workerAuthBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
+      researchAuthBuild.resolve({ agentDir: fixture.state.agentDir("research"), wrote: false });
+      replacementWorkerBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
       await Promise.allSettled([firstWorkerRead, adoptedWorkerRead, reload]);
       unregister();
     }

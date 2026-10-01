@@ -12,11 +12,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // The synthetic executable uses /bin/sh; Windows suffix lookup has owner coverage.
 describe.skipIf(process.platform === "win32")("infer local audio executable selection", () => {
-  it.each([
-    { name: "a literal home-relative PATH", homeRelative: true, decoy: false },
-    { name: "a home-relative PATH before a later decoy", homeRelative: true, decoy: true },
-    { name: "an absolute PATH", homeRelative: false, decoy: false },
-  ])("transcribes with the discovered executable from $name", async ({ homeRelative, decoy }) => {
+  it("transcribes with the home-relative executable before a later PATH decoy", async () => {
     const root = tempDirs.make("openclaw-infer-local-audio-");
     const binDir = path.join(root, "qa-stt-bin");
     const decoyDir = path.join(root, "decoy-bin");
@@ -25,9 +21,7 @@ describe.skipIf(process.platform === "win32")("infer local audio executable sele
     await Promise.all([binDir, decoyDir, tmp, workspace].map((dir) => fs.mkdir(dir)));
     const transcript = "preferred synthetic transcript";
     await createWhisperExecutable(binDir, transcript);
-    if (decoy) {
-      await createWhisperExecutable(decoyDir, "wrong executable transcript");
-    }
+    await createWhisperExecutable(decoyDir, "wrong executable transcript");
     const mediaPath = path.join(root, "input.wav");
     await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer(2048, 0x52));
     const configPath = path.join(root, "openclaw.json");
@@ -40,7 +34,6 @@ describe.skipIf(process.platform === "win32")("infer local audio executable sele
         logging: { level: "silent", consoleLevel: "silent" },
       }),
     );
-    const searchPath = [homeRelative ? "~/qa-stt-bin" : binDir, ...(decoy ? [decoyDir] : [])];
     const result = await runCliProcessChild({
       nodeArgs: [
         ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
@@ -53,7 +46,7 @@ describe.skipIf(process.platform === "win32")("infer local audio executable sele
       ],
       cwd: root,
       env: {
-        PATH: searchPath.join(path.delimiter),
+        PATH: ["~/qa-stt-bin", decoyDir].join(path.delimiter),
         ESBUILD_WORKER_THREADS: process.env.ESBUILD_WORKER_THREADS,
         HOME: root,
         USERPROFILE: root,

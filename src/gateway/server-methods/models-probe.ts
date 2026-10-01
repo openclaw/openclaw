@@ -1,4 +1,3 @@
-// Model probe gateway method reuses the CLI auth-probe engine behind an admin-scoped RPC.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,

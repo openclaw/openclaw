@@ -8,7 +8,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  disposeOpenClawAgentDatabaseByPath,
+} from "../../state/openclaw-agent-db.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { runEmbeddedAgent } from "../embedded-agent-runner.js";
 import { AgentSession } from "./agent-session.js";
@@ -51,7 +54,16 @@ const STRESS_PROFILE = FULL_CONTEXT
       testTimeoutMs: 10 * 60 * 1000,
     };
 
-const ownedTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const ownedDatabasePaths = new Set<string>();
+const ownedTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const databasePath of ownedDatabasePaths) {
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+    }
+    ownedDatabasePaths.clear();
+    cleanup();
+  }),
+);
 const sessions: AgentSession[] = [];
 const tempRoots: string[] = [];
 
@@ -196,6 +208,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         sessionKey,
         storePath: join(agentDir, "openclaw-agent.sqlite"),
       };
+      ownedDatabasePaths.add(sessionTarget.storePath);
       const marker = `TOOL-MEMORY-${randomUUID()}`;
       const tailMarker = `SYNTHETIC-END-${randomUUID()}`;
       const sourceFile = join(workspaceDir, "synthetic-context.txt");
@@ -295,7 +308,8 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
           admission.close();
         }
       };
-      const reopen = () => {
+      const reopen = async () => {
+        await closeOpenClawAgentDatabaseByPathAsync(sessionTarget.storePath);
         disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
         return SessionManager.open(sessionTarget, workspaceDir);
       };
@@ -304,7 +318,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
           "seed",
           `Read all of ${sourceFile}, remember its durable verification marker, then reply exactly STORED.`,
         );
-        const seeded = reopen();
+        const seeded = await reopen();
         const history = seeded.buildSessionContext().messages;
         const suppliedText = history
           .filter((message) => message.role === "toolResult")
@@ -336,7 +350,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         expect(modelDefinition.contextTokens).toBeLessThan(48_000);
         await rm(sourceFile);
         await run("compact", "Reply exactly with the durable verification marker from the file.");
-        const checkpointSession = reopen();
+        const checkpointSession = await reopen();
         const checkpoint = checkpointSession
           .getBranch()
           .findLast((entry) => entry.type === "compaction");
@@ -356,7 +370,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
           "Repeat the durable verification marker, with no other text.",
         );
         expect(continued.meta.agentMeta?.compactionCount ?? 0).toBe(0);
-        const replayedSession = reopen();
+        const replayedSession = await reopen();
         expect(countCompactions(replayedSession)).toBe(checkpointCount);
         const saved = replayedSession.buildSessionContext().messages.at(-1);
         const replayUsage = saved?.role === "assistant" ? saved.usage.contextUsage : undefined;
@@ -369,6 +383,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
           `[openai-checkpoint-live] budget=${modelDefinition.contextTokens} compactions=${checkpointCount} replayTokens=${replayUsage.totalTokens} sqliteReplay=passed toolMarker=preserved\n`,
         );
       } finally {
+        await closeOpenClawAgentDatabaseByPathAsync(sessionTarget.storePath);
         disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
       }
     },

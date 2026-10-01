@@ -1,19 +1,15 @@
 import { createHash } from "node:crypto";
 import {
-  assertCanInsertPluginStateEntry,
-  bindPluginStateEntry,
   createPluginStateError,
   deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
-  enforcePostRegisterLimits,
   parseStoredJson,
-  resolvePluginStateExpiresAtMs,
   selectPluginStateEntry,
-  upsertPluginStateEntry,
   type PluginStateDatabase,
-  type PluginStateRegisterEntryParams,
   type PluginStateReadRow,
 } from "./plugin-state-store.kernel.js";
+import { updatePluginStateEntry } from "./plugin-state-store.mutations.js";
+import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
   PluginStateObservation,
@@ -125,23 +121,6 @@ export function compareAndApplyPluginStateEntry(
   if (params.action === "keep") {
     return { status: "unchanged" };
   }
-  if (!row) {
-    assertCanInsertPluginStateEntry({ ...params, store, now });
-  }
-  const expiresAt = resolvePluginStateExpiresAtMs({
-    ttlMs: params.ttlMs,
-    now,
-    operation: "register",
-    path: store.path,
-  });
-  upsertPluginStateEntry(
-    store.db,
-    bindPluginStateEntry({
-      ...params,
-      createdAt: now,
-      expiresAt,
-    }),
-  );
-  enforcePostRegisterLimits({ ...params, store, now, protectedKey: params.key });
+  updatePluginStateEntry(store, params, now, row !== undefined);
   return { status: "applied" };
 }

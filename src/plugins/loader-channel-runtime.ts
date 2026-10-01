@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import type { NormalizedPluginsConfig } from "./config-state.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -14,6 +14,7 @@ import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { recordPluginError } from "./loader-records.js";
 import type { PluginRegistrationPlan } from "./loader-registration-plan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { openPluginRootFileSync } from "./path-safety.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { resolvePluginRuntimeExecutionArtifact } from "./plugin-runtime-artifact-selection.js";
@@ -99,7 +100,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
     }
     instance.run(() => setter(api.runtime));
   };
-  let mergedSetupRegistration = setupRegistration;
+  let mergedSetupPlugin = setupRegistration.plugin;
   try {
     applyChannelRuntime(setupRegistration.setChannelRuntime);
   } catch (error) {
@@ -112,12 +113,10 @@ export function loadSetupRuntimeChannelCandidate(params: {
       : undefined;
   if (runtimeEntry && runtimeEntry.source !== params.safeSource) {
     const { source: runtimeModuleSource, rootDir: runtimeModuleRoot } = runtimeEntry;
-    const runtimeOpened = openRootFileSync({
-      absolutePath: runtimeModuleSource,
+    const runtimeOpened = openPluginRootFileSync({
+      filePath: runtimeModuleSource,
       rootPath: runtimeModuleRoot,
-      boundaryLabel: "plugin root",
       rejectHardlinks: params.rejectHardlinks,
-      skipLexicalRootCheck: true,
     });
     if (!runtimeOpened.ok) {
       params.pushPluginLoadError(
@@ -181,20 +180,11 @@ export function loadSetupRuntimeChannelCandidate(params: {
         );
         return true;
       }
-      mergedSetupRegistration = {
-        ...setupRegistration,
-        plugin: mergeSetupRuntimeChannelPlugin(
-          runtimePluginRegistration.plugin,
-          setupRegistration.plugin,
-        ),
-        setChannelRuntime:
-          runtimeRegistration.setChannelRuntime ?? setupRegistration.setChannelRuntime,
-      };
+      mergedSetupPlugin = mergeSetupRuntimeChannelPlugin(
+        runtimePluginRegistration.plugin,
+        setupRegistration.plugin,
+      );
     }
-  }
-  const mergedSetupPlugin = mergedSetupRegistration.plugin;
-  if (!mergedSetupPlugin) {
-    return true;
   }
   if (
     !channelPluginIdBelongsToManifest({
@@ -208,10 +198,10 @@ export function loadSetupRuntimeChannelCandidate(params: {
     );
     return true;
   }
-  if (registrationPlan.mode === "setup-runtime" && mergedSetupRegistration.registerSetupRuntime) {
+  if (registrationPlan.mode === "setup-runtime" && setupRegistration.registerSetupRuntime) {
     try {
       runPluginRegisterSyncInRegistry(
-        (registrationApi) => mergedSetupRegistration.registerSetupRuntime?.(registrationApi),
+        (registrationApi) => setupRegistration.registerSetupRuntime?.(registrationApi),
         api,
         registryBuilder.registry,
         record.id,

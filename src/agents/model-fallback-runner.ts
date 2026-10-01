@@ -4,6 +4,11 @@ import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  assertOperatorModelAllowed,
+  type AdmittedRunOperatorAuthority,
+} from "./admitted-run-context.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
@@ -112,6 +117,7 @@ type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
   mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
   skipAuthProfileRuntime?: boolean;
   abortSignal?: AbortSignal;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 } & ModelManifestNormalizationContext;
 
 type DeferredSessionSuspensionState = {
@@ -149,7 +155,12 @@ async function runWithModelFallbackInternal<T>(
   params: RunWithModelFallbackParams<T>,
   deferredSuspension: DeferredSessionSuspensionState,
 ): Promise<ModelFallbackRunResult<T>> {
-  const candidates = resolveModelCandidateChain({
+  const operatorAuthority = params.operatorAuthority;
+  if (operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+    operatorAuthority.assertCurrent();
+  }
+  const plannedCandidates = resolveModelCandidateChain({
     cfg: params.cfg,
     agentId: params.agentId,
     provider: params.provider,
@@ -158,6 +169,13 @@ async function runWithModelFallbackInternal<T>(
     requestedRouteResolution: params.requestedRouteResolution,
     manifestPlugins: params.manifestPlugins,
   });
+  const operatorModelPolicy = operatorAuthority?.modelPolicy;
+  const candidates = operatorModelPolicy
+    ? plannedCandidates.filter(operatorModelPolicy.allows)
+    : plannedCandidates;
+  if (operatorModelPolicy && candidates.length === 0) {
+    assertOperatorModelAllowed(operatorAuthority, undefined);
+  }
   await params.prepareCandidateChain?.(candidates);
   const userLockedAuthProfileId = params.userLockedAuthProfileId?.trim() || undefined;
   const authRuntime =
@@ -180,6 +198,7 @@ async function runWithModelFallbackInternal<T>(
   const attempts: FallbackAttempt[] = [];
   const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
+  let selectionChanged = false;
   let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
@@ -252,6 +271,10 @@ async function runWithModelFallbackInternal<T>(
       continue;
     }
     const candidateRef = { provider: candidate.provider, model: candidate.model };
+    operatorAuthority?.assertCurrent();
+    if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
+      continue;
+    }
     const nextCandidateIndex = resolveNextFallbackCandidateIndex({
       candidates,
       currentIndex: i,
@@ -299,6 +322,7 @@ async function runWithModelFallbackInternal<T>(
     };
 
     let candidateAuthProfileIds: string[] | undefined;
+    let quotaRequiresAuthPreparation = false;
     let userLockedAuthProfileEligible = false;
     if (authRuntime && authStore) {
       userLockedAuthProfileEligible =
@@ -320,12 +344,15 @@ async function runWithModelFallbackInternal<T>(
       if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
         profileIds = [...new Set([userLockedAuthProfileId, ...profileIds])];
       }
-      await authRuntime.maybeReprobeWhamBlockedProfiles({
+      const quota = await authRuntime.maybeReprobeWhamBlockedProfiles({
         store: authStore,
         profileIds,
         agentDir: params.agentDir,
+        cfg: params.cfg,
         forModel: candidate.model,
       });
+      // Normal auth selection owns remaining profiles and declared direct credentials.
+      quotaRequiresAuthPreparation = quota?.requiresAuthPreparation === true;
       if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
         candidateAuthProfileIds = profileIds;
         profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
@@ -371,6 +398,7 @@ async function runWithModelFallbackInternal<T>(
       authRuntime &&
       authStore &&
       candidateAuthProfileIds &&
+      !quotaRequiresAuthPreparation &&
       !candidateHarnessAuth.skipsProviderAuthCooldown
     ) {
       const profileIds = candidateAuthProfileIds;
@@ -470,6 +498,10 @@ async function runWithModelFallbackInternal<T>(
       }
     }
 
+    operatorAuthority?.assertCurrent();
+    if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
+      continue;
+    }
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -482,6 +514,7 @@ async function runWithModelFallbackInternal<T>(
           requestedProvider: params.provider,
           requestedModel: params.model,
           stage: isPrimary ? "initial" : "fallback",
+          selectionChanged,
           fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
         },
       },
@@ -594,6 +627,7 @@ async function runWithModelFallbackInternal<T>(
 
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
+      selectionChanged = true;
       // The outer owner must apply runtime changes before selecting another model.
       if (
         hasDifferentLiveSessionRuntimeSelection({
@@ -685,6 +719,9 @@ async function runWithModelFallbackInternal<T>(
     };
   }
 
+  if (operatorAuthority?.modelPolicy && attempts.length === 0) {
+    assertOperatorModelAllowed(operatorAuthority, undefined);
+  }
   return throwFallbackFailureSummary({
     attempts,
     candidates,

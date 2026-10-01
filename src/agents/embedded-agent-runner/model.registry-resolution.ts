@@ -5,6 +5,7 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metad
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persisted-rows.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
@@ -22,7 +23,6 @@ import {
   mergeStaticCatalogInlineModel,
   resolveConfiguredProviderConfig,
   shouldSuppressConfiguredModel,
-  type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
 import type { InlineModelEntry } from "./model.inline-provider.js";
 import {
@@ -62,7 +62,7 @@ export function resolveExplicitModelWithRegistry(params: {
   runtimeHooks?: ProviderRuntimeHooks;
   preparedInlineProviderModels?: readonly InlineModelEntry[];
   preparedCatalogModel?: ProviderRuntimeModel;
-  getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
+  getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
 }): ExplicitModelResolution | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   // Competing activated owners cannot lend either model or transport authority.
@@ -164,6 +164,7 @@ type DynamicModelAuthProfile = {
 };
 
 export async function resolveDynamicModelAuthProfile(params: {
+  abortSignal?: AbortSignal;
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;
@@ -172,6 +173,7 @@ export async function resolveDynamicModelAuthProfile(params: {
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
   preferredProfile?: string;
 }): Promise<DynamicModelAuthProfile> {
+  params.abortSignal?.throwIfAborted();
   const explicitProfileId = params.authProfileId?.trim() || undefined;
   // A prepared mode is authoritative; model discovery does not reselect its credentials.
   if (params.authProfileMode) {
@@ -180,7 +182,8 @@ export async function resolveDynamicModelAuthProfile(params: {
       authProfileMode: params.authProfileMode,
     };
   }
-  const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+  const agentDir = params.agentDir;
+  const readOptions = {
     readOnly: true,
     migrationProvider: params.provider,
     allowKeychainPrompt: false,
@@ -192,19 +195,34 @@ export async function resolveDynamicModelAuthProfile(params: {
       profileId: explicitProfileId,
       preferredProfile: params.preferredProfile,
     }),
+  };
+  const readStore = () => {
+    params.abortSignal?.throwIfAborted();
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
+  };
+  const providers = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider: params.provider,
+    config: params.cfg,
   });
+  const store = await readStore().catch(async (error: unknown) => {
+    if (!(error instanceof AuthProfileRuntimeReadStaleError)) {
+      throw error;
+    }
+    // OAuth publication can overlap selection. The rejected reader has joined its cleanup.
+    await error.waitForSettlement?.(params.abortSignal);
+    return readStore();
+  });
+  params.abortSignal?.throwIfAborted();
   const profileId =
     explicitProfileId ??
-    listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: params.provider,
-      config: params.cfg,
-    }).flatMap((provider) =>
+    providers.flatMap((provider) =>
       resolveAuthProfileOrder({
         cfg: params.cfg,
         store,
         provider,
         preferredProfile: params.preferredProfile,
         forModel: params.modelId,
+        includePendingOAuthRefresh: true,
       }),
     )[0];
   if (!profileId) {
@@ -307,18 +325,6 @@ export async function resolveRuntimePreferredSuppressedModel(
   return resolvePluginDynamicModelWithRegistry({ ...params, runtimeHooks });
 }
 
-function shouldDropRuntimePreferredExplicitMiss(params: {
-  provider: string;
-  modelId: string;
-  explicitModel: ExplicitModelResolution;
-}): boolean {
-  return (
-    params.explicitModel.kind === "resolved" &&
-    params.explicitModel.source === "registry" &&
-    params.explicitModel.dropOnRuntimeMiss
-  );
-}
-
 export function shouldCompareProviderRuntimeResolvedModel(params: {
   provider: string;
   modelId: string;
@@ -374,6 +380,7 @@ export function normalizeProviderModelRef(params: {
 }
 
 type ResolveModelWithRegistryParams = {
+  abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   provider: string;
   modelId: string;
@@ -394,7 +401,7 @@ type ResolveModelWithPreparedRegistryParams = ResolveModelWithRegistryParams & {
   // An empty result is prepared too; a dynamic-model miss must not read auth again.
   preparedAuthProfile?: DynamicModelAuthProfile;
   preparedDynamicModel?: ProviderRuntimeModel;
-  getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
+  getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
 };
 
 export async function resolveModelWithPreparedRegistry(
@@ -409,25 +416,22 @@ export async function resolveModelWithPreparedRegistry(
   if (explicitModel?.kind === "suppressed") {
     return resolveRuntimePreferredSuppressedModel(params);
   }
+  if (
+    explicitModel?.kind === "resolved" &&
+    !shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })
+  ) {
+    return explicitModel.model;
+  }
+  const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
+  params.assertCurrent?.();
   if (explicitModel?.kind === "resolved") {
-    if (!shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })) {
-      return explicitModel.model;
-    }
-    const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
-    params.assertCurrent?.();
     return (
       pluginDynamicModel ??
-      (shouldDropRuntimePreferredExplicitMiss({
-        provider: params.provider,
-        modelId: params.modelId,
-        explicitModel,
-      })
+      (explicitModel.source === "registry" && explicitModel.dropOnRuntimeMiss
         ? undefined
         : explicitModel.model)
     );
   }
-  const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
-  params.assertCurrent?.();
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
@@ -445,7 +449,7 @@ export async function resolveModelWithRegistry(
   const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
   const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
   let staticCatalogResolved = false;
-  let staticCatalogModel: StaticCatalogFallbackModel | undefined;
+  let staticCatalogModel: ProviderRuntimeModel | undefined;
   const getStaticCatalogModel = () => {
     if (!staticCatalogResolved) {
       staticCatalogResolved = true;

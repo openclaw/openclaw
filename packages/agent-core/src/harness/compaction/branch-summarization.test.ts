@@ -4,30 +4,15 @@ import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary, prepareBranchEntries } from "./branch-summarization.js";
+import { createCompactionModel, createMessageEntry } from "./compaction.test-support.js";
 
 function createModel(contextWindow: number, maxTokens = 8000): Model & { contextWindow: number } {
-  return {
+  return createCompactionModel({
     id: "branch-summary-model",
     name: "Branch Summary Model",
-    api: "test-api",
-    provider: "test-provider",
-    baseUrl: "https://example.test",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens,
-  };
-}
-
-function createMessageEntry(message: AgentMessage, index: number): SessionTreeEntry {
-  return {
-    type: "message",
-    id: `entry-${index}`,
-    parentId: index === 0 ? null : `entry-${index - 1}`,
-    timestamp: new Date(message.timestamp).toISOString(),
-    message,
-  };
+  });
 }
 
 function createResponse(

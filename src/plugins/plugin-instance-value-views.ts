@@ -1,11 +1,59 @@
 // Callable value views preserve plugin admission and native data/receiver contracts.
 import { types } from "node:util";
 import { createPluginArgumentView } from "./plugin-instance-argument-views.js";
-import { pluginInstanceState, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+import { PluginHostObject } from "./plugin-instance-owned-values.js";
+import {
+  getPluginOriginalValue,
+  pluginInstanceState,
+  setPluginOriginalValue,
+  type PluginInstanceHandle,
+} from "./plugin-instance-scope.js";
 import type { PluginInstanceCallLease, PluginIteratorAdmission } from "./plugin-instance.types.js";
-import { resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 
 const { values: valueInstances } = pluginInstanceState;
+type PluginMemberReader = {
+  factory: object;
+  source: object;
+  derivedFields: Set<PropertyKey>;
+  read: (key: PropertyKey, receiver: object, readMember: typeof readPluginMember) => unknown;
+};
+
+class MemberReader extends PluginHostObject {
+  #reader: PluginMemberReader;
+
+  constructor(value: object, reader: PluginMemberReader) {
+    super(value);
+    this.#reader = reader;
+  }
+
+  static get(value: object, factory: object) {
+    if (#reader in value && value.#reader.factory === factory) {
+      return value.#reader;
+    }
+    return undefined;
+  }
+}
+
+type IteratorDataRead = { data?: object };
+type PluginIteratorResultReader = {
+  read: () => unknown;
+  readWithData: (read: IteratorDataRead) => unknown;
+  admission: PluginIteratorAdmission;
+};
+
+class IteratorResultReader extends PluginHostObject {
+  #reader: PluginIteratorResultReader;
+
+  constructor(value: object, reader: PluginIteratorResultReader) {
+    super(value);
+    this.#reader = reader;
+  }
+
+  static get(value: object) {
+    return #reader in value ? value.#reader : undefined;
+  }
+}
 const DATA_FIELDS = new Set([
   "parameters",
   "schema",
@@ -60,20 +108,29 @@ function hasProxyPrototype(object: object): boolean {
   return false;
 }
 
-function isPluginData(value: unknown, seen?: Set<object>): boolean {
+function isNativePluginData(value: object): boolean {
+  return (
+    types.isAnyArrayBuffer(value) ||
+    types.isArrayBufferView(value) ||
+    types.isDate(value) ||
+    types.isRegExp(value) ||
+    types.isNativeError(value)
+  );
+}
+
+function isPluginData(
+  value: unknown,
+  seen?: Set<object>,
+  knownPrototype?: object,
+  knownNative?: Function,
+): boolean {
   if (!value || typeof value !== "object") {
     return typeof value !== "function";
   }
   if (types.isProxy(value)) {
     return false;
   }
-  if (
-    types.isAnyArrayBuffer(value) ||
-    types.isArrayBufferView(value) ||
-    types.isDate(value) ||
-    types.isRegExp(value) ||
-    types.isNativeError(value)
-  ) {
+  if (isNativePluginData(value)) {
     return true;
   }
   if (seen?.has(value)) {
@@ -90,17 +147,18 @@ function isPluginData(value: unknown, seen?: Set<object>): boolean {
   if (prototype && types.isProxy(prototype)) {
     return false;
   }
-  const constructor = prototype && Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
-  // Same-engine realm intrinsics share native source; subclasses retain their own executable source.
-  if (
-    prototype !== null &&
-    (typeof constructor !== "function" ||
+  if (prototype && (prototype !== knownPrototype || native !== knownNative)) {
+    const constructor = Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+    // Same-engine realm intrinsics share native source; subclasses retain their own executable source.
+    if (
+      typeof constructor !== "function" ||
       (constructor !== native &&
         Function.prototype.toString.call(constructor) !==
           Function.prototype.toString.call(native)) ||
-      Object.getOwnPropertyDescriptor(constructor, "prototype")?.value !== prototype)
-  ) {
-    return false;
+      Object.getOwnPropertyDescriptor(constructor, "prototype")?.value !== prototype
+    ) {
+      return false;
+    }
   }
   let firstChild: object | undefined;
   let moreChildren: object[] | undefined;
@@ -126,12 +184,15 @@ function isPluginData(value: unknown, seen?: Set<object>): boolean {
   }
   const visited = seen ?? new Set<object>();
   visited.add(value);
-  if (firstChild && !isPluginData(firstChild, visited)) {
+  // Reuse intrinsic checks within this walk; later wraps must recheck mutable prototypes.
+  const nextPrototype = knownPrototype ?? prototype ?? undefined;
+  const nextNative = knownPrototype ? knownNative : native;
+  if (firstChild && !isPluginData(firstChild, visited, nextPrototype, nextNative)) {
     return false;
   }
   if (moreChildren) {
     for (const child of moreChildren) {
-      if (!isPluginData(child, visited)) {
+      if (!isPluginData(child, visited, nextPrototype, nextNative)) {
         return false;
       }
     }
@@ -140,13 +201,16 @@ function isPluginData(value: unknown, seen?: Set<object>): boolean {
   // entry, and Set members do not allocate duplicate key/value pairs.
   if (native === Map) {
     for (const [key, entry] of Map.prototype.entries.call(value)) {
-      if (!isPluginData(key, visited) || !isPluginData(entry, visited)) {
+      if (
+        !isPluginData(key, visited, nextPrototype, nextNative) ||
+        !isPluginData(entry, visited, nextPrototype, nextNative)
+      ) {
         return false;
       }
     }
   } else if (native === Set) {
     for (const entry of Set.prototype.values.call(value)) {
-      if (!isPluginData(entry, visited)) {
+      if (!isPluginData(entry, visited, nextPrototype, nextNative)) {
         return false;
       }
     }
@@ -213,30 +277,37 @@ function bindNativeReceiver<T, R>(invoke: (receiver: T, args: unknown[]) => R) {
 export function createPluginValueView(
   bindings: {
     instance: PluginInstanceHandle;
-    originalValues: WeakMap<object, object>;
     invoke: <T>(run: () => T, lease?: PluginInstanceCallLease) => T;
     lease: () => PluginInstanceCallLease;
     hasToken: (token: object) => boolean;
   },
   admit: <T>(run: () => T) => T,
+  admitCallback: <T>(run: () => T) => T,
 ) {
   const wrapped = new WeakMap<object, unknown>();
+  const factory = {};
+  const originalValue = (value: object) => getPluginOriginalValue(value, bindings.instance);
   const derivedReceivers = new WeakSet<object>();
   const prototypeReceivers = new WeakMap<object, WeakMap<object, object>>();
   const iterators = new WeakMap<object, PluginIteratorAdmission>();
   const wrapArguments = createPluginArgumentView({
-    originalValues: bindings.originalValues,
-    wrapped,
+    original: originalValue,
+    setOriginal: (value, source) => setPluginOriginalValue(value, source, bindings.instance),
+    isWrapped: (value) => MemberReader.get(value, factory) !== undefined,
     wrap: (value) => wrap(value),
-    invoke: (callback) => admit(() => bindings.invoke(callback)),
+    invoke: admitCallback,
   });
   const wrapResult = <T>(result: T, callerData?: unknown[]): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
-      const pending = completion.then((resolved) => wrap(resolved));
-      valueInstances.set(pending, bindings.instance);
+      const pending = mapPluginReturnPromise(completion, (resolved) => wrap(resolved));
+      if (pending.host) {
+        valueInstances.setHost(pending.value, bindings.instance);
+      } else {
+        valueInstances.set(pending.value, bindings.instance);
+      }
       // SAFETY: Promise-like results retain their resolved type while callable values stay owned.
-      return pending as T;
+      return pending.value as T;
     }
     return callerData?.includes(result) ? result : wrap(result);
   };
@@ -251,6 +322,9 @@ export function createPluginValueView(
       return value;
     }
     const object: object = value;
+    if (MemberReader.get(object, factory)) {
+      return value;
+    }
     const cached = wrapped.get(object);
     if (cached) {
       // SAFETY: The cache stores only the view created for this exact input value.
@@ -271,19 +345,19 @@ export function createPluginValueView(
     const resolveReceiver = (key: PropertyKey, receiver: object) => {
       const receivers = prototypeReceivers.get(object);
       if (receivers) {
-        const original = bindings.originalValues.get(receiver) ?? receiver;
+        const original = originalValue(receiver) ?? receiver;
         return receivers.get(original) ?? original;
       }
       // Inherited access belongs to the child; exact-view access keeps private fields on the original.
       if (receiver !== object && receiver !== result) {
-        return bindings.originalValues.get(receiver) ?? receiver;
+        return originalValue(receiver) ?? receiver;
       }
       return derivedReceivers.has(object) &&
         (!reflect(() => Object.hasOwn(object, key)) || derivedFields.has(key))
         ? result
         : object;
     };
-    const read = (key: PropertyKey, receiver = object) => {
+    const read = (key: PropertyKey, receiver = object, readMember = readPluginMember) => {
       const protocol = key === "next" || key === "return" || key === "throw";
       const iteration = iterators.get(object);
       if (protocol && iteration?.done) {
@@ -295,7 +369,7 @@ export function createPluginValueView(
       let property: unknown;
       try {
         resolvedReceiver = resolveReceiver(key, receiver);
-        property = readPluginMember(object, key, invoke, resolvedReceiver);
+        property = readMember(object, key, invoke, resolvedReceiver);
       } catch (error) {
         if (key === "return" && iteration?.active) {
           iteration.close();
@@ -341,7 +415,7 @@ export function createPluginValueView(
                 return owner.call(key, property, args);
               };
         methods.set(key, { original: property, receiver: resolvedReceiver, wrapped: bound });
-        valueInstances.set(bound, bindings.instance);
+        valueInstances.setHost(bound, bindings.instance);
         return bound;
       }
       const bind = () =>
@@ -354,7 +428,7 @@ export function createPluginValueView(
       const callback = () => collectionCallbackIndex(object, key);
       const bound = wrap(
         // Our callable views already guard metadata and preserve derived receiver bindings.
-        !bindings.originalValues.has(property) &&
+        !originalValue(property) &&
           (pluginMemberNeedsAdmission(property, "length") ||
             pluginMemberNeedsAdmission(property, "name"))
           ? invoke(bind)
@@ -362,7 +436,7 @@ export function createPluginValueView(
         String(key),
         hasProxyPrototype(object) ? invoke(callback) : callback(),
       );
-      bindings.originalValues.set(bound, property);
+      setPluginOriginalValue(bound, property, bindings.instance);
       methods.set(key, { original: property, receiver: resolvedReceiver, wrapped: bound });
       return bound;
     };
@@ -470,7 +544,7 @@ export function createPluginValueView(
                 wrapArguments(args, callbackIndex, field).args,
                 newTarget === result ? value : newTarget,
               );
-              receivers?.set(bindings.originalValues.get(constructed) ?? constructed, constructed);
+              receivers?.set(originalValue(constructed) ?? constructed, constructed);
               // Derived private fields are installed on super()'s returned view;
               // base prototype methods still require the original branded receiver.
               if (newTarget !== result) {
@@ -489,11 +563,35 @@ export function createPluginValueView(
       );
     }
     wrapped.set(object, result);
-    wrapped.set(result, result);
-    bindings.originalValues.set(result, object);
-    valueInstances.set(result, bindings.instance);
+    void new MemberReader(result, { factory, source: object, derivedFields, read });
+    setPluginOriginalValue(result, object, bindings.instance);
+    valueInstances.setHost(result, bindings.instance);
     // SAFETY: The view retains the input prototype and routes each member to the original object.
     return result as T;
+  };
+
+  // Host readers retain their lease; the outer iterator can project their payload lazily.
+  const wrapIteratorResult = (value: object, dataRead?: IteratorDataRead): object => {
+    const result =
+      IteratorResultReader.get(value) &&
+      !pluginMemberNeedsAdmission(value, "then") &&
+      typeof Reflect.get(value, "then") !== "function"
+        ? value
+        : wrap(value);
+    if (
+      dataRead &&
+      result === value &&
+      !types.isProxy(value) &&
+      !IteratorResultReader.get(value) &&
+      !isNativePluginData(value)
+    ) {
+      // Only a complete graph inspection admits the payload for this synchronous read.
+      const payload: unknown = Object.getOwnPropertyDescriptor(value, "value")?.value;
+      if (payload !== null && typeof payload === "object") {
+        dataRead.data = payload;
+      }
+    }
+    return result;
   };
 
   const admitIterator = (iterator: object): PluginIteratorAdmission => {
@@ -513,12 +611,63 @@ export function createPluginValueView(
       }
       return undefined;
     };
-    const invoke = <T>(run: () => T): T => {
+    const assertActive = () => {
       if (!active || !bindings.hasToken(token)) {
         throw new Error(`Plugin ${bindings.instance.pluginId} stream is closed`);
       }
+    };
+    const invoke = <T>(run: () => T): T => {
+      assertActive();
       pending += 1;
       return bindings.invoke(run, { token, release: releaseOperation });
+    };
+    const readResultMember = (
+      result: object,
+      key: "done" | "value",
+      dataRead?: IteratorDataRead,
+    ): unknown => {
+      assertActive();
+      const view = MemberReader.get(result, factory);
+      // Caller-defined shadow properties keep the Proxy's descriptor/identity contract.
+      const project = view && !view.derivedFields.has(key) ? view : undefined;
+      const source = project?.source ?? result;
+      const descriptor = !types.isProxy(source) && Object.getOwnPropertyDescriptor(source, key);
+      const reader = IteratorResultReader.get(source);
+      if (
+        descriptor &&
+        ("value" in descriptor || (reader?.admission.active && descriptor.get === reader.read))
+      ) {
+        const value: unknown =
+          "value" in descriptor ? descriptor.value : reader?.readWithData(dataRead ?? {});
+        // Ordinary data reads need authority, but only executable Promise inspection needs scope.
+        if (
+          value === null ||
+          (typeof value !== "object" && typeof value !== "function") ||
+          (((!project && !reader) || dataRead?.data === value || isPluginData(value)) &&
+            !types.isPromise(value) &&
+            !pluginMemberNeedsAdmission(value, "then") &&
+            typeof Reflect.get(value, "then") !== "function")
+        ) {
+          // Share only a completed classification in this synchronous reader chain.
+          // A later read starts fresh, so mutations never retain a data exemption.
+          if ((project || reader) && dataRead && value !== null && typeof value === "object") {
+            dataRead.data = value;
+          }
+          return value;
+        }
+        if (dataRead) {
+          dataRead.data = undefined;
+        }
+        return invoke(() => {
+          const projected =
+            project ?? (reader ? MemberReader.get(wrap(result), factory) : undefined);
+          return projected ? projected.read(key, source, () => value) : value;
+        });
+      }
+      if (dataRead) {
+        dataRead.data = undefined;
+      }
+      return invoke(() => Reflect.get(reader ? wrap(result) : result, key));
     };
     const admission: PluginIteratorAdmission = {
       get done() {
@@ -555,22 +704,53 @@ export function createPluginValueView(
               }
               throw new TypeError("Plugin iterator method must be callable");
             }
-            const next: unknown = await wrapResult(Reflect.apply(method, iterator, args));
+            const next: unknown = await Reflect.apply(method, iterator, args);
             if (next === null || (typeof next !== "object" && typeof next !== "function")) {
               throw new TypeError("Plugin async iterator result must be an object");
             }
-            const complete = Boolean(invoke(() => Reflect.get(next, "done")));
+            const doneDescriptor =
+              typeof next === "object" &&
+              !hasProxyPrototype(next) &&
+              Object.getOwnPropertyDescriptor(next, "done");
+            // Executable reflection and non-Boolean completion values keep their original projection.
+            let projected =
+              doneDescriptor &&
+              "value" in doneDescriptor &&
+              typeof doneDescriptor.value === "boolean" &&
+              !IteratorResultReader.get(next)
+                ? undefined
+                : wrapIteratorResult(next);
+            const complete = Boolean(readResultMember(projected ?? next, "done"));
             // IteratorClose ends this admission even when a generator yields in finally.
             // A later explicit next can acquire a new lease only while the instance is live.
             state = complete ? "done" : key === "return" ? "returned" : state;
-            return {
-              // The consumer reads completion after the last call may have joined disposal.
-              done: complete,
-              get value() {
-                const read = (): unknown => Reflect.get(next, "value");
-                return active ? invoke(read) : read();
-              },
+            const readWithData = (dataRead: IteratorDataRead) => {
+              if (!projected) {
+                const prepare = () => {
+                  projected = wrapIteratorResult(next, dataRead);
+                };
+                // Result projection belongs to its first payload read, not next()'s completion.
+                // Terminal data stays readable after the iterator's admission has finished.
+                if (active) {
+                  invoke(prepare);
+                } else {
+                  prepare();
+                }
+              }
+              const result = projected!;
+              return active
+                ? readResultMember(result, "value", dataRead)
+                : Reflect.get(IteratorResultReader.get(result) ? wrap(result) : result, "value");
             };
+            const readValue = () => readWithData({});
+            // Completion may join disposal; value stays lazy and checks the exact inner lease.
+            const result = Object.defineProperty({ done: complete }, "value", {
+              get: readValue,
+              enumerable: true,
+              configurable: true,
+            });
+            void new IteratorResultReader(result, { read: readValue, readWithData, admission });
+            return result;
           } catch (error) {
             state = "done";
             throw error;

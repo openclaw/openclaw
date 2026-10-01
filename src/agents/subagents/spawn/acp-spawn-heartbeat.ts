@@ -6,10 +6,8 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isHeartbeatEnabledForAgent } from "../../../infra/heartbeat-summary.js";
 import { areHeartbeatsEnabled } from "../../../infra/heartbeat-wake.js";
-import {
-  deliveryContextFromSession,
-  hasDeliveryTargetFields,
-} from "../../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
+import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
 
 export function isHeartbeatEnabledForSessionAgent(params: {
@@ -48,21 +46,6 @@ export function isHeartbeatEnabledForSessionAgent(params: {
   }
 }
 
-function resolveHeartbeatConfigForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["heartbeat"] {
-  const defaults = params.cfg.agents?.defaults?.heartbeat;
-  const overrides = resolveAgentConfig(params.cfg, params.agentId)?.heartbeat;
-  if (!defaults && !overrides) {
-    return undefined;
-  }
-  return {
-    ...defaults,
-    ...overrides,
-  };
-}
-
 export function hasSessionLocalHeartbeatRelayRoute(params: {
   cfg: OpenClawConfig;
   parentSessionKey: string;
@@ -73,20 +56,17 @@ export function hasSessionLocalHeartbeatRelayRoute(params: {
     return false;
   }
 
-  const heartbeat = resolveHeartbeatConfigForAgent({
-    cfg: params.cfg,
-    agentId: params.requesterAgentId,
-  });
-  if ((heartbeat?.target ?? "none") !== "last") {
+  const heartbeat = {
+    ...params.cfg.agents?.defaults?.heartbeat,
+    ...resolveAgentConfig(params.cfg, params.requesterAgentId)?.heartbeat,
+  };
+  if (heartbeat.target !== "last") {
     return false;
   }
 
   // Explicit delivery overrides are not session-local and can route updates
   // to unrelated destinations (for example a pinned ops channel).
-  if (normalizeOptionalString(heartbeat?.to)) {
-    return false;
-  }
-  if (normalizeOptionalString(heartbeat?.accountId)) {
+  if (normalizeOptionalString(heartbeat.to) || normalizeOptionalString(heartbeat.accountId)) {
     return false;
   }
 

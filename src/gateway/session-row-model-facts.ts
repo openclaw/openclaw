@@ -3,7 +3,6 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
@@ -21,6 +20,7 @@ export function readSessionRowModelFacts(params: {
   key: string;
   agentId: string;
   entry?: SessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   source: GatewaySessionModelSource;
   rowContext: SessionListRowContext;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -56,8 +56,9 @@ export function readSessionRowModelFacts(params: {
     agentId,
     provider: provider ?? DEFAULT_PROVIDER,
     model: model ?? DEFAULT_MODEL,
-    sessionKey: resolveStoredSessionKeyForAgentStore({ cfg, agentId, sessionKey: key }),
+    sessionKey: key,
     entry: params.entry,
+    preparedAcpMeta: params.preparedAcpMeta,
     modelCatalog: rowModelCatalog ?? (lightweight ? [] : undefined),
     modelCatalogRouteVariants: preparedCatalog?.routeVariants,
     metadataSnapshot,

@@ -1,9 +1,17 @@
 /** Native service control/inspection only; payload launchers own their full environment. */
 import { extractErrorCode } from "../infra/errors.js";
-import { createSanitizedCommandError } from "../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  createSanitizedCommandError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  getGatewayServiceUpdateNativeCommand,
+  GatewayServiceAuthorityError,
+} from "./service-update-authority.js";
 
 export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   code: number;
@@ -23,9 +31,13 @@ export async function execFileUtf8(
     windowsHide?: boolean;
   } = {},
 ): Promise<ExecResult> {
-  assertGatewayServiceUpdateCurrent();
+  const scopedNative = getGatewayServiceUpdateNativeCommand();
+  const scoped = scopedNative ? true : assertGatewayServiceUpdateCurrent();
   try {
-    const { stdout, stderr, code, termination, signal } = await runCommandWithTimeout(
+    // Scoped dispatch serializes before its parent-currentness check. Ordinary
+    // calls retain the existing synchronous assertion and unbound runner.
+    const runNative = scopedNative ?? runCommandWithTimeout;
+    const { stdout, stderr, code, termination, signal, cleanup } = await runNative(
       [command, ...args],
       {
         baseEnv: resolveServiceManagerEnv(options.env),
@@ -36,6 +48,15 @@ export async function execFileUtf8(
         timeoutMs: options.timeout,
       },
     );
+    // Compensation cannot run while an earlier writer may still be active.
+    if (scoped && cleanup === "uncertain") {
+      throw new CommandProcessCleanupError();
+    }
+    // Bound dispatch revalidates before releasing its queue; another native
+    // child may suspend that parent before this continuation resumes.
+    if (!scopedNative) {
+      assertGatewayServiceUpdateCurrent();
+    }
     const diagnostic =
       termination === "exit"
         ? ""
@@ -52,6 +73,9 @@ export async function execFileUtf8(
       termination,
     };
   } catch (error) {
+    if (error instanceof GatewayServiceAuthorityError || hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     const message = error instanceof Error ? error.message : String(error);
     const errorCode = extractErrorCode(error);
     // Launch diagnostics omit argv; preserve errno separately so daemon owners

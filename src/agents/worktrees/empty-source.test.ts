@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { requireGit, runGit } from "./git.js";
 import { getRegistryWorktree } from "./registry.js";
@@ -20,9 +23,10 @@ const identity = {
 
 describe("empty managed workspaces", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
@@ -110,11 +114,11 @@ describe("empty managed workspaces", () => {
     expect(await requireGit(first.repoRoot, ["rev-list", "--count", "main"])).toBe("1");
     expect(await create("first")).toMatchObject({ id: first.id, path: first.path });
 
-    const records = service.listRegistryRecords();
+    const records = await service.listRegistryRecords();
     await fs.rename(first.repoRoot, `${first.repoRoot}-saved`);
     await expect(create("first")).rejects.toThrow("Empty workspace source is missing");
     expect(fsSync.existsSync(first.repoRoot)).toBe(false);
-    expect(service.listRegistryRecords()).toEqual(records);
+    expect(await service.listRegistryRecords()).toEqual(records);
     expect(await fs.readFile(path.join(restored.path, "attachment.bin"))).toEqual(attachment);
   });
 
@@ -209,7 +213,7 @@ describe("empty managed workspaces", () => {
 
   it("removes an unbound source when checkout allocation fails", async () => {
     await expect(create("invalid name")).rejects.toThrow("worktree name must match");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     expect(
       await fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktree-sources", "empty")),
     ).toEqual([]);

@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { materializeLegacyDefaultCronJobOwners } from "./legacy-default-agent-owner-migration.js";
 import { CronService } from "./service.js";
@@ -70,6 +71,8 @@ it("materializes before scheduler startup", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   closeOpenClawStateDatabaseForTest();
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     legacyDefaultAgentId: "ops",
@@ -114,6 +117,8 @@ it("owns rows imported from a JSON-only store on first startup load", async () =
     });
 
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     legacyDefaultAgentId: "ops",

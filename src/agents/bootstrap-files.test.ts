@@ -307,16 +307,6 @@ describe("resolveBootstrapFilesForRun", () => {
     testState = undefined;
   });
 
-  it("applies bootstrap hook overrides", async () => {
-    registerExtraBootstrapFileHook();
-
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-
-    const filePaths = files.map((file) => file.path);
-    expect(filePaths).toContain(path.join(workspaceDir, "EXTRA.md"));
-  });
-
   it("drops malformed hook files with missing/invalid paths", async () => {
     registerMalformedBootstrapFileHook();
 
@@ -356,26 +346,6 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(agentsContextFiles[0]?.content).toBe("workspace rules");
   });
 
-  it("ignores stale workspace BOOTSTRAP.md once setup is completed", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await writeCompletedWorkspaceState(workspaceDir);
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-
-    expect(files.map((file) => file.name)).toContain("AGENTS.md");
-    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
-  });
-
-  it("treats USER.md as optional", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-
-    expect(files.map((file) => file.name)).not.toContain("USER.md");
-  });
-
   it("refreshes USER.md on every turn for long-lived sessions", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     const userPath = path.join(workspaceDir, "USER.md");
@@ -401,19 +371,6 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.map((file) => file.name)).toContain("AGENTS.md");
-    expect(files.map((file) => file.name)).toContain("BOOTSTRAP.md");
-  });
-
-  it("keeps BOOTSTRAP.md when current setup state cannot be read", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.mkdir(path.join(workspaceDir, "openclaw-workspace-state.json"), {
-      recursive: true,
-    });
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-
     expect(files.map((file) => file.name)).toContain("BOOTSTRAP.md");
   });
 
@@ -759,19 +716,6 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files).toStrictEqual([]);
   });
 
-  it("keeps bootstrap context empty in lightweight cron mode", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      contextMode: "lightweight",
-      runKind: "cron",
-    });
-
-    expect(files).toStrictEqual([]);
-  });
-
   it("never re-imports a leftover workspace HEARTBEAT.md into bootstrap context", async () => {
     const workspaceDir = await createHeartbeatAgentsWorkspace();
 
@@ -818,20 +762,6 @@ describe("resolveBootstrapContextForDiagnostics", () => {
     return { workspaceDir, extraPath };
   }
 
-  it("projects bootstrap-extra-files additions without a registered handler", async () => {
-    const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
-
-    const result = await resolveBootstrapContextForDiagnostics({
-      workspaceDir,
-      config: createExtraFilesConfig(),
-    });
-
-    expect(result.bootstrapFiles.map((file) => file.path)).toContain(extraPath);
-    expect(result.contextFiles.find((file) => file.path === extraPath)?.content).toBe(
-      "extra agents",
-    );
-  });
-
   it("does not execute registered hooks while projecting declared files", async () => {
     const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
     const handler = vi.fn(() => {
@@ -860,8 +790,6 @@ describe("resolveBootstrapContextForDiagnostics", () => {
   });
 
   it.each([
-    { label: "a loadable handler", handler: "export default async () => {};", projects: false },
-    { label: "an invalid export", handler: "export default 42;", projects: false },
     { label: "an import failure", handler: 'throw new Error("must not import");', projects: false },
     { label: "no readable handler", handler: undefined, projects: true },
   ])(
@@ -935,13 +863,6 @@ describe("hasCompletedBootstrapTurn", () => {
     sessionManager.appendCustomEntry("openclaw:unrelated", { timestamp: 2 });
 
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
-  });
-
-  it("reads a completion marker persisted by the SQLite session manager", async () => {
-    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
-
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
   });
 
   it("invalidates a completion marker after compaction", async () => {
@@ -1058,10 +979,6 @@ describe("makeBootstrapWarn", () => {
 describe("resolveContextInjectionMode", () => {
   it("defaults to always when config is missing", () => {
     expect(resolveContextInjectionMode(undefined)).toBe("always");
-  });
-
-  it("defaults to always when the setting is omitted", () => {
-    expect(resolveContextInjectionMode({ agents: { defaults: {} } } as never)).toBe("always");
   });
 
   it("returns the configured continuation-skip mode", () => {

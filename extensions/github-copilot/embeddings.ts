@@ -1,4 +1,3 @@
-// Github Copilot plugin module implements embeddings behavior.
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
@@ -13,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
 import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
@@ -22,9 +22,6 @@ import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
 
-/**
- * Preferred embedding models in order. The first available model wins.
- */
 const PREFERRED_MODELS = [
   "text-embedding-3-small",
   "text-embedding-3-large",
@@ -33,18 +30,6 @@ const PREFERRED_MODELS = [
 
 const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
-
-function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
 
 type CopilotModelEntry = {
   id?: unknown;
@@ -171,21 +156,18 @@ function pickBestModel(available: string[], userModel?: string): string {
 }
 
 function parseGitHubCopilotEmbeddingPayload(payload: unknown, expectedCount: number): number[][] {
-  if (!payload || typeof payload !== "object") {
-    throw new Error("GitHub Copilot embeddings response missing data[]");
-  }
-  const data = (payload as { data?: unknown }).data;
+  const data = asOptionalObjectRecord(payload)?.data;
   if (!Array.isArray(data)) {
     throw new Error("GitHub Copilot embeddings response missing data[]");
   }
 
   const vectors = Array.from<number[] | undefined>({ length: expectedCount });
   for (const entry of data) {
-    if (!entry || typeof entry !== "object") {
+    const record = asOptionalObjectRecord(entry);
+    if (!record) {
       throw new Error("GitHub Copilot embeddings response contains an invalid entry");
     }
-    const indexValue = (entry as { index?: unknown }).index;
-    const embedding = (entry as { embedding?: unknown }).embedding;
+    const { index: indexValue, embedding } = record;
     const index = typeof indexValue === "number" ? indexValue : Number.NaN;
     if (!Number.isInteger(index)) {
       throw new Error("GitHub Copilot embeddings response contains an invalid index");
@@ -274,7 +256,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   normalizeModel: ({ model }) => normalizeCopilotEmbeddingModel(model),
   autoSelectPriority: 15,
   allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: (err: unknown) => isCopilotSetupError(err),
+  shouldContinueAutoSelection: isCopilotSetupError,
   create: async (options) => {
     const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,
@@ -318,7 +300,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
         githubDomain,
       }));
     const baseUrl = runtimeAuth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
-    const ssrfPolicy = buildSsrfPolicy(baseUrl);
+    const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
     const headers = buildCopilotRuntimeHeaders({
       config: options.config,
       headers: { "Content-Type": "application/json", ...options.remote?.headers },

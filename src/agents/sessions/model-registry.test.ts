@@ -21,6 +21,21 @@ const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 const { writeModelsJson, writeModelsJsonWithPluginCatalog, writeModelsJsonWithPluginCatalogs } =
   installModelRegistryTestFixtures();
 
+function writeGeneratedPluginCatalog(
+  providerId: string,
+  provider: Record<string, unknown>,
+  root: unknown = { providers: {} },
+): string {
+  return writeModelsJsonWithPluginCatalog({
+    root,
+    pluginRelativePath: join("plugins", providerId, PLUGIN_MODEL_CATALOG_FILE),
+    pluginCatalog: {
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: { [providerId]: provider },
+    },
+  });
+}
+
 function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfigInput {
   return {
     oauth: {
@@ -289,36 +304,15 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("custom", "example-model")?.contextTokens).toBeUndefined();
   });
 
-  it("loads provider models from the SQLite-backed generated plugin catalog", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalog({
-      root: { providers: {} },
-      pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          zai: {
-            baseUrl: "https://api.z.ai/api/paas/v4",
-            api: "openai-completions",
-            apiKey: "ZAI_API_KEY",
-            models: [{ id: "glm-5.1", name: "GLM 5.1" }],
-          },
-        },
-      },
-    });
-
-    const registry = ModelRegistry.create(
-      AuthStorage.inMemory({ zai: { type: "api_key", key: "sk-test" } }),
-      modelsPath,
-      { pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai") },
-    );
-
-    expect(registry.getError()).toBeUndefined();
-    expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
-  });
-
   it("can parse authored models without opening generated plugin catalogs", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalog({
-      root: {
+    const modelsPath = writeGeneratedPluginCatalog(
+      "zai",
+      {
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        api: "openai-completions",
+        models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+      },
+      {
         providers: {
           custom: {
             baseUrl: "https://models.example/v1",
@@ -327,18 +321,7 @@ describe("ModelRegistry models.json auth", () => {
           },
         },
       },
-      pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          zai: {
-            baseUrl: "https://api.z.ai/api/paas/v4",
-            api: "openai-completions",
-            models: [{ id: "glm-5.1", name: "GLM 5.1" }],
-          },
-        },
-      },
-    });
+    );
 
     const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
       includePluginCatalogs: false,
@@ -427,8 +410,14 @@ describe("ModelRegistry models.json auth", () => {
   });
 
   it("tracks explicit max-token provenance across authored and generated catalogs", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalog({
-      root: {
+    const modelsPath = writeGeneratedPluginCatalog(
+      "zai",
+      {
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        api: "openai-completions",
+        models: [{ id: "catalog-model", maxTokens: 32_768 }],
+      },
+      {
         providers: {
           custom: {
             baseUrl: "https://models.example/v1",
@@ -437,18 +426,7 @@ describe("ModelRegistry models.json auth", () => {
           },
         },
       },
-      pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          zai: {
-            baseUrl: "https://api.z.ai/api/paas/v4",
-            api: "openai-completions",
-            models: [{ id: "catalog-model", maxTokens: 32_768 }],
-          },
-        },
-      },
-    });
+    );
 
     const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
       pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai"),
@@ -464,27 +442,18 @@ describe("ModelRegistry models.json auth", () => {
     });
   });
 
-  it("preserves response-model temperature compatibility from generated catalogs", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalog({
-      root: { providers: {} },
-      pluginRelativePath: join("plugins", "openai", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-responses",
-            apiKey: "test-token-placeholder",
-            models: [
-              {
-                id: "gpt-5.6-luna",
-                name: "GPT-5.6 Luna",
-                compat: { supportsTemperature: false },
-              },
-            ],
-          },
+  it("preserves response-model compatibility from generated catalogs", () => {
+    const modelsPath = writeGeneratedPluginCatalog("openai", {
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-responses",
+      apiKey: "test-token-placeholder",
+      models: [
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          compat: { supportsTemperature: false, supportsInstructions: false },
         },
-      },
+      ],
     });
 
     const registry = ModelRegistry.create(
@@ -496,40 +465,6 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("openai", "gpt-5.6-luna")?.compat).toMatchObject({
       supportsTemperature: false,
-    });
-  });
-
-  it("preserves response-model instructions compatibility from generated catalogs", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalog({
-      root: { providers: {} },
-      pluginRelativePath: join("plugins", "openai", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          openai: {
-            baseUrl: "https://proxy.example.com/v1",
-            api: "openai-responses",
-            apiKey: "test-token-placeholder",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom Model",
-                compat: { supportsInstructions: false },
-              },
-            ],
-          },
-        },
-      },
-    });
-
-    const registry = ModelRegistry.create(
-      AuthStorage.inMemory({ openai: { type: "api_key", key: "test-token-placeholder" } }),
-      modelsPath,
-      { pluginMetadataSnapshot: pluginOwnerSnapshot("openai", "openai") },
-    );
-
-    expect(registry.getError()).toBeUndefined();
-    expect(registry.find("openai", "custom-model")?.compat).toMatchObject({
       supportsInstructions: false,
     });
   });
@@ -677,26 +612,17 @@ describe("ModelRegistry models.json auth", () => {
   );
 
   it("preserves model params from SQLite-cached plugin catalogs", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalog({
-      root: { providers: {} },
-      pluginRelativePath: join("plugins", "amazon-bedrock", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          "amazon-bedrock": {
-            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            api: "bedrock-converse-stream",
-            auth: "aws-sdk",
-            models: [
-              {
-                id: "company-fable",
-                name: "Company Fable",
-                params: { canonicalModelId: "claude-fable-5" },
-              },
-            ],
-          },
+    const modelsPath = writeGeneratedPluginCatalog("amazon-bedrock", {
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      api: "bedrock-converse-stream",
+      auth: "aws-sdk",
+      models: [
+        {
+          id: "company-fable",
+          name: "Company Fable",
+          params: { canonicalModelId: "claude-fable-5" },
         },
-      },
+      ],
     });
 
     const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
@@ -737,20 +663,11 @@ describe("ModelRegistry models.json auth", () => {
   });
 
   it("ignores generated plugin catalog providers without current ownership", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalog({
-      root: { providers: {} },
-      pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          zai: {
-            baseUrl: "https://api.z.ai/api/paas/v4",
-            api: "openai-completions",
-            apiKey: "ZAI_API_KEY",
-            models: [{ id: "glm-5.1", name: "GLM 5.1" }],
-          },
-        },
-      },
+    const modelsPath = writeGeneratedPluginCatalog("zai", {
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      api: "openai-completions",
+      apiKey: "ZAI_API_KEY",
+      models: [{ id: "glm-5.1", name: "GLM 5.1" }],
     });
 
     const registry = ModelRegistry.create(
@@ -764,20 +681,11 @@ describe("ModelRegistry models.json auth", () => {
   });
 
   it("ignores generated plugin catalog providers owned by disabled plugins", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalog({
-      root: { providers: {} },
-      pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          zai: {
-            baseUrl: "https://api.z.ai/api/paas/v4",
-            api: "openai-completions",
-            apiKey: "ZAI_API_KEY",
-            models: [{ id: "glm-5.1", name: "GLM 5.1" }],
-          },
-        },
-      },
+    const modelsPath = writeGeneratedPluginCatalog("zai", {
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      api: "openai-completions",
+      apiKey: "ZAI_API_KEY",
+      models: [{ id: "glm-5.1", name: "GLM 5.1" }],
     });
 
     const registry = ModelRegistry.create(

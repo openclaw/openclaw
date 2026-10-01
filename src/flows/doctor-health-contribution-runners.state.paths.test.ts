@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -13,6 +14,12 @@ import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-st
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { runStateIntegrityHealth } from "./doctor-health-contribution-runners.state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+
+vi.hoisted(() => {
+  // Shared-worker setup can import path helpers before this Windows simulation.
+  // Re-evaluate that graph so it consumes this file’s node:path mock.
+  vi.resetModules();
+});
 
 const fixture = vi.hoisted(() => ({
   database: undefined as OpenClawStateDatabase | undefined,
@@ -50,7 +57,11 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
   const database = {
     db,
     path: path.join(stateDir, "state", "openclaw.sqlite"),
-    walMaintenance: { checkpoint: () => true, close: () => true },
+    walMaintenance: {
+      checkpoint: () => true,
+      close: () => true,
+      reclaimFreePages: createSqliteWalReclamationResult,
+    },
   };
   fixture.database = database;
   const queries = getNodeSqliteKysely<Pick<DB, "agent_databases" | "update_runs">>(db);

@@ -1,0 +1,137 @@
+import type { PluginRuntime } from "../api.js";
+import { VisitorAccessError } from "./errors.js";
+import {
+  isRestrictedVisitorRole,
+  profileUsesVisitorRole,
+  resolveVisitorRole,
+  type GatewayRoles,
+} from "./roles.js";
+
+type VisitorProfile = {
+  id: string;
+  emails: string[];
+  mergedInto?: string | null;
+  role?: string;
+  githubIdentity?: { login: string } | null;
+};
+
+type VisitorGatewayAccess = {
+  describe: (email: string) => string;
+  githubLogin: (email: string) => string | undefined;
+  resolveGithubProfile: (login: string) => VisitorProfile | undefined;
+  assertInvitable: (email: string) => void;
+  profileId: (email: string) => string | undefined;
+  resolveProfile: (profileId: string) => VisitorProfile | undefined;
+  withProfile: <T>(
+    profileId: string,
+    emails: readonly string[],
+    run: (assertCurrent: () => void) => Promise<T>,
+  ) => Promise<T>;
+};
+
+export type ReadVisitorGatewayAccess = () => Promise<VisitorGatewayAccess>;
+
+export function createVisitorAccessReader(
+  runtime: Pick<PluginRuntime, "gateway" | "config">,
+): ReadVisitorGatewayAccess {
+  return async () => {
+    const { profiles } = await runtime.gateway.request<{ profiles: VisitorProfile[] }>(
+      "users.list",
+      {},
+      { scopes: ["operator.read"] },
+    );
+    // The profile directory owns verified aliases, including linked identities.
+    // A supplied GitHub login is invitation metadata, never an identity binding.
+    const canonical = profiles.filter((profile) => !profile.mergedInto);
+    const byEmail = new Map(
+      canonical.flatMap((profile) => profile.emails.map((email) => [email, profile] as const)),
+    );
+    const byId = new Map(canonical.map((profile) => [profile.id, profile]));
+    const config = runtime.config.current();
+    const roles = config.gateway?.roles;
+    const access = (email: string) => describeAccess(byEmail.get(email), roles);
+    return {
+      describe: (email) => access(email).description,
+      githubLogin: (email) => byEmail.get(email)?.githubIdentity?.login,
+      resolveGithubProfile(login) {
+        const normalized = login.toLowerCase();
+        const matches = canonical.filter(
+          (profile) => profile.githubIdentity?.login.toLowerCase() === normalized,
+        );
+        if (matches.length > 1) {
+          throw new VisitorAccessError(
+            "This GitHub login matches more than one Gateway profile. Use the exact invitation email.",
+          );
+        }
+        return matches[0];
+      },
+      profileId: (email) => byEmail.get(email)?.id,
+      resolveProfile: (profileId) => byId.get(profileId),
+      withProfile(profileId, emails, run) {
+        const withIdentity = runtime.gateway.withUserProfileIdentity;
+        if (!withIdentity) {
+          throw new VisitorAccessError(
+            "This Gateway cannot keep profile bindings current. Update OpenClaw before person-wide revocation.",
+          );
+        }
+        return withIdentity({ profileId, emails }, run);
+      },
+      assertInvitable(email) {
+        resolveVisitorRole(config);
+        const result = access(email);
+        if (!result.invitable) {
+          throw new VisitorAccessError(
+            `${result.description}. Configure a default role with isolated own-session work and shared-session viewing before inviting this person.`,
+          );
+        }
+      },
+    };
+  };
+}
+
+function describeAccess(
+  profile: VisitorProfile | undefined,
+  roles: GatewayRoles,
+): { invitable: boolean; description: string } {
+  if (profile && !profileUsesVisitorRole(roles, profile)) {
+    return {
+      invitable: true,
+      description:
+        profile.id === "gateway-owner"
+          ? "Gateway access: shared owner authority retained; this invitation does not restrict it"
+          : `Gateway access: existing role ${JSON.stringify(profile.role)} retained; this invitation does not restrict it`,
+    };
+  }
+  if (!roles) {
+    return { invitable: false, description: "Gateway access is unrestricted: roles are disabled" };
+  }
+  const assignedRole =
+    profile?.role && Object.hasOwn(roles.definitions, profile.role) ? profile.role : undefined;
+  const roleName = assignedRole ?? roles.default;
+  const role =
+    roleName && Object.hasOwn(roles.definitions, roleName)
+      ? roles.definitions[roleName]
+      : undefined;
+  if (!role) {
+    return {
+      invitable: false,
+      description: `Gateway access could not be verified: default role ${JSON.stringify(roleName ?? "")} is unavailable`,
+    };
+  }
+  const source = assignedRole ? "assigned" : "default";
+  const identity = !profile
+    ? "; first sign-in pending"
+    : profile.role && !assignedRole
+      ? `; unavailable assignment ${JSON.stringify(profile.role)}`
+      : "";
+  if (isRestrictedVisitorRole(role)) {
+    return {
+      invitable: true,
+      description: `Gateway access: restricted guest (${source} role ${JSON.stringify(roleName)}${identity})`,
+    };
+  }
+  return {
+    invitable: false,
+    description: `Gateway default role ${JSON.stringify(roleName)} does not provide restricted guest access`,
+  };
+}

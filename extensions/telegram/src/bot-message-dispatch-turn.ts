@@ -1,7 +1,6 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   readAgentRunTerminalOutcome,
-  hasFinalInboundReplyDispatch,
   runChannelInboundEvent,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -17,12 +16,14 @@ import {
   beginDraftQueuedFollowup,
   cleanupDrafts,
   enqueueDraftEvent,
+  handleBeforeDeliverCancelled,
   ingestDraftLaneSegments,
   prepareQueuedAnswerBlock,
   repositionLaneForNewMessage,
+  resetLaneState,
   rotateLaneForNewMessage,
-  waitForDraftEvents,
 } from "./bot-message-dispatch-draft.js";
+import { formatTelegramGroupThreadReply } from "./bot-message-dispatch-payload.js";
 import {
   canPushToolProgress,
   handleApprovalEvent,
@@ -37,8 +38,7 @@ import {
 } from "./bot-message-dispatch-progress.js";
 import {
   deliverReply,
-  formatTelegramGroupThreadReply,
-  handleBeforeDeliverCancelled,
+  deliverPreparedReply,
   handleReplyError,
   handleReplySkip,
   resetReasoningStepState,
@@ -143,6 +143,8 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           delivery: {
             deliverWithProviderMessageSending: async (payload, info) =>
               await deliverReply(turn, payload, info),
+            deliverPreparedWithProviderMessageSending: async (plan, info) =>
+              await deliverPreparedReply(turn, plan, info),
             // The shipped SDK declaration stays void; core still awaits the runtime promise.
             onError: handleDeliveryError as NonNullable<
               ChannelInboundTurnPlan["delivery"]["onError"]
@@ -151,11 +153,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               const reason = result?.suppression?.reason;
               if (
                 info.kind === "final" &&
-                turn.finalReplyOutcome !== "failed" &&
+                !turn.previewLifecycle.finalFailed &&
                 (reason === "cancelled_by_reply_payload_sending_hook" ||
                   reason === "empty_after_reply_payload_sending_hook")
               ) {
-                turn.finalReplyOutcome = "suppressed";
+                turn.previewLifecycle.observeSuppression();
               }
             },
           },
@@ -187,6 +189,12 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               ? [{ begin: beginDeliveryCorrelation }]
               : undefined,
             suppressTyping: isRoomEvent,
+            onObservedReplyDelivery: async () => {
+              turn.previewLifecycle.beginFinalDelivery();
+              await turn.draftEventQueue;
+              turn.deliveryState.markDelivered();
+              await turn.previewLifecycle.observeDelivery({ visibleReplySent: true });
+            },
             onPartialReply:
               turn.answerLane.stream || turn.reasoningLane.stream
                 ? (payload) => {
@@ -242,10 +250,17 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               ? () => {
                   const queued = enqueueDraftEvent(turn, async () => {
                     resetReasoningStepState(turn);
-                    turn.finalAnswerDelivered = false;
+                    const previousAnswerDelivered = turn.previewLifecycle.finalDelivered;
+                    turn.previewLifecycle.reset();
+                    turn.finalDispatchClaimed = false;
                     turn.progressCompositor.beginAssistantMessage();
                     if (turn.answerLane.finalized) {
                       await rotateLaneForNewMessage(turn, turn.answerLane);
+                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
+                    } else if (previousAnswerDelivered) {
+                      // A fresh final may have used the durable sender without leaving a draft ID.
+                      turn.answerLane.stream?.forceNewMessage();
+                      resetLaneState(turn, turn.answerLane);
                       turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
                     } else if (
                       turn.answerLane.hasStreamedMessage &&
@@ -271,13 +286,13 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               : () => false,
             onQueuedFollowupAdmitted: () => {
               beginDraftQueuedFollowup(turn);
-              turn.finalAnswerDeliveryStarted = false;
-              turn.finalAnswerDelivered = false;
+              turn.previewLifecycle.reset();
+              turn.finalDispatchClaimed = false;
               turn.progressCompositor.beginNewTurn({ force: true });
             },
             onQueuedFollowupSettled: async () => {
               turn.progressCompositor.cancel();
-              await waitForDraftEvents(turn);
+              await turn.draftEventQueue;
               await cleanupDrafts(turn, turn.isSuperseded());
             },
             suppressDefaultToolProgressMessages:
@@ -316,8 +331,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                 return true;
               }
               if (isFastModeAutoProgressPayload(payload) && !canPushToolProgress(turn)) {
-                await sendPayload(turn, payload);
-                return true;
+                return (await sendPayload(turn, payload)).visibleReplySent;
               }
               return false;
             },
@@ -337,13 +351,19 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     if (!turnResult.dispatched) {
       return false;
     }
-    turn.queuedFinal ||= hasFinalInboundReplyDispatch(turnResult.dispatchResult);
+    // Dispatch custody prevents replay, but only provider acceptance proves visibility.
+    turn.finalDispatchClaimed ||=
+      turnResult.dispatchResult.queuedFinal ||
+      (turnResult.dispatchResult.settledReceipt?.counts.final.failedAfterSend ?? 0) > 0;
     turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
     turn.sendPolicyDenied = turnResult.dispatchResult.sendPolicyDenied === true;
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
-    turn.suppressSilentReplyFallback =
+    turn.suppressSilentReplyFallback ||=
       turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
+    if (turnResult.dispatchResult.deliberateSilentTerminalReply) {
+      turn.previewLifecycle.observeSuppression();
+    }
     return true;
   } finally {
     endDeliveryCorrelation();

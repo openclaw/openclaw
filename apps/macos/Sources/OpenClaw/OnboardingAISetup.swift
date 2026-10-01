@@ -26,7 +26,6 @@ final class OnboardingAISetupModel {
     private(set) var nativeSessionCatalogPreferenceRequired = false
     private(set) var detectedPrepareOptions: [PrepareOption]?
     private(set) var prepareAvailable = false
-    private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
     private(set) var providerWizardKind: ProviderWizardKind?
     private(set) var authStep: WizardStep?
@@ -539,7 +538,6 @@ final class OnboardingAISetupModel {
         self.nativeSessionCatalogPreferenceRequired = false
         self.detectedPrepareOptions = nil
         self.prepareAvailable = false
-        self.candidatePresentation = [:]
         self.clearProviderAuth()
         self.providerAuthReconciliationPending = nil
         self.providerCatalogLoaded = false
@@ -638,16 +636,6 @@ extension OnboardingAISetupModel {
             self.nativeSessionCatalogPreferenceRequired =
                 result.nativeSessionCatalogPreferenceRequired == true
             self.detectedPrepareOptions = result.prepareOptions
-            self.candidatePresentation = Dictionary(
-                result.candidates.map { candidate in
-                    (
-                        candidate.kind,
-                        CandidatePresentation(
-                            brandId: candidate.brandId,
-                            icon: candidate.icon,
-                            website: candidate.website))
-                },
-                uniquingKeysWith: { current, _ in current })
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
             self.providerAuthReconciliationPending = nil
             if Self.canAcceptProviderAuthReconciliation(
@@ -657,15 +645,7 @@ extension OnboardingAISetupModel {
                 finishConnected(kind: "provider-auth")
                 return
             }
-            self.candidates = result.candidates.map { detected in
-                Candidate(
-                    kind: detected.kind,
-                    label: detected.label,
-                    detail: detected.detail,
-                    modelRef: detected.modelRef,
-                    credentials: detected.credentials,
-                    modelTarget: detected.modelTarget)
-            }
+            self.candidates = result.candidates
             self.manualProviders = manualProviders
             self.providerCatalogLoaded = result.manualProviders != nil
             if result.manualProviders == nil {
@@ -703,7 +683,7 @@ extension OnboardingAISetupModel {
         } catch {
             guard self.isCurrentAttempt(context) else { return }
             if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
-                self.enterGatewayAuthBlocker(authIssue)
+                self.enterConfiguredGatewayBlocker(.authentication(authIssue))
                 return
             }
             self.phase = .ready
@@ -1152,8 +1132,10 @@ extension OnboardingAISetupModel {
 }
 
 extension OnboardingAISetupModel {
-    func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) {
-        guard !isBusy, self.activeAuthOption == nil else { return }
+    /// Provider wizard actions return the task that settles their reply, including stale-reply handling.
+    @discardableResult
+    func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) -> Task<Void, Never>? {
+        guard !isBusy, self.activeAuthOption == nil else { return nil }
         if kind == .auth, option.kind == "custom", self.connectionModeProvider() == .remote {
             self.clearProviderAuth()
             self.activeAuthOption = option
@@ -1165,25 +1147,26 @@ extension OnboardingAISetupModel {
                 On the Gateway host, run `openclaw onboard --auth-choice custom-api-key`, \
                 finish the endpoint wizard there, then return here and choose Try again.
                 """)
-            return
+            return nil
         }
-        guard let serverLease else { return }
+        guard let serverLease else { return nil }
         var params = ["authChoice": AnyCodable(option.id)]
         if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
             params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
         }
-        self.startSetupWizard(
+        return self.startSetupWizard(
             option,
             kind: kind,
             params: params,
             serverLease: serverLease)
     }
 
+    @discardableResult
     private func startSetupWizard(
         _ option: AuthOption,
         kind: ProviderWizardKind,
         params: [String: AnyCodable],
-        serverLease: GatewayConnection.ServerLease)
+        serverLease: GatewayConnection.ServerLease) -> Task<Void, Never>
     {
         self.clearProviderAuth()
         self.activeAuthOption = option
@@ -1201,7 +1184,7 @@ extension OnboardingAISetupModel {
         requestParams["sessionId"] = AnyCodable(authSessionID)
         let requestID = UUID()
         self.authRequestID = requestID
-        Task {
+        return Task {
             defer {
                 if self.authRequestID == requestID { self.authRequestID = nil }
             }
@@ -1276,19 +1259,18 @@ extension OnboardingAISetupModel {
         }
     }
 
-    func cancelProviderAuth() {
-        let sessionID = self.authSessionID
-        let authServerLease = self.serverLease
-        guard let sessionID, let authServerLease else {
+    @discardableResult
+    func cancelProviderAuth() -> Task<Void, Never>? {
+        guard let sessionID = self.authSessionID, let authServerLease = self.serverLease else {
             self.providerAuthReconciliationPending = nil
             self.clearProviderAuth()
-            return
+            return nil
         }
         let context = (token: self.attemptToken, state: self.lastDetectedActivationState, authID: self.authAttemptID)
         self.providerAuthCancellation = .requesting
         self.authError = nil
         self.authBusy = true
-        Task {
+        return Task {
             let cancellation = await self.gateway.cancelWizardSession(
                 sessionID,
                 on: authServerLease)
@@ -1326,8 +1308,9 @@ extension OnboardingAISetupModel {
         }
     }
 
-    func advanceProviderAuth(stepID: String?, value: AnyCodable?) {
-        guard let sessionID = authSessionID, let serverLease else { return }
+    @discardableResult
+    func advanceProviderAuth(stepID: String?, value: AnyCodable?) -> Task<Void, Never>? {
+        guard let sessionID = authSessionID, let serverLease else { return nil }
         self.authBusy = true
         self.authError = nil
         var params: [String: AnyCodable] = ["sessionId": AnyCodable(sessionID)]
@@ -1342,7 +1325,7 @@ extension OnboardingAISetupModel {
         let authAttemptID = self.authAttemptID
         let requestID = UUID()
         self.authRequestID = requestID
-        Task {
+        return Task {
             var requestLease = serverLease
             defer {
                 if self.authRequestID == requestID { self.authRequestID = nil }
@@ -1475,15 +1458,11 @@ extension OnboardingAISetupModel {
             let preparedProvider = kind == .prepare
                 ? (id: option.id, label: option.label, modelTarget: option.modelTarget)
                 : nil
-            let preparedModel = preparedModelRef?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let preparedModel = preparedModelRef?.trimmingCharacters(in: .whitespacesAndNewlines)
             self.providerAuthReconciliationPending = kind == .auth
                 ? ProviderAuthReconciliation(modelTarget: option.modelTarget) : nil
             self.clearProviderAuth()
-            if let preparedProvider,
-               let preparedModel,
-               !preparedModel.isEmpty
-            {
+            if let preparedProvider, let preparedModel, !preparedModel.isEmpty {
                 guard let context = self.captureAttemptContext() else {
                     self.failDetectionForMissingRoute()
                     return

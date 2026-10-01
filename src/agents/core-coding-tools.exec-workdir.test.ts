@@ -6,6 +6,9 @@ import { saveExecApprovals } from "../infra/exec-approvals.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
+import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
+import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -37,16 +40,7 @@ describe("coding-tool exec working directory", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    { workdir: undefined, directory: "workspace", pty: false },
-    { workdir: ".", directory: "workspace", pty: false },
-    { workdir: ".", directory: "workspace", pty: true },
-    { workdir: "nested", directory: "workspace/nested", pty: false },
-    { workdir: "~", directory: "workspace/~", pty: false },
-    { workdir: "../sibling", directory: "sibling", pty: false },
-    { workdir: "absolute", directory: "sibling", pty: false },
-  ])("executes in $directory for workdir=$workdir (PTY=$pty)", async (testCase) => {
-    expect(fs.realpathSync(process.cwd())).not.toBe(codingRoot);
+  function createExecTool(sandbox?: Parameters<typeof createCoreCodingTools>[0]["sandbox"]) {
     const tools = createCoreCodingTools({
       codingRoot,
       containmentRoot: codingRoot,
@@ -54,10 +48,11 @@ describe("coding-tool exec working directory", () => {
       shellTools: "full",
       workspaceOnly: false,
       readOnly: false,
+      sandbox,
       applyPatchEnabled: false,
       applyPatchWorkspaceOnly: true,
       execDefaults: {
-        host: "gateway",
+        host: sandbox ? "sandbox" : "gateway",
         mode: "full",
         allowBackground: false,
         notifyOnExit: false,
@@ -69,6 +64,19 @@ describe("coding-tool exec working directory", () => {
     if (!exec) {
       throw new Error("Expected the coding exec tool");
     }
+    return exec;
+  }
+
+  it.each([
+    { workdir: undefined, directory: "workspace", pty: false },
+    { workdir: ".", directory: "workspace", pty: true },
+    { workdir: "nested", directory: "workspace/nested", pty: false },
+    { workdir: "~", directory: "workspace/~", pty: false },
+    { workdir: "../sibling", directory: "sibling", pty: false },
+    { workdir: "absolute", directory: "sibling", pty: false },
+  ])("executes in $directory for workdir=$workdir (PTY=$pty)", async (testCase) => {
+    expect(fs.realpathSync(process.cwd())).not.toBe(codingRoot);
+    const exec = createExecTool();
     const workdir = testCase.workdir === "absolute" ? path.join(root, "sibling") : testCase.workdir;
     const result = await exec.execute("coding-workdir", {
       command: process.platform === "win32" ? "(Get-Location).Path" : "pwd -P",
@@ -79,5 +87,51 @@ describe("coding-tool exec working directory", () => {
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0, cwd: expectedCwd });
     const output = result.content.find((content) => content.type === "text")?.text;
     expect(output?.trim()).toBe(expectedCwd);
+  });
+
+  it("forwards sandbox cleanup custody through the builtin exec tool", async () => {
+    const terminate = vi.fn(async () => {});
+    const finalizeExec = vi.fn(async () => {});
+    const backend: SandboxBackendHandle = {
+      id: "docker",
+      runtimeId: "coding-cleanup",
+      runtimeLabel: "coding-cleanup",
+      workdir: "/workspace",
+      prepareProcessCleanup(env) {
+        return {
+          env: { ...env, CODEX_SANDBOX_EXEC_ID: this.runtimeId },
+          terminate,
+          interrupt: async () => false,
+        };
+      },
+      buildExecSpec: async ({ env }) => ({
+        argv: [
+          process.execPath,
+          "-e",
+          "process.stdout.write(process.env.CODEX_SANDBOX_EXEC_ID ?? 'missing')",
+        ],
+        env,
+        cwd: codingRoot,
+        stdinMode: "pipe-closed",
+      }),
+      finalizeExec,
+      runShellCommand: async () => ({ code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }),
+    };
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        workspaceDir: codingRoot,
+        agentWorkspaceDir: codingRoot,
+        backend,
+        fsBridge: createHostSandboxFsBridge(codingRoot),
+      },
+    });
+    const exec = createExecTool(sandbox);
+    const result = await exec.execute("coding-cleanup", { command: "fixture" });
+    expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+    expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe(
+      "coding-cleanup",
+    );
+    expect(finalizeExec).toHaveBeenCalledOnce();
+    expect(terminate).not.toHaveBeenCalled();
   });
 });

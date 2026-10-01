@@ -104,7 +104,7 @@ await fs.writeFile(
 `;
 }
 
-export function buildSwiftProtocolCompatibilityHarness() {
+function buildSwiftProtocolCompatibilityHarness() {
   return `import Foundation
 
 enum GatewayProtocolArtifactError: Error {

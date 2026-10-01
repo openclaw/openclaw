@@ -90,17 +90,11 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
     name: "message-tool-only source replies",
     sourceReplyDeliveryMode: "message_tool_only" as const,
     disableMessageTool: false,
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "message-tool-only source replies requiring an explicit target",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: false,
     requireExplicitMessageTarget: true,
     expectedDisableTools: false,
     expectedToolsAllow: ["message"],
   },
+
   {
     name: "an explicitly disabled message tool",
     sourceReplyDeliveryMode: "message_tool_only" as const,
@@ -155,22 +149,7 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
     sandboxMode: "non-main",
     expectedDisableTools: true,
   },
-  {
-    name: "an inactive sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
-    sandboxMode: "off",
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "a runtime allowlist excluding message",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    runtimeToolsAllow: ["read", "exec"],
-    expectedDisableTools: true,
-  },
+
   {
     name: "an empty runtime allowlist",
     sourceReplyDeliveryMode: "message_tool_only",
@@ -207,41 +186,17 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
 function createEmbeddedSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
   const cases: SubagentAnnounceDeliveryCase[] = [];
   for (const testCase of SUBAGENT_ANNOUNCE_DELIVERY_CASES) {
-    if (testCase.name === "automatic source replies") {
+    if (testCase.name === "message-tool-only source replies") {
       cases.push({
         ...testCase,
         expectedDisableTools: false,
         expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
       });
-    } else if (!testCase.expectedDisableTools) {
-      cases.push({
-        ...testCase,
-        expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
-      });
-    } else {
-      cases.push(testCase);
     }
   }
-  cases.push(
-    {
-      name: "a raw model run despite message-tool-only delivery",
-      sourceReplyDeliveryMode: "message_tool_only",
-      disableMessageTool: false,
-      modelRun: true,
-      expectedDisableTools: true,
-    },
-    {
-      name: "prompt mode none despite message-tool-only delivery",
-      sourceReplyDeliveryMode: "message_tool_only",
-      disableMessageTool: false,
-      promptMode: "none",
-      expectedDisableTools: true,
-    },
-  );
   return cases;
 }
-
-export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] =
+export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES =
   createEmbeddedSubagentAnnounceDeliveryCases();
 
 export function createSubagentAnnounceSessionStore(

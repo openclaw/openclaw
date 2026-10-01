@@ -3,15 +3,14 @@
  */
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { waitForAnnounceRetryDelay } from "./subagent-announce-delivery-retry.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   getSubagentAnnounceRuntimeConfig,
-  getSubagentRequesterSessionActivity,
-  isEmbeddedAgentRunActive,
+  getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   resolveSubagentRequesterSessionAbandonment,
   loadRequesterSessionEntry,
   queueSubagentAnnounceMessage,
@@ -22,30 +21,7 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
 
-export function resolveRequesterSessionActivity(
-  requesterSessionKey: string,
-  requesterAgentId?: string,
-) {
-  const cfg = getSubagentAnnounceRuntimeConfig();
-  const resolvedAgentId = tryResolveSubagentRequesterAgentId(
-    cfg,
-    requesterSessionKey,
-    requesterAgentId,
-  );
-  if (!resolvedAgentId) {
-    return { isActive: false };
-  }
-  const activity = getSubagentRequesterSessionActivity(requesterSessionKey, resolvedAgentId);
-  if (activity.sessionId || activity.isActive) {
-    return activity;
-  }
-  const { entry } = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId);
-  const sessionId = entry?.sessionId;
-  return {
-    sessionId,
-    isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
-  };
-}
+export { resolveRequesterSessionActivity };
 
 // Backoff schedule for re-attempting an active-requester steer while the run is
 // compacting. Compaction is transient and usually finishes quickly, so a denser

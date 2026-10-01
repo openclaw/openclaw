@@ -1,6 +1,5 @@
 // Gateway client bootstrap resolver.
 // Collects URL, auth, and handshake settings before constructing a GatewayClient.
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -9,7 +8,9 @@ import {
 } from "./auth-surface-resolution.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
+  resolveGatewayDeviceAuthRoute,
   type GatewayConnectionDetails,
+  type GatewaySshRoute,
 } from "./connection-details.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
@@ -206,6 +207,7 @@ export async function resolveGatewayClientBootstrap(params: {
   connectionDetails: GatewayConnectionDetails;
   urlOverrideSource?: "cli" | "env";
   deviceAuthScope?: string;
+  sshTunnel?: GatewaySshRoute;
   authFailureReason?: string;
   preauthHandshakeTimeoutMs?: number;
   tlsFingerprint?: string;
@@ -299,10 +301,15 @@ export async function resolveGatewayClientBootstrap(params: {
       modeOverride: surface,
     });
   }
-  const deviceAuthScope =
-    urlOverrideSource || params.config.gateway?.mode === "remote"
-      ? gatewayOriginScope(connection.url)
-      : undefined;
+  const { deviceAuthScope, sshTunnel } = resolveGatewayDeviceAuthRoute({
+    config: params.config,
+    url: connection.url,
+    remote: Boolean(urlOverrideSource || connection.urlSource === "config gateway.remote.url"),
+    configuredRemote:
+      (!urlOverrideSource && connection.urlSource === "config gateway.remote.url") ||
+      configuredTarget?.authSurface === "remote",
+    tlsFingerprint,
+  });
   if (params.overrideAuthErrorHint && !configuredTarget) {
     await ensureExplicitGatewayAuth({
       urlOverride: urlOverrideSource ? connection.url : undefined,
@@ -321,6 +328,7 @@ export async function resolveGatewayClientBootstrap(params: {
     connectionDetails: connection,
     ...(urlOverrideSource ? { urlOverrideSource } : {}),
     ...(deviceAuthScope ? { deviceAuthScope } : {}),
+    ...(sshTunnel ? { sshTunnel } : {}),
     ...(auth.failureReason ? { authFailureReason: auth.failureReason } : {}),
     ...(tlsFingerprint ? { tlsFingerprint } : {}),
     auth: {

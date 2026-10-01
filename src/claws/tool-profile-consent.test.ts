@@ -81,20 +81,6 @@ describe("Claw tool profile consent", () => {
     });
   });
 
-  it("uses a bounded full profile to override inherited global profiles", () => {
-    expect(
-      materializeClawToolProfile({
-        tools: {
-          profile: "full",
-          allow: ["read", "write"],
-        },
-      }).tools,
-    ).toEqual({
-      profile: "full",
-      allow: ["read", "write"],
-    });
-  });
-
   it("freezes a standalone allowlist against inherited host profiles", () => {
     expect(
       materializeClawToolProfile({

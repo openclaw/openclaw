@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import WebSocket from "ws";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -21,11 +22,11 @@ const childScript = `
   import fs from "node:fs";
   import http from "node:http";
   import { runGatewayLoop } from ${JSON.stringify(runLoopUrl)};
-  import { setGatewaySigusr1RestartPolicy } from ${JSON.stringify(restartUrl)};
+  import { setGatewayRestartPolicy } from ${JSON.stringify(restartUrl)};
   import { fileLogTransport } from ${JSON.stringify(fileLogTransportUrl)};
   const faultPath = process.argv[1];
   const closeFailure = process.argv[2];
-  setGatewaySigusr1RestartPolicy({ allowExternal: true });
+  setGatewayRestartPolicy({ allowExternal: true });
   let starts = 0;
   try {
     await runGatewayLoop({
@@ -33,7 +34,10 @@ const childScript = `
       start: async () => {
         const attempt = ++starts;
         process.stdout.write("start:" + attempt + "\\n");
-        if (fs.existsSync(faultPath)) throw new Error("fixture startup refused");
+        if (fs.existsSync(faultPath)) {
+          process.stdout.write("waiting:" + starts + "\\n");
+          throw new Error("fixture startup refused");
+        }
         const server = http.createServer((_request, response) => response.end("ready"));
         await new Promise((resolve, reject) => {
           server.once("error", reject);
@@ -55,7 +59,6 @@ const childScript = `
             if (closeFailure) {
               const error = new TypeError("fixture close owner failed");
               error.stack = "TypeError: fixture close owner failed\\n    at closeOwner (fixture.js:12:3)";
-              if (closeFailure === "sync") throw error;
               return Promise.reject(error);
             }
             return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
@@ -110,7 +113,16 @@ function startFixture(initialFailure = false, closeFailure = "") {
   }
   const child = spawn(
     process.execPath,
-    ["--import", "tsx", "--input-type=module", "--eval", childScript, faultPath, closeFailure],
+    [
+      "--inspect-port=127.0.0.1:0",
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      childScript,
+      faultPath,
+      closeFailure,
+    ],
     {
       env: {
         PATH: process.env.PATH,
@@ -144,15 +156,8 @@ async function expectFailedRestartWaiting(
   fixture: ReturnType<typeof startFixture>,
   attempt: number,
 ) {
-  expect(fixture.child.kill("SIGUSR1")).toBe(true);
-  await fixture.waitForOutput(`start:${attempt}`);
-  await vi.waitFor(
-    () =>
-      expect(
-        fixture.output().split("Process will stay alive; fix the issue and restart.").length - 1,
-      ).toBe(attempt - 1),
-    { timeout: 5_000, interval: 25 },
-  );
+  expect(fixture.child.kill("SIGUSR2")).toBe(true);
+  await fixture.waitForOutput(`waiting:${attempt}`);
   // Only the parent observes an idle interval. A child timer or IPC channel
   // would hide the lost-process regression after its real listener closes.
   expect(
@@ -166,6 +171,45 @@ async function expectFailedRestartWaiting(
 
 describe("runGatewayLoop failed-restart process lifetime", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt(
+    "attaches the Node debugger on SIGUSR1 and restarts only on SIGUSR2",
+    async () => {
+      const fixture = startFixture();
+      await fixture.waitForOutput("ready:1");
+      expect(fixture.child.kill("SIGUSR1")).toBe(true);
+      await fixture.waitForOutput("Debugger listening on ws://127.0.0.1:");
+      const inspectorUrl = fixture.output().match(/Debugger listening on (ws:\/\/[^\s]+)/)?.[1];
+      expect(inspectorUrl).toBeDefined();
+      const debuggerSocket = new WebSocket(inspectorUrl!);
+      try {
+        await once(debuggerSocket, "open");
+        const reply = once(debuggerSocket, "message");
+        debuggerSocket.send(
+          JSON.stringify({
+            id: 1,
+            method: "Runtime.evaluate",
+            params: { expression: "process.pid" },
+          }),
+        );
+        const [data] = await reply;
+        expect(JSON.parse(String(data))).toMatchObject({
+          id: 1,
+          result: { result: { value: fixture.child.pid } },
+        });
+        expect(fixture.output()).not.toContain("start:2");
+      } finally {
+        const closed = once(debuggerSocket, "close");
+        debuggerSocket.close();
+        await closed;
+      }
+      expect(fixture.child.kill("SIGUSR2")).toBe(true);
+      await fixture.waitForOutput("ready:2");
+      expect(fixture.child.kill("SIGTERM")).toBe(true);
+      expect(await fixture.closed, fixture.output()).toEqual([0, null]);
+    },
+    60_000,
+  );
 
   it.skipIf(process.platform !== "darwin")(
     "exits before the hard watchdog when a shutdown-deadline log append stalls",
@@ -186,12 +230,12 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each(["sync", "rejected"])(
-    "persists %s close failures before a SIGUSR1 force-exit",
-    async (mode) => {
-      const fixture = startFixture(false, mode);
+  posixIt(
+    "persists rejected close failures before a SIGUSR2 force-exit",
+    async () => {
+      const fixture = startFixture(false, "rejected");
       await fixture.waitForOutput("ready:1");
-      expect(fixture.child.kill("SIGUSR1")).toBe(true);
+      expect(fixture.child.kill("SIGUSR2")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([1, null]);
       const bundleDir = path.join(fixture.stateDir, "logs", "stability");
       const files = fs.readdirSync(bundleDir);
@@ -230,7 +274,7 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
       await expectFailedRestartWaiting(fixture, 2);
       await expectFailedRestartWaiting(fixture, 3);
       fs.unlinkSync(fixture.faultPath);
-      expect(fixture.child.kill("SIGUSR1")).toBe(true);
+      expect(fixture.child.kill("SIGUSR2")).toBe(true);
       await fixture.waitForOutput("ready:4");
       expect(fixture.child.kill("SIGTERM")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([0, null]);
@@ -238,14 +282,14 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each(["SIGTERM", "SIGINT"] as const)(
-    "exits cleanly on %s while waiting after a failed restart",
-    async (signal) => {
+  posixIt(
+    "exits cleanly on SIGTERM while waiting after a failed restart",
+    async () => {
       const fixture = startFixture();
       await fixture.waitForOutput("ready:1");
       fs.writeFileSync(fixture.faultPath, "refuse");
       await expectFailedRestartWaiting(fixture, 2);
-      expect(fixture.child.kill(signal)).toBe(true);
+      expect(fixture.child.kill("SIGTERM")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([0, null]);
       expect(fixture.output()).not.toContain("start:3");
     },

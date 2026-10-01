@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { listAgentEntries } from "../../agents/agent-scope.js";
+import { listAgentEntries } from "../../agents/agent-roster.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import {
   buildChannelAccountSnapshotFromInspection,
@@ -84,14 +85,11 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const ordered: Array<{ id: string; name?: string }> = [];
 
   for (const entry of entries) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
     if (typeof entry.id !== "string" || !entry.id.trim()) {
       continue;
     }
     const id = normalizeAgentId(entry.id);
-    if (!id || seen.has(id)) {
+    if (seen.has(id)) {
       continue;
     }
     seen.add(id);
@@ -359,22 +357,16 @@ async function buildHealthAccountRecord(params: {
         timeoutMs: resolveHealthProbeTimeoutMs(params.deadlineAtMs),
         cfg: params.cfg,
       });
-      lastProbeAt = Date.now();
     } catch (error) {
       probe = { ok: false, error: formatErrorMessage(error) };
-      lastProbeAt = Date.now();
     }
+    lastProbeAt = Date.now();
   }
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
 
-  const probeRecord =
-    probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
-  const bot =
-    probeRecord && typeof probeRecord.bot === "object"
-      ? (probeRecord.bot as { username?: string | null })
-      : null;
+  const bot = asNullableObjectRecord(asNullableObjectRecord(probe)?.bot);
   if (bot?.username) {
     debugHealth(params.cfg, "probe.bot", {
       channel: params.plugin.id,
@@ -643,7 +635,7 @@ export async function collectGatewayHealthSnapshot(params: {
   }
 
   const pluginHealth = buildPluginHealthSummary(cfg);
-  const contextEngineHealth = buildContextEngineHealthSummary();
+  const contextEngineHealth = await buildContextEngineHealthSummary();
   const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
   return {
     ok: true,

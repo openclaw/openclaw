@@ -1,8 +1,3 @@
-/**
- * Session visibility and access helpers for session tools.
- *
- * Adds OpenClaw session-key alias normalization and sandbox requester scoping over SDK visibility contracts.
- */
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -47,8 +42,7 @@ export {
 } from "../../plugin-sdk/session-visibility.js";
 
 type SessionToolAccessDenied = Extract<SessionVisibilityDecision, { allowed: false }>;
-export type SessionToolAccessResult = SessionVisibilityDecision;
-export type SessionToolActionOperation =
+type SessionToolActionOperation =
   | "archive"
   | "create"
   | "delete"
@@ -57,7 +51,7 @@ export type SessionToolActionOperation =
   | "reset"
   | "restore"
   | "send";
-export type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
+type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
 
 type DescribedSessionVisibilityRow = SessionVisibilityRow & { sessionId?: string };
 
@@ -139,27 +133,6 @@ function recordAdmittedSessionDecision(params: {
   });
 }
 
-function recordAdmittedSessionAccessDenial(params: {
-  action: SessionVisibilityDecisionPresentationAction;
-  targetAgentId: string;
-  targetSessionKey: string;
-  denial: SessionToolAccessDenied;
-}): boolean {
-  return recordAdmittedSessionDecision({
-    action: params.action,
-    targetAgentId: params.targetAgentId,
-    targetSessionKey: params.targetSessionKey,
-    outcome: "denied",
-    reasonCode: params.denial.reasonCode,
-    coverageState: params.denial.missingEvidence.length > 0 ? "unknown" : "enforced",
-    policyRefs: params.denial.policyRefs,
-    contextFieldsUsed: params.denial.contextFieldsUsed,
-    missingEvidence: params.denial.missingEvidence,
-    owner: "session-access",
-    decisionBoundary: "session-tool.access",
-  });
-}
-
 /** Queue an owner-native model-mediated session result after its final await. */
 export function recordSessionToolActionFact(params: {
   operation: SessionToolActionOperation;
@@ -227,15 +200,22 @@ export async function resolveSessionToolAccess(params: {
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionToolAccessResult> {
+}): Promise<SessionVisibilityDecision> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
-    recordAdmittedSessionAccessDenial({
+    recordAdmittedSessionDecision({
       action: params.displayAction ?? params.action,
       targetAgentId: params.targetAgentId,
       targetSessionKey: authorizationTargetSessionKey,
-      denial,
+      outcome: "denied",
+      reasonCode: denial.reasonCode,
+      coverageState: denial.missingEvidence.length > 0 ? "unknown" : "enforced",
+      policyRefs: denial.policyRefs,
+      contextFieldsUsed: denial.contextFieldsUsed,
+      missingEvidence: denial.missingEvidence,
+      owner: "session-access",
+      decisionBoundary: "session-tool.access",
     });
     return denial;
   };
@@ -286,10 +266,7 @@ export async function resolveSessionToolAccess(params: {
   }
   const requesterOwnedAccess = check(true);
   if (params.requesterOwned) {
-    if (requesterOwnedAccess.allowed) {
-      return requesterOwnedAccess;
-    }
-    return deny(requesterOwnedAccess);
+    return requesterOwnedAccess.allowed ? requesterOwnedAccess : deny(requesterOwnedAccess);
   }
   // Ownership proof can only widen tree visibility; do not let an operational
   // lookup failure replace a deterministic self/A2A policy denial.

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
 const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), config: vi.fn(), sleep: vi.fn() }));
 vi.mock("../infra/gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.lock }));
@@ -37,6 +38,54 @@ describe("plugin lifecycle CLI transport", () => {
     );
   });
 
+  it("waits without a response deadline and cancels the request on CLI interruption", async () => {
+    let observed: AbortSignal | undefined;
+    const interrupted = new Error("request interrupted");
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    mocks.call.mockImplementation(({ signal, timeoutMs }) => {
+      observed = signal;
+      started();
+      expect(timeoutMs).toBeNull();
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(interrupted), { once: true });
+      });
+    });
+    const gateway = await resolvePluginLifecycleGateway();
+    const request = gateway!("plugins.reload", {
+      plugins: [{ pluginId: "demo" }],
+      waitForDrain: true,
+    }).catch((error: unknown) => error);
+    await entered;
+    expect(observed).toBeInstanceOf(AbortSignal);
+    await waitForSignalExitBarriers();
+    expect(observed?.aborted).toBe(true);
+    expect(await request).toBe(interrupted);
+    expect(mocks.call).toHaveBeenCalledOnce();
+  });
+
+  it("keeps lifecycle admission bounded even when admitted drain may wait indefinitely", async () => {
+    const busy = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "lifecycle busy",
+      retryable: true,
+      retryAfterMs: 600_000,
+    });
+    mocks.call.mockRejectedValue(busy);
+    const gateway = await resolvePluginLifecycleGateway();
+    await expect(
+      gateway!("plugins.reload", {
+        plugins: [{ pluginId: "demo" }],
+        waitForDrain: true,
+      }),
+    ).rejects.toBe(busy);
+    expect(mocks.call).toHaveBeenCalledOnce();
+    expect(mocks.sleep).not.toHaveBeenCalled();
+    await expect(waitForSignalExitBarriers()).resolves.toBeUndefined();
+  });
+
   it("leaves plugin config validation to the install owner when dispatching recovery", async () => {
     mocks.config.mockImplementation(() => {
       throw Object.assign(new Error("owned plugin path is missing"), { code: "INVALID_CONFIG" });
@@ -67,11 +116,15 @@ describe("plugin lifecycle CLI transport", () => {
       const runtime = { operationId: "batch", generation: 2, pluginIds: ["demo"] };
       const targets = [{ pluginId: "demo", installHash: "a".repeat(64) }];
       const warnings = ["Previous plugin cleanup did not finish."];
-      mocks.call.mockResolvedValue(present ? { runtime, warnings } : {});
+      mocks.call.mockResolvedValue(present ? { runtime, warnings, restartRequired: true } : {});
       const reload = await resolvePluginBatchReload();
       expect(reload).toBeDefined();
       if (present) {
-        await expect(reload!(targets)).resolves.toEqual({ ...runtime, warnings });
+        await expect(reload!(targets)).resolves.toEqual({
+          ...runtime,
+          warnings,
+          restartRequired: true,
+        });
       } else {
         await expect(reload!(targets)).rejects.toThrow("did not confirm");
       }

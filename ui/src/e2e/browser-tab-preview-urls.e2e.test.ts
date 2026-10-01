@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -5,6 +6,94 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI browser preview URLs" });
 
 suite.define(() => {
+  it("loads favicon and social image through the Gateway and keeps missing metadata usable", async () => {
+    const image = `data:image/png;base64,${readFileSync("ui/public/favicon-32.png").toString("base64")}`;
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, colorScheme: "light", serviceWorkers: "block" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          automaticallyFetchFavicons: true,
+          featureMethods: [],
+          methodResponses: {
+            "controlUi.linkPreview": {
+              cases: [
+                {
+                  match: { url: "https://example.com/page" },
+                  response: { title: "Example page", imageDataUrl: image, faviconDataUrl: image },
+                },
+                { match: { url: "https://example.org/no-metadata" }, response: {} },
+              ],
+            },
+          },
+          historyMessages: [
+            { role: "user", content: "Open these pages.", timestamp: 1000 },
+            ...["https://example.com/page", "https://example.org/no-metadata"].flatMap(
+              (url, index) => [
+                {
+                  role: "assistant",
+                  timestamp: 2000 + index * 1000,
+                  content: [
+                    {
+                      type: "toolCall",
+                      id: `preview-${index}`,
+                      name: "browser",
+                      arguments: { action: "open", url },
+                    },
+                  ],
+                },
+                {
+                  role: "toolResult",
+                  timestamp: 2500 + index * 1000,
+                  toolCallId: `preview-${index}`,
+                  toolName: "browser",
+                  content: [{ type: "text", text: "Opened page" }],
+                  details: {
+                    browserTab: {
+                      target: "host",
+                      profile: "managed",
+                      targetId: `preview-tab-${index}`,
+                      url,
+                    },
+                  },
+                },
+              ],
+            ),
+            { role: "assistant", content: "Both pages are ready.", timestamp: 5000 },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.getByText("Both pages are ready.", { exact: true }).waitFor();
+        const cards = page.locator("openclaw-browser-tab-card");
+        await expect.poll(() => cards.count()).toBe(2);
+        const preview = cards.filter({ hasText: "Example page" });
+        await preview.locator(".shot.social img").waitFor();
+        await preview.locator(".icon img").waitFor();
+        expect(
+          await preview
+            .locator(".shot img")
+            .evaluate((img: HTMLImageElement) => img.decode().then(() => img.naturalWidth)),
+        ).toBeGreaterThan(0);
+        const missing = cards.filter({ hasText: "example.org" });
+        expect(await missing.locator("img").count()).toBe(0);
+        expect(await missing.locator(".icon svg").count()).toBe(1);
+        expect(await missing.locator(".url").textContent()).toBe("https://example.org/no-metadata");
+        await preview.scrollIntoViewIfNeeded();
+        const bounds = await preview.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+        expect(
+          (
+            await gateway.waitForRequest("controlUi.linkPreview", {
+              match: { url: "https://example.com/page" },
+            })
+          ).params,
+        ).toMatchObject({
+          url: "https://example.com/page",
+        });
+      },
+    );
+  });
+
   it.each([
     { width: 1440, height: 900 },
     { width: 390, height: 844 },

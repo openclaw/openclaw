@@ -135,6 +135,19 @@ describe("markdownToSignalText", () => {
         { input: "[example.com](https://www.example.com)", expected: "example.com" },
         { input: "[EXAMPLE.COM](https://example.com)", expected: "EXAMPLE.COM" },
         { input: "[example.com/page](https://example.com/page)", expected: "example.com/page" },
+        {
+          input: "[HTTPS://EXAMPLE.COM/Report](https://example.com/Report)",
+          expected: "HTTPS://EXAMPLE.COM/Report",
+        },
+        {
+          input: "[WWW.EXAMPLE.COM/Report](https://example.com/Report)",
+          expected: "WWW.EXAMPLE.COM/Report",
+        },
+        { input: "[USER@EXAMPLE.COM](mailto:user@example.com)", expected: "USER@EXAMPLE.COM" },
+        {
+          input: "[USER@EXAMPLE.COM?subject=HELLO](mailto:user@example.com?subject=hello)",
+          expected: "USER@EXAMPLE.COM?subject=HELLO",
+        },
       ] as const;
 
       for (const { input, expected } of equivalentCases) {
@@ -143,9 +156,13 @@ describe("markdownToSignalText", () => {
       }
     });
 
-    it("still shows URL when label is meaningfully different", () => {
-      const res = markdownToSignalText("[click here](https://example.com)");
-      expect(res.text).toBe("click here (https://example.com)");
+    it.each([
+      ["example.com/Report", "https://example.com/report"],
+      ["example.com?id=AbC", "https://example.com?id=abc"],
+      ["example.com#Install", "https://example.com#install"],
+    ])("retains the case-distinct destination for [%s](%s)", (label, href) => {
+      const res = markdownToSignalText(`[${label}](${href})`);
+      expect(res.text).toBe(`${label} (${href})`);
     });
 
     it("shows URL when the label is only the domain but the URL has a path", () => {
@@ -161,34 +178,11 @@ describe("markdownToSignalText", () => {
       expect(res.styles).toStrictEqual([{ start: 0, length: 9, style: "BOLD" }]);
     });
 
-    it("renders h2 headings as bold text", () => {
-      const res = markdownToSignalText("## Heading 2");
-      expect(res.text).toBe("Heading 2");
-      expect(res.styles).toStrictEqual([{ start: 0, length: 9, style: "BOLD" }]);
-    });
-
-    it("renders h3 headings as bold text", () => {
-      const res = markdownToSignalText("### Heading 3");
-      expect(res.text).toBe("Heading 3");
-      expect(res.styles).toStrictEqual([{ start: 0, length: 9, style: "BOLD" }]);
-    });
-
-    it("renders blockquotes with a visible prefix", () => {
-      const res = markdownToSignalText("> This is a quote");
-      expect(res.text).toMatch(/^[│>]/);
-      expect(res.text).toContain("This is a quote");
-    });
-
     it("renders multi-line blockquotes with a visible prefix", () => {
       const res = markdownToSignalText("> Line 1\n> Line 2");
       expect(res.text).toMatch(/^[│>]/);
       expect(res.text).toContain("Line 1");
       expect(res.text).toContain("Line 2");
-    });
-
-    it("renders horizontal rules as a visible separator", () => {
-      const res = markdownToSignalText("Para 1\n\n---\n\nPara 2");
-      expect(res.text).toMatch(/[─—-]{3,}/);
     });
 
     it("renders horizontal rules between content", () => {

@@ -1,19 +1,13 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
-/**
- * Shared types for preparing and executing CLI-backed agent runs.
- */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
-import type { ExecMode } from "../../infra/exec-approvals.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import type {
-  CliBackendConfig,
   CliBackendExecute,
   CliBackendExecutionMode,
   CliBackendPromptContext,
@@ -37,18 +31,22 @@ import type {
   AgentRunLifecycle,
 } from "../command/shared-types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
-import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
-  EmbeddedRunTrigger,
   ResolvedToolPromptFinalizer,
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
+import type { AgentExecutionAuthBinding } from "../execution-auth-binding.js";
+import type { FailoverReason } from "../failover/signal.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import type { RootedExecutionRequest } from "../rooted-run-params.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
+import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import type { CliSessionBindingFacts } from "./session-binding.types.js";
 
 export type NodeClaudePlacement = { nodeId: string; cwd?: string };
 
@@ -77,6 +75,11 @@ export type RunCliAgentParams = {
   rootedExecution?: RootedExecutionRequest;
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
+  /**
+   * One-shot helper runs mint a session identity per run. Carry Runtime facts in their only
+   * turn so those identities stay out of the native system prompt shared across runs.
+   */
+  runtimeFactsInTurn?: true;
   /** Finalizes caller-owned guidance after backend tool projection is known. */
   finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
@@ -111,6 +114,7 @@ export type RunCliAgentParams = {
   provider: string;
   silentReplyPromptMode?: SilentReplyPromptMode;
   allowEmptyAssistantReplyAsSilent?: boolean;
+  terminalReplyExpectation?: ReplyExpectation;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -130,21 +134,12 @@ export type RunCliAgentParams = {
   /** Atomically arm a cache-preserving fork before retrying a stalled resumed session. */
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
-  onSuccessfulAuthBinding?: (binding: {
-    authProfileId?: string;
-    authFingerprint?: string;
-    runtimeOwnerFingerprint?: string;
-    runtimeOwnerKind?: "cli-runtime" | "plugin-harness" | "aws-sdk";
-    runtimeOwnerId?: string;
-    runtimeArtifactFingerprint?: string;
-    runtimeArtifactId?: string;
-    skipLocalCredential?: true;
-  }) => void;
+  onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   bootstrapContextMode?: BootstrapContextMode;
   chatId?: string;
   /** Effective turn-local exec policy resolved before entering the CLI runtime. */
-  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
+  execOverrides?: ExecPolicyOverrides;
   /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
   bashElevated?: ExecElevatedDefaults;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
@@ -161,7 +156,9 @@ export type RunCliAgentParams = {
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
   assertCurrent?: () => void;
-  onExecutionStarted?: () => void;
+  /** Internal completion caller's representation of operator authorization failures. */
+  mapOperatorAuthorizationError?: (error: unknown) => Error;
+  onExecutionStarted?: () => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -191,10 +188,7 @@ export type CliSecretInput = SpawnSecretInput & {
   fingerprint: string;
 };
 
-type CliPreparedBackend = {
-  backend: CliBackendConfig;
-  beforeExecution?: () => Promise<void>;
-  cleanup?: () => Promise<void>;
+type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> & {
   /** Exact process cleanup retained across attempt copies and natural registry removal. */
   closeLiveSession?: (
     reason: import("../../plugins/cli-backend.types.js").CliBackendLiveSessionCloseReason,
@@ -215,9 +209,6 @@ type CliPreparedBackend = {
     deactivate: (captureKey: string) => void;
     captureNativeTools?: (tools: unknown) => void;
   };
-  mcpConfigHash?: string;
-  mcpResumeHash?: string;
-  env?: Record<string, string>;
 };
 
 /** Reusable CLI session id, soft content drift, or hard invalidation. */
@@ -228,11 +219,9 @@ export type CliReusableSession =
       invalidatedReason: "system-prompt" | "missing-transcript" | "orphaned-tool-use";
     };
 
-export type CliSessionBindingFacts = {
-  extraSystemPromptStatic?: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  requireExplicitMessageTarget?: boolean;
-};
+export function captureCliRunStartTime() {
+  return { started: Date.now(), startedMonotonicMs: performance.now() };
+}
 
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
@@ -244,10 +233,14 @@ export type PreparedCliRunContext = {
   authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
+  /** Monotonic anchor for elapsed-budget measurements, immune to wall-clock steps. */
+  startedMonotonicMs: number;
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
+  /** Enforced timeout of this run's managed Claude MCP server, when present. */
+  managedMcpToolTimeoutMs?: number;
   executionTarget: CliExecutionTarget;
   /** Keeps a plugin-owned turn admitted on its backend instance across a plugin hot reload. */
   pluginExecutionConsumer?: PluginInstanceConsumer;
@@ -264,6 +257,7 @@ export type PreparedCliRunContext = {
   promptForHooks?: string;
   modelId: string;
   normalizedModel: string;
+  providerThinkingLevel?: import("../../plugins/cli-backend.types.js").CliBackendThinkingLevel;
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;

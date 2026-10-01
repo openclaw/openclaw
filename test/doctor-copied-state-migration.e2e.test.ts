@@ -160,6 +160,7 @@ function writeHistoricalCopiedStateFixture(stateDir: string): void {
       ${HISTORICAL_DEVICE_BOOTSTRAP_TOKENS_SQL}
       DROP TABLE operator_approvals;
       ${HISTORICAL_OPERATOR_APPROVALS_SQL}
+      DROP INDEX idx_worker_session_placements_environment;
       PRAGMA user_version = 2;
       INSERT INTO schema_meta (
         meta_key, role, schema_version, agent_id, app_version, created_at, updated_at

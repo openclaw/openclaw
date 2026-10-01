@@ -1,57 +1,22 @@
 // Matrix plugin module owns Doctor repair of account-scoped SQLite databases.
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { resolveMatrixStateLayoutChildDepth } from "../storage-paths.js";
 import { resolveMatrixSqliteStateEnv } from "./sqlite-state.js";
+import { walkMatrixStateFiles } from "./state-layout-walk.js";
 
 const STATE_DATABASE_FILENAME = "openclaw.sqlite";
 
 async function collectMatrixAccountStateRoots(stateDir: string): Promise<string[]> {
-  const matrixRoot = path.join(stateDir, "matrix");
-  const roots = new Set<string>();
-
-  async function visit(dir: string, depth: number, allowMissing = false): Promise<void> {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch (error) {
-      if (
-        allowMissing &&
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "ENOENT"
-      ) {
-        return;
-      }
-      throw error;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && depth === 5 && entry.name === STATE_DATABASE_FILENAME) {
-        roots.add(path.dirname(dir));
-        continue;
-      }
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const isStorageRoot = depth === 2 || depth === 4;
-      if (isStorageRoot && entry.name === "state") {
-        await visit(entryPath, 5);
-        continue;
-      }
-      const childDepth = resolveMatrixStateLayoutChildDepth(depth, entry.name);
-      if (childDepth !== null) {
-        await visit(entryPath, childDepth);
-      }
-    }
+  const { entries, failedDirs } = await walkMatrixStateFiles(
+    stateDir,
+    (name, depth) => depth === 5 && name === STATE_DATABASE_FILENAME,
+    [2, 4],
+  );
+  if (failedDirs.length > 0) {
+    throw failedDirs[0]!.error;
   }
-
-  await visit(matrixRoot, 0, true);
-  return [...roots].toSorted();
+  return entries.map((entry) => path.dirname(path.dirname(entry.path))).toSorted();
 }
 
 function describeMatrixAccountStateMigration(

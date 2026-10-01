@@ -47,6 +47,29 @@ export function buildCodexPluginAppLinks(
   return blocks;
 }
 
+export function buildCodexPluginStatusButtons(
+  pluginId: string,
+  canRefreshHostedApps: boolean,
+): MessagePresentationBlock {
+  return {
+    type: "buttons",
+    buttons: [
+      ...(canRefreshHostedApps
+        ? [
+            {
+              label: "Refresh hosted apps",
+              action: { type: "command" as const, command: "/codex plugins refresh" },
+            },
+          ]
+        : []),
+      {
+        label: "Check status",
+        action: { type: "command", command: `/codex plugins status ${pluginId}` },
+      },
+    ],
+  };
+}
+
 function safeCodexAppLink(value: string | null): string | undefined {
   if (!value || value.length > 2048 || /[\s\p{Cc}\p{Cf}<>]/u.test(value)) {
     return undefined;

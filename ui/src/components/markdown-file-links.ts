@@ -12,7 +12,11 @@ const FILE_LINE_SUFFIX_SOURCE = ":\\d{1,6}(?:[-:]\\d{1,6})?";
 function fileGrammar(extension: string, segment = FILE_SEGMENT_SOURCE) {
   const name = `${segment}\\.${extension}`;
   const prefixed = `(?:~\\/|\\.\\.\\/|\\.\\/|\\/)(?:${segment}\\/)*${name}`;
-  const unprefixed = `${segment}(?:\\/${segment})*\\/${name}`;
+  // A domain-shaped root is ambiguous, not evidence of a workspace file.
+  // Local directories with that spelling remain addressable with ./ (or an absolute path).
+  const domain =
+    "[\\p{L}\\p{M}\\p{N}-]+(?:\\.[\\p{L}\\p{M}\\p{N}-]+)*\\.(?:[\\p{L}\\p{M}]{2,}|[xX][nN]--[A-Za-z0-9-]+)";
+  const unprefixed = `(?!${domain}\\/)${segment}(?:\\/${segment})*\\/${name}`;
   const windowsAbsolute = `[A-Za-z]:[\\\\/](?:${segment}[\\\\/])*${name}`;
   // A reference may not stop early inside a longer token ("logs/app.log.1" must not link "logs/app.log").
   const end = "(?!\\.?[\\p{L}\\p{M}\\p{N}_])";
@@ -39,6 +43,7 @@ const BARE_FILE_EXTENSIONS = new Set([
   "cpp",
   "cs",
   "css",
+  "csv",
   "diff",
   "fish",
   "go",

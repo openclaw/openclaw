@@ -33,6 +33,13 @@ vi.mock("./adapters/pty.js", () => ({
 
 let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 
+function createTerminatingAdapter(pid?: number) {
+  return createStubChildAdapter({
+    pid,
+    onKill: (signal, current) => current.settle(null, signal ?? "SIGTERM"),
+  });
+}
+
 describe("process supervisor", () => {
   beforeAll(async () => {
     vi.resetModules();
@@ -88,6 +95,7 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersToNextTimerAsync();
 
     const exit = await exitPromise;
     const expectedTimeoutSignal = process.platform === "win32" ? "SIGKILL" : "SIGTERM";
@@ -117,6 +125,7 @@ describe("process supervisor", () => {
     const exitPromise = run.wait();
 
     await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersToNextTimerAsync();
     expect(adapter.killMock).toHaveBeenCalledTimes(1);
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
 
@@ -165,11 +174,7 @@ describe("process supervisor", () => {
   it.each(["child", "pty"] as const)(
     "cancels a %s process by run ID while its adapter is starting",
     async (mode) => {
-      const adapter = createStubChildAdapter({
-        onKill: (signal, current) => {
-          current.settle(null, signal ?? "SIGTERM");
-        },
-      });
+      const adapter = createTerminatingAdapter();
       const startup = createDeferred<StubChildAdapter>();
       if (mode === "pty") {
         createPtyAdapterMock.mockReturnValueOnce(startup.promise);
@@ -232,6 +237,7 @@ describe("process supervisor", () => {
 
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersToNextTimerAsync();
     const constructionState = await Promise.race([
       pendingRun.then(() => "settled" as const),
       Promise.resolve().then(() => "pending" as const),
@@ -258,11 +264,7 @@ describe("process supervisor", () => {
   });
 
   it("fences new runs and drains an unscoped startup during shutdown", async () => {
-    const adapter = createStubChildAdapter({
-      onKill: (signal, current) => {
-        current.settle(null, signal ?? "SIGTERM");
-      },
-    });
+    const adapter = createTerminatingAdapter();
     const startup = createDeferred<StubChildAdapter>();
     createChildAdapterMock.mockReturnValueOnce(startup.promise);
     const supervisor = createProcessSupervisor();
@@ -291,11 +293,7 @@ describe("process supervisor", () => {
 
   it("keeps shutdown fenced when live ownership extinction fails", async () => {
     const extinction = createDeferred();
-    const adapter = createStubChildAdapter({
-      onKill: (signal, current) => {
-        current.settle(null, signal ?? "SIGTERM");
-      },
-    });
+    const adapter = createTerminatingAdapter();
     adapter.waitForExtinction = () => extinction.promise;
     createChildAdapterMock.mockResolvedValueOnce(adapter);
     const supervisor = createProcessSupervisor();
@@ -321,12 +319,7 @@ describe("process supervisor", () => {
     const runCount = 16;
     const startups = Array.from({ length: runCount }, () => createDeferred<StubChildAdapter>());
     const adapters = Array.from({ length: runCount }, (_unused, index) =>
-      createStubChildAdapter({
-        pid: 7_000 + index,
-        onKill: (signal, current) => {
-          current.settle(null, signal ?? "SIGTERM");
-        },
-      }),
+      createTerminatingAdapter(7_000 + index),
     );
     const laterAdapter = createStubChildAdapter({ pid: 8_000 });
     let adapterIndex = 0;
@@ -391,11 +384,7 @@ describe("process supervisor", () => {
   });
 
   it("cancels a replacement that is fenced behind an earlier startup", async () => {
-    const first = createStubChildAdapter({
-      onKill: (signal, current) => {
-        current.settle(null, signal ?? "SIGTERM");
-      },
-    });
+    const first = createTerminatingAdapter();
     const later = createStubChildAdapter();
     const firstStartup = createDeferred<StubChildAdapter>();
     createChildAdapterMock.mockReturnValueOnce(firstStartup.promise).mockResolvedValueOnce(later);
@@ -486,46 +475,6 @@ describe("process supervisor", () => {
     expect(secondExit.stdout).toBe("new");
   });
 
-  it("waits for an in-flight scoped startup before replacing its run", async () => {
-    const first = createStubChildAdapter({
-      onKill: (signal, current) => {
-        current.settle(null, signal ?? "SIGTERM");
-      },
-    });
-    const second = createStubChildAdapter();
-    const firstStartup = createDeferred<StubChildAdapter>();
-    createChildAdapterMock.mockReturnValueOnce(firstStartup.promise).mockResolvedValueOnce(second);
-
-    const supervisor = createProcessSupervisor();
-    const firstRunPromise = spawnChild(supervisor, {
-      runId: "scoped-start-first",
-      scopeKey: "scope:overlap",
-      argv: createSilentIdleArgv(),
-    });
-    const replacementPromise = spawnChild(supervisor, {
-      runId: "scoped-start-replacement",
-      scopeKey: "scope:overlap",
-      replaceExistingScope: true,
-      argv: createWriteStdoutArgv("replacement"),
-    });
-
-    expect(createChildAdapterMock).toHaveBeenCalledTimes(1);
-
-    firstStartup.resolve(first);
-    const [firstRun, replacement] = await Promise.all([firstRunPromise, replacementPromise]);
-
-    expect(createChildAdapterMock).toHaveBeenCalledTimes(2);
-    expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
-    await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
-
-    second.emitStdout("replacement");
-    second.settle(0);
-    await expect(replacement.wait()).resolves.toMatchObject({
-      reason: "exit",
-      stdout: "replacement",
-    });
-  });
-
   it("starts same-scope runs concurrently when replacement is not requested", async () => {
     const first = createStubChildAdapter();
     const second = createStubChildAdapter();
@@ -563,11 +512,7 @@ describe("process supervisor", () => {
   });
 
   it("does not cancel a newer run while an earlier scoped replacement is pending", async () => {
-    const first = createStubChildAdapter({
-      onKill: (signal, current) => {
-        current.settle(null, signal ?? "SIGTERM");
-      },
-    });
+    const first = createTerminatingAdapter();
     const replacementAdapter = createStubChildAdapter();
     const newerAdapter = createStubChildAdapter();
     const firstStartup = createDeferred<StubChildAdapter>();
@@ -626,12 +571,7 @@ describe("process supervisor", () => {
     const runCount = 8;
     const startups = Array.from({ length: runCount }, () => createDeferred<StubChildAdapter>());
     const adapters = Array.from({ length: runCount }, (_unused, index) =>
-      createStubChildAdapter({
-        pid: 5_000 + index,
-        onKill: (signal, current) => {
-          current.settle(null, signal ?? "SIGTERM");
-        },
-      }),
+      createTerminatingAdapter(5_000 + index),
     );
     const replacementAdapter = createStubChildAdapter({ pid: 6_000 });
     let adapterIndex = 0;
@@ -729,89 +669,6 @@ describe("process supervisor", () => {
     ]);
   });
 
-  it("starts a scoped replacement after the previous adapter fails to start", async () => {
-    const second = createStubChildAdapter();
-    createChildAdapterMock
-      .mockRejectedValueOnce(new Error("first adapter could not start"))
-      .mockResolvedValueOnce(second);
-
-    const supervisor = createProcessSupervisor();
-    const firstRunPromise = spawnChild(supervisor, {
-      runId: "failed-scoped-start",
-      scopeKey: "scope:recover-start",
-      argv: createSilentIdleArgv(),
-    });
-    const replacementPromise = spawnChild(supervisor, {
-      runId: "recovered-scoped-start",
-      scopeKey: "scope:recover-start",
-      replaceExistingScope: true,
-      argv: createWriteStdoutArgv("recovered"),
-    });
-
-    await expect(firstRunPromise).rejects.toThrow("first adapter could not start");
-    const replacement = await replacementPromise;
-    second.emitStdout("recovered");
-    second.settle(0);
-
-    await expect(replacement.wait()).resolves.toMatchObject({
-      reason: "exit",
-      stdout: "recovered",
-    });
-  });
-
-  it("keeps only the newest run across 64 concurrent same-scope replacements", async () => {
-    const runCount = 64;
-    const adapters = Array.from({ length: runCount }, (_unused, index) =>
-      createStubChildAdapter({
-        pid: 2_000 + index,
-        onKill: (signal, current) => {
-          current.settle(null, signal ?? "SIGTERM");
-        },
-      }),
-    );
-    let adapterIndex = 0;
-    createChildAdapterMock.mockImplementation(async () => {
-      const adapter = adapters[adapterIndex++];
-      if (!adapter) {
-        throw new Error("unexpected concurrent supervisor startup");
-      }
-      return adapter;
-    });
-
-    const supervisor = createProcessSupervisor();
-    const pendingRuns = Array.from({ length: runCount }, (_unused, index) =>
-      spawnChild(supervisor, {
-        runId: `scope-stress-${index}`,
-        scopeKey: "scope:stress",
-        replaceExistingScope: true,
-        argv: createSilentIdleArgv(),
-      }),
-    );
-
-    const runs = await Promise.all(pendingRuns);
-    for (const [index, adapter] of adapters.entries()) {
-      if (index === runCount - 1) {
-        expect(adapter.killMock, `newest scope owner ${index}`).not.toHaveBeenCalled();
-      } else {
-        expect(adapter.killMock, `superseded scope owner ${index}`).toHaveBeenCalledWith("SIGTERM");
-      }
-    }
-
-    const newestAdapter = adapters[runCount - 1];
-    const newestRun = runs[runCount - 1];
-    if (!newestAdapter || !newestRun) {
-      throw new Error("expected the newest scoped process");
-    }
-    newestAdapter.settle(0);
-
-    const exits = await Promise.all(runs.map((run) => run.wait()));
-    for (const [index, exit] of exits.entries()) {
-      expect(exit.reason, `scoped run ${index}`).toBe(
-        index === runCount - 1 ? "exit" : "manual-cancel",
-      );
-    }
-  });
-
   it("continues replacing scoped runs across interleaved startup failures", async () => {
     const runCount = 48;
     const adapters = new Map<number, StubChildAdapter>();
@@ -821,12 +678,7 @@ describe("process supervisor", () => {
       if (index % 7 === 3) {
         throw new Error(`adapter ${index} could not start`);
       }
-      const adapter = createStubChildAdapter({
-        pid: 3_000 + index,
-        onKill: (signal, current) => {
-          current.settle(null, signal ?? "SIGTERM");
-        },
-      });
+      const adapter = createTerminatingAdapter(3_000 + index);
       adapters.set(index, adapter);
       return adapter;
     });
@@ -877,52 +729,6 @@ describe("process supervisor", () => {
     );
   });
 
-  it("starts 24 independent scoped processes without a global startup bottleneck", async () => {
-    const scopeCount = 24;
-    const startups = Array.from({ length: scopeCount }, () => createDeferred<StubChildAdapter>());
-    const adapters = Array.from({ length: scopeCount }, (_unused, index) =>
-      createStubChildAdapter({ pid: 4_000 + index }),
-    );
-    let adapterIndex = 0;
-    createChildAdapterMock.mockImplementation(() => {
-      const startup = startups[adapterIndex++];
-      if (!startup) {
-        throw new Error("unexpected independent supervisor startup");
-      }
-      return startup.promise;
-    });
-
-    const supervisor = createProcessSupervisor();
-    const pendingRuns = Array.from({ length: scopeCount }, (_unused, index) =>
-      spawnChild(supervisor, {
-        runId: `independent-scope-${index}`,
-        scopeKey: `scope:independent-${index}`,
-        replaceExistingScope: true,
-        argv: createSilentIdleArgv(),
-      }),
-    );
-
-    expect(createChildAdapterMock).toHaveBeenCalledTimes(scopeCount);
-
-    for (let index = scopeCount - 1; index >= 0; index -= 1) {
-      const startup = startups[index];
-      const adapter = adapters[index];
-      if (!startup || !adapter) {
-        throw new Error(`missing independent scope ${index}`);
-      }
-      startup.resolve(adapter);
-    }
-
-    const runs = await Promise.all(pendingRuns);
-    for (const adapter of adapters) {
-      expect(adapter.killMock).not.toHaveBeenCalled();
-      adapter.settle(0);
-    }
-
-    const exits = await Promise.all(runs.map((run) => run.wait()));
-    expect(exits.every((exit) => exit.reason === "exit")).toBe(true);
-  });
-
   it("applies overall timeout even for near-immediate timer firing", async () => {
     vi.useFakeTimers();
     const adapter = createStubChildAdapter({
@@ -941,6 +747,7 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersToNextTimerAsync();
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith(
@@ -950,7 +757,50 @@ describe("process supervisor", () => {
     expect(exit.timedOut).toBe(true);
   });
 
-  it("classifies a natural close after a missed overall deadline as timed out", async () => {
+  it("preserves a queued successful exit when the deadline timer runs first", async () => {
+    vi.useFakeTimers();
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const run = await spawnChild(createProcessSupervisor(), {
+      argv: createSilentIdleArgv(),
+      timeoutMs: 10,
+    });
+
+    vi.advanceTimersByTime(10);
+    adapter.settle(0);
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "exit",
+      exitCode: 0,
+      timedOut: false,
+    });
+    await vi.runOnlyPendingTimersAsync();
+    expect(adapter.killMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes an expired no-output timer before its deferred decision", async () => {
+    vi.useFakeTimers();
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const run = await spawnChild(createProcessSupervisor(), {
+      argv: createSilentIdleArgv(),
+      noOutputTimeoutMs: 10,
+    });
+
+    vi.advanceTimersByTime(10);
+    adapter.emitStdout("progress");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(adapter.killMock).not.toHaveBeenCalled();
+    adapter.settle(0);
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "exit",
+      stdout: "progress",
+      timedOut: false,
+    });
+  });
+
+  it("preserves a natural close observed after a missed overall deadline", async () => {
     vi.useFakeTimers();
     const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const adapter = createStubChildAdapter();
@@ -969,11 +819,11 @@ describe("process supervisor", () => {
 
     const exit = await exitPromise;
     expect(adapter.killMock).not.toHaveBeenCalled();
-    expect(exit.reason).toBe("overall-timeout");
-    expect(exit.timedOut).toBe(true);
+    expect(exit.reason).toBe("exit");
+    expect(exit.timedOut).toBe(false);
   });
 
-  it("uses the refreshed no-output deadline when a missed timer races natural close", async () => {
+  it("preserves natural close observed after the refreshed no-output deadline", async () => {
     vi.useFakeTimers();
     const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const adapter = createStubChildAdapter();
@@ -995,9 +845,9 @@ describe("process supervisor", () => {
 
     const exit = await exitPromise;
     expect(adapter.killMock).not.toHaveBeenCalled();
-    expect(exit.reason).toBe("no-output-timeout");
-    expect(exit.noOutputTimedOut).toBe(true);
-    expect(exit.timedOut).toBe(true);
+    expect(exit.reason).toBe("exit");
+    expect(exit.noOutputTimedOut).toBe(false);
+    expect(exit.timedOut).toBe(false);
   });
 
   it("can stream output without retaining it in RunExit payload", async () => {

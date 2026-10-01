@@ -2,11 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
-import {
-  assignSessionOwner,
-  patchSessionEntryCore,
-  recordSessionParticipant,
-} from "../config/sessions/session-accessor.js";
+import { assignSessionOwner, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {

@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { inspect } from "node:util";
 import { runTelegramTestScenario } from "./run-mock-sut-user-e2e.mjs";
 
 function deadline(promise, label, milliseconds = 1500) {
@@ -18,7 +19,7 @@ function deadline(promise, label, milliseconds = 1500) {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function composition(mode) {
+async function composition(mode, acquisitionReady = Promise.resolve()) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-run-composition-"));
   const children = [];
   const watchers = [];
@@ -26,24 +27,56 @@ async function composition(mode) {
   const controller = new AbortController();
   const originalFetch = globalThis.fetch;
   const originalSpawn = childProcess.spawn;
+  const originalWriteFileSync = fs.writeFileSync;
+  const originalExistsSync = fs.existsSync;
   const originalKill = process.kill;
   let released = 0;
-  let healthy = true;
+  const healthy = true;
   const loss = Promise.withResolvers();
   const headerBody = Promise.withResolvers();
   const bodyStarted = Promise.withResolvers();
   let bodyController;
   let observedRequest;
   const waiters = new Map();
+  let baselineBarrier;
   const observe = (name, value) => {
     events.push(name);
     waiters.get(name)?.resolve(value);
   };
+  if (mode === "late") {
+    fs.existsSync = (pathname) => {
+      const exists = originalExistsSync(pathname);
+      if (pathname === baselineBarrier && !exists) {
+        observe("baseline-wait");
+      }
+      return exists;
+    };
+  }
+  if (mode === "success" && process.env.TELEGRAM_TEST_CONFINED === "1") {
+    process.kill = (pid, signal) => {
+      const gateway = children.find((entry) => entry.argv.includes("dist/entry.js"))?.child;
+      if (gateway && pid === -gateway.pid && signal === 0 && !events.includes("group-eperm")) {
+        observe("group-eperm");
+        throw Object.assign(new Error("Group is awaiting reap"), { code: "EPERM" });
+      }
+      return originalKill(pid, signal);
+    };
+  }
   const wait = (name) => {
-    if (events.includes(name)) return Promise.resolve();
+    if (events.includes(name)) {
+      return Promise.resolve();
+    }
     const waiter = Promise.withResolvers();
     waiters.set(name, waiter);
-    return waiter.promise;
+    return Promise.race([
+      waiter.promise,
+      outcome.then((result) => {
+        if (!result.ok) {
+          throw result.error;
+        }
+        throw new Error(`Telegram run completed before ${name}.`);
+      }),
+    ]);
   };
   fs.mkdirSync(path.join(root, "scripts/e2e"), { recursive: true });
   fs.mkdirSync(path.join(root, "dist"));
@@ -58,8 +91,9 @@ async function composition(mode) {
     path.join(root, "dist/entry.js"),
     `
     const http=require('node:http');
-    const port=Number(process.argv[process.argv.indexOf('--port')+1]);
-    http.createServer((req,res)=>{res.end('{}')}).listen(port,'127.0.0.1');
+    process.once('message', (_message, listener)=>{
+      http.createServer((req,res)=>{res.end('{}')}).listen(listener, ()=>process.send('listening'));
+    });
     if(${JSON.stringify(mode)}==='late') process.once('SIGTERM',()=>{
       const fs=require('node:fs'); const root=${JSON.stringify(root)};
       const exitWhenReleased=()=>{if(fs.existsSync(root+'/release-stop')) process.exit(0)};
@@ -104,6 +138,22 @@ class Driver:
             attempts.write("send")
         raise record.driver.DriverError("Timed out waiting for Telegram message send confirmation")
 
+# Admit Node controls only after the recorder's actual failure receipt is durable.
+publish_ready = record.publish_recorder_ready
+publish_state = record.publish_recorder_state
+pending_ready = None
+
+def defer_ready(*args):
+    global pending_ready
+    pending_ready = args
+
+def publish_failure_then_ready(target, payload):
+    publish_state(target, payload)
+    if Path(target).name == "action-failure.json":
+        publish_ready(*pending_ready)
+
+record.publish_recorder_ready = defer_ready
+record.publish_recorder_state = publish_failure_then_ready
 record.build_driver = lambda: ({"sutId": "42", "sutUsername": "sut_bot"}, {}, Driver())
 sys.exit(record.main())
 `,
@@ -113,7 +163,7 @@ sys.exit(record.main())
     path.join(root, "uv"),
     `#!${process.execPath}
     const fs=require('node:fs');
-    if(process.argv.includes('status')) { console.log(JSON.stringify({ok:true,authorized:true,testDc:true,tdlibVersion:'1.8.67',user:{id:123}})); }
+    if(process.argv.includes('status')) { console.log(JSON.stringify({ok:true,authorized:true,testDc:true,tdlibVersion:'1.8.67',user:{id:123},chatId:-1001})); }
     else if(process.argv.includes('prepare-group')) { console.log(JSON.stringify({ok:true,groupId:'-1001',status:'created'})); }
     else if(process.argv.includes('cleanup-group')) { console.log(JSON.stringify({ok:true,groupId:'-1001',status:'deleted'})); }
     else if(${JSON.stringify(mode)}==='uncertain-send') {
@@ -126,6 +176,7 @@ sys.exit(record.main())
     else {
       const index=process.argv.indexOf('--ready-file');
       if(index>=0) fs.writeFileSync(process.argv[index+1],JSON.stringify({schemaVersion:1,startedAtUnixMs:Date.now(),chatId:-1001}));
+      if(${JSON.stringify(mode)}==='late') fs.watch(${JSON.stringify(root)},()=>{});
       console.log('recorder done');
     }
   `,
@@ -136,38 +187,100 @@ sys.exit(record.main())
   listener.listen(0, "127.0.0.1");
   await once(listener, "listening");
   const gatewayPort = listener.address().port;
-  await new Promise((resolve) => listener.close(resolve));
+  const gatewayHandoff = Promise.withResolvers();
+  void gatewayHandoff.promise.catch(() => {});
   childProcess.spawn = (command, argv, options) => {
-    const child = originalSpawn(command, argv, options);
+    const isGateway = argv.includes("dist/entry.js");
+    // The sandbox denies shared-temp ancestor metadata. Evaluate synthetic
+    // child fixtures from their bytes so Node's entrypoint realpath does not
+    // fail before reaching the runner's actual scenario boundary.
+    const fixturePath =
+      command === "uv"
+        ? path.join(root, "uv")
+        : ["dist/entry.js", "scripts/e2e/mock-openai-server.mjs"].includes(argv[0])
+          ? path.join(root, argv[0])
+          : undefined;
+    const confined = process.env.TELEGRAM_TEST_CONFINED === "1" && fixturePath;
+    const child = originalSpawn(
+      confined ? process.execPath : command,
+      confined
+        ? [
+            "-e",
+            fs.readFileSync(fixturePath, "utf8").replace(/^#!.*\n/u, ""),
+            ...(command === "uv" ? ["uv", ...argv] : argv),
+          ]
+        : argv,
+      isGateway ? { ...options, stdio: [...options.stdio, "ipc"] } : options,
+    );
     children.push({ child, command, argv, options });
-    if (argv.includes("dist/entry.js")) {
+    if (isGateway) {
+      // Transfer the bound socket without exposing a free-port gap to other tests.
+      child.once("message", () => {
+        listener.close((error) => {
+          if (error) {
+            gatewayHandoff.reject(error);
+          } else {
+            gatewayHandoff.resolve();
+          }
+        });
+      });
+      child.once("error", gatewayHandoff.reject);
+      child.once("exit", (code, signal) =>
+        gatewayHandoff.reject(
+          new Error(`Gateway fixture exited before socket handoff: ${signal ?? code}`),
+        ),
+      );
+      child.send("listen", listener, (error) => {
+        if (error) {
+          gatewayHandoff.reject(error);
+        }
+      });
       observe("gateway-spawn", child);
-      const command = options.env?.TELEGRAM_E2E_FOLLOWUP_CONTROL_COMMAND;
-      if (command)
-        watchers.push(
-          fs.watch(path.dirname(command), () => {
-            if (fs.existsSync(command)) observe("control-wait");
-          }),
-        );
+      const controlCommand = options.env?.TELEGRAM_E2E_FOLLOWUP_CONTROL_COMMAND;
+      if (controlCommand) {
+        // Directory notifications can lag or disappear after a completed command write.
+        fs.writeFileSync = (...args) => {
+          const result = originalWriteFileSync(...args);
+          if (args[0] === controlCommand) {
+            observe("control-wait");
+          }
+          return result;
+        };
+      }
     }
-    if (argv.some((value) => String(value).endsWith("user-record.py")))
+    if (argv.some((value) => String(value).endsWith("user-record.py"))) {
+      baselineBarrier = path.join(argv[argv.indexOf("--barrier-dir") + 1], "0");
       child.once("exit", () => observe("recorder-terminated"));
+    }
     child.stdout?.on("data", (data) => {
-      if (data.toString().includes("fixture blocked")) observe("mock-wait");
-      if (data.toString().includes("recorder done")) observe("recorder-exit");
+      if (data.toString().includes("fixture blocked")) {
+        observe("mock-wait");
+      }
+      if (data.toString().includes("recorder done")) {
+        observe("recorder-exit");
+      }
     });
     return child;
   };
   syncBuiltinESMExports();
-  watchers.push(
-    fs.watch(root, () => {
-      if (fs.existsSync(path.join(root, "stop-requested"))) observe("restart-stop");
-    }),
-  );
+  if (mode === "late") {
+    watchers.push(
+      fs.watch(root, () => {
+        if (fs.existsSync(path.join(root, "stop-requested"))) {
+          observe("restart-stop");
+        }
+      }),
+    );
+  }
   let getMeCount = 0;
   globalThis.fetch = async (url, init = {}) => {
     const parsed = new URL(url);
-    if (parsed.hostname !== "api.telegram.org") return await originalFetch(url, init);
+    if (parsed.hostname === "127.0.0.1" && Number(parsed.port) === gatewayPort) {
+      await gatewayHandoff.promise;
+    }
+    if (parsed.hostname !== "api.telegram.org") {
+      return await originalFetch(url, init);
+    }
     const method = parsed.pathname.split("/").at(-1);
     if (method === "getMe" && ++getMeCount === 2 && mode === "body") {
       observedRequest = init.signal;
@@ -209,7 +322,9 @@ sys.exit(record.main())
     whenLeaseUnhealthy: loss.promise,
     assertLeaseHealthy() {
       assert.equal(released, 0);
-      if (!healthy) throw new Error("lease lost");
+      if (!healthy) {
+        throw new Error("lease lost");
+      }
     },
     async release() {
       released += 1;
@@ -218,7 +333,10 @@ sys.exit(record.main())
   };
   const actions =
     mode === "late"
-      ? [{ type: "patchConfig", atMs: 0, patch: { messages: { responsePrefix: "test" } } }]
+      ? [
+          { type: "send", atMs: 0, text: "BEFORE", awaitReply: { text: "BEFORE" } },
+          { type: "restartGateway", atMs: 0, graceMs: 15_000 },
+        ]
       : mode === "control"
         ? [{ type: "followupDrainWaitHeld", atMs: 0, timeoutMs: 60_000 }]
         : mode === "uncertain-send"
@@ -241,7 +359,10 @@ sys.exit(record.main())
   const run = runTelegramTestScenario({
     repoRoot: root,
     signal: controller.signal,
-    acquireCredential: async () => credential,
+    acquireCredential: async () => {
+      await acquisitionReady;
+      return credential;
+    },
     args: {
       backend: "mock",
       dm: true,
@@ -260,7 +381,7 @@ sys.exit(record.main())
   });
   const outcome = run.then(
     (result) => ({ ok: true, result }),
-    (error) => ({ ok: false, error }),
+    (/** @type {unknown} */ error) => ({ ok: false, error }),
   );
   return {
     root,
@@ -271,6 +392,9 @@ sys.exit(record.main())
     wait,
     headerBody,
     bodyStarted,
+    releaseBaseline() {
+      fs.writeFileSync(baselineBarrier, JSON.stringify({ sentMessageId: 10, messageId: 11 }));
+    },
     finishOldGatewayStop() {
       fs.writeFileSync(path.join(root, "release-stop"), "");
     },
@@ -279,15 +403,21 @@ sys.exit(record.main())
     ignoreGatewayStop() {
       process.kill = (pid, signal) => {
         const gateway = children.find((entry) => entry.argv.includes("dist/entry.js"))?.child;
-        if (gateway && pid === -gateway.pid && signal !== 0) return true;
+        if (gateway && pid === -gateway.pid) {
+          if (signal === 0) {
+            throw Object.assign(new Error("Group probe denied"), { code: "EPERM" });
+          }
+          return true;
+        }
         return originalKill(pid, signal);
       };
     },
     async cleanup() {
       process.kill = originalKill;
       controller.abort(new Error("fixture cleanup"));
-      if (bodyController && !observedRequest?.aborted)
+      if (bodyController && !observedRequest?.aborted) {
         bodyController.error(new Error("fixture cleanup"));
+      }
       for (const entry of children) {
         const command = entry.options.env?.TELEGRAM_E2E_FOLLOWUP_CONTROL_COMMAND;
         const status = entry.options.env?.TELEGRAM_E2E_FOLLOWUP_CONTROL_STATUS;
@@ -302,8 +432,19 @@ sys.exit(record.main())
         }
       }
       await outcome;
-      for (const watcher of watchers) watcher.close();
+      if (listener.listening) {
+        await new Promise((resolve, reject) => {
+          listener.close((/** @type {Error | undefined} */ error) =>
+            error ? reject(error) : resolve(),
+          );
+        });
+      }
+      for (const watcher of watchers) {
+        watcher.close();
+      }
       childProcess.spawn = originalSpawn;
+      fs.writeFileSync = originalWriteFileSync;
+      fs.existsSync = originalExistsSync;
       syncBuiltinESMExports();
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -316,10 +457,14 @@ test("run owner aborts the drive response body after headers", async () => {
   try {
     const response = await deadline(f.headerBody.promise, "drive did not reach headers");
     await f.bodyStarted.promise;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(response.body.locked, true);
     f.controller.abort(new Error("cancel body"));
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(
       f.requestSignal().aborted,
       true,
@@ -333,6 +478,57 @@ test("run owner aborts the drive response body after headers", async () => {
   }
 });
 
+test(
+  "confined scenarios preserve readiness, uncertain-send fencing, and cleanup",
+  { skip: process.platform !== "darwin" },
+  async (context) => {
+    const root = fs.mkdtempSync("/private/tmp/telegram-scenario-confinement-");
+    context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const policy = path.join(root, "isolation.sb");
+    fs.writeFileSync(
+      policy,
+      `(version 1)
+(allow default)
+(deny network*)
+(allow network* (local ip "localhost:*") (remote ip "localhost:*"))
+(deny file-write*)
+(allow file-write* (subpath ${JSON.stringify(root)}))
+(deny file-read* (require-all (subpath "/private/tmp") (require-not (subpath ${JSON.stringify(root)}))))
+`,
+    );
+    const child = childProcess.spawn(
+      "/usr/bin/sandbox-exec",
+      [
+        "-f",
+        policy,
+        process.execPath,
+        "--test",
+        "--test-reporter=tap",
+        "--test-name-pattern=^(uninterrupted composition|uncertain recorder send)",
+        import.meta.filename,
+      ],
+      {
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          TMPDIR: root,
+          PYTHONDONTWRITEBYTECODE: "1",
+          TELEGRAM_TEST_CONFINED: "1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let output = "";
+    child.stdout.on("data", (chunk) => (output += chunk));
+    child.stderr.on("data", (chunk) => (output += chunk));
+    const [code, signal] = await once(child, "close");
+    assert.equal(signal, null);
+    assert.equal(code, 0, output.replaceAll(root, "<owned-root>"));
+    assert.match(output, /^# tests 2$/mu);
+    assert.deepEqual(fs.readdirSync(root), ["isolation.sb"]);
+  },
+);
+
 test("run owner cancels provider startup before the banner deadline", async () => {
   const f = await composition("mock");
   try {
@@ -340,6 +536,15 @@ test("run owner cancels provider startup before the banner deadline", async () =
     f.controller.abort(new Error("cancel startup"));
     const result = await deadline(f.outcome, "provider wait ignored run cancellation");
     assert.equal(result.ok, false);
+    await assert.rejects(
+      Promise.race([
+        f.wait("restart-stop"),
+        new Promise((resolve) => {
+          setImmediate(resolve);
+        }),
+      ]),
+      (error) => error === result.error,
+    );
     assert.equal(f.events.includes("gateway-spawn"), false);
     assert.equal(f.releaseCount(), 1);
     const config = JSON.parse(fs.readFileSync(path.join(f.root, "sut-config.json"), "utf8"));
@@ -356,7 +561,9 @@ test("run owner cancels controls after recorder exit already won", async () => {
       Promise.all([f.wait("recorder-terminated"), f.wait("control-wait")]),
       "recorder exit/control join precondition missing",
     );
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     f.controller.abort(new Error("cancel control join"));
     const result = await deadline(f.outcome, "post-recorder control join ignored cancellation");
     assert.equal(result.ok, false);
@@ -372,26 +579,46 @@ test("unconfirmed child termination cannot report clean release", async () => {
     f.ignoreGatewayStop();
     const result = await deadline(f.outcome, "teardown did not return its failure", 12_000);
     assert.equal(result.ok, false, "unconfirmed group stop must fail the run");
+    assert.match(inspect(result.error, { depth: null }), /Telegram process group did not stop:/u);
     assert.equal(f.releaseCount(), 0, "lease release must not precede proven child closure");
   } finally {
     await f.cleanup();
   }
 });
 
-test("closed run admission rejects a Gateway replacement after awaited stop", async () => {
-  const f = await composition("late");
+test("restart waits for the visible baseline and rejects replacement after run closure", async () => {
+  const acquisition = Promise.withResolvers();
+  const f = await composition("late", acquisition.promise);
   try {
+    let stopped = false;
+    const restartStop = f.wait("restart-stop").then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    assert.equal(stopped, false);
+    assert.equal(f.children.length, 0, "setup must wait for credential acquisition");
+    acquisition.resolve();
     await deadline(
-      f.wait("restart-stop"),
-      "configuration replacement did not reach old-child stop",
+      Promise.race([
+        f.wait("baseline-wait"),
+        restartStop.then(() => {
+          throw new Error("Gateway stopped before visible baseline");
+        }),
+      ]),
+      "runner did not wait for the baseline",
     );
+    assert.equal(stopped, false);
+    f.releaseBaseline();
+    await restartStop;
     f.controller.abort(new Error("cancel replacement"));
     f.finishOldGatewayStop();
     const result = await deadline(
       f.outcome,
       "replacement cancellation did not finish",
       10000,
-    ).catch((error) => ({ error }));
+    ).catch((/** @type {unknown} */ error) => ({ error }));
     assert.equal(
       f.events.filter((event) => event === "gateway-spawn").length,
       1,
@@ -399,6 +626,7 @@ test("closed run admission rejects a Gateway replacement after awaited stop", as
     );
     assert.equal(result.ok, false, "replacement cancellation must finish as a failed run");
   } finally {
+    acquisition.resolve();
     await f.cleanup();
   }
 });
@@ -407,7 +635,20 @@ test("uninterrupted composition completes strict readiness and drive on one leas
   const f = await composition("success");
   try {
     const result = await deadline(f.outcome, "positive composition did not complete", 10000);
-    assert.equal(result.ok, true, String(result.error));
+    assert.equal(result.ok, true, inspect(result.error, { depth: null }));
+    if (process.env.TELEGRAM_TEST_CONFINED === "1") {
+      assert.equal(f.events.includes("group-eperm"), true);
+    }
+    assert.equal(f.events.includes("gateway-spawn"), true);
+    await assert.rejects(
+      Promise.race([
+        f.wait("restart-stop"),
+        new Promise((resolve) => {
+          setImmediate(resolve);
+        }),
+      ]),
+      /Telegram run completed before restart-stop/,
+    );
     assert.equal(f.releaseCount(), 1);
     const evidence = fs.readFileSync(path.join(f.root, "sut-config.json"), "utf8");
     const config = JSON.parse(evidence);
@@ -424,6 +665,7 @@ test("uninterrupted composition completes strict readiness and drive on one leas
         true,
         "every child must terminate before successful completion",
       );
+      assert.throws(() => process.kill(-child.pid, 0), { code: "ESRCH" });
     }
   } finally {
     await f.cleanup();
@@ -434,7 +676,7 @@ test("uncertain recorder send fences later Node actions while recording incoming
   const f = await composition("uncertain-send");
   try {
     const outcome = await deadline(f.outcome, "uncertain-send composition did not finish", 10000);
-    assert.equal(outcome.ok, true, String(outcome.error));
+    assert.equal(outcome.ok, true, inspect(outcome.error, { depth: null }));
     assert.equal(outcome.result.exitCode, 1);
     assert.equal(outcome.result.report.completed, false);
     assert.equal(fs.existsSync(path.join(f.root, "later-side-effect")), false);

@@ -95,21 +95,19 @@ it("keeps a watched reaction on the runtime-bound global owner's queue", async (
           },
         },
       });
-      await vi.waitFor(() =>
-        expect(runtime.log).toHaveBeenCalledWith(
-          expect.stringContaining("reaction system event queued session=global"),
-        ),
-      );
     });
     return client;
   });
 
   await monitorIMessageProvider({ config: cfg, runtime });
 
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(runtime.log).toHaveBeenCalledWith(
+    expect.stringContaining("reaction system event queued session=global"),
+  );
   expect(peekSystemEventEntries("agent:research:global")).toEqual([
     expect.objectContaining({ text: `iMessage reaction added: 👍 by ${sender} on msg bot-reply` }),
   ]);
   expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
   expect(binding.targetSessionKey).toBe("global");
-  expect(runtime.error).not.toHaveBeenCalled();
 });

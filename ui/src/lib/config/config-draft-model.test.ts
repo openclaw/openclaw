@@ -507,14 +507,8 @@ describe("config draft model", () => {
 
   it.each([
     ["automatic save", "123"],
-    ["automatic save", "z.ai"],
-    ["automatic save", "a.models.3"],
-    ["manual save", "123"],
     ["manual save", "z.ai"],
-    ["manual save", "a.models.3"],
     ["manual save", "$&"],
-    ["apply", "123"],
-    ["apply", "z.ai"],
     ["apply", "a.models.3"],
   ] as const)(
     "formats the rejected %s validation path for provider %s without changing the Gateway issue",

@@ -32,6 +32,14 @@ the [Plugin SDK subpath catalog](/plugins/sdk-subpaths), and import `zod`
 directly from the `zod` package. `inbound-reply-dispatch` remains available
 until the next Plugin SDK major.
 
+The beta.5 whole-session-store bridge was retired with explicit SDK-owner
+approval on September 30, 2026, ahead of its former October 12 deadline.
+The supported-plugin cutoff excludes `v2026.7.1-beta.5` and all releases that
+still import those bridge exports or package-root whole-store aliases.
+Upgrade affected plugins to scoped row and transcript-identity APIs before
+upgrading the host. The `session-store-runtime` subpath and `resolveStorePath`
+remain supported; see the [removed session APIs and replacements](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis).
+
 | Removal gate            | Tier                               | SDK subpaths                                                                                                                                                                        |
 | ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `2026-10-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |

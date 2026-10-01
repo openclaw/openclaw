@@ -66,15 +66,3 @@ export function hasInboundMedia(msg: Message): boolean {
     Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
   );
 }
-
-export function resolveInboundMediaFileId(msg: Message): string | undefined {
-  return (
-    msg.sticker?.file_id ??
-    msg.photo?.[msg.photo.length - 1]?.file_id ??
-    msg.video?.file_id ??
-    msg.video_note?.file_id ??
-    msg.document?.file_id ??
-    msg.audio?.file_id ??
-    msg.voice?.file_id
-  );
-}

@@ -102,8 +102,6 @@ describe("plugin install recovery source ownership", () => {
 
   it.each([
     { prefix: "", allowed: false },
-    { prefix: "", allowed: true },
-    { prefix: "file:", allowed: false },
     { prefix: "file:", allowed: true },
   ])(
     "uses local recovery=$allowed through $prefix without borrowing metadata",

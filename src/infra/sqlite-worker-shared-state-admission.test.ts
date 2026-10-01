@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
+import { MessagePort, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -80,12 +79,7 @@ if (!isMainThread) {
     const dispatch = vi.spyOn(worker, "postMessage").mockImplementation((message, transferList) => {
       const result = nativePost(message, transferList);
       const request = asOptionalRecord(message);
-      if (
-        request?.type !== "execute" ||
-        !request.operationAdmission ||
-        !(request.input instanceof Uint8Array) ||
-        asOptionalRecord(deserialize(request.input))?.type !== "nativeHookRelay.renew"
-      ) {
+      if (request?.type !== "execute" || !(request.operationAdmission instanceof MessagePort)) {
         return result;
       }
       dispatch.mockRestore();

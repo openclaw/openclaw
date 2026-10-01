@@ -15,26 +15,18 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import type { CliTimeoutContext, FallbackAttemptRecord } from "../failover-error.js";
-import { ERROR_PREFIX_RE, renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
+import { ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  splitFailoverAggregateLegs,
 } from "./message-patterns.js";
 import {
   classifyProviderRequestFacets,
   type ProviderRequestFacet,
 } from "./request-error-facets.js";
 import type { FailoverClassification, FailoverReason } from "./signal.js";
-
-type FailoverUserCopyContext = {
-  raw?: string;
-  provider?: string;
-  model?: string;
-  authMode?: string;
-};
-
-type FailoverBaseCopyRenderer = (context: FailoverUserCopyContext) => string;
 
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
@@ -107,53 +99,29 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
-function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
-  const raw = context.raw ?? "";
-  if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
-    return MODEL_CAPACITY_ERROR_USER_MESSAGE;
-  }
-  return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
-}
-
-const FAILOVER_REASON_BASE_COPY = {
-  auth: () => AUTH_INVALID_TOKEN_USER_TEXT,
-  auth_permanent: () => AUTH_INVALID_TOKEN_USER_TEXT,
-  format: (context) => renderFormatErrorCopy(context.raw ?? ""),
-  rate_limit: renderRateLimitBaseCopy,
-  overloaded: (context) =>
-    MODEL_CAPACITY_ERROR_RE.test(context.raw ?? "")
-      ? MODEL_CAPACITY_ERROR_USER_MESSAGE
-      : OVERLOADED_ERROR_USER_MESSAGE,
-  billing: (context) =>
-    formatBillingErrorMessage(context.provider, context.model, context.authMode),
-  server_error: () => "LLM request failed: provider returned an internal error.",
-  timeout: () => "LLM request timed out.",
-  tls_certificate: () =>
-    "LLM request failed: TLS certificate validation rejected the provider endpoint. Check the endpoint hostname, proxy, and local certificate trust.",
-  context_overflow: () =>
-    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
-  model_not_found: () =>
-    "The selected model was not found by the provider. Check the model id or choose a different model.",
-  session_expired: () => "The provider session expired. Start a new session and try again.",
-  empty_response: () => "The model returned an empty response. Please try again.",
-  no_error_details: () => "LLM request failed with an unknown error.",
-  unclassified: () => "LLM request failed.",
-  unknown: () => "LLM request failed with an unknown error.",
-} satisfies Record<FailoverReason, FailoverBaseCopyRenderer>;
-
-function renderFailoverBaseCopy(
-  reason: FailoverReason,
-  context: FailoverUserCopyContext = {},
-): string {
-  return FAILOVER_REASON_BASE_COPY[reason](context);
-}
-
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
 }): string {
-  return renderFailoverBaseCopy(params.reason, { raw: params.raw });
+  const raw = params.raw ?? "";
+  if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
+    return MODEL_CAPACITY_ERROR_USER_MESSAGE;
+  }
+  if (params.reason === "overloaded") {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  const direct = extractProviderRateLimitMessage(raw);
+  if (direct) {
+    return direct;
+  }
+  for (const leg of splitFailoverAggregateLegs(raw)) {
+    const fromLeg = extractProviderRateLimitMessage(leg);
+    if (fromLeg) {
+      return fromLeg;
+    }
+  }
+  return RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -259,10 +227,12 @@ export function renderSanitizedUserFacingText(
       ERROR_PREFIX_RE.test(trimmed) ||
       CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
   ) {
-    return renderFailoverBaseCopy("context_overflow");
+    return "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
-    return renderFailoverBaseCopy(reason, { raw: trimmed });
+    return reason === "billing"
+      ? BILLING_ERROR_USER_MESSAGE
+      : renderRateLimitOrOverloadedCopy({ reason, raw: trimmed });
   }
   // Labeled HTTP statuses require the full grammar; keep provider retry detail above.
   const providerRequestCode = resolveProviderRequestFailureCode({
@@ -294,7 +264,7 @@ export function renderSanitizedUserFacingText(
       return formatRawAssistantErrorForUi(trimmed);
     }
     if (reason === "timeout") {
-      return renderFailoverBaseCopy("timeout");
+      return "LLM request timed out.";
     }
     return formatRawAssistantErrorForUi(trimmed);
   }
@@ -324,7 +294,7 @@ const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
-  "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
+  "⚠️ The selected model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. Select an available model or update the model configuration, then try again.";
 
 const PROVIDER_REQUEST_COPY = {
   provider_authentication_error: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
@@ -447,6 +417,15 @@ export function renderRateLimitReplyCopy(params: {
     }
     return RATE_LIMIT_RETRY_MESSAGE;
   }
+  for (const attempt of attempts) {
+    if (attempt.reason !== "rate_limit" || !attempt.error) {
+      continue;
+    }
+    const hint = extractProviderRateLimitMessage(attempt.error);
+    if (hint) {
+      return params.sanitizeText?.(attempt.error) ?? hint;
+    }
+  }
   const expiry = params.cooldownExpiry;
   const nowMs = params.nowMs ?? Date.now();
   if (typeof expiry === "number" && expiry > nowMs) {
@@ -481,8 +460,7 @@ export function renderBillingReplyCopy(params: {
       : params.authMode === "oauth" || params.authMode === "token"
         ? params
         : undefined;
-  return billingFailure &&
-    (billingFailure.authMode === "oauth" || billingFailure.authMode === "token")
+  return billingFailure
     ? formatBillingErrorMessage(
         billingFailure.provider,
         billingFailure.model,
@@ -596,42 +574,33 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
   unknown: authProfileUnavailableCopy,
 } satisfies Record<FailoverReason, (provider: string) => string>;
 
-type AuthProfileReasonPolicy = {
-  direct: ((provider: string) => string) | undefined;
-  recovery: boolean;
+const AUTH_PROFILE_DIRECT_COPY: Partial<Record<FailoverReason, (provider: string) => string>> = {
+  auth: AUTH_PROFILE_COOLDOWN_COPY.auth,
+  auth_permanent: (provider) => `${provider} isn't accepting your saved login.`,
+  billing: AUTH_PROFILE_COOLDOWN_COPY.billing,
+  session_expired: AUTH_PROFILE_COOLDOWN_COPY.session_expired,
 };
 
-const AUTH_PROFILE_REASON_POLICY = {
-  auth: { direct: AUTH_PROFILE_COOLDOWN_COPY.auth, recovery: true },
-  auth_permanent: {
-    direct: (provider) => `${provider} isn't accepting your saved login.`,
-    recovery: true,
-  },
-  format: { direct: undefined, recovery: false },
-  rate_limit: { direct: undefined, recovery: false },
-  overloaded: { direct: undefined, recovery: false },
-  billing: { direct: AUTH_PROFILE_COOLDOWN_COPY.billing, recovery: true },
-  server_error: { direct: undefined, recovery: false },
-  timeout: { direct: undefined, recovery: false },
-  tls_certificate: { direct: undefined, recovery: false },
-  context_overflow: { direct: undefined, recovery: true },
-  model_not_found: { direct: undefined, recovery: false },
-  session_expired: { direct: AUTH_PROFILE_COOLDOWN_COPY.session_expired, recovery: true },
-  empty_response: { direct: undefined, recovery: true },
-  no_error_details: { direct: undefined, recovery: true },
-  unclassified: { direct: undefined, recovery: true },
-  unknown: { direct: undefined, recovery: true },
-} satisfies Record<FailoverReason, AuthProfileReasonPolicy>;
+const AUTH_PROFILE_RECOVERY_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "billing",
+  "context_overflow",
+  "session_expired",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+]);
 
 export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyParams): string {
-  const policy = AUTH_PROFILE_REASON_POLICY[params.reason];
   const description = params.allInCooldown
     ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](params.provider)
-    : policy.direct?.(params.provider);
+    : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(params.provider);
   if (!description) {
     return params.causeText?.trim() || authProfileUnavailableCopy(params.provider);
   }
-  const hint = policy.recovery ? params.recoveryHint : null;
+  const hint = AUTH_PROFILE_RECOVERY_REASONS.has(params.reason) ? params.recoveryHint : null;
   const causeText = params.causeText?.trim() ?? "";
   const suffix = causeText && !description.includes(causeText) ? ` (${causeText})` : "";
   return `${[description, hint].filter(Boolean).join(" ")}${suffix}`;
@@ -647,9 +616,6 @@ export function replaceGenericExternalRunFailureText(text: string): {
   text: string;
   replaced: boolean;
 } {
-  if (text.trim() === GENERIC_EXTERNAL_RUN_FAILURE_TEXT) {
-    return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, replaced: true };
-  }
   const start = text.indexOf(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
   if (start < 0 || text.slice(start + GENERIC_EXTERNAL_RUN_FAILURE_TEXT.length).trim()) {
     return { text, replaced: false };

@@ -1,9 +1,10 @@
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore as deferred } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -57,14 +58,6 @@ vi.mock("../process/exec.js", async () => {
   };
 });
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 async function within<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -115,11 +108,10 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("runLinkUnderstanding transport cleanup", () => {
-  it("cancels a non-OK response body before releasing its guarded transport", async () => {
-    const sockets = new Set<Socket>();
-    const requestSocketClosed = deferred();
-    const server = createServer((request, response) => {
+it("cancels a non-OK response body before releasing its guarded transport", async () => {
+  const requestSocketClosed = deferred();
+  await withServer(
+    (request, response) => {
       request.socket.once("close", requestSocketClosed.resolve);
       response.writeHead(500, {
         "content-length": "1000000",
@@ -127,19 +119,8 @@ describe("runLinkUnderstanding transport cleanup", () => {
       });
       // Leave the declared body unfinished so cleanup must actively cancel it.
       response.write("error");
-    });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.once("close", () => sockets.delete(socket));
-    });
-
-    try {
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const port = (server.address() as AddressInfo).port;
-      const url = `http://loopback.test:${port}/error`;
-
+    },
+    async (base) => {
       const resultPromise = runLinkUnderstanding({
         cfg: {
           tools: {
@@ -148,8 +129,8 @@ describe("runLinkUnderstanding transport cleanup", () => {
               models: [{ type: "cli", command: "summarize" }],
             },
           },
-        } as OpenClawConfig,
-        ctx: { Body: `see ${url}` } as MsgContext,
+        },
+        ctx: { Body: `see ${base}/error` },
       });
 
       const result = await within(resultPromise, 1000, "link understanding did not finish");
@@ -159,15 +140,8 @@ describe("runLinkUnderstanding transport cleanup", () => {
       expect(mocks.bodyCancel).toHaveBeenCalledOnce();
       expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
       expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+    },
+  );
 });
 
 it("cancels a streaming response and preserves the unmodified inbound context", async () => {
@@ -224,7 +198,7 @@ it("skips a timed-out streaming link and processes the next link", async () => {
   );
 });
 
-it("fetches only bare URLs from messages that also contain titled markdown links", async () => {
+it("fetches bare URLs in order while ignoring titled markdown links", async () => {
   const requests: string[] = [];
   await withServer(
     (req, res) => {
@@ -233,24 +207,18 @@ it("fetches only bare URLs from messages that also contain titled markdown links
       res.end(requestPath);
     },
     async (base) => {
-      const firstBare = `${base}/bare-one`;
-      const secondBare = `${base}/bare-two`;
       const ctx: MsgContext = {
         Body: [
           `[quoted](${base}/quoted "Docs")`,
-          `[parenthesized](${base}/parenthesized (Docs))`,
-          `[escaped](${base}/escaped "A \\"quoted\\" title")`,
-          firstBare,
+          `${base}/bare-one`,
           `[angle](<${base}/angle> 'Docs')`,
-          secondBare,
+          `${base}/bare-two`,
         ].join(" "),
       };
-
       await applyLinkUnderstanding({
         cfg: config(["-e", "process.stdin.pipe(process.stdout)"]),
         ctx,
       });
-
       expect(requests).toEqual(["/bare-one", "/bare-two"]);
       expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
     },

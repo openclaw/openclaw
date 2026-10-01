@@ -2,12 +2,13 @@ import type { InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isTelegramSkippableChunkSendError,
   mergeTelegramPartialDeliveryError,
 } from "./chunk-delivery.js";
-import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./network-errors.js";
+import { rethrowTelegramSendError, isSafeToRetrySendError } from "./network-errors.js";
 import {
   sendTelegramCaptionedMediaWithFallback,
   sendTelegramOutboundMediaWithPhotoFallback,
@@ -15,19 +16,15 @@ import {
 } from "./outbound-media.js";
 import {
   getTelegramNativeQuoteReplyMessageId,
+  withTelegramNativeQuoteFallback,
   isTelegramQuoteParamError,
 } from "./reply-parameters.js";
-import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
 } from "./rich-message.js";
 import { isTelegramEmptyContentError, isTelegramHtmlParseError } from "./rich-plain-fallback.js";
-import {
-  resolveTelegramMessageIdOrThrow,
-  withTelegramNativeQuoteFallback,
-  type TelegramApi,
-} from "./send-context.js";
+import { resolveTelegramMessageIdOrThrow, type TelegramApi } from "./send-context.js";
 import {
   isTelegramPhotoLimitError,
   isTelegramVoiceMessagesForbiddenError,
@@ -47,9 +44,8 @@ type PreparedRequest = <T>(
 
 export function createTelegramReplyRequest(runtime: RuntimeEnv): PreparedRequest {
   const retry = createChannelApiRetryRunner({
-    shouldRetry: shouldRetryTelegramSendError,
+    shouldRetry: isSafeToRetrySendError,
     strictShouldRetry: true,
-    retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
   });
   return (send, operation, options) =>
     withTelegramApiErrorLogging({
@@ -70,6 +66,11 @@ type TextFallback = { index: number; count: number };
 type AcceptedPart = TelegramPreparedSendPart & { messageId: number; hasInlineKeyboard: boolean };
 type ObservePart = (part: AcceptedPart) => Promise<void>;
 type PartialDeliveryResult = Parameters<typeof mergeTelegramPartialDeliveryError>[1];
+type AcceptOptions = {
+  partialDeliveryResult?: () => PartialDeliveryResult;
+  start?: number;
+  mediaUrls?: readonly string[];
+};
 type Tracking = {
   invalidate: () => void;
   onRejected: (error: unknown) => void;
@@ -85,6 +86,7 @@ export function createTelegramPreparedSender(config: {
   beforeTextPage?: () => Promise<void>;
   beforeMedia?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
+  onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 }) {
   const parts: AcceptedPart[] = [];
   const fail = (error: unknown, start = 0, details?: PartialDeliveryResult): never => {
@@ -111,26 +113,24 @@ export function createTelegramPreparedSender(config: {
   const acceptMany = async (
     delivered: readonly TelegramPreparedSendPart[],
     observe: ObservePart,
-    details?: () => PartialDeliveryResult,
-    start = 0,
+    options: AcceptOptions = {},
   ) => {
     // One album request accepts every returned message at once. Record all IDs
     // before any receipt/cache observer can fail, preventing a replay of its tail.
     const accepted = delivered.map(recordAcceptance);
     try {
+      if (options.mediaUrls && options.mediaUrls.length === accepted.length) {
+        config.onMediaAccepted?.(options.mediaUrls);
+      }
       for (const part of accepted) {
         await observe(part);
       }
     } catch (error) {
-      fail(error, start, details?.());
+      fail(error, options.start ?? 0, options.partialDeliveryResult?.());
     }
   };
-  const accept = (
-    part: TelegramPreparedSendPart,
-    observe: ObservePart,
-    details?: () => PartialDeliveryResult,
-    start = 0,
-  ) => acceptMany([part], observe, details, start);
+  const accept = (part: TelegramPreparedSendPart, observe: ObservePart, options?: AcceptOptions) =>
+    acceptMany([part], observe, options);
   const request = <T>(
     label: string,
     requestParams: Record<string, unknown>,
@@ -148,7 +148,9 @@ export function createTelegramPreparedSender(config: {
         config.request(
           () => {
             config.assertPlatformSendAuthorized?.();
-            return send(effective);
+            return runAuthorizedTelegramRequest(config.assertPlatformSendAuthorized, () =>
+              send(effective),
+            );
           },
           operation,
           {
@@ -289,7 +291,10 @@ export function createTelegramPreparedSender(config: {
           }
           if (next.value.result) {
             const part = { ...next.value.result, plainText: next.value.page.plainText };
-            await accept(part, params.observe, params.tracking.partialDeliveryResult, start);
+            await accept(part, params.observe, {
+              partialDeliveryResult: params.tracking.partialDeliveryResult,
+              start,
+            });
           }
         }
       } finally {
@@ -308,12 +313,12 @@ export function createTelegramPreparedSender(config: {
   };
 
   const sendMedia = async (params: {
-    sender: TelegramOutboundMediaSender<Message>;
-    documentSender?: TelegramOutboundMediaSender<Message>;
+    sender: TelegramOutboundMediaSender;
+    documentSender?: TelegramOutboundMediaSender;
     requestParams: Record<string, unknown>;
     plainCaption?: string;
   }) => {
-    const send = async (sender: TelegramOutboundMediaSender<Message>) => {
+    const send = async (sender: TelegramOutboundMediaSender) => {
       await config.beforeMedia?.();
       return sendTelegramCaptionedMediaWithFallback({
         operation: sender.operation,

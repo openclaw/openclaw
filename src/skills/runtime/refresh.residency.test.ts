@@ -4,33 +4,37 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { toWatchRoot } from "./refresh-watch-path.js";
 import {
   createSkillsWatcherMock,
   useSkillsWatcherFixture,
 } from "./refresh.watcher.test-support.js";
 
-const { createdWatchers, watchMock, watchForSkillRoot } = createSkillsWatcherMock();
+const observer = createSkillsWatcherMock();
+const { watchMock } = observer;
 
-vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
+vi.mock("@openclaw/fs-safe/watch", () => ({ watch: watchMock }));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
   resolvePluginSkillRootsFromMetadata: () => [],
 }));
 
 let refreshModule: typeof import("./refresh.js");
+let registry: typeof import("./refresh-watch-registry.js");
 
 describe("skills watcher residency", () => {
-  const fixture = useSkillsWatcherFixture();
+  const fixture = useSkillsWatcherFixture(observer);
 
   beforeAll(async () => {
     refreshModule = await import("./refresh.js");
+    registry = await import("./refresh-watch-registry.js");
   });
 
   beforeEach(() => {
-    vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
+    // Logical workspace retention is bounded independently of native transport.
+    vi.stubEnv("CHOKIDAR_USEPOLLING", "true");
     watchMock.mockClear();
-    createdWatchers.length = 0;
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
   });
 
@@ -41,32 +45,73 @@ describe("skills watcher residency", () => {
       workspaceDir: fixture.workspaceDir,
       executionWorkspaceDir,
     });
+    await observer.readyAll();
     return {
       executionWorkspaceDir,
-      watcher: watchForSkillRoot(path.join(executionWorkspaceDir, "skills")).watcher,
+      watcher: observer.forRoot(path.join(executionWorkspaceDir, "skills")),
     };
+  }
+
+  function fillCapacity(count: number) {
+    // Fill the LRU with workspace peers sharing base sources, without extra filesystem roots.
+    const sharedTargets = [...registry.workspaceWatchTargets.values()][0]!.filter(
+      (target) => !target.executionOnly,
+    );
+    expect(sharedTargets.length).toBeGreaterThan(0);
+    for (let index = 0; index < count; index += 1) {
+      const key = JSON.stringify([fixture.workspaceDir, undefined, `idle-${index}`]);
+      registry.workspaceWatchOwners.set(key, {
+        workspaceDir: fixture.workspaceDir,
+        sourceScope: {},
+        sharedScanPending: false,
+        unavailable: false,
+      });
+      registry.workspaceWatchTargets.set(key, sharedTargets);
+      for (const target of sharedTargets) {
+        registry.pathWatchers.get(target.path)!.subscribers.add(key);
+      }
+      registry.workspaceWatchLastEnsuredAt.set(key, Date.now());
+    }
+  }
+
+  function executionTargetStates(executionWorkspaceDir: string) {
+    const key = JSON.stringify([
+      fixture.workspaceDir,
+      path.resolve(executionWorkspaceDir),
+      undefined,
+    ]);
+    const targets = expectDefined(
+      registry.workspaceWatchTargets.get(key),
+      "execution watch targets",
+    );
+    const states = targets
+      .filter((target) => target.executionOnly)
+      .map((target) => ({
+        target,
+        state: expectDefined(registry.pathWatchers.get(target.path), "execution path owner"),
+      }));
+    expect(states.length).toBeGreaterThan(0);
+    return states;
   }
 
   it("bounds recent execution roots while retaining the most recently used and shared roots", async () => {
     const first = await ensureExecutionRoot(0);
     const oldest = await ensureExecutionRoot(1);
-    const shared = watchForSkillRoot(path.join(fixture.workspaceDir, "skills")).watcher;
-    for (let index = 2; index < 128; index += 1) {
-      await ensureExecutionRoot(index);
-    }
+    const shared = observer.forRoot(path.join(fixture.workspaceDir, "skills"));
+    fillCapacity(126);
     await ensureExecutionRoot(0);
-    expect(createdWatchers.every((watcher) => !watcher.closed)).toBe(true);
+    expect(observer.subscriptions.every((watcher) => !watcher.closed)).toBe(true);
 
     await ensureExecutionRoot(128);
 
     expect(oldest.watcher.closed).toBe(true);
     expect(first.watcher.closed).toBe(false);
     expect(shared.closed).toBe(false);
-    expect(watchForSkillRoot(path.join(fixture.workspaceDir, "skills")).watcher).toBe(shared);
+    expect(observer.forRoot(path.join(fixture.workspaceDir, "skills"))).toBe(shared);
     const seen = vi.fn();
     refreshModule.registerSkillsChangeListener(seen);
     const changedPath = path.join(first.executionWorkspaceDir, "skills", "probe", "SKILL.md");
-    first.watcher.emit("all", "change", changedPath);
+    first.watcher.change(changedPath);
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toHaveBeenCalledExactlyOnceWith({
       workspaceDir: fixture.workspaceDir,
@@ -101,10 +146,18 @@ describe("skills watcher residency", () => {
       } else {
         expect(initial.snapshot.prompt).toContain("Original instructions");
       }
-      for (let index = 1; index <= 128; index += 1) {
-        await ensureExecutionRoot(index);
-      }
+      const retiring = executionTargetStates(first.executionWorkspaceDir);
+      const shared = observer.forRoot(path.join(fixture.workspaceDir, "skills"));
+      fillCapacity(127);
+      await ensureExecutionRoot(1);
       expect(first.watcher.closed).toBe(true);
+      expect(shared.closed).toBe(false);
+      expect(retiring.every(({ state }) => state.closed)).toBe(true);
+      // Join owner work before testing fresh acquisition; the next case holds retirement.
+      await Promise.all(retiring.map(({ state }) => state.close()));
+      for (const { target, state } of retiring) {
+        expect(registry.pathWatchers.get(target.path)).not.toBe(state);
+      }
       const cached = initial.snapshot;
       if (repair) {
         await writeSkill({
@@ -134,56 +187,87 @@ describe("skills watcher residency", () => {
       } else {
         expect(refreshed.snapshot).toBe(initial.snapshot);
       }
-      expect(
-        watchForSkillRoot(path.join(first.executionWorkspaceDir, "skills")).watcher.closed,
-      ).toBe(false);
+      await observer.readyAll();
+      expect(observer.forRoot(path.join(first.executionWorkspaceDir, "skills")).closed).toBe(false);
     },
   );
 
-  it("joins retired native closes during shutdown without publishing late work", async () => {
-    const skillDir = await fixture.createFixtureDirectory("workspace/skills/probe");
-    const changedPath = path.join(skillDir, "SKILL.md");
-    await fs.writeFile(changedPath, "skill content");
-    refreshModule.ensureSkillsWatcher({ workspaceDir: fixture.workspaceDir });
-    const watcher = watchForSkillRoot(path.join(fixture.workspaceDir, "skills")).watcher;
-    const originalClose = expectDefined(watcher.close.getMockImplementation(), "watcher close");
-    const retirement = createDeferred();
-    watcher.close.mockImplementation(async () => {
-      await originalClose();
-      await retirement.promise;
+  it("refreshes preparation while capacity re-entry waits for retirement", async () => {
+    const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
+    const first = await ensureExecutionRoot(0);
+    const skillDir = path.join(first.executionWorkspaceDir, "skills", "residency-proof");
+    await writeSkill({
+      dir: skillDir,
+      name: "residency-proof",
+      description: "Original instructions",
     });
-    watcher.emit("raw", "change", "SKILL.md", { watchedPath: skillDir });
-    refreshModule.ensureSkillsWatcher({
+    const params = {
       workspaceDir: fixture.workspaceDir,
-      config: { skills: { load: { watch: false } } },
-    });
-    expect(watcher.closed).toBe(true);
+      executionWorkspaceDir: first.executionWorkspaceDir,
+      config: {},
+      skillFilter: ["residency-proof"],
+    };
+    const initial = await resolveReusableWorkspaceSkillSnapshot(params);
+    const retiring = executionTargetStates(first.executionWorkspaceDir);
+    const contentRoot = toWatchRoot(path.join(first.executionWorkspaceDir, "skills"));
+    const held = expectDefined(
+      retiring.find(({ target }) => target.path === contentRoot),
+      "retiring content owner",
+    );
+    const watcher = observer.forRoot(contentRoot);
+    const retirement = createDeferred();
+    watcher.holdClose(retirement.promise);
     const seen = vi.fn();
-    refreshModule.registerSkillsChangeListener(seen);
-    let closed = false;
-    const shutdown = refreshModule.closeSkillsWatchers().then(() => {
-      closed = true;
-    });
     try {
-      for (const [event, callback] of watcher.on.mock.calls) {
-        if (event === "ready") {
-          callback();
-        }
-        if (event === "all") {
-          callback("change", changedPath);
-        }
-        if (event === "raw") {
-          callback("change", "SKILL.md", { watchedPath: skillDir });
-        }
-      }
-      await vi.advanceTimersByTimeAsync(500);
-      expect(seen).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-      expect(closed).toBe(false);
+      fillCapacity(127);
+      await ensureExecutionRoot(1);
+      expect(retiring.every(({ state }) => state.closed)).toBe(true);
+      // Settle unrelated execution targets so this isolates the one held retirement.
+      await Promise.all(
+        retiring.filter(({ state }) => state !== held.state).map(({ state }) => state.close()),
+      );
+      expect(registry.pathWatchers.get(contentRoot)).toBe(held.state);
+      refreshModule.registerSkillsChangeListener(seen);
+      const reentered = await resolveReusableWorkspaceSkillSnapshot({
+        ...params,
+        existingSnapshot: initial.snapshot,
+      });
+      expect(reentered.shouldRefresh).toBe(true);
+      expect(reentered.snapshot.prompt).toContain("Original instructions");
+      expect(registry.pathWatchers.get(contentRoot)).toBe(held.state);
+      expect(observer.forRoot(contentRoot, true)).toBe(watcher);
+      expect(
+        seen.mock.calls.filter(([event]) => event.reason === "watch-unavailable"),
+      ).toHaveLength(1);
+      expect(seen.mock.calls.filter(([event]) => event.reason === "watch-available")).toHaveLength(
+        0,
+      );
+
+      await writeSkill({
+        dir: skillDir,
+        name: "residency-proof",
+        description: "Edited while retiring",
+      });
+      const refreshed = await resolveReusableWorkspaceSkillSnapshot({
+        ...params,
+        existingSnapshot: reentered.snapshot,
+      });
+      expect(refreshed.shouldRefresh).toBe(true);
+      expect(refreshed.snapshot.prompt).toContain("Edited while retiring");
+      expect(registry.pathWatchers.get(contentRoot)).toBe(held.state);
+      expect(observer.forRoot(contentRoot, true)).toBe(watcher);
+      expect(
+        seen.mock.calls.filter(([event]) => event.reason === "watch-unavailable"),
+      ).toHaveLength(1);
+      expect(seen.mock.calls.filter(([event]) => event.reason === "watch-available")).toHaveLength(
+        0,
+      );
+      expect(watcher.close).toHaveBeenCalledTimes(1);
     } finally {
+      const closing = refreshModule.closeSkillsWatchers();
       retirement.resolve();
-      await shutdown;
+      await closing;
     }
-    expect(closed).toBe(true);
+    expect(observer.subscriptions.every((created) => created.closed)).toBe(true);
   });
 });

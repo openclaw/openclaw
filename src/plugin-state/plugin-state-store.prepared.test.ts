@@ -13,7 +13,8 @@ import {
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
-import { lookupPluginStateEntry, registerPluginStateEntry } from "./plugin-state-store.kernel.js";
+import { lookupPluginStateEntry } from "./plugin-state-store.kernel.js";
+import { registerPluginStateEntry } from "./plugin-state-store.retention.js";
 import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import {
   clearPluginStateStoreForTests,

@@ -176,6 +176,8 @@ The `.env` scan covers the effective state directory and the directory containin
 
 Sensitive provider header detection is name-heuristic based: it flags headers whose name matches common auth/credential fragments (`authorization`, `x-api-key`, `token`, `secret`, `password`, `credential`).
 
+Doctor and secrets audit share the plaintext classification for `openclaw.json`. Known non-secret provider API-key markers such as `ollama-local`, SecretRefs, and non-sensitive provider headers do not produce plaintext warnings. Real plaintext keys still do.
+
 ```bash
 openclaw secrets audit
 openclaw secrets audit --check

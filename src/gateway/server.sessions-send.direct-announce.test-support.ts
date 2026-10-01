@@ -61,7 +61,7 @@ export async function runDirectSessionAnnounceScenario(params: {
         },
       },
     });
-    agentStepTesting.setDepsForTest({
+    await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
         payloads: [{ text: "direct announcement delivered", mediaUrl: null }],
         meta: { durationMs: 1 },
@@ -90,6 +90,6 @@ export async function runDirectSessionAnnounceScenario(params: {
       { timeout: 5_000 },
     );
   } finally {
-    agentStepTesting.setDepsForTest();
+    await agentStepTesting.setDepsForTest();
   }
 }

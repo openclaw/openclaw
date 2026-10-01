@@ -16,15 +16,7 @@ const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 const INLINE_STYLE_TAGS: Record<
   string,
-  | "bold"
-  | "italic"
-  | "underline"
-  | "strikethrough"
-  | "code"
-  | "spoiler"
-  | "marked"
-  | "subscript"
-  | "superscript"
+  Exclude<Extract<RichText, { text: RichText }>["type"], "url" | "anchor_link">
 > = {
   b: "bold",
   strong: "bold",
@@ -76,10 +68,12 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
     const parent = stack.at(-1);
     // Code examples are text, including tag-shaped examples inside a disclosure.
     // Keep them out of matching so they cannot close or create an authored container.
+    // Telegram's `<pre><code class="language-x">` wrapper is the one tag a <pre> opens.
     if (
       literalRanges.some((range) => tag.start >= range.start && tag.start < range.end) ||
       ((parent?.name === "code" || parent?.name === "pre") &&
-        !(tag.closing && tag.name === parent.name))
+        !(tag.closing && tag.name === parent.name) &&
+        !(parent.name === "pre" && !tag.closing && tag.name === "code"))
     ) {
       continue;
     }

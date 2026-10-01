@@ -10,7 +10,7 @@ import {
   type AssistantMessageOptions,
 } from "./event-projector-assistant-message.js";
 import { shouldClearTerminalPresentationForNativeItem } from "./event-projector-items.js";
-import { extractRawAssistantText, readItemString } from "./event-projector-values.js";
+import { extractRawAssistantText } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 
@@ -213,7 +213,7 @@ export class CodexAssistantProjection {
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (item.text && this.isCommentaryAssistantItem(item.id)) {
+      if (this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
         this.pendingRawCommentaryEchoes += 1;
       } else if (
@@ -267,18 +267,12 @@ export class CodexAssistantProjection {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
-    const text = extractRawAssistantText(item);
     if (isPendingTerminalAssistantEcho) {
-      const typedItemId = pendingTerminalAssistantEchoItemId;
       this.pendingRawTerminalAssistantEchoItemId = undefined;
-      // Contributors may rewrite the typed completion without rewriting its raw echo.
-      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
-        return;
-      }
-      this.rememberAssistantItem(typedItemId);
-      this.assistantTextByItem.set(typedItemId, text);
+      // Contributors may rewrite or erase typed text without changing its raw echo.
       return;
     }
+    const text = extractRawAssistantText(item);
     if (
       text === undefined ||
       (!text &&
@@ -403,6 +397,25 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
       return;
     }
+    // Codex 0.154.0 can stream under an output-item ID that differs from the
+    // completed item's ID. Only completion receipts own successful history;
+    // retaining the preview would concatenate it with the completed answer.
+    // Remove text before checkpoint close too, so queued commentary readers
+    // cannot persist an orphan preview. Failed turns retain their partial work;
+    // unphased replacement snapshots retain their existing replacement authority.
+    for (const itemId of this.assistantItemOrder) {
+      if (
+        !this.completedAssistantItemIds.has(itemId) &&
+        !this.isAsyncAssistantItem(itemId) &&
+        (this.isFinalAnswerAssistantItem(itemId) || this.isCommentaryAssistantItem(itemId))
+      ) {
+        if (itemId === this.visibleAnswerCandidateItemId) {
+          // Activity needs the preview text to publish its superseded transition.
+          this.supersedeVisibleAnswerCandidate();
+        }
+        this.assistantTextByItem.delete(itemId);
+      }
+    }
     const turnItems = turn.items ?? [];
     const authoritativeIndex = turnItems.findLastIndex((item) => {
       if (
@@ -412,8 +425,8 @@ export class CodexAssistantProjection {
       ) {
         return false;
       }
-      const phase = readItemString(item, "phase");
-      const delivery = readItemString(item, "delivery");
+      const phase = readString(item, "phase");
+      const delivery = readString(item, "delivery");
       return delivery !== "async" && (phase === "final_answer" || phase === undefined);
     });
     const authoritative = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
@@ -484,11 +497,11 @@ export class CodexAssistantProjection {
     if (item?.type !== "agentMessage") {
       return;
     }
-    const phase = readItemString(item, "phase");
+    const phase = readString(item, "phase");
     if (phase) {
       this.assistantPhaseByItem.set(item.id, phase);
     }
-    const delivery = readItemString(item, "delivery");
+    const delivery = readString(item, "delivery");
     if (delivery) {
       this.assistantDeliveryByItem.set(item.id, delivery);
     }

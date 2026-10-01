@@ -4,10 +4,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import "../../components/modal-dialog.ts";
 import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
+import "../../components/modal-dialog.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
@@ -40,6 +41,8 @@ import {
 } from "./composer-capability-catalog.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
 
+registerMcpEnglish();
+
 type ComposerMcpServerScope = "session" | "everywhere";
 
 type CapabilityMutationResult =
@@ -52,8 +55,7 @@ function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
   if (revision) {
     return revision;
   }
-  // Older gateways and partial test fixtures may omit revision hashes. Include the complete
-  // connector definitions so edits to targets, args, auth, or filters still invalidate tools.
+  // Without a revision hash, connector edits still invalidate the effective tools.
   return JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null);
 }
 
@@ -63,7 +65,7 @@ export class ChatComposerCapabilityHost {
   private readonly patchTokens = new Map<string, symbol>();
   private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
   private effectiveToolsErrorKey: string | null = null;
-  private effectiveToolsRequest: { key: string; owner: symbol } | null = null;
+  private effectiveToolsRequest: { key: string } | null = null;
   private client: GatewayBrowserClient | null = null;
   private connectionEpoch: number | undefined;
   private addDialogOpen = false;
@@ -93,53 +95,32 @@ export class ChatComposerCapabilityHost {
   }): Promise<CapabilityMutationResult> {
     const globalConfig =
       options.scope === "session" ? { ...options.config, enabled: false } : options.config;
-    let globalResult: Awaited<ReturnType<typeof options.patchGlobal>>;
+    let stage: "config" | "session" = "config";
     try {
-      globalResult = await options.patchGlobal(globalConfig);
+      const globalResult = await options.patchGlobal(globalConfig);
+      if (!globalResult.ok) {
+        return { ...globalResult, stage };
+      }
+      if (options.scope === "everywhere") {
+        return { ok: true };
+      }
+      stage = "session";
+      const loaded = await options.loadSessionOverrides();
+      if (!loaded.ok) {
+        return { ...loaded, stage };
+      }
+      const next = nextBooleanToolOverrides(
+        loaded.overrides,
+        "mcpServers",
+        options.name,
+        true,
+        false,
+      );
+      const sessionResult = await options.patchSession(next);
+      return sessionResult.ok ? sessionResult : { ...sessionResult, stage };
     } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "config",
-      };
+      return { ok: false, error: formatUiError(error), stage };
     }
-    if (!globalResult.ok) {
-      return { ...globalResult, stage: "config" };
-    }
-    if (options.scope === "everywhere") {
-      return { ok: true };
-    }
-    let loaded: Awaited<ReturnType<typeof options.loadSessionOverrides>>;
-    try {
-      loaded = await options.loadSessionOverrides();
-    } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "session",
-      };
-    }
-    if (!loaded.ok) {
-      return { ...loaded, stage: "session" };
-    }
-    const next = nextBooleanToolOverrides(
-      loaded.overrides,
-      "mcpServers",
-      options.name,
-      true,
-      false,
-    );
-    let sessionResult: Awaited<ReturnType<typeof options.patchSession>>;
-    try {
-      sessionResult = await options.patchSession(next);
-    } catch (error) {
-      return {
-        ok: false,
-        error: formatUiError(error),
-        stage: "session",
-      };
-    }
-    return sessionResult.ok ? sessionResult : { ...sessionResult, stage: "session" };
   }
 
   private loadSkills(context: ApplicationContext, state: ChatPageHost, agentId: string): void {
@@ -194,23 +175,23 @@ export class ChatComposerCapabilityHost {
     ) {
       return;
     }
-    const requestOwner = Symbol("composer-effective-tools-request");
+    const request = { key: cacheKey };
     const connectionEpoch = state.connectionEpoch;
-    this.effectiveToolsRequest = { key: cacheKey, owner: requestOwner };
-    const loader = {
+    this.effectiveToolsRequest = request;
+    const loader: Parameters<typeof loadToolsEffective>[0] = {
       chatModelCatalog: state.chatModelCatalog,
       client,
       connected: true,
       sessions: context.sessions,
       sessionsResult: state.sessionsResult,
-      toolsEffectiveError: null as string | null,
+      toolsEffectiveError: null,
       toolsEffectiveLoading: false,
-      toolsEffectiveLoadingKey: null as string | null,
-      toolsEffectiveResult: null as ToolsEffectiveResult | null,
-      toolsEffectiveResultKey: null as string | null,
+      toolsEffectiveLoadingKey: null,
+      toolsEffectiveResult: null,
+      toolsEffectiveResultKey: null,
     };
     const isCurrent = () =>
-      this.effectiveToolsRequest?.owner === requestOwner &&
+      this.effectiveToolsRequest === request &&
       this.client === client &&
       state.client === client &&
       state.connected &&
@@ -237,7 +218,7 @@ export class ChatComposerCapabilityHost {
         }
       })
       .finally(() => {
-        if (this.effectiveToolsRequest?.owner === requestOwner) {
+        if (this.effectiveToolsRequest === request) {
           this.effectiveToolsRequest = null;
           if (this.client === client && this.connectionEpoch === connectionEpoch) {
             this.notify();
@@ -273,19 +254,15 @@ export class ChatComposerCapabilityHost {
       state.client === client &&
       state.sessionKey === sessionKey &&
       this.patchTokens.get(sessionKey) === patchToken;
-    if (state.sessionKey === sessionKey) {
-      state.lastError = null;
-      state.chatError = null;
-    }
+    state.lastError = null;
+    state.chatError = null;
     this.notify();
     try {
       const result = await patchChatSessionSettings(
         state,
         sessionKey,
         { toolOverrides: next },
-        {
-          ...scopedAgentParamsForSession(state, sessionKey),
-        },
+        scopedAgentParamsForSession(state, sessionKey),
       );
       if (!result) {
         throw new Error(t("chat.composer.menu.offlineBlocked"));

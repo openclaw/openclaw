@@ -7,6 +7,8 @@ export type SessionPatchTargetIdentity = Pick<
   | "expectedLifecycleRevision"
   | "expectedMarkedUnreadAt"
   | "expectedPermissionMode"
+  | "expectedSandboxMode"
+  | "expectedNativeRuntimeConsent"
   | "expectedSessionId"
   | "expectedToolOverrides"
   | "key"

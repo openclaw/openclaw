@@ -23,6 +23,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
@@ -921,6 +922,21 @@ describe("trigger handling", () => {
       expect(inlineRunEmbeddedAgentMock).toHaveBeenCalled();
       const prompt = inlineRunEmbeddedAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
       expect(prompt).toContain("/status");
+    });
+  });
+
+  it("keeps fixture files until asynchronous database custody closes", async () => {
+    await withTempHome(async (home) => {
+      const markerPath = join(home, "custody.txt");
+      await fs.writeFile(markerPath, "retained until close");
+      registerOpenClawAgentDatabaseAsyncResource({
+        agentId: "main",
+        path: join(home, "custody.sqlite"),
+        revoke: () => {},
+        close: async () => {
+          await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("retained until close");
+        },
+      });
     });
   });
 });

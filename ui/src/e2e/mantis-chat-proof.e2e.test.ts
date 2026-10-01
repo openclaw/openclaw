@@ -7,6 +7,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   pauseVirtualClock,
   resolvePlaywrightChromiumExecutablePath,
@@ -152,6 +153,137 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       const videoPath = await video?.path().catch(() => undefined);
       if (videoPath) {
         await copyFile(videoPath, path.join(artifactDir, "web-ui-chat.webm"));
+      }
+    }
+  });
+
+  it("captures Ask OpenClaw handoff focus, dock closure, and hatch drafts", async () => {
+    const outputRoot = process.env.OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR?.trim() || undefined;
+    const beforeDir = createControlUiE2eArtifactDir("mantis-chat-proof-handoff-before", outputRoot);
+    const afterDir = createControlUiE2eArtifactDir("mantis-chat-proof-handoff-after", outputRoot);
+    const hatchDir = createControlUiE2eArtifactDir("mantis-chat-proof-hatch-draft", outputRoot);
+    const rawVideoDir = path.join(afterDir, "raw-video");
+    await mkdir(rawVideoDir, { recursive: true });
+    const context = await newBrowserContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      recordVideo: { dir: rawVideoDir, size: { height: 900, width: 1280 } },
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionId = "mantis-custodian-handoff";
+    const workSessionKey = "agent:main:work";
+    const workSessionUrl = controlUiSessionUrl(server.baseUrl, workSessionKey);
+    const gateway = await installMockGateway(page, {
+      sessionKey: workSessionKey,
+      sessions: [{ key: workSessionKey, kind: "direct", label: "Main", updatedAt: Date.now() }],
+      featureMethods: [
+        "chat.history",
+        "chat.metadata",
+        "chat.send",
+        "chat.startup",
+        "openclaw.chat",
+        "openclaw.chat.history",
+      ],
+      methodResponses: {
+        "openclaw.chat": {
+          action: "none",
+          reply: "Ask OpenClaw is ready to hand work back to your agent.",
+          sessionId,
+        },
+        "openclaw.chat.history": { turns: [] },
+      },
+    });
+
+    try {
+      await page.goto(workSessionUrl);
+      await page.locator(".sidebar-footer-bar__home").click();
+      const panel = page.locator("openclaw-assistant-panel");
+      await panel.getByRole("button", { name: "Ask OpenClaw", exact: true }).click();
+      await panel.getByText("Ask OpenClaw is ready to hand work back to your agent.").waitFor();
+      await writeFile(
+        path.join(beforeDir, "web-ui-chat.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          panel.locator(".agent-chat__composer-combobox textarea"),
+        ]),
+      );
+      await writeFile(
+        path.join(beforeDir, "web-ui-chat-proof.json"),
+        `${JSON.stringify({ stage: "before-handoff", status: "pass" }, null, 2)}\n`,
+      );
+
+      await gateway.setMethodResponse("openclaw.chat", {
+        action: "open-agent",
+        reply: "Opening normal agent chat now.",
+        sessionId,
+      });
+      await panel.locator(".agent-chat__composer-combobox textarea").fill("Continue in agent chat");
+      await panel.locator(".chat-send-btn").click();
+
+      const mainComposer = page.locator("main.content .agent-chat__composer-combobox textarea");
+      await mainComposer.waitFor();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(new URL(workSessionUrl).pathname);
+      await expect
+        .poll(() => mainComposer.evaluate((node) => document.activeElement === node))
+        .toBe(true);
+      await expect.poll(() => panel.locator("section.assistant-panel").isHidden()).toBe(true);
+      await writeFile(
+        path.join(afterDir, "web-ui-chat.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [mainComposer]),
+      );
+      await writeFile(
+        path.join(afterDir, "web-ui-chat-proof.json"),
+        `${JSON.stringify(
+          {
+            composerFocused: true,
+            dockClosed: true,
+            pathname: new URL(page.url()).pathname,
+            stage: "after-handoff",
+            status: "pass",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      await page.locator(".sidebar-footer-bar__home").click();
+      await panel.getByRole("button", { name: "Ask OpenClaw", exact: true }).click();
+      await panel.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await gateway.setMethodResponse("openclaw.chat", {
+        action: "open-agent",
+        agentDraft: "hatch",
+        reply: "Your new agent is ready.",
+        sessionId,
+      });
+      await panel.locator(".agent-chat__composer-combobox textarea").fill("Open my new agent");
+      await panel.locator(".chat-send-btn").click();
+
+      await expect.poll(() => mainComposer.inputValue()).toBe("Wake up, my friend!");
+      await expect.poll(() => panel.locator("section.assistant-panel").isHidden()).toBe(true);
+      await writeFile(
+        path.join(hatchDir, "web-ui-chat.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [mainComposer]),
+      );
+      await writeFile(
+        path.join(hatchDir, "web-ui-chat-proof.json"),
+        `${JSON.stringify(
+          {
+            dockClosed: true,
+            draft: await mainComposer.inputValue(),
+            stage: "hatch-draft",
+            status: "pass",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } finally {
+      const video = page.video();
+      await closeBrowserContext(context);
+      const videoPath = await video?.path().catch(() => undefined);
+      if (videoPath) {
+        await copyFile(videoPath, path.join(afterDir, "web-ui-chat.webm"));
       }
     }
   });

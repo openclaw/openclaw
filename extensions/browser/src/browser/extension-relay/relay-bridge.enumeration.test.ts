@@ -461,4 +461,75 @@ describe("ExtensionRelayBridge target enumeration", () => {
       error: { message: expect.stringMatching(/target identit.*unavailable/i) },
     });
   });
+
+  it("skips a protected tab discovered during native attachment", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const attaching = createDeferred<RelayToExtensionMessage>();
+    const extension = wireExtension(bridge, (message) => {
+      if (message.type === "attach" && message.tabId === 1) {
+        attaching.resolve(message);
+        return null;
+      }
+      return message.type === "attach"
+        ? { type: "error", seq: message.seq, message: "The extensions gallery cannot be scripted." }
+        : replyFor(message);
+    });
+    sendHello(extension.handlers);
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(JSON.stringify({ id: 1, method: "Target.getTargets" }));
+    const pending = await attaching.promise;
+    extension.handlers.onMessage(
+      JSON.stringify({
+        type: "tabs",
+        tabs: [
+          { tabId: 1, url: "https://example.com", title: "Example", active: true },
+          { tabId: 2, url: "https://chrome.google.com/webstore/", title: "Store", active: false },
+        ],
+      }),
+    );
+    extension.handlers.onMessage(JSON.stringify(replyFor(pending)));
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 1)).toMatchObject({
+      result: { targetInfos: [expect.objectContaining({ targetId: "target-1" })] },
+    });
+  });
+
+  it("skips a permanent Chrome refusal but retries that tab on the next enumeration", async () => {
+    const bridge = new ExtensionRelayBridge();
+    let refused = true;
+    const extension = wireExtension(bridge, (message) =>
+      message.type === "attach" && message.tabId === 2 && refused
+        ? { type: "error", seq: message.seq, message: "The extensions gallery cannot be scripted." }
+        : replyFor(message),
+    );
+    sendHello(extension.handlers, [
+      { tabId: 1, url: "https://example.com", title: "Example", active: true },
+      {
+        tabId: 2,
+        url: "https://chromewebstore.google.com/detail/x/abc",
+        title: "Chrome Web Store",
+        active: false,
+      },
+    ]);
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(JSON.stringify({ id: 1, method: "Target.getTargets" }));
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 1)).toMatchObject({
+      result: { targetInfos: [expect.objectContaining({ targetId: "target-1" })] },
+    });
+
+    refused = false;
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.getTargets" }));
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+      result: {
+        targetInfos: [
+          expect.objectContaining({ targetId: "target-1" }),
+          expect.objectContaining({ targetId: "target-2" }),
+        ],
+      },
+    });
+  });
 });

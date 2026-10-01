@@ -26,7 +26,7 @@ import { readDeletedSessionStartup } from "./deleted-session-startup.ts";
 import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
 
 export interface ShellNavigationHost {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   activeSessionKey: string;
   routeState: ShellRouteState;
   lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
@@ -79,7 +79,7 @@ export class ShellNavigationOwner {
     );
   }
 
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void {
+  readonly navigate = (routeId: string, options?: ApplicationNavigationOptions): void => {
     const context = this.host.context;
     if (!context || !isRouteId(routeId)) {
       return;
@@ -89,7 +89,7 @@ export class ShellNavigationOwner {
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
     );
-  }
+  };
 
   recoverNotFoundRoute(): boolean {
     const context = this.host.context;

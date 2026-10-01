@@ -2,7 +2,6 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -293,6 +292,9 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../gateway/probe.js", () => ({
     probeGateway: mocks.probeGateway,
   }));
+  vi.doMock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+    waitForGatewayDiagnosticReadiness: async () => undefined,
+  }));
   vi.doMock("../gateway/probe-target.js", () => ({
     resolveGatewayProbeTarget: mocks.resolveGatewayProbeTarget,
   }));
@@ -329,7 +331,6 @@ export function createStatusSummary(
 ) {
   return {
     linkChannel: options.linkChannel,
-    tasks: createEmptyTaskRegistrySummary(),
     sessions: {
       count: 0,
       paths: [],

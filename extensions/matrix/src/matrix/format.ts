@@ -43,9 +43,7 @@ type MatrixMentionCandidate = {
   raw: string;
   start: number;
   end: number;
-  kind: "room" | "user";
-  userId?: string;
-};
+} & ({ kind: "room" } | { kind: "user"; userId: string });
 
 const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:[\]]+/g;
 const MATRIX_MENTION_SERVER_NAME_PATTERN =
@@ -179,23 +177,12 @@ function buildMentionCandidate(raw: string, start: number): MatrixMentionCandida
   if (!normalized) {
     return null;
   }
-  const kind = normalizeLowercaseStringOrEmpty(normalized.raw) === "@room" ? "room" : "user";
-  const base: MatrixMentionCandidate = {
-    raw: normalized.raw,
-    start,
-    end: normalized.end,
-    kind,
-  };
-  if (kind === "room") {
-    return base;
+  if (normalizeLowercaseStringOrEmpty(normalized.raw) === "@room") {
+    return { ...normalized, start, kind: "room" };
   }
-  const userCandidate = isMatrixMentionUserId(normalized.raw)
-    ? { ...base, userId: normalized.raw }
+  return isMatrixMentionUserId(normalized.raw)
+    ? { ...normalized, start, kind: "user", userId: normalized.raw }
     : null;
-  if (!userCandidate) {
-    return null;
-  }
-  return userCandidate;
 }
 
 function collectMentionCandidates(text: string): MatrixMentionCandidate[] {
@@ -344,21 +331,6 @@ function createMentionLinkTokens(params: {
   return [open, text, close];
 }
 
-function resolveMentionUserId(match: MatrixMentionCandidate): string | null {
-  if (match.kind !== "user") {
-    return null;
-  }
-  return match.userId ?? null;
-}
-
-async function resolveMatrixSelfUserId(client: MatrixClient): Promise<string | null> {
-  const getUserId = (client as { getUserId?: () => Promise<string> | string }).getUserId;
-  if (typeof getUserId !== "function") {
-    return null;
-  }
-  return await Promise.resolve(getUserId.call(client)).catch(() => null);
-}
-
 function mutateInlineTokensWithMentions(params: {
   children: MarkdownInlineToken[];
   userIds: string[];
@@ -406,8 +378,8 @@ function mutateInlineTokensWithMentions(params: {
         continue;
       }
 
-      const resolvedUserId = resolveMentionUserId(match);
-      if (!resolvedUserId || resolvedUserId === params.selfUserId) {
+      const resolvedUserId = match.userId;
+      if (resolvedUserId === params.selfUserId) {
         nextChildren.push(createTextToken(child, match.raw));
         continue;
       }
@@ -574,7 +546,7 @@ async function resolveMarkdownMentionState(params: {
   tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
   const tokens = parseMatrixMarkdown(params.analysis, params.tableMode);
-  const selfUserId = await resolveMatrixSelfUserId(params.client);
+  const selfUserId = await params.client.getUserId().catch(() => null);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
   let roomMentioned = false;

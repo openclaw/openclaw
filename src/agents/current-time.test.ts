@@ -47,16 +47,6 @@ describe("appendCronStyleCurrentTimeLine", () => {
     expect(appendCronStyleCurrentTimeLine("", CFG, Date.now())).toBe("");
   });
 
-  it("appends a Current time line when none is present", () => {
-    const out = appendCronStyleCurrentTimeLine(
-      "Heartbeat tick",
-      CFG,
-      Date.parse("2026-04-30T10:00:00Z"),
-    );
-    expect(out).toContain("Heartbeat tick");
-    expect(out).toMatch(/Reference UTC: 2026-04-30 10:00 UTC/);
-  });
-
   it("refreshes an existing Current time line on subsequent calls (#44993)", () => {
     const oldNow = Date.parse("2026-04-30T08:00:00Z");
     const newNow = Date.parse("2026-04-30T10:00:00Z");

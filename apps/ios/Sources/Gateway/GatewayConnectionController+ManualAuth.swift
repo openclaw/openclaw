@@ -16,21 +16,15 @@ extension GatewayConnectionController {
     }
 
     static func clearDeviceAuthTokens(gatewayID: String) {
-        if let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted() {
-            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
-            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
-        }
-        if let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) {
-            DeviceAuthStore.clearToken(
-                deviceId: shareIdentity.deviceId,
-                role: "node",
-                gatewayID: gatewayID,
-                profile: .shareExtension)
-            DeviceAuthStore.clearToken(
-                deviceId: shareIdentity.deviceId,
-                role: "operator",
-                gatewayID: gatewayID,
-                profile: .shareExtension)
+        for profile in [GatewayDeviceIdentityProfile.primary, .shareExtension] {
+            guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile) else { continue }
+            for role in ["node", "operator"] {
+                DeviceAuthStore.clearToken(
+                    deviceId: identity.deviceId,
+                    role: role,
+                    gatewayID: gatewayID,
+                    profile: profile)
+            }
         }
     }
 

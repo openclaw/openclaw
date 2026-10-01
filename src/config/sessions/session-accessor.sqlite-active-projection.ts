@@ -8,6 +8,7 @@ import {
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
+  type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
   SessionTranscriptProjectionUnavailableError,
@@ -18,19 +19,17 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 export function withCurrentProjectionSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (projection: CurrentTranscriptProjection) => T,
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; resolvedScope?: ResolvedTranscriptReadScope } = {},
 ): T {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const resolved = options.resolvedScope ?? resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
   const readSnapshot = (database: CurrentTranscriptProjection["database"]) =>
     readCurrentProjectionSnapshot(database, resolved, read);
   const result = options.readOnly
-    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, {
-        throwOnMissingTable: true,
-      })
+    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions)
     : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
   if (!result.found) {
-    throw new SessionTranscriptStorageUnavailableError();
+    throw new SessionTranscriptStorageUnavailableError(result.reason);
   }
   if (result.value.kind === "value") {
     return result.value.value;

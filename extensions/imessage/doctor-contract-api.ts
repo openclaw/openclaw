@@ -1,16 +1,18 @@
-import { definePluginDoctorMigrationFromPlans } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 
-export const stateMigrations = [
-  definePluginDoctorMigrationFromPlans({
+export const stateMigrations: PluginDoctorStateMigration[] = [
+  {
     id: "imessage-legacy-state",
     label: "iMessage legacy state",
-    // Config repair enumerates this artifact too; load the detector only when
-    // detection or migration resolves plans.
-    resolvePlans: async (params) => {
-      const { detectIMessageLegacyStateMigrations } = await import("./src/state-migrations.js");
-      return detectIMessageLegacyStateMigrations(params);
+    async detectLegacyState(params) {
+      const { imessageRetiredStateMigration } = await import("./src/state-migrations.js");
+      return imessageRetiredStateMigration.detectLegacyState(params);
     },
-  }),
+    async migrateLegacyState(params) {
+      const { imessageRetiredStateMigration } = await import("./src/state-migrations.js");
+      return imessageRetiredStateMigration.migrateLegacyState(params);
+    },
+  },
 ];

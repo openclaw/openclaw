@@ -10,22 +10,24 @@ const cfg = {
   },
 } as OpenClawConfig;
 
+const base = {
+  cfg,
+  jobId: "job-1",
+  provider: "openai",
+  model: "gpt-5.4-codex",
+  workspaceDir: "/workspace",
+  agentRuntime: "codex",
+  agentPayload: {
+    kind: "agentTurn" as const,
+    message: "run",
+    toolsAllow: ["read"],
+    toolsAllowIsDefault: true,
+  },
+};
+
 describe("configured MCP inherited-cap diagnostics", () => {
   it("persists an actionable warning for legacy Codex default caps", async () => {
-    const diagnostics = await createCronToolsAllowPreflightDiagnostics({
-      cfg,
-      jobId: "job-1",
-      provider: "openai",
-      model: "gpt-5.4-codex",
-      workspaceDir: "/workspace",
-      agentRuntime: "codex",
-      agentPayload: {
-        kind: "agentTurn",
-        message: "run",
-        toolsAllow: ["read"],
-        toolsAllowIsDefault: true,
-      },
-    });
+    const diagnostics = await createCronToolsAllowPreflightDiagnostics(base);
 
     expect(diagnostics?.entries[0]).toMatchObject({
       source: "cron-preflight",
@@ -37,18 +39,11 @@ describe("configured MCP inherited-cap diagnostics", () => {
   it("does not warn after final executable-surface capture", async () => {
     await expect(
       createCronToolsAllowPreflightDiagnostics({
-        cfg,
-        jobId: "job-1",
-        provider: "openai",
-        model: "gpt-5.4-codex",
-        workspaceDir: "/workspace",
-        agentRuntime: "codex",
+        ...base,
         toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
         agentPayload: {
-          kind: "agentTurn",
-          message: "run",
+          ...base.agentPayload,
           toolsAllow: ["notes__read"],
-          toolsAllowIsDefault: true,
         },
       }),
     ).resolves.toBeUndefined();
@@ -66,26 +61,17 @@ describe("configured MCP inherited-cap diagnostics", () => {
         },
       },
     } as OpenClawConfig;
-    const base = {
+    const scoped = {
+      ...base,
       cfg: agentScopedCfg,
       jobId: "job-agent-scope",
-      provider: "openai",
-      model: "gpt-5.4-codex",
-      workspaceDir: "/workspace",
-      agentRuntime: "codex",
-      agentPayload: {
-        kind: "agentTurn" as const,
-        message: "run",
-        toolsAllow: ["read"],
-        toolsAllowIsDefault: true as const,
-      },
     };
 
     await expect(
-      createCronToolsAllowPreflightDiagnostics({ ...base, agentId: "support" }),
+      createCronToolsAllowPreflightDiagnostics({ ...scoped, agentId: "support" }),
     ).resolves.toBeUndefined();
     await expect(
-      createCronToolsAllowPreflightDiagnostics({ ...base, agentId: "research" }),
+      createCronToolsAllowPreflightDiagnostics({ ...scoped, agentId: "research" }),
     ).resolves.toMatchObject({ entries: [expect.objectContaining({ severity: "warn" })] });
   });
 });

@@ -11,6 +11,7 @@
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",
+    "../../src/audit/**",
     "../../src/agents/**",
     "../../src/gateway/**",
     "../../src/infra/**",

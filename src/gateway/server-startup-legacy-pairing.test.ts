@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
+import { seedNodeDevice } from "../infra/device-pairing-node.test-support.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { readChannelPairingState } from "../pairing/pairing-store-sqlite.js";
@@ -70,6 +72,32 @@ afterEach(async () => {
 });
 
 describe("legacy pairing repair ownership", () => {
+  it("preserves disabled desktop grants before startup admission", async () => {
+    await seedNodeDevice(stateDir, "desktop-node");
+    const { request } = await requestNodePairing(
+      { nodeId: "desktop-node", platform: "darwin", commands: ["desktop.stream", "system.run"] },
+      stateDir,
+    );
+    await approveNodePairing(
+      request.requestId,
+      { callerScopes: ["operator.pairing", "operator.admin"] },
+      stateDir,
+    );
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    await runGatewayStartupMaintenance({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
+    });
+    expect((await getPairedDevice("desktop-node", stateDir))?.nodeSurface?.commands).toEqual([
+      "system.run",
+    ]);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("approve their updated desktop capability"),
+    );
+  });
+
   it("imports legacy DM requests and approvals only in Doctor mode", async () => {
     const timestamp = new Date().toISOString();
     const request = {

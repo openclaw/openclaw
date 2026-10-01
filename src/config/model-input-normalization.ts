@@ -53,21 +53,15 @@ function normalizeAgentModelScope(value: unknown): unknown {
   }
   const originalMediaModels = value.mediaModels;
   if (isRecord(originalMediaModels)) {
-    let mediaModelsChanged = false;
-    const mediaModels = { ...originalMediaModels };
+    let mediaModels: unknown = originalMediaModels;
     for (const key of MEDIA_MODEL_KEYS) {
-      if (!Object.hasOwn(originalMediaModels, key)) {
-        continue;
-      }
-      const normalized = normalizeAgentModelSelectionForConfig(originalMediaModels[key]);
-      if (normalized !== mediaModels[key]) {
-        mediaModels[key] = normalized;
-        mediaModelsChanged = true;
-      }
+      mediaModels = normalizeNestedModelField(
+        mediaModels,
+        key,
+        normalizeAgentModelSelectionForConfig,
+      );
     }
-    if (mediaModelsChanged) {
-      assign("mediaModels", mediaModels);
-    }
+    assign("mediaModels", mediaModels);
   }
   assign("heartbeat", normalizeNestedModelField(value.heartbeat, "model", normalizeStringModelRef));
   assign(

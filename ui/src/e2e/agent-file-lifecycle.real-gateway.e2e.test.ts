@@ -241,13 +241,13 @@ catalogSuite.define(() => {
           await page.goto(url.toString());
           await waitForControlUiGatewayReady(page);
           const editor = page.locator("openclaw-agents-page");
-          const picker = editor.locator(".model-picker__select");
+          const picker = editor.locator(
+            'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+          );
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
-          const identityName = editor.locator(
-            ".agent-identity-editor__fields input[maxlength='64']",
-          );
+          const identityName = editor.getByRole("textbox", { name: "Display name", exact: true });
           // Identity hydration can replace the selection between fill's browser and keyboard steps.
           await expect.poll(() => identityName.inputValue()).toBe("Assistant");
           await identityName.fill("Keep this identity draft");
@@ -359,7 +359,11 @@ catalogSuite.define(() => {
           ).toBe(0);
 
           rejectCatalog = true;
-          await publish("held");
+          // Refresh the same catalog owner; a config write retires its display facts.
+          inventoryModel = "inventory-read-failure";
+          const failedReadRefresh = await refreshInventory();
+          commands.push({ args: refreshInventoryArgs, publishedInventory: failedReadRefresh });
+          expect(failedReadRefresh.stdout).toContain("inventory-read-failure");
           const error = editor
             .getByRole("alert")
             .filter({ hasText: "Catalog transport unavailable" });

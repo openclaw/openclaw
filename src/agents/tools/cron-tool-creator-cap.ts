@@ -9,12 +9,7 @@ import {
 } from "../tool-policy.js";
 import type { CronCreatorToolAllowlistEntry, CronToolsAllowCaptureRef } from "./cron-tool.types.js";
 
-type NormalizedCronCreatorTool = {
-  name: string;
-  pluginId?: string;
-  aliasName?: string;
-  execTarget?: { host: "gateway"; ask?: "always" };
-};
+type NormalizedCronCreatorTool = Exclude<CronCreatorToolAllowlistEntry, string>;
 
 type CronCreatorCapCaptureOptions = {
   /** Backend-projected native capabilities; must be exact vocabulary names. */
@@ -290,9 +285,7 @@ function capCronJobToolsAllow(params: {
 
   const creatorToolsAllow = normalizeCronCreatorToolsAllow(params.creatorToolAllowlist);
   const creatorToolNames = creatorToolsAllow.map((tool) => tool.name);
-  const requestedRaw = Object.hasOwn(params.payload, "toolsAllow")
-    ? params.payload.toolsAllow
-    : params.defaultToolsAllow;
+  const requestedRaw = writesToolsAllow ? params.payload.toolsAllow : params.defaultToolsAllow;
   if (!Array.isArray(requestedRaw)) {
     params.payload.toolsAllow = creatorToolNames;
     params.payload.toolsAllowIsDefault = true;
@@ -336,10 +329,7 @@ export function capCronJobToolsAllowOnCreate(
   value: unknown,
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined,
 ): void {
-  if (!isRecord(value) || !isRecord(value.payload)) {
-    return;
-  }
-  if (!creatorToolAllowlist) {
+  if (!isRecord(value) || !isRecord(value.payload) || !creatorToolAllowlist) {
     return;
   }
   capCronJobToolsAllow({
@@ -403,7 +393,7 @@ export function planCronJobUpdatePatch(params: {
   const existingPayload = params.currentJob.payload;
   const existingPayloadRecord = isRecord(existingPayload) ? existingPayload : undefined;
   const existingPayloadKind = readCronPayloadKind(existingPayload);
-  const payloadKind = explicitPayloadKind ?? readCronPayloadKind(existingPayload);
+  const payloadKind = explicitPayloadKind ?? existingPayloadKind;
   if (payload && payloadKind !== undefined) {
     payload.kind = payloadKind;
     patch.payload = payload;

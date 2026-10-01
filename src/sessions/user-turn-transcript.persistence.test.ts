@@ -9,11 +9,13 @@ import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
+import { formatChatWorkContext } from "../chat/work-context.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session-accessor.transcript-target.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { stripEnvelopeFromMessage } from "../gateway/chat-sanitize.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -21,7 +23,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
-import { buildChannelUserTurnSender } from "./user-turn-transcript.metadata.js";
+import {
+  buildChannelUserTurnSender,
+  restorePreparedUserTurnOperationalMetaForRuntime,
+} from "./user-turn-transcript.metadata.js";
 import {
   createSqliteTranscriptTarget,
   persistUserTurnTranscript,
@@ -107,6 +112,56 @@ describe("persistUserTurnTranscript", () => {
       );
     },
   );
+
+  it.each([false, true])(
+    "round-trips captured context without undoing hook redaction (%s)",
+    async (redact) => {
+      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("user-context-") });
+      const snapshot = { page: "chat", title: "Parser work", workspace: "/projects/parser" };
+      const text = "Explain this task";
+      const modelText = text + "\n\n" + formatChatWorkContext(snapshot);
+      await persistUserTurnTranscript({
+        ...target,
+        input: { text: modelText, workContext: { snapshot, text }, timestamp: 123 },
+        updateMode: "none",
+        ...(redact
+          ? { beforeMessageWrite: ({ message }) => ({ ...message, content: "[redacted]" }) }
+          : {}),
+      });
+      const [stored] = await readTranscriptMessages(target);
+      expect(stored?.content).toBe(redact ? "[redacted]" : modelText);
+      expect(stripEnvelopeFromMessage(stored)).toMatchObject({
+        content: redact ? "[redacted]" : text,
+      });
+      if (redact) {
+        expect(stored).not.toHaveProperty("__openclaw.workContext");
+      } else {
+        expect(stored).toHaveProperty("__openclaw.workContext", { snapshot, text });
+      }
+      expect(stripEnvelopeFromMessage(stored)).not.toHaveProperty("__openclaw.workContext.text");
+    },
+  );
+
+  it("does not restore original display text after a runtime hook or continuation rewrites it", async () => {
+    const target = createSqliteTranscriptTarget({ dir: tempDirs.make("user-context-rewrite-") });
+    const input = {
+      text: "original prompt",
+      workContext: { snapshot: { page: "chat" }, text: "original words" },
+    };
+    const recorder = createUserTurnTranscriptRecorder({ target, input, updateMode: "none" });
+    const prepared = recorder.message!;
+    const runtime = restorePreparedUserTurnOperationalMetaForRuntime({
+      preparedMessage: prepared,
+      runtimeMessage: { ...prepared, content: "[redacted]" },
+    });
+    expect(stripEnvelopeFromMessage(runtime)).toMatchObject({ content: "[redacted]" });
+    expect(runtime).not.toHaveProperty("__openclaw.workContext");
+    recorder.replaceTextBeforePersistence?.("approved continuation");
+    await recorder.persistApproved();
+    const [persisted] = await readTranscriptMessages(target);
+    expect(stripEnvelopeFromMessage(persisted)).toMatchObject({ content: "approved continuation" });
+    expect(persisted).not.toHaveProperty("__openclaw.workContext");
+  });
 
   it("appends a structured user turn through the shared transcript writer", async () => {
     const dir = tempDirs.make("openclaw-user-turn-append-");
@@ -329,31 +384,6 @@ describe("persistUserTurnTranscript", () => {
     });
 
     expect(appended?.message).not.toHaveProperty("__openclaw");
-  });
-
-  it("uses inline update mode by default", async () => {
-    const dir = tempDirs.make("openclaw-user-turn-append-inline-");
-    const target = createSqliteTranscriptTarget({ dir });
-
-    const appended = await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "hello from runtime",
-      },
-    });
-
-    expect(appended?.message).toMatchObject({
-      role: "user",
-      content: "hello from runtime",
-      timestamp: expect.any(Number),
-    });
-    await expect(readTranscriptMessages(target)).resolves.toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: "hello from runtime",
-        timestamp: expect.any(Number),
-      }),
-    ]);
   });
 
   it("reports one original committed input, never staged custody or idempotent replay", async () => {
@@ -649,46 +679,29 @@ describe("persistUserTurnTranscript", () => {
     const dir = tempDirs.make("openclaw-user-turn-redacted-idempotent-");
     const target = createSqliteTranscriptTarget({ dir });
 
-    await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "secret prompt",
-        idempotencyKey: "chat-run-1:user",
-        replyToId: "transcript-reply-1",
-        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
-        senderIsOwner: true,
-        provenance,
-        sender: { id: "user-42", name: "Ada" },
-        transport: {
-          channel: "reef",
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          messageId: "inbound-1",
-          replyToId: "outbound-1",
-          clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
+    const persist = () =>
+      persistUserTurnTranscript({
+        ...target,
+        input: {
+          text: "secret prompt",
+          idempotencyKey: "chat-run-1:user",
+          replyToId: "transcript-reply-1",
+          replyToPreview: { text: "Original reply", senderLabel: "Molty" },
+          senderIsOwner: true,
+          provenance,
+          sender: { id: "user-42", name: "Ada" },
+          transport: {
+            channel: "reef",
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            messageId: "inbound-1",
+            replyToId: "outbound-1",
+            clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
+          },
         },
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    });
-    await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "secret prompt",
-        idempotencyKey: "chat-run-1:user",
-        replyToId: "transcript-reply-1",
-        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
-        senderIsOwner: true,
-        provenance,
-        sender: { id: "user-42", name: "Ada" },
-        transport: {
-          channel: "reef",
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          messageId: "inbound-1",
-          replyToId: "outbound-1",
-          clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
-        },
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    });
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+    await persist();
+    await persist();
 
     await expect(readTranscriptMessages(target)).resolves.toEqual([
       expect.objectContaining({

@@ -194,27 +194,6 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     expect(isKnownSecretTargetId("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
   });
 
-  it("registers config contract targets only from the resolved snapshot", async () => {
-    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      plugins: [
-        {
-          id: "snapshot-plugin",
-          origin: "config",
-          channels: [],
-          configContracts: {
-            secretInputs: { paths: [{ path: "credentials.token" }] },
-          },
-        },
-      ],
-    } as never);
-    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
-
-    const ids = getSecretTargetRegistry().map((entry) => entry.id);
-
-    expect(ids).toContain("plugins.entries.snapshot-plugin.config.credentials.token");
-    expect(metadataMocks.listBundledPluginMetadata).not.toHaveBeenCalled();
-  });
-
   it("preserves plugin, array, and record identity across discovery, setup, and apply", async () => {
     const rootDir = makeTrackedTempDir("openclaw-target-registry-plugin-identity", tempDirs);
     const pluginContracts = [
@@ -463,15 +442,6 @@ describe("getSecretTargetRegistry metadata reuse", () => {
         { token: { source: "env", provider: "default", id: "WILDCARD_ARRAY_PLUGIN_TOKEN" } },
       ],
     });
-  });
-
-  it("keeps official external channel secret targets without installed plugin metadata", async () => {
-    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
-
-    const ids = getSecretTargetRegistry().map((entry) => entry.id);
-
-    expect(ids).toContain("channels.qqbot.clientSecret");
-    expect(ids).toContain("channels.qqbot.accounts.*.clientSecret");
   });
 
   it("builds config-scoped registries independently instead of reusing the singleton", async () => {

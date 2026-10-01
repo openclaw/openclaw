@@ -57,11 +57,6 @@ export function resolveAuthProfilePortability(
   return { portable: true, reason: "portable-static-credential" };
 }
 
-/** Returns true when a credential can be copied into an agent-local store. */
-function isAuthProfileCredentialPortableForAgentCopy(credential: AuthProfileCredential): boolean {
-  return resolveAuthProfilePortability(credential).portable;
-}
-
 /** Builds an agent-copy store containing only portable credentials and their order. */
 export function buildPortableAuthProfileStoreForAgentCopy(store: AuthProfileStore): {
   store: AuthProfileStore;
@@ -72,7 +67,7 @@ export function buildPortableAuthProfileStoreForAgentCopy(store: AuthProfileStor
   const skippedProfileIds: string[] = [];
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).flatMap(([profileId, credential]) => {
-      if (!isAuthProfileCredentialPortableForAgentCopy(credential)) {
+      if (!resolveAuthProfilePortability(credential).portable) {
         skippedProfileIds.push(profileId);
         return [];
       }

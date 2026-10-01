@@ -1,31 +1,19 @@
+import {
+  bindCommandOwnerAuthority,
+  captureCommandOwnerAssertion,
+  getCommandOwnerAuthority,
+} from "../../auto-reply/command-owner-authority.js";
+import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
+import { captureChannelOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { readChannelIngressHostOwner, type ChannelIngressHostOwner } from "./ingress-host-owner.js";
+import { takeChannelParticipantInput } from "./admission-evidence.js";
+import type { ChannelIngressHostOwner } from "./ingress-host-owner.js";
 import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "./runtime-types.js";
-
-type ChannelInput = {
-  identity: Extract<SessionParticipantIdentity, { type: "remote" | "observation" }>;
-  binding: ChannelIngressContextBinding;
-  promptedAt: number;
-  owner: ChannelIngressHostOwner;
-};
-const inputs = resolveGlobalSingleton(
-  Symbol.for("openclaw.channelParticipantInputs"),
-  () => new WeakMap<ResolvedChannelMessageIngress, ChannelInput>(),
-);
-
-/** Raw product facts stay private; the public ingress result remains redacted diagnostic data. */
-export function prepareChannelParticipantInput(
-  result: ResolvedChannelMessageIngress,
-  input: ChannelInput,
-): void {
-  inputs.set(result, input);
-}
 
 export function bindChannelParticipantInput(params: {
   context: MsgContext;
@@ -42,20 +30,16 @@ export function bindChannelParticipantInput(params: {
     return;
   }
   const resolutions = Array.isArray(params.ingress) ? params.ingress : [params.ingress];
-  const batch = resolutions.map((result) => {
-    const input = inputs.get(result);
-    inputs.delete(result);
-    return input;
-  });
+  const batch = resolutions.map(takeChannelParticipantInput);
   // Batched ingress uses the final transport message id; every source keeps its own accepted time.
   if (
     batch.at(-1)?.binding.messageId !== params.binding.messageId ||
-    params.owner !== readChannelIngressHostOwner(params.channelId) ||
     !params.owner.isLive() ||
     batch.some(
       (input) =>
         !input ||
         input.owner !== params.owner ||
+        input.gatewayContext !== params.owner.resolveGatewayContext?.() ||
         input.identity.pluginId !== params.channelId ||
         input.binding.agentId !== params.binding.agentId ||
         input.binding.sessionKey !== params.binding.sessionKey ||
@@ -69,5 +53,57 @@ export function bindChannelParticipantInput(params: {
     if (input) {
       prepareSessionParticipantInput(params.context, input.identity, input.promptedAt);
     }
+  }
+  const principal = batch.at(-1)?.verifiedPrincipal;
+  const principalKey = principal && JSON.stringify(principal);
+  const gateway = params.owner.resolveGatewayContext?.();
+  if (
+    !principal ||
+    !gateway ||
+    batch.some((input) => JSON.stringify(input?.verifiedPrincipal) !== principalKey)
+  ) {
+    return;
+  }
+  const requester = batch.at(-1)?.requesterProfile;
+  if (
+    requester &&
+    params.context.SenderId === principal.senderId &&
+    (params.context.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
+    params.context.OriginatingChannel === principal.channelId &&
+    batch.every(
+      (input) => input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),
+    )
+  ) {
+    bindRequesterProfile(params.context, {
+      ...requester,
+      isCurrent: () =>
+        params.owner.isLive() &&
+        params.owner.resolveGatewayContext?.() === gateway &&
+        batch.every((input) => input?.requesterProfile?.isCurrent()),
+    });
+  }
+  const authority = batch.at(-1)?.commandOwnerAuthority;
+  if (!authority?.source || !authority.isCurrent(gateway.getRuntimeConfig())) {
+    return;
+  }
+  bindCommandOwnerAuthority(params.context, {
+    recoveryReference: authority.recoveryReference,
+    isCurrent: () =>
+      params.owner.isLive() &&
+      params.owner.resolveGatewayContext?.() === gateway &&
+      authority.isCurrent(gateway.getRuntimeConfig()),
+  });
+  const assertCurrent = captureCommandOwnerAssertion(params.context);
+  const commandOwner = getCommandOwnerAuthority(params.context);
+  if (authority.operatorProfile && assertCurrent && commandOwner) {
+    bindCommandOwnerAuthority(params.context, {
+      ...commandOwner,
+      operatorAuthority: captureChannelOperatorRunAuthority({
+        ...authority.operatorProfile,
+        getRuntimeConfig: () => gateway.getRuntimeConfig(),
+        assertCurrent,
+        signal: authority.signal,
+      }),
+    });
   }
 }

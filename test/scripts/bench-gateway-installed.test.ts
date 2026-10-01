@@ -14,6 +14,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const require = createRequire(import.meta.url);
+const wsServerUrl = pathToFileURL(
+  path.join(path.dirname(require.resolve("ws/package.json")), "lib/websocket-server.js"),
+).href;
 const sourceSha = "1".repeat(40);
 const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 
@@ -38,7 +41,7 @@ import { createServer } from "node:http";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fork, spawn } from "node:child_process";
 import path from "node:path";
-import WebSocket from ${JSON.stringify(pathToFileURL(require.resolve("ws")).href)};
+import WebSocketServer from ${JSON.stringify(wsServerUrl)};
 const record = (event) => appendFileSync(${JSON.stringify(events)}, JSON.stringify({ ...event, pid: process.pid }) + "\\n");
 if (process.argv.includes("--descendant")) {
   record({ type: "descendant", listeners: process.listenerCount("message") });
@@ -55,7 +58,20 @@ if (process.argv.includes("--descendant")) {
       while (performance.now() < until) { Math.sqrt(performance.now()); }
     }
     fixtureStartupCpuWork();
-    console.log("startup trace: fixture.cpu 60.0ms total=70.0ms start=5.0ms calls=2");
+    const consoleResults = [
+      console.log("startup trace: fixture.cpu 60.0ms total=70.0ms start=5.0ms calls=2"),
+      console.info("fixture console %s", "info"),
+      console.debug("fixture console debug"),
+      console.warn("fixture console warn"),
+      console.error("fixture console error"),
+    ];
+    if (consoleResults.some((value) => value !== undefined)) throw new Error("console return changed");
+    for (const stream of ["stdout", "stderr"]) {
+      await new Promise((resolve, reject) => {
+        const accepted = process[stream].write("fixture direct " + stream + "\\n", resolve);
+        if (typeof accepted !== "boolean") reject(new Error("stream write return changed"));
+      });
+    }
   }
   const inherited = fork(process.argv[1], ["--descendant"], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
   await new Promise((resolve, reject) => { inherited.once("exit", resolve); inherited.once("error", reject); });
@@ -63,7 +79,7 @@ if (process.argv.includes("--descendant")) {
     res.writeHead(req.method === "HEAD" && ["/healthz", "/readyz"].includes(req.url) ? 200 : 404);
     res.end();
   });
-  const sockets = new WebSocket.WebSocketServer({ server });
+  const sockets = new WebSocketServer({ server });
   sockets.on("connection", (ws) => ws.on("message", (data) => {
     const request = JSON.parse(data.toString());
     record({ type: "request", index, method: request.method });
@@ -194,32 +210,46 @@ describe("installed Gateway startup benchmark entry", () => {
   it("retains signed profile samples and rejects malformed capture data", async () => {
     const root = tempDirs.make("openclaw-installed-profile-");
     const capture = await prepareInstalledCpuProfile(path.join(root, "result.json"), "fixture.mjs");
-    await fs.writeFile(
-      capture.attachmentPath,
-      JSON.stringify({
-        pid: process.pid,
-        parentPid: process.pid,
-        mainThread: true,
-        threadId: 0,
-        entry: capture.entry,
-        execArgv: capture.nodeArgs,
-        attachedMonotonicUs: 1_000_100,
-        attachedPerformanceMs: 100,
-        timeOrigin: 1,
-        exitedMonotonicUs: 1_009_900,
-        code: 0,
-        phases: [],
-        droppedPhases: 0,
-        observerErrors: [],
-      }),
-    );
+    const attachment = {
+      pid: process.pid,
+      parentPid: process.pid,
+      mainThread: true,
+      threadId: 0,
+      entry: capture.entry,
+      execArgv: capture.nodeArgs,
+      attachedMonotonicUs: 1_000_100,
+      attachedPerformanceMs: 100,
+      timeOrigin: 1,
+      exitedMonotonicUs: 1_009_900,
+      code: 0,
+      phases: [
+        {
+          phase: "first",
+          durationMs: 1,
+          totalMs: 1,
+          monotonicUs: 1_000_200,
+          performanceMs: 101,
+        },
+        {
+          phase: "second",
+          durationMs: 1,
+          totalMs: 2,
+          monotonicUs: 1_000_300,
+          performanceMs: 102,
+        },
+      ],
+      droppedPhases: 0,
+      observerErrors: [],
+    };
+    await fs.writeFile(capture.attachmentPath, JSON.stringify(attachment));
     const file = path.join(
       capture.directory,
       `CPU.20260918.000000.${process.pid}.0.001.cpuprofile`,
     );
     const profile = {
-      startTime: 1_000_000,
-      endTime: 1_010_000,
+      // Native profile timestamps have their own origin, independent of hrtime.
+      startTime: 7_000_001_000_000,
+      endTime: 7_000_001_010_000,
       nodes: [
         { id: 1, callFrame: { functionName: "first" } },
         { id: 2, callFrame: { functionName: "second" } },
@@ -234,8 +264,35 @@ describe("installed Gateway startup benchmark entry", () => {
       samples: 3,
       negativeTimeDeltas: 1,
       profiles: [expect.objectContaining({ sha256: hash(raw) })],
+      clockDomains: {
+        controller: { pid: process.pid, source: "process.hrtime.bigint", unit: "microseconds" },
+        gateway: { pid: process.pid, source: "process.hrtime.bigint", unit: "microseconds" },
+        nativeProfile: { origin: "runtime-defined", unit: "microseconds" },
+        alignment: "not-established",
+      },
     });
     expect(await fs.readFile(file, "utf8")).toBe(raw);
+    for (const invalid of [
+      { ...attachment, exitedMonotonicUs: attachment.attachedMonotonicUs - 1 },
+      {
+        ...attachment,
+        phases: [{ ...attachment.phases[0], monotonicUs: attachment.exitedMonotonicUs + 1 }],
+      },
+      {
+        ...attachment,
+        phases: [attachment.phases[1], attachment.phases[0]],
+      },
+      {
+        ...attachment,
+        phases: [attachment.phases[0], { ...attachment.phases[1], performanceMs: 100.5 }],
+      },
+    ]) {
+      await fs.writeFile(capture.attachmentPath, JSON.stringify(invalid));
+      await expect(collectInstalledCpuProfile(capture, process.pid)).rejects.toThrow(
+        /monotonic|performance clock/u,
+      );
+    }
+    await fs.writeFile(capture.attachmentPath, JSON.stringify(attachment));
     await fs.writeFile(file, JSON.stringify({ ...profile, samples: [1, 3, 1] }));
     await expect(collectInstalledCpuProfile(capture, process.pid)).rejects.toThrow(
       "CPU sample references an unknown node",
@@ -295,6 +352,12 @@ describe("installed Gateway startup benchmark entry", () => {
       const capture = report.samples[1].observations.cpuProfile;
       expect(report.samples[1].observations.health.response.ok).toBe(!failed);
       expect(report.samples[1].errors.length).toBe(failed ? 1 : 0);
+      expect(
+        report.samples[1].stdout.split("\n").filter((line: string) => line.startsWith("fixture ")),
+      ).toEqual(["fixture console info", "fixture console debug", "fixture direct stdout"]);
+      expect(
+        report.samples[1].stderr.split("\n").filter((line: string) => line.startsWith("fixture ")),
+      ).toEqual(["fixture console warn", "fixture console error", "fixture direct stderr"]);
       expect(capture.attachment).toMatchObject({
         pid: starts[1].pid,
         mainThread: true,

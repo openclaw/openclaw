@@ -1,4 +1,3 @@
-// Filters heartbeat event text before it is added to prompts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -44,10 +43,7 @@ export function isRelayableExecCompletionEvent(evt: string): boolean {
   if (!parsed) {
     return isExecCompletionEvent(evt);
   }
-  if (parsed.output) {
-    return true;
-  }
-  return !parsed.succeeded;
+  return Boolean(parsed.output) || !parsed.succeeded;
 }
 
 function formatExecEventPromptText(pendingEvents: string[]): {
@@ -75,9 +71,6 @@ function formatExecEventPromptText(pendingEvents: string[]): {
   return { text: lines.join("\n").trim(), hasMissingOutputFailure };
 }
 
-// Build a dynamic prompt for cron events by embedding the actual event content.
-// This ensures the model sees the reminder text directly instead of relying on
-// "shown in the system messages above" which may not be visible in context.
 export function buildCronEventPrompt(
   pendingEvents: string[],
   opts?: {
@@ -96,17 +89,14 @@ export function buildCronEventPrompt(
         : `Handle this internally and reply ${SILENT_REPLY_TOKEN} when nothing needs user-facing follow-up.`;
     return `A scheduled cron event was triggered, but no event content was found. ${completionInstruction}`;
   }
-  if (!deliverToUser) {
-    return (
-      "A scheduled reminder has been triggered. The reminder content is:\n\n" +
-      eventText +
-      "\n\nHandle this reminder internally. Do not relay it to the user unless explicitly requested."
-    );
-  }
+  const instruction = deliverToUser
+    ? "Please relay this reminder to the user in a helpful and friendly way."
+    : "Handle this reminder internally. Do not relay it to the user unless explicitly requested.";
   return (
     "A scheduled reminder has been triggered. The reminder content is:\n\n" +
     eventText +
-    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
+    "\n\n" +
+    instruction
   );
 }
 
@@ -128,33 +118,34 @@ export function buildExecEventPrompt(
     return `An async command completion event was triggered, but no command output was found. ${completionInstruction} Do not mention, summarize, or reuse output from any earlier run.`;
   }
   if (!deliverToUser) {
-    if (useHeartbeatResponseTool) {
-      return (
-        "An async command completion event was triggered, but user delivery is disabled for this run. " +
-        `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ` +
-        "Do not mention, summarize, or reuse command output."
-      );
-    }
+    const completionInstruction = useHeartbeatResponseTool
+      ? `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
+      : `Handle the result internally and reply ${SILENT_REPLY_TOKEN} only.`;
     return (
       "An async command completion event was triggered, but user delivery is disabled for this run. " +
-      `Handle the result internally and reply ${SILENT_REPLY_TOKEN} only. Do not mention, summarize, or reuse command output.`
+      `${completionInstruction} Do not mention, summarize, or reuse command output.`
     );
   }
-  if (hasMissingOutputFailure) {
-    return (
-      "An async command you ran earlier completed without captured stdout/stderr. The completion details are:\n\n" +
-      eventText +
-      "\n\n" +
-      "Tell the user the command completed without captured output and include the exit status or signal. " +
+  // Delivery eligibility permits an update; it does not make every completion news.
+  const completionInstruction = useHeartbeatResponseTool
+    ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+    : `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`;
+  const missingOutputInstruction = hasMissingOutputFailure
+    ? " If reporting a failure without captured output, include the exit status or signal. " +
       "Do not ask the user to provide missing logs, and do not try to retrieve logs from an exec/session id."
-    );
-  }
+    : "";
   return (
     "An async command you ran earlier has completed. The command completion details are:\n\n" +
     eventText +
     "\n\n" +
-    "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
-    "If it failed, explain what went wrong."
+    "Treat this completion as an internal continuation, not a new user request. " +
+    "Reconcile it with the conversation and continue any outstanding authorized work. " +
+    "Notify the user only if this provides a requested result not yet delivered, a meaningful change to the outcome, " +
+    "or a new unresolved failure, blocker, or decision they need to know about. " +
+    "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; " +
+    "do not recap them or announce that nothing changed. " +
+    completionInstruction +
+    missingOutputInstruction
   );
 }
 
@@ -187,7 +178,6 @@ export function isHeartbeatDeliveryAwarenessEvent(event: { contextKey?: string |
   return event.contextKey?.startsWith(HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX) ?? false;
 }
 
-// Returns true when a system event should be treated as real cron reminder content.
 export function isCronSystemEvent(evt: string) {
   if (!evt.trim()) {
     return false;

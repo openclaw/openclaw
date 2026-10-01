@@ -1,5 +1,7 @@
 import type { ScopeUpgradeResult } from "../../packages/gateway-protocol/src/index.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getPairedDevice, getPendingDevicePairing } from "../infra/device-pairing.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -22,24 +24,22 @@ type UpgradeEntry = {
   resolutionHint?: "approved" | "rejected";
   resultPromise?: Promise<ScopeUpgradeResult | null>;
   wake: Deferred;
-  cleanupTimer?: ReturnType<typeof setTimeout>;
 };
 
 function sameOwner(left: UpgradeOwner, right: UpgradeOwner): boolean {
   return left.deviceId === right.deviceId && left.publicKey === right.publicKey;
 }
 
-function scheduleUnref(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {
-  const timer = setTimeout(callback, delayMs);
-  timer.unref?.();
-  return timer;
-}
-
 /** Coordinates live device scope-upgrade waiters with the durable pairing store. */
 export class ScopeUpgradeCoordinator {
   private readonly entries = new Map<string, UpgradeEntry>();
   private readonly work = new AsyncWorkScope();
+  private readonly scheduler: GatewaySchedulerScope;
   private lifetimeBound = false;
+
+  constructor(scheduler: GatewayScheduler) {
+    this.scheduler = scheduler.scope();
+  }
 
   private bindGatewayLifetime(): void {
     if (this.lifetimeBound || this.work.isClosing) {
@@ -75,8 +75,8 @@ export class ScopeUpgradeCoordinator {
 
   async close(): Promise<void> {
     this.work.beginClose();
+    this.scheduler.beginClose();
     for (const entry of this.entries.values()) {
-      clearTimeout(entry.cleanupTimer);
       entry.wake.resolve();
     }
     this.entries.clear();
@@ -110,12 +110,9 @@ export class ScopeUpgradeCoordinator {
     };
     entry.requestedScopes = [...params.requestedScopes];
     entry.expiresAtMs = params.expiresAtMs;
-    if (entry.cleanupTimer) {
-      clearTimeout(entry.cleanupTimer);
-    }
-    entry.cleanupTimer = scheduleUnref(
-      () => this.entries.delete(entry.requestId),
-      Math.max(0, entry.expiresAtMs + TERMINAL_GRACE_MS - Date.now()),
+    this.scheduleCleanup(
+      entry,
+      Math.max(0, entry.expiresAtMs + TERMINAL_GRACE_MS - this.scheduler.now()),
     );
     this.entries.set(entry.requestId, entry);
     return true;
@@ -146,13 +143,13 @@ export class ScopeUpgradeCoordinator {
         }
       });
     }
-    return await entry.resultPromise;
+    return await racePromiseWithAbortSignal(entry.resultPromise, getAsyncWorkSignal());
   }
 
   private async waitForResult(entry: UpgradeEntry): Promise<ScopeUpgradeResult | null> {
     while (!this.work.isClosing) {
-      if (Date.now() >= entry.expiresAtMs) {
-        this.retainTerminal(entry);
+      if (this.scheduler.now() >= entry.expiresAtMs) {
+        this.scheduleCleanup(entry);
         return { status: "expired", requestId: entry.requestId };
       }
       const wake = entry.wake;
@@ -161,14 +158,15 @@ export class ScopeUpgradeCoordinator {
         break;
       }
       if (result) {
-        this.retainTerminal(entry);
+        this.scheduleCleanup(entry);
         return result;
       }
       const delayMs = Math.min(
         DURABLE_RECONCILE_INTERVAL_MS,
-        Math.max(0, entry.expiresAtMs - Date.now()),
+        Math.max(0, entry.expiresAtMs - this.scheduler.now()),
       );
-      const timer = scheduleUnref(wake.resolve, delayMs);
+      const timer = setTimeout(wake.resolve, delayMs);
+      timer.unref();
       try {
         await wake.promise;
       } finally {
@@ -218,13 +216,13 @@ export class ScopeUpgradeCoordinator {
       : { status: "rejected", requestId: entry.requestId };
   }
 
-  private retainTerminal(entry: UpgradeEntry): void {
-    if (entry.cleanupTimer) {
-      clearTimeout(entry.cleanupTimer);
-    }
-    entry.cleanupTimer = scheduleUnref(
-      () => this.entries.delete(entry.requestId),
-      TERMINAL_GRACE_MS,
-    );
+  private scheduleCleanup(entry: UpgradeEntry, delayMs = TERMINAL_GRACE_MS): void {
+    this.scheduler.schedule({
+      id: `device-scope-upgrade:${entry.requestId}`,
+      delayMs,
+      run: () => {
+        this.entries.delete(entry.requestId);
+      },
+    });
   }
 }

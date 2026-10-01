@@ -84,35 +84,23 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
         }
 
         const cfg = getRuntimeConfig();
-        const resolved = target
-          ? await resolveSessionTarget({
-              raw: target,
-              gateway: {
-                config: cfg,
-                url: opts.url,
-                token: opts.token,
-                password: opts.password,
-                tlsFingerprint: opts.tlsFingerprint,
-              },
-            })
-          : undefined;
-        const gateway: SessionTargetGateway = resolved?.gateway ?? {
+        const requestedGateway: SessionTargetGateway = {
           config: cfg,
           url: opts.url,
           token: opts.token,
           password: opts.password,
           tlsFingerprint: opts.tlsFingerprint,
         };
-        const globalAgentId =
-          resolved?.sessionKey === "global" && resolved.parsed.kind === "url"
-            ? resolved.parsed.agentId
-            : undefined;
+        const resolved = target
+          ? await resolveSessionTarget({ raw: target, gateway: requestedGateway })
+          : undefined;
+        const gateway = resolved?.gateway ?? requestedGateway;
         const granted = (await callSessionTargetGateway({
           gateway,
           method: "attach.grant",
           request: {
             sessionKey: resolved?.sessionKey ?? opts.session,
-            ...(globalAgentId ? { agentId: globalAgentId } : {}),
+            ...(resolved ? { agentId: resolved.agentId } : {}),
             ttlMs,
           },
           requiredScope: "operator.admin",

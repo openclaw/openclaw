@@ -9,13 +9,9 @@ import {
   formatMediaPlaceholderText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { jidToE164 } from "./text-runtime.js";
+import { jidToE164 } from "./targets-runtime.js";
 
-// ── Inbound message metadata cache ──────────────────────────────────────
-// Maps messageId → { participant, participantE164, body, fromMe } so the
-// outbound adapter can
-// populate the quote key with the sender JID and preview text even though
-// the outbound path only receives a bare messageId string.
+// Outbound callers only have a message ID; retain the sender and preview needed for quotes.
 
 type QuotedMeta = {
   participant?: string;
@@ -144,11 +140,7 @@ export function lookupInboundMessageMetaForTarget(
   if (exact) {
     return {
       remoteJid: targetJid,
-      participant: exact.participant,
-      participantE164: exact.participantE164,
-      body: exact.body,
-      media: exact.media,
-      fromMe: exact.fromMe,
+      ...exact,
     };
   }
   const prefix = `${accountId}:`;

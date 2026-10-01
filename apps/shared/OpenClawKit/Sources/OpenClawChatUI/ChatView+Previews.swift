@@ -297,26 +297,37 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
 }
 
 #Preview("Onboarding chat") {
-    OpenClawChatView(
-        viewModel: OpenClawChatViewModel(
-            sessionKey: "ios-preview",
-            transport: OpenClawChatPreviewTransport()),
-        showsSessionSwitcher: false,
-        style: .onboarding,
-        markdownVariant: .standard,
-        userAccent: OpenClawChatTheme.accent)
+    OpenClawOnboardingChatPreview()
 }
 #endif
 
-private struct OpenClawChatPreview: View {
-    let scenario: OpenClawChatPreviewTransport.Scenario
-    var sessionKey: String = "main"
+private struct OpenClawOnboardingChatPreview: View {
+    @State private var viewModel = OpenClawChatViewModel(
+        sessionKey: "ios-preview",
+        transport: OpenClawChatPreviewTransport())
 
     var body: some View {
         OpenClawChatView(
-            viewModel: OpenClawChatViewModel(
-                sessionKey: self.sessionKey,
-                transport: OpenClawChatPreviewTransport(scenario: self.scenario)),
+            viewModel: self.viewModel,
+            showsSessionSwitcher: false,
+            style: .onboarding,
+            markdownVariant: .standard,
+            userAccent: OpenClawChatTheme.accent)
+    }
+}
+
+private struct OpenClawChatPreview: View {
+    @State private var viewModel: OpenClawChatViewModel
+
+    init(scenario: OpenClawChatPreviewTransport.Scenario, sessionKey: String = "main") {
+        _viewModel = State(initialValue: OpenClawChatViewModel(
+            sessionKey: sessionKey,
+            transport: OpenClawChatPreviewTransport(scenario: scenario)))
+    }
+
+    var body: some View {
+        OpenClawChatView(
+            viewModel: self.viewModel,
             showsSessionSwitcher: true,
             style: .standard,
             markdownVariant: .standard,

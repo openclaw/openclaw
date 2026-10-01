@@ -10,7 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getActiveNostrBuses, nostrOutboundAdapter, startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
-import { buildResolvedNostrAccount } from "./test-fixtures.js";
+import { buildResolvedNostrAccount, createMockNostrBus } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   startNostrBus: vi.fn(),
@@ -21,21 +21,14 @@ vi.mock("./nostr-bus.js", () => ({
   startNostrBus: mocks.startNostrBus,
 }));
 
-function createMockBus() {
-  return {
-    sendDm: vi.fn(async () => {}),
-    close: vi.fn(async () => {}),
-    getMetrics: vi.fn(() => ({ counters: {} })),
-    publishProfile: vi.fn(),
-    getProfileState: vi.fn(async () => null),
-  };
-}
-
 function bindChannelRuntime(
   context: Parameters<typeof startNostrGatewayAccount>[0],
 ): Parameters<typeof startNostrGatewayAccount>[0] {
   context.channelRuntime = {
-    inbound: { buildContext: buildChannelInboundEventContext },
+    inbound: {
+      ...createPluginRuntimeMock().channel.inbound,
+      buildContext: buildChannelInboundEventContext,
+    },
   } as never;
   return context;
 }
@@ -54,7 +47,7 @@ describe("nostr gateway lifecycle", () => {
   });
 
   it("keeps startAccount pending until abort, then closes the bus", async () => {
-    const bus = createMockBus();
+    const bus = createMockNostrBus();
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
@@ -72,7 +65,7 @@ describe("nostr gateway lifecycle", () => {
   });
 
   it("keeps the active bus registered while pending and removes it after abort", async () => {
-    const bus = createMockBus();
+    const bus = createMockNostrBus();
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
@@ -96,7 +89,7 @@ describe("nostr gateway lifecycle", () => {
     { outcome: "resolves", closeFails: false },
     { outcome: "rejects", closeFails: true },
   ])("retires the active bus before shutdown $outcome", async ({ closeFails }) => {
-    const bus = createMockBus();
+    const bus = createMockNostrBus();
     let finishClose!: () => void;
     let rejectClose!: (reason: Error) => void;
     bus.close.mockReturnValueOnce(
@@ -164,8 +157,8 @@ describe("nostr gateway lifecycle", () => {
   });
 
   it("does not retire a replacement bus while the previous generation closes", async () => {
-    const firstBus = createMockBus();
-    const replacementBus = createMockBus();
+    const firstBus = createMockNostrBus();
+    const replacementBus = createMockNostrBus();
     let finishFirstClose!: () => void;
     firstBus.close.mockReturnValueOnce(
       new Promise<void>((resolve) => {
@@ -221,7 +214,7 @@ describe("nostr gateway lifecycle", () => {
   });
 
   it("stops immediately when startAccount receives an already-aborted signal", async () => {
-    const bus = createMockBus();
+    const bus = createMockNostrBus();
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
     const abort = new AbortController();
     abort.abort();
@@ -240,7 +233,7 @@ describe("nostr gateway lifecycle", () => {
   });
 
   it("describes configured relays without claiming they are already connected", async () => {
-    const bus = createMockBus();
+    const bus = createMockNostrBus();
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
     const abort = new AbortController();
     const account = buildResolvedNostrAccount({ relays: ["wss://relay.example.com"] });
@@ -260,7 +253,7 @@ describe("nostr gateway lifecycle", () => {
   });
 
   it("publishes ready with one relay and recovering only after the last relay disconnects", async () => {
-    const bus = createMockBus();
+    const bus = createMockNostrBus();
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
     const abort = new AbortController();
     const statusEvents: Array<Record<string, unknown>> = [];

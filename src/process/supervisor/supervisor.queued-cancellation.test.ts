@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createProcessSupervisor } from "./supervisor.js";
-import type { SpawnInput, SpawnProcessAdapter } from "./types.js";
+import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
+import type { SpawnInput } from "./types.js";
 
 const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock: vi.fn(),
@@ -22,25 +23,8 @@ vi.mock("./adapters/pty.js", () => ({
   createPtyAdapter: createPtyAdapterMock,
 }));
 
-type StubProcessAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
-  killMock: ReturnType<typeof vi.fn>;
-  settle: (code: number | null, signal?: NodeJS.Signals | null) => void;
-};
-
-function createStubProcessAdapter(pid = 1234): StubProcessAdapter {
-  const completion = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
-  const killMock = vi.fn();
-  return {
-    pid,
-    supportsRawOutput: false,
-    onStdout: () => undefined,
-    onStderr: () => undefined,
-    wait: async () => completion.promise,
-    kill: (signal) => killMock(signal),
-    dispose: () => undefined,
-    killMock,
-    settle: (code, signal = null) => completion.resolve({ code, signal }),
-  };
+function createStubProcessAdapter(pid = 1234) {
+  return Object.assign(createStubChildAdapter({ pid }), { supportsRawOutput: false });
 }
 
 function createSpawnInput(params: {
@@ -67,7 +51,7 @@ describe("process supervisor queued cancellation", () => {
   it("resolves invocation arguments after queued scope admission", async () => {
     const first = createStubProcessAdapter(1234);
     const replacement = createStubProcessAdapter(5678);
-    const firstStartup = createDeferred<StubProcessAdapter>();
+    const firstStartup = createDeferred<StubChildAdapter>();
     createChildAdapterMock.mockReturnValueOnce(firstStartup.promise);
     createChildAdapterMock.mockResolvedValueOnce(replacement);
     const supervisor = createProcessSupervisor();
@@ -113,7 +97,7 @@ describe("process supervisor queued cancellation", () => {
     async (mode) => {
       const first = createStubProcessAdapter();
       const replacement = createStubProcessAdapter();
-      const firstStartup = createDeferred<StubProcessAdapter>();
+      const firstStartup = createDeferred<StubChildAdapter>();
       createChildAdapterMock.mockReturnValueOnce(firstStartup.promise);
       if (mode === "pty") {
         createPtyAdapterMock.mockResolvedValueOnce(replacement);
@@ -240,7 +224,7 @@ describe("process supervisor queued cancellation", () => {
     const replacementCount = 32;
     const first = createStubProcessAdapter(1234);
     const later = createStubProcessAdapter(1235);
-    const firstStartup = createDeferred<StubProcessAdapter>();
+    const firstStartup = createDeferred<StubChildAdapter>();
     createChildAdapterMock.mockReturnValueOnce(firstStartup.promise).mockResolvedValueOnce(later);
 
     const supervisor = createProcessSupervisor();
@@ -299,7 +283,7 @@ describe("process supervisor queued cancellation", () => {
   it("rejects retired request authority behind a scope fence without cancelling its survivor", async () => {
     const first = createStubProcessAdapter();
     const replacement = createStubProcessAdapter(1235);
-    const firstStartup = createDeferred<StubProcessAdapter>();
+    const firstStartup = createDeferred<StubChildAdapter>();
     createChildAdapterMock
       .mockReturnValueOnce(firstStartup.promise)
       .mockResolvedValueOnce(replacement);

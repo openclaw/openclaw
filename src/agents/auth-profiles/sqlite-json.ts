@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -24,6 +28,7 @@ export const PRIMARY_ROW_KEY = "primary";
 // in STATE_SECRET_CONFIG_STATE_KEY_PREFIXES so git backups never carry them.
 export const SHARED_STORE_STATE_KEY = "authProfiles.store";
 export const SHARED_STATE_STATE_KEY = "authProfiles.state";
+export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
 
 // Callers own transactions; opening another here would nest.
 export function readSharedAuthKvCell(db: DatabaseSync, stateKey: string): string | undefined {
@@ -41,7 +46,7 @@ export function getAgentAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AgentAuthProfileDatabase>(db);
 }
 
-export function getSharedAuthProfileKysely(db: DatabaseSync) {
+function getSharedAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<SharedAuthProfileDatabase>(db);
 }
 
@@ -175,4 +180,83 @@ export function readAuthProfileRows(
     state,
     cacheable: store.status !== "unreadable" && state.status !== "unreadable" && canCache(),
   };
+}
+
+/** Write one canonical auth cell on the caller's admitted transaction connection. */
+export function writeAuthProfileJsonCell(
+  database: DatabaseSync,
+  target: "store" | "state",
+  kind: "agent" | "shared-state",
+  payload: unknown,
+): void {
+  const value = JSON.stringify(payload);
+  const now = Date.now();
+  if (kind === "shared-state") {
+    executeSqliteQuerySync(
+      database,
+      getSharedAuthProfileKysely(database)
+        .insertInto("config_machine_state")
+        .values({
+          state_key: target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
+          value_json: value,
+          updated_at_ms: now,
+        })
+        .onConflict((conflict) =>
+          conflict.column("state_key").doUpdateSet({ value_json: value, updated_at_ms: now }),
+        ),
+    );
+  } else if (target === "store") {
+    executeSqliteQuerySync(
+      database,
+      getAgentAuthProfileKysely(database)
+        .insertInto("auth_profile_store")
+        .values({ store_key: PRIMARY_ROW_KEY, store_json: value, updated_at: now })
+        .onConflict((conflict) =>
+          conflict.column("store_key").doUpdateSet({ store_json: value, updated_at: now }),
+        ),
+    );
+  } else {
+    executeSqliteQuerySync(
+      database,
+      getAgentAuthProfileKysely(database)
+        .insertInto("auth_profile_state")
+        .values({ state_key: PRIMARY_ROW_KEY, state_json: value, updated_at: now })
+        .onConflict((conflict) =>
+          conflict.column("state_key").doUpdateSet({ state_json: value, updated_at: now }),
+        ),
+    );
+  }
+}
+
+export function deleteAuthProfileJsonCell(
+  database: DatabaseSync,
+  target: "store" | "state",
+  kind: "agent" | "shared-state",
+): void {
+  if (kind === "shared-state") {
+    executeSqliteQuerySync(
+      database,
+      getSharedAuthProfileKysely(database)
+        .deleteFrom("config_machine_state")
+        .where(
+          "state_key",
+          "=",
+          target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
+        ),
+    );
+  } else if (target === "store") {
+    executeSqliteQuerySync(
+      database,
+      getAgentAuthProfileKysely(database)
+        .deleteFrom("auth_profile_store")
+        .where("store_key", "=", PRIMARY_ROW_KEY),
+    );
+  } else {
+    executeSqliteQuerySync(
+      database,
+      getAgentAuthProfileKysely(database)
+        .deleteFrom("auth_profile_state")
+        .where("state_key", "=", PRIMARY_ROW_KEY),
+    );
+  }
 }

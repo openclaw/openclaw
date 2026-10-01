@@ -18,6 +18,7 @@ export async function resolveImageCompressionModelPolicy(params: {
   agentDir?: string;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  abortSignal?: AbortSignal;
   deps?: { resolveModelAsync?: ResolveModelAsync };
 }): Promise<ImageCompressionModelPolicy> {
   const resolveModelAsync = params.deps?.resolveModelAsync ?? resolveModelAsyncDefault;
@@ -31,6 +32,7 @@ export async function resolveImageCompressionModelPolicy(params: {
         params.agentDir,
         params.cfg,
         {
+          abortSignal: params.abortSignal,
           allowBundledStaticCatalogFallback: true,
           skipProviderRuntimeHooks,
           skipAgentDiscovery: true,
@@ -43,6 +45,7 @@ export async function resolveImageCompressionModelPolicy(params: {
       // SAFETY: model resolution preserves provider runtime fields on its narrower Model result.
       return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
     } catch {
+      params.abortSignal?.throwIfAborted();
       return {};
     }
   }

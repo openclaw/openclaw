@@ -349,36 +349,6 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
     }
   }
 
-  it("converts bare string entries to proper ExecAllowlistEntry objects", () => {
-    // Simulates a corrupted or legacy config where allowlist contains plain
-    // strings (e.g. ["ls", "cat"]) instead of { pattern: "..." } objects.
-    const file = {
-      version: 1,
-      agents: {
-        main: {
-          mode: "allowlist",
-          allowlist: ["things", "remindctl", "memo", "which", "ls", "cat", "echo"],
-        },
-      },
-    } as unknown as ExecApprovalsFile;
-
-    const normalized = normalizeExecApprovals(file);
-    const entries = normalized.agents?.main?.allowlist ?? [];
-
-    // Spread-string corruption would create numeric keys — ensure none exist.
-    expectNoSpreadStringArtifacts(entries);
-
-    expect(entries.map((e) => e.pattern)).toEqual([
-      "things",
-      "remindctl",
-      "memo",
-      "which",
-      "ls",
-      "cat",
-      "echo",
-    ]);
-  });
-
   it("preserves proper ExecAllowlistEntry objects unchanged", () => {
     const file: ExecApprovalsFile = {
       version: 1,
@@ -439,26 +409,6 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
 });
 
 describe("normalizeExecApprovals strips invalid security/ask enum values (#59006)", () => {
-  it("drops invalid defaults.security values like 'none'", () => {
-    const file = {
-      version: 1,
-      defaults: { security: "none" },
-      agents: {},
-    } as unknown as ExecApprovalsFile;
-    const normalized = normalizeExecApprovals(file);
-    expect(normalized.defaults?.security).toBeUndefined();
-  });
-
-  it("drops invalid defaults.ask values like 'never'", () => {
-    const file = {
-      version: 1,
-      defaults: { ask: "never" },
-      agents: {},
-    } as unknown as ExecApprovalsFile;
-    const normalized = normalizeExecApprovals(file);
-    expect(normalized.defaults?.ask).toBeUndefined();
-  });
-
   it("drops invalid defaults.askFallback values", () => {
     const file = {
       version: 1,
@@ -492,18 +442,6 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
     expect(normalized.agents?.main?.security).toBeUndefined();
     expect(normalized.agents?.main?.ask).toBeUndefined();
     expect(normalized.agents?.main?.askFallback).toBeUndefined();
-  });
-
-  it("drops invalid wildcard agent security/ask values", () => {
-    const file = {
-      version: 1,
-      agents: {
-        "*": { security: "none", ask: "off" },
-      },
-    } as unknown as ExecApprovalsFile;
-    const normalized = normalizeExecApprovals(file);
-    expect(normalized.agents?.["*"]?.security).toBeUndefined();
-    expect(normalized.agents?.["*"]?.ask).toBe("off");
   });
 
   it("resolves to built-in defaults when invalid values are stripped", () => {

@@ -79,7 +79,19 @@ async function startSupervisedRelay(
   let sequence = 0;
   const emit = (payload: ServiceChildAnchorPayload) =>
     stub.control.push(
-      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
+      Buffer.from(
+        encodeServiceChildMessage({
+          ...(payload.type === "ready" && start.treeOwnership === "linux-subreaper"
+            ? { treeOwnership: "linux-subreaper" as const }
+            : {}),
+          ...(payload.type === "closing" && start.treeOwnership === "linux-subreaper"
+            ? { descendantsReaped: true as const }
+            : {}),
+          ...payload,
+          generation,
+          sequence: ++sequence,
+        }),
+      ),
     );
   const finish = () => {
     emit({ type: "closing", reason: "lineage-closed" });
@@ -181,7 +193,10 @@ it.each(["cancel", "overall-timeout"] as const)(
     const run = await f.starting;
     expect((await run.wait()).reason).toBe(mode === "cancel" ? "manual-cancel" : mode);
     expect((await run.wait()).stdout).toBe("before cancellation");
-    expect(f.killMock).toHaveBeenCalledWith("SIGKILL");
+    // Disconnect asks the dedicated native owner to stop and reap descendants.
+    // Killing that owner during construction would abandon its wait custody.
+    expect(f.killMock).not.toHaveBeenCalled();
+    expect(f.disconnectMock).toHaveBeenCalled();
     expect(f.sendMock.mock.calls.length).toBe(sending);
     await expect(f.closeScope()).rejects.toThrow("construction aborted");
   },
@@ -197,6 +212,7 @@ it("counts raw-only construction activity without renewing the original overall 
     f.child.stdout?.emit("data", Buffer.from([0x82]));
     expect(f.killMock).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersToNextTimerAsync();
     const run = await f.starting;
     expect((await run.wait()).reason).toBe("overall-timeout");
     await expect(f.closeScope()).rejects.toThrow("construction aborted");
@@ -237,6 +253,7 @@ it.each(["cancel", "deadline", "shutdown"] as const)(
     try {
       if (action === "deadline") {
         await vi.advanceTimersByTimeAsync(10);
+        await vi.advanceTimersToNextTimerAsync();
       }
       await nextTurn();
       expect(observed).toBeInstanceOf(Error);

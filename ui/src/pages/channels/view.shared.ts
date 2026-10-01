@@ -3,7 +3,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
-import { renderSettingsSection, renderSettingsStatus } from "../../components/settings-ui.ts";
+import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -31,7 +31,7 @@ function resolveChannelStatus(
   key: ChannelKey,
   props: ChannelsProps,
 ): Record<string, unknown> | undefined {
-  const channels = props.snapshot?.channels;
+  const channels = props.channels.channelsSnapshot?.channels;
   return channels && Object.hasOwn(channels, key)
     ? (asNullableRecord(channels[key]) ?? undefined)
     : undefined;
@@ -41,8 +41,8 @@ function resolveDefaultChannelAccount(
   key: ChannelKey,
   props: ChannelsProps,
 ): ChannelAccountSnapshot | null {
-  const accounts = resolveChannelAccounts(props.snapshot?.channelAccounts, key);
-  const defaultAccountIds = props.snapshot?.channelDefaultAccountId;
+  const accounts = resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key);
+  const defaultAccountIds = props.channels.channelsSnapshot?.channelDefaultAccountId;
   const defaultAccountId =
     defaultAccountIds && Object.hasOwn(defaultAccountIds, key) ? defaultAccountIds[key] : undefined;
   return (
@@ -79,7 +79,7 @@ export function resolveChannelDisplayState(
 }
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  return channelSnapshotEntryIsActive(props.snapshot, key);
+  return channelSnapshotEntryIsActive(props.channels.channelsSnapshot, key);
 }
 
 export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {
@@ -219,40 +219,6 @@ export function renderChannelAccountRow(params: {
       </div>
     </div>
   `;
-}
-
-/**
- * One channel = one settings section: heading with optional account count,
- * a group holding the status facts, error/probe rows, the config form,
- * extra content, and a trailing action row. Extra content sits directly
- * above the actions so action feedback (e.g. the WhatsApp QR) appears next
- * to the button that triggered it instead of scrolled away above the form.
- */
-export function renderSingleAccountChannelCard(params: {
-  title: string;
-  subtitle: string;
-  accountCount?: number;
-  statusRows: readonly ChannelStatusRow[];
-  lastError?: string | null;
-  secondaryCallout?: unknown;
-  extraContent?: unknown;
-  configSection: unknown;
-  footer?: unknown;
-}) {
-  return renderSettingsSection(
-    {
-      title: params.title,
-      description: params.subtitle,
-      ...(params.accountCount !== undefined ? { count: params.accountCount } : {}),
-    },
-    html`
-      ${renderChannelFacts(params.statusRows)}
-      ${params.lastError ? renderChannelErrorRow(params.lastError) : nothing}
-      ${params.secondaryCallout ?? nothing} ${params.configSection}
-      ${params.extraContent ?? nothing}
-      ${params.footer ? renderChannelActionRow(params.footer) : nothing}
-    `,
-  );
 }
 
 /** Multi-account channels surface the account count next to the heading. */

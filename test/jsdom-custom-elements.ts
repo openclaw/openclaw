@@ -13,31 +13,18 @@
 // they evaluate once per worker through native ESM and never re-register; dropping
 // their definitions would leave `wa-*` and friends permanently unupgraded.
 
-type JsdomCustomElementDefinition = { name: string };
+import {
+  jsdomCustomElementDefinitions,
+  type JsdomCustomElementDefinition,
+} from "./jsdom-compat.mts";
+
+export { jsdomCustomElementDefinitions };
 
 export type CustomElementTracking = {
   registry: CustomElementRegistry;
   definitions: JsdomCustomElementDefinition[];
   repoOwnedTags: Set<string>;
 };
-
-export function jsdomCustomElementDefinitions(
-  registry: object,
-): JsdomCustomElementDefinition[] | undefined {
-  const implKey = Object.getOwnPropertySymbols(registry).find(
-    (symbol) => symbol.description === "impl",
-  );
-  if (!implKey) {
-    return undefined;
-  }
-  const impl = (
-    registry as Record<
-      symbol,
-      { _customElementDefinitions?: JsdomCustomElementDefinition[] } | undefined
-    >
-  )[implKey];
-  return impl?._customElementDefinitions;
-}
 
 // Conservative on an unreadable stack: keeping a repo tag costs a stale class in
 // one lane, dropping a dependency tag would leave it unupgraded for the whole run.

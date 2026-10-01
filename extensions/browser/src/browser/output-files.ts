@@ -5,7 +5,7 @@
  * screenshots, PDFs, downloads, or traces to disk.
  */
 import path from "node:path";
-import { writeExternalFileWithinRoot } from "../sdk-security-runtime.js";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { ensureOutputDirectory } from "./output-directories.js";
 
 /** Write a browser output file within a caller-selected output root. */

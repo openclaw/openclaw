@@ -8,6 +8,8 @@ import type {
   MigrationLogger,
   MigrationMessages,
 } from "./state-migrations.types.js";
+import { formatUpdateFailureFact } from "./update-failure-facts-format.js";
+import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 
 type NoticeSource = { notices?: readonly string[] } | undefined;
 
@@ -102,9 +104,22 @@ export function createLegacyStateMigrationStepReceipt(
 
 export class DoctorStateMigrationRefusalError extends Error {
   readonly stepReceipts: readonly LegacyStateMigrationStepReceipt[];
+  readonly failureFacts: UpdateFailureFact[];
 
   constructor(stepReceipts: readonly LegacyStateMigrationStepReceipt[]) {
     const refused = stepReceipts.filter((receipt) => receipt.outcome === "refused");
+    const isBlocked = (receipt: LegacyStateMigrationStepReceipt) =>
+      receipt.refusal?.code === "blocked-by-prior-refusal" ||
+      receipt.refusal?.code === "blocked-by-agent-database-refusal";
+    const failureFacts = normalizeUpdateFailureFacts(
+      refused
+        .toSorted((left, right) => Number(isBlocked(left)) - Number(isBlocked(right)))
+        .flatMap((receipt) =>
+          receipt.refusal
+            ? [{ check: receipt.id, code: receipt.refusal.code, message: receipt.refusal.message }]
+            : [],
+        ),
+    );
     const onlyAgentOwnershipRefusals =
       refused.length > 0 &&
       refused.every(
@@ -113,12 +128,16 @@ export class DoctorStateMigrationRefusalError extends Error {
           receipt.refusal?.code === "blocked-by-agent-database-refusal",
       );
     super(
-      onlyAgentOwnershipRefusals
-        ? "Doctor stopped because an agent database ownership mismatch remains. Independent state repairs were run; repairs requiring the refused database were skipped. Resolve the reported ownership mismatch before retrying."
-        : "Doctor stopped because a state migration refused to continue. Resolve the reported migration failure before retrying. Later repairs were not run.",
+      [
+        onlyAgentOwnershipRefusals
+          ? "Doctor stopped because an agent database ownership mismatch remains. Independent state repairs were run; repairs requiring the refused database were skipped. Resolve the reported ownership mismatch before retrying."
+          : "Doctor stopped because a state migration refused to continue. Resolve the reported migration failure before retrying. Later repairs were not run.",
+        ...failureFacts.map(formatUpdateFailureFact),
+      ].join("\n"),
     );
     this.name = "DoctorStateMigrationRefusalError";
     this.stepReceipts = [...stepReceipts];
+    this.failureFacts = failureFacts;
   }
 }
 

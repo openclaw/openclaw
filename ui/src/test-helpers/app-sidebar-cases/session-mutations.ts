@@ -76,13 +76,11 @@ describe("AppSidebar session mutation feedback", () => {
   }
 
   async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
-    const button = sidebar.querySelector<HTMLButtonElement>(
-      `[data-session-key="${key}"] [data-session-menu="true"]`,
-    );
-    if (!button) {
-      throw new Error(`expected menu button for ${key}`);
+    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
+    if (!row) {
+      throw new Error(`expected session row for ${key}`);
     }
-    button.click();
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
     if (!menu) {
@@ -196,7 +194,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(menu.querySelector(actionSelector)).toBeNull();
   });
 
-  it("offers undo after archiving and restores a pinned active session", async () => {
+  it("offers undo after inline archiving and restores a pinned active session without navigating", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
@@ -214,11 +212,28 @@ describe("AppSidebar session mutation feedback", () => {
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;
     const toast = await mountToastHost();
+    gateway.publish({ hello: gatewayHelloForMethods(["sessions.patch"], ["operator.read"]) });
     await sidebar.updateComplete;
 
-    const menu = await openSessionMenu(sidebar, archivedRow.key);
-    menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    const archive = sidebar.querySelector<HTMLButtonElement>(
+      `[data-session-key="${archivedRow.key}"] [data-sidebar-session-archive]`,
+    );
+    expect(archive?.disabled).toBe(true);
+    archive!.click();
+    expect(harness.patch).not.toHaveBeenCalled();
+
+    gateway.publish({ hello: gatewayHelloForMethods(["sessions.patch"]) });
+    await sidebar.updateComplete;
+    expect(archive?.disabled).toBe(false);
+    const pendingArchive = deferred<Awaited<ReturnType<typeof harness.patch>>>();
+    harness.patch.mockReturnValueOnce(pendingArchive.promise);
+    archive!.click();
+    archive!.click();
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(`[data-session-key="${archivedRow.key}"]`)).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+    pendingArchive.resolve(successfulSessionPatch(archivedRow.key));
     await vi.waitFor(() =>
       expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Session archived"),
     );

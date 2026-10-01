@@ -9,12 +9,18 @@ import {
   loadSessionEntryReadOnly,
   resolveSessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
-import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../../routing/session-key.js";
+import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
@@ -45,6 +51,27 @@ export type AcpSpawnRequesterState = {
   heartbeatRelayRouteUsable: boolean;
   origin: ReturnType<typeof normalizeDeliveryContext>;
 };
+
+export async function readAcpSpawnParentDeliveryContext(params: {
+  parentSessionKey: string;
+  requesterAgentId: string;
+  assertActive?: () => void;
+}) {
+  return await withSessionEntryReadOnlyInWorker(
+    {
+      sessionKey: params.parentSessionKey,
+      agentId: resolveAgentIdFromSessionKey(params.parentSessionKey, params.requesterAgentId),
+      clone: false,
+    },
+    () => params.assertActive?.(),
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return deliveryContextFromSession(read.value);
+    },
+  );
+}
 
 export function resolveRequesterInternalSessionKey(params: {
   cfg: OpenClawConfig;
@@ -170,29 +197,6 @@ export function shouldStreamAcpSpawnToParent(params: {
   return params.streamToParentRequested || implicitStreamToParent;
 }
 
-function sessionEntryMatchesAcpResumeSessionId(
-  acp: SessionAcpMeta | undefined,
-  resumeSessionId: string,
-): boolean {
-  const identity = acp?.identity;
-  return (
-    normalizeOptionalString(identity?.agentSessionId) === resumeSessionId ||
-    normalizeOptionalString(identity?.acpxSessionId) === resumeSessionId
-  );
-}
-
-function sessionEntryIsOwnedByRequester(params: {
-  sessionKey: string;
-  entry: SessionEntry | undefined;
-  requesterSessionKey: string;
-}): boolean {
-  return (
-    params.sessionKey === params.requesterSessionKey ||
-    normalizeOptionalString(params.entry?.spawnedBy) === params.requesterSessionKey ||
-    normalizeOptionalString(params.entry?.parentSessionKey) === params.requesterSessionKey
-  );
-}
-
 export function validateAcpResumeSessionOwnership(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -221,16 +225,15 @@ export function validateAcpResumeSessionOwnership(params: {
     // Resume identifiers are backend-local; requester ownership cannot authorize another backend.
     if (
       (configuredBackend && normalizeOptionalLowercaseString(acp?.backend) !== configuredBackend) ||
-      !sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)
+      (normalizeOptionalString(acp?.identity?.agentSessionId) !== resumeSessionId &&
+        normalizeOptionalString(acp?.identity?.acpxSessionId) !== resumeSessionId)
     ) {
       continue;
     }
     if (
-      sessionEntryIsOwnedByRequester({
-        sessionKey,
-        entry,
-        requesterSessionKey,
-      })
+      sessionKey === requesterSessionKey ||
+      normalizeOptionalString(entry?.spawnedBy) === requesterSessionKey ||
+      normalizeOptionalString(entry?.parentSessionKey) === requesterSessionKey
     ) {
       return { ok: true };
     }

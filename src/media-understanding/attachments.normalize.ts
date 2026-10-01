@@ -1,9 +1,9 @@
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 // Attachment normalization converts message context media fields into typed
 // attachment records and classifies media kind from MIME or filename.
 import type { MediaKind } from "@openclaw/media-core/constants";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import { normalizeMediaFacts, resolveMediaFactKind } from "../media/media-facts.js";
 import type { MediaAttachment } from "./types.js";
 
@@ -64,11 +64,6 @@ export function resolveAttachmentKind(attachment: MediaAttachment): Exclude<Medi
     kind: attachment.kind,
   });
   return kind === "sticker" ? "image" : kind === "document" ? "unknown" : (kind ?? "unknown");
-}
-
-/** Returns true when the attachment is classified as video media. */
-export function isVideoAttachment(attachment: MediaAttachment): boolean {
-  return resolveAttachmentKind(attachment) === "video";
 }
 
 /** Returns true when the attachment is classified as audio media. */

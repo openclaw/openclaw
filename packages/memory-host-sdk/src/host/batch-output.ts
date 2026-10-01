@@ -61,21 +61,16 @@ export async function readEmbeddingBatchJsonl<T>(
     if (recordCount > options.maxRecords) {
       throw new Error(`${options.label}: JSONL output exceeds ${options.maxRecords} records`);
     }
-    let text: string;
-    try {
-      text = decoder.decode(recordBuffer?.subarray(0, recordBytes)).trim();
-    } catch {
-      recordBytes = 0;
-      throw new Error(`${options.label}: malformed JSONL record`);
-    }
-    recordBytes = 0;
-    if (!text) {
-      return true;
-    }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(text) as unknown;
+      const text = decoder.decode(recordBuffer?.subarray(0, recordBytes)).trim();
+      recordBytes = 0;
+      if (!text) {
+        return true;
+      }
+      parsed = JSON.parse(text);
     } catch {
+      recordBytes = 0;
       throw new Error(`${options.label}: malformed JSONL record`);
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -159,7 +154,7 @@ export function applyEmbeddingBatchOutputLine(params: {
   if (statusCode >= 400) {
     const messageFromObject =
       response?.body && typeof response.body === "object"
-        ? (response.body as { error?: { message?: string } }).error?.message
+        ? response.body.error?.message
         : undefined;
     const messageFromString = typeof response?.body === "string" ? response.body : undefined;
     params.errors.push(

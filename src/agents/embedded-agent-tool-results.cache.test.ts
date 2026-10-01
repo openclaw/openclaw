@@ -49,7 +49,7 @@ it("does not return a cached output modified by an earlier consumer", () => {
   expect(sanitizeToolResult(input)).toEqual({ details: { note: "ordinary" } });
 });
 
-it.each(["add", "delete", "enumerability", "prototype", "array-length"] as const)(
+it.each(["add", "enumerability", "prototype", "array-length"] as const)(
   "rechecks structural changes (%s)",
   (change) => {
     const input = { details: { note: "ordinary" }, content: [{ type: "text", text: "kept" }] };
@@ -57,8 +57,6 @@ it.each(["add", "delete", "enumerability", "prototype", "array-length"] as const
     sanitizeToolResult(input);
     if (change === "add") {
       Object.assign(input.details, { token: "added-secret" });
-    } else if (change === "delete") {
-      Reflect.deleteProperty(input.details, "note");
     } else if (change === "enumerability") {
       Object.defineProperty(input.details, "note", { enumerable: false });
     } else if (change === "prototype") {

@@ -21,6 +21,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
@@ -30,7 +31,6 @@ import {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
@@ -52,6 +52,7 @@ import {
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 const databasePaths: string[] = [];
@@ -175,7 +176,7 @@ describe("cold transcript storage workers", () => {
         database,
         getNodeSqliteKysely<DB>(database)
           .selectFrom("transcript_events")
-          .select("event_json")
+          .select(transcriptEventJsonSql(database).as("event_json"))
           .where("session_id", "=", sessionId)
           .orderBy("seq"),
       ).rows) {
@@ -316,6 +317,7 @@ describe("cold transcript storage workers", () => {
     process.on("worker", observeWorker);
     try {
       closeOpenClawAgentDatabasesForTest();
+      clearOpenClawAgentIntegrityVerification(fixture.options.path);
       await expect(runSessionColdStorageMaintenance({ config: fixture.config })).resolves.toEqual({
         archivedTranscripts: 2,
         externalizedTranscripts: 0,
@@ -326,9 +328,11 @@ describe("cold transcript storage workers", () => {
       ).toBeDefined();
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
+      clearOpenClawAgentIntegrityVerification(fixture.options.path);
       await restoreSessionColdTranscript(fixture.scope);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
+      clearOpenClawAgentIntegrityVerification(fixture.options.path);
       await restoreSessionColdTranscript(fixture.secondScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
       await flushLogger();
@@ -572,7 +576,6 @@ describe("cold transcript storage workers", () => {
       () => loadTranscriptEventsSync(fixture.scope),
       () => readSessionTranscriptHistoryEvents(fixture.scope),
       () => loadTranscriptHeaderSync(fixture.scope),
-      () => loadTranscriptTailEventsSync(fixture.scope, 1),
     ]) {
       expect(read).toThrow(expect.objectContaining({ code: "TRANSCRIPT_COLD" }));
     }
@@ -677,6 +680,14 @@ describe("cold transcript storage workers", () => {
       try {
         await restoreSessionColdTranscript(fixture.scope);
         expect(fixture.snapshot()).toEqual(fixture.original);
+        expect(
+          fixture
+            .database()
+            .prepare(`SELECT f.message_id FROM session_transcript_fts_rows m
+            JOIN session_transcript_fts f ON f.rowid=m.id AND f.session_id=m.session_id
+            WHERE m.session_id=? ORDER BY f.message_id`)
+            .all(historicalId),
+        ).toEqual([{ message_id: "history-assistant" }, { message_id: "history-user" }]);
         expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
         expect(fixture.database().prepare("PRAGMA quick_check").get()).toEqual({
           quick_check: "ok",
@@ -821,7 +832,14 @@ describe("cold transcript storage workers", () => {
     { version: 19, expected: /uses schema version 19/ },
     {
       version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      expected: /no such table: session_transcript_cold_archives/,
+      expected: expect.objectContaining({
+        name: "SessionMetadataUnavailableError",
+        reason: "table-missing",
+        missingTables: ["session_transcript_cold_archives"],
+        cause: expect.objectContaining({
+          message: expect.stringMatching(/no such table: session_transcript_cold_archives/),
+        }),
+      }),
     },
   ])(
     "rejects unmigrated or damaged schema $version instead of reporting zero transcripts",

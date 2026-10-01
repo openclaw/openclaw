@@ -6,7 +6,6 @@ const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs"
 describe("detectChangedScope Git-owner routing", () => {
   it.each([
     ".github/actions/publish-generated-pr/action.yml",
-    ".github/actions/publish-generated-pr/policy.py",
     ".github/workflows/maturity-scorecard.yml",
     "test/scripts/generated-publisher.test-support.ts",
     ".github/actions/git-owner/action.yml",
@@ -26,9 +25,7 @@ describe("detectChangedScope Git-owner routing", () => {
     ".github/workflows/mantis-discord-thread-attachment.yml",
     ".github/workflows/mantis-slack-desktop-smoke.yml",
     ".github/workflows/mantis-web-ui-chat-proof.yml",
-    ".github/actions/git-owner/owner.py",
     ".github/actions/ensure-base-commit/action.yml",
-    ".github/actions/ensure-base-commit/policy.py",
     "scripts/generate-ci-git-owner.mts",
     "test/scripts/ci-checkout.test-support.ts",
     "test/scripts/ci-git-owner.test.ts",

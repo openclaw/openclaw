@@ -15,7 +15,6 @@ import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import {
   connectReq,
   getTrackedConnectChallengeNonce,
-  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
@@ -385,7 +384,6 @@ export {
   createSignedDevice,
   ensurePairedDeviceTokenForCurrentIdentity,
   expectHelloOkServerVersion,
-  getGatewayTestPort,
   installGatewayTestHooks,
   MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,

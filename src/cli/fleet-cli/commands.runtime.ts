@@ -1,4 +1,3 @@
-// Runtime-backed fleet command handlers and human/JSON output formatting.
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import {
   createFleetService,
@@ -148,6 +147,7 @@ export async function runFleetStatusCommand(options: {
   }
   defaultRuntime.log(`Tenant: ${result.tenant}`);
   defaultRuntime.log(`Container: ${result.containerName}`);
+  defaultRuntime.log(`Runtime: ${result.runtime}`);
   defaultRuntime.log(`State: ${result.container.state}`);
   defaultRuntime.log(`Port: ${result.port}`);
   defaultRuntime.log(`Image: ${result.image}`);

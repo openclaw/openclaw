@@ -37,7 +37,6 @@ export {
   ensureExecApprovals,
   ensureExecApprovalsSnapshot,
   loadExecApprovals,
-  loadExecApprovalsAsync,
   loadExecApprovalsReadOnly,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,
@@ -181,7 +180,6 @@ export {
   OPTIONAL_EXEC_APPROVAL_DECISIONS,
 } from "./exec-approvals-policy.js";
 export {
-  commandRequiresSecurityAuditSuppressionApproval,
   isExecApprovalDecisionAllowed,
   maxAsk,
   minSecurity,

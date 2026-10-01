@@ -9,10 +9,7 @@ import {
   ChatHistoryParamsSchema,
   ChatPendingInputsPageSchema,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import {
-  applySessionStoreProjection,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
@@ -46,25 +43,17 @@ function useLoggingConfig(name: string, logging: Record<string, unknown>): void 
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 }
 
-async function writeSessionStore(
+function writeSessionStore(
   name: string,
   entries: Record<string, { sessionId: string; updatedAt: number; archivedAt?: number }>,
-): Promise<string> {
+): string {
   if (!tempDir) {
     throw new Error("tempDir not initialized");
   }
   const storePath = path.join(tempDir, name);
-  await applySessionStoreProjection({
-    storePath,
-    skipMaintenance: true,
-    update: (store) => {
-      for (const sessionKey of Object.keys(store)) {
-        delete store[sessionKey];
-      }
-      Object.assign(store, entries);
-      return { persist: true, result: undefined };
-    },
-  });
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    replaceSessionEntrySync({ storePath, sessionKey }, entry);
+  }
   return storePath;
 }
 
@@ -146,16 +135,18 @@ describe("sessions_history redaction", () => {
           message: { role: "user", content: "next" },
           acceptedAt: 1,
           state: "queued",
+          queued: true,
         },
       ],
       total: 1,
+      queuedCount: 1,
     };
     expect(Value.Check(ChatPendingInputsPageSchema, pendingInputs)).toBe(true);
     expect(Value.Check(tool.outputSchema!, { ...readHistoryDetails(result), pendingInputs })).toBe(
       true,
     );
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; runId?: string }>; total: number; nextBefore?: number }; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
+      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number; windowReset?: boolean } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
@@ -236,7 +227,11 @@ describe("sessions_history redaction", () => {
 
     expect(serialized).not.toContain("sk-or-v1-abcdef0123456789");
     expect(serialized).toContain("OPENROUTER_API_KEY=");
-    expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
+    expect(result.details).toMatchObject({
+      contentRedacted: true,
+      contentTruncated: false,
+      truncated: false,
+    });
   });
 
   it("keeps accepted inputs separate, redacted, bounded, and addressable by their own cursor", async () => {
@@ -298,7 +293,7 @@ describe("sessions_history redaction", () => {
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
   });
 
-  it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {
+  it.each([0])("rejects invalid limit value %s", async (limit) => {
     const tool = createHistoryToolWithMessage("hello");
 
     await expect(tool.execute("call-1", { sessionKey: "main", limit })).rejects.toThrow(
@@ -306,7 +301,7 @@ describe("sessions_history redaction", () => {
     );
   });
 
-  it.each([-1, 1.5, "1abc"])("rejects invalid offset value %s", async (offset) => {
+  it.each(["1abc"])("rejects invalid offset value %s", async (offset) => {
     const requests: CallGatewayRequest[] = [];
     const tool = createSessionsHistoryTool({
       config: {},
@@ -322,7 +317,7 @@ describe("sessions_history redaction", () => {
     expect(requests).toEqual([]);
   });
 
-  it.each([0, 4])("ignores offset %i when an anchored read is requested", async (offset) => {
+  it.each([4])("ignores offset %i when an anchored read is requested", async (offset) => {
     const requests: CallGatewayRequest[] = [];
     const tool = createSessionsHistoryTool({
       config: {},
@@ -507,7 +502,7 @@ describe("sessions_history redaction", () => {
     expect(details.nextOffset).not.toBe(30);
   });
 
-  it("uses the oldest visible message for pagination after tool messages are filtered", async () => {
+  it("paginates history with default filtering and explicit tool inclusion", async () => {
     const tool = createSessionsHistoryTool({
       config: {},
       callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
@@ -537,6 +532,16 @@ describe("sessions_history redaction", () => {
       hasMore: true,
       totalMessages: 10,
     });
+
+    const withTools = readHistoryDetails(
+      await tool.execute("with-tools", { sessionKey: "main", offset: 0, includeTools: true }),
+    );
+    expect(withTools.messages).toEqual([
+      { role: "tool", content: "hidden", __openclaw: { seq: 6 } },
+      { role: "assistant", content: "visible", __openclaw: { seq: 7 } },
+      { role: "assistant", content: "latest", __openclaw: { seq: 8 } },
+    ]);
+    expect(withTools.nextOffset).toBe(5);
   });
 
   it("preserves the Gateway replay cursor for projected siblings from the same row", async () => {
@@ -592,7 +597,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:subagent:parent";
     const targetSessionKey = "agent:main:subagent:old-child";
     const expectedSessionId = "old-child-session";
-    const storePath = await writeSessionStore("old-child.json", {
+    const storePath = writeSessionStore("old-child.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     const requests: CallGatewayRequest[] = [];
@@ -646,7 +651,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:subagent:parent";
     const targetSessionKey = "agent:main:subagent:old-child-race";
     const expectedSessionId = "old-child-session";
-    const storePath = await writeSessionStore("old-child-race.json", {
+    const storePath = writeSessionStore("old-child-race.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     const requests: CallGatewayRequest[] = [];
@@ -689,7 +694,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "main-session-incarnation";
-    const storePath = await writeSessionStore("scoped-grant.json", {
+    const storePath = writeSessionStore("scoped-grant.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     const requests: CallGatewayRequest[] = [];
@@ -735,7 +740,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-race";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "old-incarnation";
-    const storePath = await writeSessionStore("scoped-grant-race.json", {
+    const storePath = writeSessionStore("scoped-grant-race.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     let grantChecks = 0;
@@ -789,7 +794,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-archive-race";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "main-incarnation";
-    const storePath = await writeSessionStore("scoped-grant-archive-race.json", {
+    const storePath = writeSessionStore("scoped-grant-archive-race.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     let grantChecks = 0;

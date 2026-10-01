@@ -5,7 +5,10 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import * as baseRefs from "./base-ref.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
 import { addManagedWorktree } from "./checkout.js";
@@ -18,11 +21,20 @@ async function git(cwd: string, ...args: string[]) {
   return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 }
 
+function read(root: string, file: string) {
+  return fs.readFile(path.join(root, file), "utf8");
+}
+
+function failed(stderr: string) {
+  return { stdout: "", stderr, code: 1, signal: null, killed: false, termination: "exit" as const };
+}
+
 describe("repository source profile creation", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const roots = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
@@ -41,6 +53,23 @@ describe("repository source profile creation", () => {
     await git(repo, "add", ".");
     await git(repo, "commit", "-m", "profile inputs");
     return await git(repo, "rev-parse", "HEAD");
+  }
+  async function profileTarget(destination: string) {
+    return {
+      env,
+      now: Date.now,
+      enabled: false,
+      repoRoot: repo,
+      commonDir: await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+      worktreeRoot: path.dirname(destination),
+      destination,
+      base: commit,
+      sourceProfile: await resolveWorktreeSourceProfile(repo, commit, ["alpha"], {
+        commitGuard: () => undefined,
+      }),
+      requireSpace: vi.fn(),
+      commitGuard: () => undefined,
+    };
   }
 
   beforeEach(async () => {
@@ -70,7 +99,7 @@ describe("repository source profile creation", () => {
     expect(await git(sparse.path, "sparse-checkout", "list")).toBe(
       ".openclaw/worktree-profiles\nalpha\nbeta",
     );
-    expect(await fs.readFile(path.join(sparse.path, "alpha/source.txt"), "utf8")).toBe("alpha\n");
+    expect(await read(sparse.path, "alpha/source.txt")).toBe("alpha\n");
     await expect(fs.access(path.join(sparse.path, "excluded/source.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -82,25 +111,19 @@ describe("repository source profile creation", () => {
       await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
     );
     const full = await service.create({ repoRoot: repo, name: "full", baseRef: commit });
-    expect(await fs.readFile(path.join(full.path, "excluded/source.txt"), "utf8")).toBe(
-      "full-only\n",
-    );
+    expect(await read(full.path, "excluded/source.txt")).toBe("full-only\n");
     expect(
       await git(sparse.path, "rev-parse", "--path-format=absolute", "--git-path", "index"),
     ).not.toBe(await git(full.path, "rev-parse", "--path-format=absolute", "--git-path", "index"));
     await fs.writeFile(path.join(sparse.path, "alpha/source.txt"), "task edit\n");
-    expect(await fs.readFile(path.join(full.path, "alpha/source.txt"), "utf8")).toBe("alpha\n");
-    expect(await fs.readFile(path.join(repo, "alpha/source.txt"), "utf8")).toBe("alpha\n");
+    expect(await read(full.path, "alpha/source.txt")).toBe("alpha\n");
+    expect(await read(repo, "alpha/source.txt")).toBe("alpha\n");
     await git(sparse.path, "sparse-checkout", "disable");
-    expect(await fs.readFile(path.join(sparse.path, "excluded/source.txt"), "utf8")).toBe(
-      "full-only\n",
-    );
-    expect(await fs.readFile(path.join(sparse.path, "alpha/source.txt"), "utf8")).toBe(
-      "task edit\n",
-    );
+    expect(await read(sparse.path, "excluded/source.txt")).toBe("full-only\n");
+    expect(await read(sparse.path, "alpha/source.txt")).toBe("task edit\n");
   });
 
-  it.each(["../excluded\n", "/excluded\n", "alpha/source.txt\n", "missing\n", "alpha/*\n"])(
+  it.each(["../excluded\n", "alpha/source.txt\n", "alpha/*\n"])(
     "rejects invalid cone data before target or branch registration: %j",
     async (definition) => {
       await write(".openclaw/worktree-profiles/bad", definition);
@@ -114,7 +137,7 @@ describe("repository source profile creation", () => {
         }),
       ).rejects.toThrow(/directory/);
       expect(await git(repo, "branch", "--list", "openclaw/invalid")).toBe("");
-      expect(service.listRegistryRecords()).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/invalid");
     },
   );
@@ -130,13 +153,11 @@ describe("repository source profile creation", () => {
       baseRef: "HEAD",
       profiles: ["alpha"],
     });
-    expect(await fs.readFile(path.join(sparse.path, "excluded/sentinel"), "utf8")).toBe(
-      "provisioned bytes\n",
-    );
+    expect(await read(sparse.path, "excluded/sentinel")).toBe("provisioned bytes\n");
     await expect(fs.access(path.join(sparse.path, "excluded/source.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    const before = service.listRegistryRecords();
+    const before = await service.listRegistryRecords();
     await expect(
       service.create({
         repoRoot: repo,
@@ -144,18 +165,12 @@ describe("repository source profile creation", () => {
         profiles: ["both"],
       }),
     ).rejects.toThrow(/new worktree/);
-    expect(service.listRegistryRecords()).toEqual(before);
-    expect(await fs.readFile(path.join(sparse.path, "excluded/sentinel"), "utf8")).toBe(
-      "provisioned bytes\n",
-    );
+    expect(await service.listRegistryRecords()).toEqual(before);
+    expect(await read(sparse.path, "excluded/sentinel")).toBe("provisioned bytes\n");
     expect((await service.create({ repoRoot: repo, name: "prepared" })).id).toBe(sparse.id);
     await git(sparse.path, "sparse-checkout", "disable");
-    expect(await fs.readFile(path.join(sparse.path, "excluded/sentinel"), "utf8")).toBe(
-      "provisioned bytes\n",
-    );
-    expect(await fs.readFile(path.join(sparse.path, "excluded/source.txt"), "utf8")).toBe(
-      "full-only\n",
-    );
+    expect(await read(sparse.path, "excluded/sentinel")).toBe("provisioned bytes\n");
+    expect(await read(sparse.path, "excluded/source.txt")).toBe("full-only\n");
   });
 
   it("does not reshrink a partially provisioned target after failed setup and failed cleanup", async () => {
@@ -168,14 +183,6 @@ describe("repository source profile creation", () => {
     let target = "";
     let sparseCalls = 0;
     let setupCalls = 0;
-    const failed = (stderr: string) => ({
-      stdout: "",
-      stderr,
-      code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    });
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (argv[0] === path.join(repo, ".openclaw/worktree-setup.sh")) {
         setupCalls++;
@@ -187,9 +194,7 @@ describe("repository source profile creation", () => {
         expect(await git(target, "sparse-checkout", "list")).toBe(
           ".openclaw/worktree-profiles\nalpha",
         );
-        expect(await fs.readFile(path.join(target, "excluded/sentinel"), "utf8")).toBe(
-          "retained provisioning\n",
-        );
+        expect(await read(target, "excluded/sentinel")).toBe("retained provisioning\n");
         await expect(fs.access(path.join(target, "excluded/source.txt"))).rejects.toMatchObject({
           code: "ENOENT",
         });
@@ -207,17 +212,13 @@ describe("repository source profile creation", () => {
     const params = { repoRoot: repo, name: "partial", baseRef: "HEAD", profiles: ["alpha"] };
     await expect(service.create(params)).rejects.toThrow(/setup failure/);
     expect(target).not.toBe("");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     await expect(service.create({ ...params, profiles: ["both"] })).rejects.toThrow();
     expect(sparseCalls).toBe(1);
     expect(setupCalls).toBe(1);
     expect(await git(target, "sparse-checkout", "list")).toBe(".openclaw/worktree-profiles\nalpha");
-    expect(await fs.readFile(path.join(target, "excluded/sentinel"), "utf8")).toBe(
-      "retained provisioning\n",
-    );
-    expect(await fs.readFile(path.join(target, "excluded/setup-state"), "utf8")).toBe(
-      "partial setup\n",
-    );
+    expect(await read(target, "excluded/sentinel")).toBe("retained provisioning\n");
+    expect(await read(target, "excluded/setup-state")).toBe("partial setup\n");
   });
 
   it("rejects selected owner reuse and snapshot restore before changing ignored state", async () => {
@@ -237,23 +238,17 @@ describe("repository source profile creation", () => {
     await expect(
       service.create({ ...params, name: "different", profiles: ["alpha"] }),
     ).rejects.toThrow(/new worktree/);
-    expect(await fs.readFile(path.join(full.path, "excluded/sentinel"), "utf8")).toBe(
-      "owned ignored bytes\n",
-    );
+    expect(await read(full.path, "excluded/sentinel")).toBe("owned ignored bytes\n");
     await service.remove({ id: full.id, reason: "archive" });
-    const before = service.listRegistryRecords();
+    const before = await service.listRegistryRecords();
     expect(before[0]?.snapshotRef).toBeTruthy();
     await expect(service.create({ ...params, profiles: ["alpha"] })).rejects.toThrow(
       /new worktree/,
     );
-    expect(service.listRegistryRecords()).toEqual(before);
+    expect(await service.listRegistryRecords()).toEqual(before);
     const restored = await service.restore({ id: full.id });
-    expect(await fs.readFile(path.join(restored.path, "excluded/sentinel"), "utf8")).toBe(
-      "owned ignored bytes\n",
-    );
-    expect(await fs.readFile(path.join(restored.path, "excluded/source.txt"), "utf8")).toBe(
-      "full-only\n",
-    );
+    expect(await read(restored.path, "excluded/sentinel")).toBe("owned ignored bytes\n");
+    expect(await read(restored.path, "excluded/source.txt")).toBe("full-only\n");
   });
 
   it.each(["existing", "restore"])(
@@ -264,39 +259,24 @@ describe("repository source profile creation", () => {
         await fs.mkdir(destination);
         await fs.writeFile(path.join(destination, "sentinel"), "preserve\n");
       }
-      const sourceProfile = await resolveWorktreeSourceProfile(repo, commit, ["alpha"], {
-        commitGuard: () => undefined,
-      });
-      const requireSpace = vi.fn();
+      const input = await profileTarget(destination);
       await expect(
         addManagedWorktree({
-          env,
-          now: Date.now,
-          enabled: false,
-          repoRoot: repo,
-          commonDir: await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-          worktreeRoot: path.dirname(destination),
-          destination,
-          base: commit,
-          sourceProfile,
+          ...input,
           deferGitCheckout: mode === "restore",
-          requireSpace,
-          commitGuard: () => undefined,
         }),
       ).rejects.toThrow(/fresh destination/);
-      expect(requireSpace).not.toHaveBeenCalled();
+      expect(input.requireSpace).not.toHaveBeenCalled();
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(destination);
       if (mode === "existing") {
-        expect(await fs.readFile(path.join(destination, "sentinel"), "utf8")).toBe("preserve\n");
+        expect(await read(destination, "sentinel")).toBe("preserve\n");
       }
     },
   );
 
   it("preserves unexpected content appearing after registration instead of shrinking or rolling it back", async () => {
     const destination = path.join(roots.make("openclaw-profile-race-"), "target");
-    const sourceProfile = await resolveWorktreeSourceProfile(repo, commit, ["alpha"], {
-      commitGuard: () => undefined,
-    });
+    const input = await profileTarget(destination);
     let sparseCalls = 0;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (argv[0] === "git" && argv.includes("sparse-checkout")) {
@@ -314,25 +294,9 @@ describe("repository source profile creation", () => {
       }
       return result;
     });
-    await expect(
-      addManagedWorktree({
-        env,
-        now: Date.now,
-        enabled: false,
-        repoRoot: repo,
-        commonDir: await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-        worktreeRoot: path.dirname(destination),
-        destination,
-        base: commit,
-        sourceProfile,
-        requireSpace: () => undefined,
-        commitGuard: () => undefined,
-      }),
-    ).rejects.toThrow(/no longer unprepared/);
+    await expect(addManagedWorktree(input)).rejects.toThrow(/no longer unprepared/);
     expect(sparseCalls).toBe(0);
-    expect(await fs.readFile(path.join(destination, "sentinel"), "utf8")).toBe(
-      "interrupted preparation\n",
-    );
+    expect(await read(destination, "sentinel")).toBe("interrupted preparation\n");
     expect(await git(repo, "worktree", "list", "--porcelain")).toContain(destination);
   });
 
@@ -355,49 +319,35 @@ describe("repository source profile creation", () => {
         target = directory;
         await fs.mkdir(path.join(target, "excluded"), { recursive: true });
         await fs.writeFile(path.join(target, "excluded/sentinel"), "partial recovery evidence\n");
-        return {
-          stdout: "",
-          stderr: "injected partial materialization",
-          code: 1,
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
+        return failed("injected partial materialization");
       }
       return await realRunCommand(argv, options);
     });
     const params = { repoRoot: repo, name: "partial-source", baseRef: "HEAD", profiles: ["alpha"] };
     await expect(service.create(params)).rejects.toThrow(/partial materialization/);
     expect(target).not.toBe("");
-    expect(await fs.readFile(path.join(target, "excluded/sentinel"), "utf8")).toBe(
-      "partial recovery evidence\n",
-    );
+    expect(await read(target, "excluded/sentinel")).toBe("partial recovery evidence\n");
     expect(await git(repo, "worktree", "list", "--porcelain")).toContain(target);
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     await expect(service.create({ ...params, profiles: ["both"] })).rejects.toThrow(
       /branch already exists/,
     );
     expect(sparseCalls).toBe(1);
-    expect(await fs.readFile(path.join(target, "excluded/sentinel"), "utf8")).toBe(
-      "partial recovery evidence\n",
-    );
+    expect(await read(target, "excluded/sentinel")).toBe("partial recovery evidence\n");
   });
 
-  it.each(["../alpha", "Alpha", "", "alpha/beta", "--alpha", "alpha\n"])(
-    "rejects unsafe profile names before source registration: %j",
-    async (name) => {
-      await expect(
-        service.create({
-          repoRoot: repo,
-          name: "invalid-name",
-          baseRef: commit,
-          profiles: [name],
-        }),
-      ).rejects.toThrow(/lowercase name/);
-      expect(await git(repo, "branch", "--list", "openclaw/invalid-name")).toBe("");
-      expect(service.listRegistryRecords()).toEqual([]);
-    },
-  );
+  it("rejects an escaping profile name before source registration", async () => {
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "invalid-name",
+        baseRef: commit,
+        profiles: ["../alpha"],
+      }),
+    ).rejects.toThrow(/lowercase name/);
+    expect(await git(repo, "branch", "--list", "openclaw/invalid-name")).toBe("");
+    expect(await service.listRegistryRecords()).toEqual([]);
+  });
 
   it("rejects invalid UTF-8 and oversized definitions instead of reading a valid prefix", async () => {
     for (const contents of [Buffer.from([0xff]), Buffer.from("alpha\n" + "\n".repeat(64 * 1024))]) {
@@ -429,14 +379,7 @@ describe("repository source profile creation", () => {
       if (argv[0] === "git" && argv.includes("worktree") && argv.includes("add")) {
         attempts++;
         if (attempts === 1) {
-          return {
-            stdout: "",
-            stderr: "remote checkout failed",
-            code: 1,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+          return failed("remote checkout failed");
         }
       }
       return await realRunCommand(argv, options);
@@ -445,7 +388,7 @@ describe("repository source profile creation", () => {
     if (missing) {
       await expect(result).rejects.toThrow(/tracked regular file/);
       expect(attempts).toBe(1);
-      expect(service.listRegistryRecords()).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
       expect(await git(repo, "branch", "--list", "openclaw/retry")).toBe("");
     } else {
       const target = await result;

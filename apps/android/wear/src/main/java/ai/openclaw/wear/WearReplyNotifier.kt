@@ -42,19 +42,10 @@ internal class WearReplyNotifier(
           "sequence:${inbound.sequence}",
         ).joinToString("\u0000")
     val notificationTag = replyNotificationTag(sessionKey, message, fallbackIdentity)
-    val requestCode = NOTIFICATION_ID
     val replyAction = createReplyAction(sessionKey, notificationTag, inbound.sourceNodeId)
-    val openPendingIntent = createOpenAppIntent(requestCode)
     val agent = Person.Builder().setName("OpenClaw").build()
     val notification =
-      NotificationCompat
-        .Builder(context, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(context.getString(R.string.notification_title))
-        .setContentText(message.text)
-        .setContentIntent(openPendingIntent)
-        .setAutoCancel(true)
-        .setLocalOnly(true)
+      replyNotification(context.getString(R.string.notification_title), message.text)
         .setOnlyAlertOnce(true)
         .setStyle(
           NotificationCompat
@@ -73,15 +64,10 @@ internal class WearReplyNotifier(
     if (!notificationsAllowed()) return
     createChannel()
     val notification =
-      NotificationCompat
-        .Builder(context, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(context.getString(R.string.notification_reply_failed_title))
-        .setContentText(context.getString(R.string.notification_reply_failed_text))
-        .setContentIntent(createOpenAppIntent(NOTIFICATION_ID))
-        .setAutoCancel(true)
-        .setLocalOnly(true)
-        .addAction(createReplyAction(sessionKey, notificationTag, phoneNodeId))
+      replyNotification(
+        context.getString(R.string.notification_reply_failed_title),
+        context.getString(R.string.notification_reply_failed_text),
+      ).addAction(createReplyAction(sessionKey, notificationTag, phoneNodeId))
         .build()
     notify(notificationTag, notification)
   }
@@ -90,25 +76,31 @@ internal class WearReplyNotifier(
     if (!notificationsAllowed()) return
     createChannel()
     val notification =
-      NotificationCompat
-        .Builder(context, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(context.getString(R.string.notification_phone_changed_title))
-        .setContentText(context.getString(R.string.notification_phone_changed_text))
-        .setContentIntent(createOpenAppIntent(NOTIFICATION_ID))
-        .setAutoCancel(true)
-        .setLocalOnly(true)
-        .build()
+      replyNotification(
+        context.getString(R.string.notification_phone_changed_title),
+        context.getString(R.string.notification_phone_changed_text),
+      ).build()
     notify(notificationTag, notification)
   }
 
-  private fun createOpenAppIntent(requestCode: Int): PendingIntent =
-    PendingIntent.getActivity(
-      context,
-      requestCode,
-      Intent(context, MainActivity::class.java),
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
+  private fun replyNotification(
+    title: String,
+    text: String,
+  ): NotificationCompat.Builder =
+    NotificationCompat
+      .Builder(context, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_notification)
+      .setContentTitle(title)
+      .setContentText(text)
+      .setContentIntent(
+        PendingIntent.getActivity(
+          context,
+          NOTIFICATION_ID,
+          Intent(context, MainActivity::class.java),
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        ),
+      ).setAutoCancel(true)
+      .setLocalOnly(true)
 
   private fun createReplyAction(
     sessionKey: String,

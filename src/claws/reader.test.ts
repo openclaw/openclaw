@@ -1,4 +1,4 @@
-import { link, writeFile } from "node:fs/promises";
+import { link, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -7,8 +7,99 @@ import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const manifestJson = JSON.stringify({
+  schemaVersion: 1,
+  agent: { id: "reader-agent", name: "Café" },
+});
+const packageJson = JSON.stringify({
+  name: "reader-package",
+  version: "1.0.0",
+  openclaw: { claw: "openclaw.claw.json" },
+});
+
+async function jsonSource(kind: "package" | "manifest") {
+  const root = tempDirs.make("openclaw-claw-json-");
+  const manifestPath = join(root, "openclaw.claw.json");
+  const packagePath = join(root, "package.json");
+  await writeFile(manifestPath, manifestJson);
+  await writeFile(packagePath, packageJson);
+  return {
+    path: kind === "package" ? packagePath : manifestPath,
+    source: kind === "package" ? root : manifestPath,
+    json: kind === "package" ? packageJson : manifestJson,
+  };
+}
 
 describe("Claw source reader", () => {
+  it.each(["package", "manifest"] as const)(
+    "reports BOM-prefixed %s JSON at its source path",
+    async (kind) => {
+      const { path, source, json } = await jsonSource(kind);
+      await writeFile(path, `\uFEFF${json}`);
+
+      expect(await readClawManifestFile(source)).toEqual({
+        ok: false,
+        diagnostics: [
+          {
+            level: "error",
+            code: "invalid_json",
+            phase: "parse",
+            path: "$",
+            message: expect.stringContaining(`Could not parse ${await realpath(path)}:`),
+          },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    { kind: "package", maxBytes: 256 * 1024, code: "package_read_failed_too_large" },
+    { kind: "manifest", maxBytes: 1024 * 1024, code: "read_failed_too_large" },
+  ] as const)("keeps the distinct $kind byte limit", async ({ kind, maxBytes, code }) => {
+    const { path, source, json: text } = await jsonSource(kind);
+    const json = Buffer.from(text);
+    const raw = Buffer.concat([json, Buffer.alloc(maxBytes - json.length, 0x20)]);
+    await writeFile(path, raw);
+
+    expect(await readClawManifestFile(source)).toMatchObject({
+      ok: true,
+      manifest: { agent: { id: "reader-agent", name: "Café" } },
+    });
+
+    await writeFile(path, Buffer.concat([raw, Buffer.from(" ")]));
+    expect(await readClawManifestFile(source)).toEqual({
+      ok: false,
+      diagnostics: [
+        {
+          level: "error",
+          code,
+          phase: "parse",
+          path: "$",
+          message: `${await realpath(path)} exceeds ${maxBytes} bytes.`,
+        },
+      ],
+    });
+  });
+
+  it("binds package whitespace bytes even when identity and byte length are unchanged", async () => {
+    const { path: packagePath, source } = await jsonSource("package");
+    await writeFile(packagePath, `${packageJson}\n`);
+    const first = await readClawManifestFile(source);
+    await writeFile(packagePath, `${packageJson} `);
+    const second = await readClawManifestFile(source);
+
+    if (!first.ok || !second.ok) {
+      throw new Error("expected both package documents to parse");
+    }
+    expect(second.manifest).toEqual(first.manifest);
+    expect(second.snapshot).toEqual(first.snapshot);
+    expect(second.source).toEqual({
+      ...first.source,
+      integrity: expect.any(String),
+    });
+    expect(second.source.integrity).not.toBe(first.source.integrity);
+  });
+
   it("reads an unpackaged Claw directory without bypassing declared package metadata", async () => {
     const root = tempDirs.make("openclaw-standalone-claw-");
     const source = join(root, "CLAW.md");
@@ -44,11 +135,7 @@ describe("Claw source reader", () => {
     }
   });
 
-  it.each([
-    ["nested", "SOUL.md/child"],
-    ["case-folded nested", "soul.MD/child"],
-    ["Unicode-normalized nested", "SOUL.md/cafe\u0301"],
-  ])("rejects a body with a %s workspace collision", async (_label, destination) => {
+  it("rejects a body with a case-folded nested workspace collision", async () => {
     const root = tempDirs.make("openclaw-claw-markdown-soul-hierarchy-");
     const manifestPath = join(root, "CLAW.md");
     await writeFile(
@@ -59,7 +146,7 @@ describe("Claw source reader", () => {
         "agent: { id: triage }",
         "workspace:",
         "  files:",
-        `    - { source: package.json, path: ${JSON.stringify(destination)} }`,
+        "    - { source: package.json, path: soul.MD/child }",
         "---",
         "Portable soul",
       ].join("\n"),

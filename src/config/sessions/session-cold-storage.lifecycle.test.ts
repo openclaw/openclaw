@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  createTempDirTracker,
+  useAutoCleanupTempDirTracker,
+} from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { createVerifiedSqliteSnapshot } from "../../infra/sqlite-snapshot.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -31,6 +36,25 @@ import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-rec
 
 const tempDirs = createTempDirTracker();
 const stores: string[] = [];
+let seedStorePath: string | undefined;
+const seedDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    if (seedStorePath) {
+      await closeOpenClawAgentDatabaseByPathAsync(seedStorePath, "main");
+    }
+    cleanup();
+    seed = undefined;
+    seedStorePath = undefined;
+  });
+});
+let seed:
+  | {
+      snapshotPath: string;
+      archivePath: string;
+      archiveName: string;
+      original: ReturnType<typeof loadTranscriptEventsSync>;
+    }
+  | undefined;
 afterEach(async () => {
   for (const storePath of stores.splice(0)) {
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: storePath });
@@ -39,9 +63,41 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-async function createColdCurrentSession() {
-  const storePath = path.join(tempDirs.make("openclaw-cold-lifecycle-"), "openclaw-agent.sqlite");
-  stores.push(storePath);
+beforeAll(async () => {
+  const root = seedDirs.make("openclaw-cold-lifecycle-seed-");
+  seedStorePath = path.join(root, "openclaw-agent.sqlite");
+  let fixture: Fixture;
+  try {
+    fixture = await createColdCurrentSession(seedStorePath);
+  } finally {
+    try {
+      await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: seedStorePath });
+    } finally {
+      await closeOpenClawAgentDatabaseByPathAsync(seedStorePath, "main");
+    }
+  }
+  expect(fixture.descriptor.storage).toBe("file");
+  const snapshotPath = path.join(root, "seed.sqlite");
+  await createVerifiedSqliteSnapshot({
+    sourcePath: seedStorePath,
+    targetPath: snapshotPath,
+    requireNonEmptySource: true,
+    preserveRowIds: true,
+  });
+  seed = {
+    snapshotPath,
+    archivePath: fixture.archivePath,
+    archiveName: fixture.descriptor.archive_name,
+    original: fixture.original,
+  };
+});
+
+async function createColdCurrentSession(
+  storePath = path.join(tempDirs.make("openclaw-cold-lifecycle-"), "openclaw-agent.sqlite"),
+) {
+  if (seed) {
+    stores.push(storePath);
+  }
   const scope = {
     agentId: "main",
     storePath,
@@ -49,53 +105,63 @@ async function createColdCurrentSession() {
     sessionKey: "agent:main:cold-lifecycle",
   };
   const entry = { sessionId: scope.sessionId, updatedAt: 1, lifecycleRevision: "cold-revision" };
-  await replaceSessionEntry(scope, entry);
-  await replaceTranscriptEvents(scope, [
-    { type: "session", id: scope.sessionId, version: 3 },
-    {
-      type: "message",
-      id: "question",
-      parentId: null,
-      message: { role: "user", content: "Question" },
-    },
-    {
-      type: "message",
-      id: "answer",
-      parentId: "question",
-      message: { role: "assistant", content: "Original answer" },
-    },
-    {
-      type: "message",
-      id: "alternate",
-      parentId: "question",
-      message: { role: "assistant", content: "Alternate answer" },
-    },
-    { type: "leaf", id: "selection", parentId: "alternate", targetId: "answer" },
-  ]);
   const options = { agentId: scope.agentId, path: storePath };
-  await waitForSessionTranscriptIndexReconcile(options);
-  await replaceSessionEntry(scope, { ...loadSessionEntry(scope), ...entry });
-  runOpenClawAgentWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<DB>(db)
-        .updateTable("session_windows")
-        .set({ updated_at: 1, transcript_updated_at: 1 })
-        .where("session_id", "=", scope.sessionId),
-    );
-  }, options);
-  const original = loadTranscriptEventsSync(scope);
-  await expect(
-    runSessionColdStorageMaintenance({
-      config: {
-        agents: { list: [{ id: "main" }] },
-        session: {
-          store: storePath,
-          maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-        },
+  let original: ReturnType<typeof loadTranscriptEventsSync>;
+  const template = seed;
+  if (template) {
+    await fs.copyFile(template.snapshotPath, storePath, fs.constants.COPYFILE_EXCL);
+    const archivePath = resolveSessionColdArchivePath(storePath, template.archiveName);
+    await fs.mkdir(path.dirname(archivePath), { recursive: true });
+    await fs.copyFile(template.archivePath, archivePath, fs.constants.COPYFILE_EXCL);
+    original = structuredClone(template.original);
+  } else {
+    await replaceSessionEntry(scope, entry);
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      {
+        type: "message",
+        id: "question",
+        parentId: null,
+        message: { role: "user", content: "Question" },
       },
-    }),
-  ).resolves.toMatchObject({ archivedTranscripts: 1 });
+      {
+        type: "message",
+        id: "answer",
+        parentId: "question",
+        message: { role: "assistant", content: "Original answer" },
+      },
+      {
+        type: "message",
+        id: "alternate",
+        parentId: "question",
+        message: { role: "assistant", content: "Alternate answer" },
+      },
+      { type: "leaf", id: "selection", parentId: "alternate", targetId: "answer" },
+    ]);
+    await waitForSessionTranscriptIndexReconcile(options);
+    await replaceSessionEntry(scope, { ...loadSessionEntry(scope), ...entry });
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<DB>(db)
+          .updateTable("session_windows")
+          .set({ updated_at: 1, transcript_updated_at: 1 })
+          .where("session_id", "=", scope.sessionId),
+      );
+    }, options);
+    original = loadTranscriptEventsSync(scope);
+    await expect(
+      runSessionColdStorageMaintenance({
+        config: {
+          agents: { list: [{ id: "main" }] },
+          session: {
+            store: storePath,
+            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ archivedTranscripts: 1 });
+  }
   const database = () => openOpenClawAgentDatabase(options).db;
   const descriptor = readSessionColdTranscript(database(), scope.sessionId);
   if (!descriptor) {

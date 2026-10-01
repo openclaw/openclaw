@@ -5,6 +5,7 @@ import { createServer, IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import path from "node:path";
 import { json } from "node:stream/consumers";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   afterAll,
   afterEach,
@@ -19,6 +20,7 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
   createOperationalRunInstanceRef,
@@ -355,7 +357,8 @@ describe("sessions_spawn model fallback through the Gateway", () => {
                 "proof-backup": providerConfig(provider.baseUrl, ["backup", "child-backup"]),
               },
             },
-            tools: { profile: "coding" },
+            // The provider scripts a direct spawn to isolate the child's model fallback ladder.
+            tools: { profile: "coding", toolSearch: false },
             gateway: { auth: { mode: "token", token } },
             hooks: { enabled: false },
           };
@@ -379,6 +382,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             });
           }
           const port = await getGatewayE2ePortBlock();
+          let onSessionChanged: (payload: unknown) => void = () => {};
           gateway = await startGatewayWithClient({
             cfg,
             port,
@@ -387,6 +391,11 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             origin: `http://127.0.0.1:${port}`,
             configPath: await createGatewayConfigPath(home.tempHome),
             token,
+            onEvent: ({ event, payload }) => {
+              if (event === "sessions.changed") {
+                onSessionChanged(payload);
+              }
+            },
           });
           await gateway.server.startupSettled;
           const { client } = gateway;
@@ -447,19 +456,40 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             historyOffset = initialHistory.messages.length;
             requestOffset = provider.requests.length;
             provider.rateLimitPrimary();
+            const followupRunId = randomUUID();
+            const publishedIdle = createDeferred();
+            onSessionChanged = (payload) => {
+              if (
+                isRecord(payload) &&
+                payload.sessionKey === spawn.childSessionKey &&
+                payload.lastRunId === followupRunId &&
+                payload.hasActiveRun === false &&
+                Array.isArray(payload.activeRunIds) &&
+                payload.activeRunIds.length === 0
+              ) {
+                publishedIdle.resolve();
+              }
+            };
+            await client.request("sessions.subscribe", {});
             const followup = await client.request<{ runId: string; status: string }>(
               "agent",
               {
                 sessionKey: spawn.childSessionKey,
                 message: `Return exactly ${SUCCESS}. ${WORKER}`,
                 deliver: false,
-                idempotencyKey: randomUUID(),
+                idempotencyKey: followupRunId,
                 ...(scenario.directModel ? { model: scenario.directModel } : {}),
               },
               { expectFinal: false },
             );
             expect(followup.status).toBe("accepted");
+            expect(followup.runId).toBe(followupRunId);
             terminal = await wait(followup.runId);
+            await withTestTimeout(
+              publishedIdle.promise,
+              8_000,
+              "Gateway did not publish settled child ownership after the direct turn",
+            );
           }
           expect(spawn.childSessionKey).toMatch(
             scenario.visible === false ? /^agent:main:subagent:/ : /^agent:main:dashboard:/,

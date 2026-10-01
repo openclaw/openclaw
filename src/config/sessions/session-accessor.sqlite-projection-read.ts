@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQueryIterator,
   prepareSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -14,6 +15,8 @@ import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -100,14 +103,33 @@ export function selectMessageRows(
     .where("active.message_position", "is not", null)
     .orderBy("active.message_position", "asc");
   return "positions" in selection
-    ? query.where("active.message_position", "in", selection.positions)
+    ? query.where(
+        "active.message_position",
+        "in",
+        selection.positions.length <= 500
+          ? selection.positions
+          : getActiveTranscriptKysely(database)
+              .selectFrom((eb) =>
+                eb
+                  .fn<{ value: number }>("json_each", [eb.val(JSON.stringify(selection.positions))])
+                  .as("requested"),
+              )
+              .select("requested.value"),
+      )
     : query
         .where("active.message_position", ">=", selection.start)
         .where("active.message_position", "<", selection.endExclusive);
 }
 
-export function selectMessagePayload(query: ReturnType<typeof selectMessageRows>) {
-  return query.select(["active.event_seq", "active.message_position", "event.event_json"]);
+export function selectMessagePayload(
+  database: CurrentTranscriptProjection["database"],
+  query: ReturnType<typeof selectMessageRows>,
+) {
+  return query.select([
+    "active.event_seq",
+    "active.message_position",
+    transcriptEventJsonSql(database.db, "event").as("event_json"),
+  ]);
 }
 
 export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows>) {
@@ -115,7 +137,7 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .select([
       "active.message_position",
       /* kysely-allow-raw: byte caps include each event's JSONL newline. */
-      sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+      sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
     ])
     .$narrowType<{ message_position: number }>();
 }
@@ -140,11 +162,31 @@ function createMessageRangeReaders(database: CurrentTranscriptProjection["databa
       ),
     );
   return {
+    latest: prepareSqliteQueryTakeFirstSync<
+      MessageRangeParameters,
+      Parameters<typeof parseActiveTranscriptMessageRow>[0]
+    >(database.db, (parameter) =>
+      selectMessagePayload(
+        database,
+        selectMessageRows(
+          database,
+          parameter((params) => params.sessionId),
+          {
+            start: parameter((params) => params.start),
+            endExclusive: parameter((params) => params.endExclusive),
+          },
+        ),
+      )
+        .clearOrderBy()
+        .orderBy("active.message_position", "desc")
+        .limit(1),
+    ),
     messages: prepareSqliteQueryIterator<
       MessageRangeParameters,
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
+        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),
@@ -302,36 +344,25 @@ export function readCurrentProjectionSnapshot<T>(
       if (snapshot.cold) {
         throw new SessionTranscriptColdError(resolved.sessionId);
       }
-      if (snapshot.latestSeq === null) {
-        return {
-          kind: "value" as const,
-          value: read({
-            database,
-            generation: snapshot.generation,
-            hasUnindexedPrefix: false,
-            resolved,
-            state: EMPTY_PROJECTION_STATE,
-          }),
-        };
-      }
+      const empty = snapshot.latestSeq === null;
+      const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
       if (
-        snapshot.state &&
-        !snapshot.state.needsRebuild &&
-        snapshot.state.indexedSeq === snapshot.latestSeq &&
-        !snapshot.hasUnclassified
+        !state ||
+        state.needsRebuild ||
+        (!empty && (state.indexedSeq !== snapshot.latestSeq || snapshot.hasUnclassified))
       ) {
-        return {
-          kind: "value" as const,
-          value: read({
-            database,
-            generation: snapshot.generation,
-            hasUnindexedPrefix: snapshot.hasUnindexedPrefix,
-            resolved,
-            state: snapshot.state,
-          }),
-        };
+        return { kind: "unavailable" as const };
       }
-      return { kind: "unavailable" as const };
+      return {
+        kind: "value" as const,
+        value: read({
+          database,
+          generation: snapshot.generation,
+          hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
+          resolved,
+          state,
+        }),
+      };
     },
     {
       databaseLabel: database.path,

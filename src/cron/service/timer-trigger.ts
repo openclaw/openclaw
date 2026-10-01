@@ -1,5 +1,4 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { CronConfig } from "../../config/types.cron.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
@@ -17,6 +16,7 @@ import {
   isJobEnabled,
 } from "./jobs-scheduling.js";
 import type {
+  CronJobPolicyContext,
   CronServiceState,
   CronSystemEventEnqueueResult,
   DeferredCronNotifications,
@@ -49,17 +49,16 @@ type QueuedSystemEventHandle = {
 
 /** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
 export function resolveNextRunAtMsOrDisable(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   candidate: unknown;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): number | undefined {
   const nextRunAtMs = asDateTimestampMs(params.candidate);
   if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
     return nextRunAtMs;
   }
   autoDisableCronJob({
-    state: params.state,
     job: params.job,
     reason: "schedule-errors",
     atMs: params.state.deps.nowMs(),
@@ -118,11 +117,11 @@ export function applyTriggerRunResult(
 }
 
 export function resolveCronNextRunWithLowerBound(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   naturalNext: number | undefined;
   lowerBoundMs: number;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): number | undefined {
   if (params.naturalNext === undefined) {
     params.state.deps.log.warn(
@@ -143,7 +142,6 @@ export function resolveCronNextRunWithLowerBound(params: {
 }
 
 export function resolveTransientCronRetryDecision(params: {
-  cronConfig?: CronConfig;
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
   lastErrorReason?: CronJob["state"]["lastErrorReason"];
@@ -196,7 +194,6 @@ export function resolveTransientCronRetryDecision(params: {
 }
 
 export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
-  cronConfig?: CronConfig;
   consecutiveSkipped: number | undefined;
 }): DisabledHeartbeatOneShotRetryDecision {
   const consecutiveSkipped = params.consecutiveSkipped ?? 0;

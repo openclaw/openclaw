@@ -1,7 +1,4 @@
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
-/**
- * Shared parameter types for embedded-agent run orchestration.
- */
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
@@ -41,16 +38,18 @@ import type {
 import type { ExecSessionDefaults } from "../../exec-defaults.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import type { ReplyDeliveryObserver, ReplyExpectation } from "../../reply-completion.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode, PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
-
-export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 
 export type ResolvedToolPromptFinalizer = (params: {
   prompt: string;
@@ -62,16 +61,6 @@ type ReasoningStreamPayload = Pick<
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
   requiresReasoningProgressOptIn?: boolean;
-};
-
-export type CurrentInboundPromptContext = {
-  text: string;
-  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
-  fragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
-  resumableText?: string;
-  promptJoiner?: "\n\n" | "\n" | " ";
-  /** Generated goal blocks owned by inbound-context assembly, never user text. */
-  injectedGoalContexts?: string[];
 };
 
 export type RunEmbeddedAgentParams = {
@@ -127,6 +116,8 @@ export type RunEmbeddedAgentParams = {
   codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
+  /** Setup can reject unavailable endpoints without spending the session retry budget. */
+  retryConnectionErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
   /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
@@ -227,7 +218,7 @@ export type RunEmbeddedAgentParams = {
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -251,6 +242,8 @@ export type RunEmbeddedAgentParams = {
   shouldEmitToolOutput?: () => boolean;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
+  /** Source-owned final receipt/custody for this input, never mere callback or preview acceptance. */
+  resolveReplyDelivery?: ReplyDeliveryObserver;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
@@ -280,39 +273,26 @@ export type RunEmbeddedAgentParams = {
   /** Skip per-chunk live visible-text parsing when no live stream consumer exists (e.g. subagents). */
   suppressLiveStreamOutput?: boolean;
   /**
-   * Treat a clean empty assistant stop as an intentional silent reply.
-   * Only set when the caller's prompt policy already allows an exact NO_REPLY
-   * final answer for silence.
+   * Legacy default for callers without terminalReplyExpectation.
+   * An explicit required reply cannot be waived by this flag or model output.
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
   /**
-   * Whether this run still owes a visible reply after settled non-reporting tools.
-   * Exact configured silence and committed delivery remain terminal outcomes.
+   * Host-owned reply requirement for this input, independent of model output.
+   * Confirmed source delivery and pending custody prevent duplicate recovery.
    */
-  terminalReplyExpectation?: "required" | "optional";
+  terminalReplyExpectation?: ReplyExpectation;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
-   * One-shot helper runs may opt in to executing through the provider's CLI
-   * backend instead of the direct-API passthrough when the run targets a CLI
-   * runtime provider whose passthrough credentials are subscription-scoped.
-   * Anthropic routes direct anthropic-messages calls on subscription OAuth to
-   * metered extra-usage billing: without extra-usage balance the passthrough
-   * fails closed with a billing error, and with it the run silently draws
-   * paid usage instead of plan limits. The CLI backend is the plan-limits
-   * path for those credentials. CLI dispatch translates `toolsAllow` into the
-   * selectable-backend surface (no native tools, allowlisted loopback MCP
-   * tools); the same list bounds the loopback MCP grant server-side, so tools
-   * outside it — including the message tool, matching `disableMessageTool`
-   * intent — can be neither listed nor called. Leave unset to keep the
-   * direct-API passthrough.
+   * Use the provider's subscription CLI for one-shot helpers within plan limits.
+   * Direct Anthropic OAuth passthrough uses metered extra usage and fails without balance.
+   * `toolsAllow` bounds both backend-visible tools and server-side loopback MCP grants;
+   * native and non-allowlisted tools, including a disabled message tool, stay unavailable.
+   * Unset retains direct-API passthrough.
    */
   cliBackendDispatch?: "subscription-auth";
   /**
-   * Allow a single run attempt even when all auth profiles are in cooldown,
-   * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.
-   *
-   * This is used by model fallback when trying sibling models on providers
-   * where transient service pressure is often model-scoped.
+   * Probe one transiently cooled profile when sibling models may still be available.
    */
   allowTransientCooldownProbe?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;

@@ -4,6 +4,7 @@ import UIKit
 
 @MainActor
 struct ChatComposerTextViewIOS: UIViewRepresentable {
+    @Environment(\.isEnabled) private var effectiveEnvironmentEnabled
     @Binding var text: String
     var focusRequested: Bool
     var isEnabled: Bool
@@ -12,6 +13,10 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     var onFocusChange: (Bool) -> Void
     var onHistoryUp: (Bool) -> Bool
     var onHistoryDown: () -> Bool
+
+    private var interactionEnabled: Bool {
+        self.isEnabled && self.effectiveEnvironmentEnabled
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -27,18 +32,11 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 
     func updateUIView(_ textView: ChatComposerUITextView, context: Context) {
         context.coordinator.parent = self
-        textView.isEditable = self.isEnabled
-        textView.isSelectable = self.isEnabled
+        context.coordinator.scheduleInteractionUpdate(textView)
         self.configureHistoryHandlers(textView)
 
-        // UIKit owns user-initiated focus. A false focus request is not a blur request;
-        // conflating the two cancels a tap before SwiftUI observes first-responder state.
-        if self.focusRequested, self.isEnabled, !textView.isFirstResponder {
-            textView.becomeFirstResponder()
-        } else if !self.isEnabled, textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
-
+        // Publishing native input can re-enter SwiftUI with the previous rendered value.
+        guard !context.coordinator.isReportingTextChange else { return }
         let isEcho = context.coordinator.lastReportedText == self.text
         if textView.isFirstResponder, isEcho {
             return
@@ -78,10 +76,49 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ChatComposerTextViewIOS
         var isProgrammaticUpdate = false
+        private(set) var isReportingTextChange = false
         var lastReportedText: String?
+        private var interactionUpdateScheduled = false
 
         init(_ parent: ChatComposerTextViewIOS) {
             self.parent = parent
+        }
+
+        func scheduleInteractionUpdate(_ textView: ChatComposerUITextView) {
+            guard !self.interactionUpdateScheduled else { return }
+            self.interactionUpdateScheduled = true
+            // Disabling a focused UITextView synchronously resigns first responder.
+            // Inside updateUIView that re-enters SwiftUI's responder graph and can
+            // spin in AttributeGraph. Apply UIKit state after the graph update,
+            // reading the latest parent so a queued disable cannot outlive recovery.
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.interactionUpdateScheduled = false
+                guard let textView else { return }
+                let isEnabled = self.parent.interactionEnabled
+                if textView.isEditable != isEnabled {
+                    textView.isEditable = isEnabled
+                }
+                if textView.isSelectable != isEnabled {
+                    textView.isSelectable = isEnabled
+                }
+                // UIKit owns user-initiated focus; false is not a blur request.
+                if self.parent.focusRequested, isEnabled,
+                   !textView.isFirstResponder
+                {
+                    textView.becomeFirstResponder()
+                } else if !isEnabled, textView.isFirstResponder {
+                    textView.resignFirstResponder()
+                }
+            }
+        }
+
+        func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+            self.parent.interactionEnabled
+        }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            self.parent.interactionEnabled
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -94,6 +131,8 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard !self.isProgrammaticUpdate, textView.isFirstResponder else { return }
+            self.isReportingTextChange = true
+            defer { self.isReportingTextChange = false }
             self.lastReportedText = textView.text
             self.parent.text = textView.text
             textView.invalidateIntrinsicContentSize()
@@ -105,6 +144,12 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 final class ChatComposerUITextView: UITextView {
     var onHistoryUp: ((Bool) -> Bool)?
     var onHistoryDown: (() -> Bool)?
+
+    override var accessibilityTraits: UIAccessibilityTraits {
+        // Preserve UIKit's dynamic keyboard-focus traits when exposing disabled input.
+        get { self.isEditable ? super.accessibilityTraits : super.accessibilityTraits.union(.notEnabled) }
+        set { super.accessibilityTraits = newValue }
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var unhandledPresses = presses

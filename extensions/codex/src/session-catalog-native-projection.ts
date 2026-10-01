@@ -92,18 +92,13 @@ export function projectCodexCatalogNativeThread(
       row[field] = value;
     }
   }
-  const preview = cachedPreview?.({
-    id,
-    path: typeof row.path === "string" ? row.path : null,
-    updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : null,
-    recencyAt: typeof row.recencyAt === "number" ? row.recencyAt : null,
-  });
   const rawPreview = thread.preview;
-  if (
-    preview !== undefined &&
-    preview.length <= 500 &&
-    !(typeof rawPreview === "string" && Boolean(rawPreview) !== Boolean(preview))
-  ) {
+  const preview = reuseCodexCatalogPreview(
+    row,
+    typeof rawPreview === "string" ? Boolean(rawPreview) : undefined,
+    cachedPreview,
+  );
+  if (preview !== undefined) {
     row.preview = preview;
   } else if (typeof rawPreview === "string") {
     row.preview = rawPreview
@@ -182,4 +177,23 @@ export function projectCodexCatalogNativeResponse(
     }
   }
   return page;
+}
+
+/** Reuse resident text without transferring a cache or an unbounded native preview. */
+export function reuseCodexCatalogPreview(
+  thread: Pick<CodexThread, "id" | "path" | "updatedAt" | "recencyAt">,
+  rawPreviewNonempty: boolean | undefined,
+  cachedPreview?: CodexCatalogPreviewCache,
+): string | undefined {
+  const preview = cachedPreview?.({
+    id: thread.id,
+    path: typeof thread.path === "string" ? thread.path : null,
+    updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : null,
+    recencyAt: typeof thread.recencyAt === "number" ? thread.recencyAt : null,
+  });
+  return preview !== undefined &&
+    preview.length <= 500 &&
+    (rawPreviewNonempty === undefined || rawPreviewNonempty === Boolean(preview))
+    ? preview
+    : undefined;
 }

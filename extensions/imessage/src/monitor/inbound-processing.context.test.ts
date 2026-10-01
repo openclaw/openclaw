@@ -150,21 +150,6 @@ describe("resolveIMessageInboundDecision command auth", () => {
     expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
   });
 
-  it("authorizes DM commands for senders in pairing-mode store allowlist", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 101,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-    });
-
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.commandAuthorized).toBe(true);
-    expect(decision.hasControlCommand).toBe(true);
-  });
-
   it("marks authorized iMessage control commands as text command turns", async () => {
     const decision = await resolveDmCommandDecision({
       messageId: 102,

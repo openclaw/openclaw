@@ -15,6 +15,7 @@ import {
   preparedNpmArtifactName,
   validatePreparedNpmRelease,
   verifyPreparedNpmRegistry,
+  verifyPublishedNpmRegistry,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
 
@@ -251,7 +252,6 @@ describe("prepared plugin npm publication", () => {
       "default",
       "npm-token-bootstrap",
     ],
-    ["alpha OIDC", "2026.9.3-alpha.1", "alpha", "alpha", "default", "npm-oidc"],
     [
       "extended-stable OIDC",
       "2026.9.33",
@@ -280,11 +280,24 @@ describe("prepared plugin npm publication", () => {
     },
   );
 
+  it.each(["npm-oidc", "npm-token-bootstrap"])(
+    "rejects retired alpha preparation on %s",
+    (route) => {
+      expect(() =>
+        createPreparedNpmRelease(
+          preparation(
+            { version: "2026.9.3-alpha.1", channel: "alpha", publishTag: "alpha" },
+            route,
+          ),
+        ),
+      ).toThrow("Alpha releases are retired");
+    },
+  );
+
   it.each([
     ["first extended-stable patch on latest", "2026.9.33", "stable", "latest", "default"],
     ["later extended-stable patch on latest", "2026.9.34", "stable", "latest", "default"],
     ["extended-stable correction on latest", "2026.9.33-1", "stable", "latest", "default"],
-    ["alpha", "2026.9.3-alpha.1", "alpha", "alpha", "default"],
     ["explicit extended-stable", "2026.9.33", "stable", "extended-stable", "extended-stable"],
   ])(
     "rejects bootstrap preparation for %s",
@@ -478,8 +491,7 @@ describe("prepared plugin npm publication", () => {
 });
 
 describe("prepared npm registry readback", () => {
-  function registryFixture() {
-    const bytes = Buffer.from("exact qualified bytes");
+  function registryFixture(bytes = Buffer.from("exact qualified bytes")) {
     const tarballPath = join(tempRoot(), "qualified.tgz");
     writeFileSync(tarballPath, bytes);
     const name = "@openclaw/demo";
@@ -501,7 +513,7 @@ describe("prepared npm registry readback", () => {
     const params = {
       packageName: name,
       version,
-      publishTag: "beta",
+      publishTags: ["beta"],
       route: "npm-oidc",
       tarballPath,
       allowMissing: true,
@@ -523,6 +535,44 @@ describe("prepared npm registry readback", () => {
     });
     expect(result).toEqual({ alreadyPublished: true });
     expect(requests).toHaveLength(2);
+  });
+
+  async function publishedFixture(beta: string) {
+    const fixture = registryFixture(readFileSync((await packedPluginFixture()).tarballPath));
+    fixture.packument["dist-tags"].beta = beta;
+    return fixture;
+  }
+
+  it("passes a version this run did not publish once a later release owns its selector", async () => {
+    const { bytes, packument, params } = await publishedFixture("2026.9.2-beta.2");
+    let tarballReads = 0;
+    await expect(
+      verifyPublishedNpmRegistry({
+        ...params,
+        fetchImpl: async (input: string) => {
+          if (input.endsWith(".tgz")) {
+            tarballReads += 1;
+            return new Response(new Uint8Array(bytes));
+          }
+          return Response.json(packument);
+        },
+      }),
+    ).resolves.toEqual({ alreadyPublished: true, supersededBy: "2026.9.2-beta.2" });
+    expect(tarballReads).toBe(1);
+  });
+
+  it.each([
+    ["lagging", "2026.9.1-beta.1"],
+    ["incomparable", "not-a-version"],
+  ])("still refuses a %s selector on a version this run did not publish", async (_label, beta) => {
+    const { bytes, packument, params } = await publishedFixture(beta);
+    await expect(
+      verifyPublishedNpmRegistry({
+        ...params,
+        fetchImpl: async (input: string) =>
+          input.endsWith(".tgz") ? new Response(new Uint8Array(bytes)) : Response.json(packument),
+      }),
+    ).rejects.toThrow("beta differs from the prepared version; use authorized tag repair.");
   });
 
   it("accepts an authoritative missing version as publication work, not a malformed response", async () => {
@@ -571,7 +621,7 @@ describe("prepared npm registry readback", () => {
             tarballReads += 1;
             return new Response(bytes);
           }
-          if (++registryReads <= 6) {
+          if (++registryReads <= 18) {
             return missing === "package"
               ? new Response(null, { status: 404 })
               : Response.json({ ...packument, versions: {} });
@@ -580,7 +630,7 @@ describe("prepared npm registry readback", () => {
         },
       });
       const verified = expect(result).resolves.toEqual({ alreadyPublished: true });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(180_000);
       await verified;
       expect(tarballReads).toBe(1);
     },

@@ -7,14 +7,12 @@ import {
 } from "../agents/embedded-agent-runner/terminal-tool-failure.js";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { normalizeToolPolicyName as normalizePolicyToolName } from "../agents/tool-policy.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import {
   formatUnknownError,
   normalizeCronRunDiagnosticSummary,
   normalizeCronRunDiagnosticsCore as normalizeCronRunDiagnosticsValue,
   normalizeExitCode,
-  normalizeDiagnosticToolName,
   tailText,
 } from "./run-diagnostics-normalize.js";
 import type {
@@ -143,20 +141,10 @@ export function createCronRunDiagnosticsFromMissingWebSearchProvider(params: {
   if (!toolsAllowRequestsWebSearch(params.toolsAllow)) {
     return undefined;
   }
-  return normalizeCronRunDiagnostics(
-    {
-      summary: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
-      entries: [
-        {
-          ts: params.nowMs?.() ?? Date.now(),
-          source: "cron-preflight",
-          severity: "warn",
-          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
-          toolName: WEB_SEARCH_TOOL_NAME,
-        },
-      ],
-    },
-    { nowMs: params.nowMs },
+  return createCronRunDiagnosticsFromError(
+    "cron-preflight",
+    MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+    { severity: "warn", nowMs: params.nowMs, toolName: WEB_SEARCH_TOOL_NAME },
   );
 }
 
@@ -185,22 +173,12 @@ function createCronRunDiagnosticsFromExecDetails(
     : typeof exitCode === "number"
       ? `exec failed with exit code ${exitCode}`
       : "exec failed";
-  return normalizeCronRunDiagnostics(
-    {
-      summary: message,
-      entries: [
-        {
-          ts: opts?.nowMs?.() ?? Date.now(),
-          source: "exec",
-          severity: opts?.finalStatus === "ok" ? "warn" : status === "failed" ? "error" : "warn",
-          message,
-          toolName: opts?.toolName,
-          exitCode,
-        },
-      ],
-    },
-    opts,
-  );
+  return createCronRunDiagnosticsFromError("exec", message, {
+    severity: opts?.finalStatus === "ok" ? "warn" : status === "failed" ? "error" : "warn",
+    nowMs: opts?.nowMs,
+    toolName: opts?.toolName,
+    exitCode,
+  });
 }
 
 /** Extracts tool-call failure diagnostics from an agent reply payload. */
@@ -212,8 +190,7 @@ function createCronRunDiagnosticsFromToolPayload(
   if (!record) {
     return undefined;
   }
-  const toolName =
-    normalizeDiagnosticToolName(record.toolName) ?? normalizeDiagnosticToolName(record.name);
+  const toolName = normalizeOptionalString(record.toolName) ?? normalizeOptionalString(record.name);
   const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(record.details, {
     nowMs: opts?.nowMs,
     toolName,
@@ -221,13 +198,10 @@ function createCronRunDiagnosticsFromToolPayload(
   });
   const isError = record.isError === true;
   const text = typeof record.text === "string" ? record.text : undefined;
-  const isNonTerminalToolWarning =
-    opts?.finalStatus === "ok" &&
-    getReplyPayloadMetadata(record)?.nonTerminalToolErrorWarning === true;
   const textDiagnostics =
     isError && text
       ? createCronRunDiagnosticsFromError("tool", text, {
-          severity: isNonTerminalToolWarning || opts?.finalStatus === "ok" ? "warn" : "error",
+          severity: opts?.finalStatus === "ok" ? "warn" : "error",
           nowMs: opts?.nowMs,
           toolName,
         })

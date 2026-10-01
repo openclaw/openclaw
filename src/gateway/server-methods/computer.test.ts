@@ -56,6 +56,7 @@ async function invoke(
     ? {
         ...service,
         close: async () => {},
+        reconcileRuntimePolicy: async () => {},
         revokeRunAuthority: () => {},
         preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
       }
@@ -182,6 +183,7 @@ describe("Gateway computer RPC", () => {
         invoke: dispatch,
         status: async () => ({ configured: true, available: true }),
         close: async () => {},
+        reconcileRuntimePolicy: async () => {},
         revokeRunAuthority: () => {},
         preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
       },

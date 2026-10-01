@@ -1,11 +1,14 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
+import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
 import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
+// Tolerate brief network pauses while resuming stalls well before the command deadline.
+const CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
 
 export type CrabboxWorkerNodeEnrollment = Awaited<
   ReturnType<
@@ -51,8 +54,9 @@ function createCrabboxNodeSetup(params: {
   const workerBundle = params.workerBundle
     ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
     : undefined;
+  const desktopTarget = params.desktop ? (params.target ?? "linux") : undefined;
   const desktopEnvironment =
-    params.desktop && (params.target ?? "linux") === "linux"
+    desktopTarget === "linux"
       ? [
           "set -eu",
           ...createCrabboxXfceSessionEnvironment(),
@@ -70,6 +74,7 @@ const http = require("node:http");
 const https = require("node:https");
 const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
+const { setTimeout: delay } = require("node:timers/promises");
 const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const workerBundle = ${JSON.stringify(workerBundle)};
 const leaseId = ${JSON.stringify(leaseId)};
@@ -107,13 +112,17 @@ setPhase("preparation");
     if (!desktopSetup) return;
     setPhase("desktop setup");
     // The wallpaper can exceed the OS argument limit; stream the owned script over stdin.
+    if (process.platform === "win32") {
+      runWindowsDesktopPowerShell(desktopSetup);
+      return;
+    }
     const result = spawnSync("bash", ["-s"], { input: desktopSetup, env: nodeEnv, stdio: ["pipe", "inherit", "inherit"], timeout: ${CRABBOX_SETUP_TIMEOUT_MS}, killSignal: "SIGKILL" });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error("Cloud worker desktop setup failed" + (result.signal ? " (" + result.signal + ")" : " with exit code " + result.status));
   };
   const directoryOptions = process.platform === "win32" ? {} : { mode: 0o700 };
   const launcher = path.join(process.env.ProgramFiles || "C:\\\\Program Files", "Crabbox", "bin", "Start-CrabboxDetachedProcess.ps1");
-  if (process.platform === "win32" && mode && !fs.existsSync(launcher)) {
+  if (process.platform === "win32" && mode && !${JSON.stringify(desktopTarget === "windows/normal")} && !fs.existsSync(launcher)) {
     throw new Error("Cloud worker requires " + launcher + "; update the Crabbox Windows bootstrap image and reprovision the worker");
   }
   if (desktopEnvironment) {
@@ -127,72 +136,12 @@ setPhase("preparation");
     fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
     if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
   }
-  const probeProcess = (binary, args) => {
-    const result = spawnSync(binary, args, { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout: process.platform === "win32" ? 10000 : 2000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
-    return result.status === 0 && !result.error ? result.stdout.trim() : null;
-  };
-  const processStartTime = (pid) => probeProcess("ps", ["-o", "lstart=", "-p", String(pid)])?.replace(/\\s+/g, " ");
-  const windowsProcesses = (filter) => {
-    const output = probeProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; @(Get-CimInstance Win32_Process -Filter '" + filter + "' | ForEach-Object { @{ pid = $_.ProcessId; startTime = $_.CreationDate.ToUniversalTime().ToString('o'); executablePath = $_.ExecutablePath; commandLine = $_.CommandLine } }) | ConvertTo-Json -Compress"]);
-    if (!output) return [];
-    const parsed = JSON.parse(output);
-    return Array.isArray(parsed) ? parsed : [parsed];
-  };
-  const isWindowsNode = (entry) => {
-    if (!entry || !Number.isSafeInteger(entry.pid) || entry.pid < 1 || typeof entry.startTime !== "string" || !entry.startTime || typeof entry.executablePath !== "string" || typeof entry.commandLine !== "string") return false;
-    // Our invocation has exactly executable + CLI before its options. Windows paths
-    // cannot contain quotes; accept quoted or unquoted path tokens in those positions.
-    // CIM retains this command line even when Node changes the console title.
-    const invocation = entry.commandLine.match(/^(?:"([^"]+)"|([^\\s"]+))\\s+(?:"([^"]+)"|([^\\s"]+))(?:\\s|$)/);
-    return invocation !== null && (invocation[3] ?? invocation[4]) === cli && fs.realpathSync(invocation[1] ?? invocation[2]) === fs.realpathSync(process.execPath) && fs.realpathSync(entry.executablePath) === fs.realpathSync(process.execPath);
-  };
-  if (mode && fs.existsSync(pidFile)) {
-    const pidText = fs.readFileSync(pidFile, "utf8").trim();
-    if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
-    const pid = Number(pidText);
-    let alive = true;
-    try { process.kill(pid, 0); } catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
-    if (alive) {
-      let verified = false;
-      if (process.platform === "linux") {
-        const args = fs.readFileSync(path.join("/proc", pidText, "cmdline"), "utf8").split("\\0");
-        const env = fs.readFileSync(path.join("/proc", pidText, "environ"), "utf8").split("\\0");
-        // OpenClaw changes process.title; the immutable install cwd survives that argv rewrite.
-        const title = args[0];
-        const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
-        verified = nodeInvocation && fs.realpathSync(path.join("/proc", pidText, "cwd")) === runtimeDir && env.includes("OPENCLAW_STATE_DIR=" + stateDir);
-      } else if (process.platform === "win32") {
-        try {
-          const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
-          const entries = windowsProcesses("ProcessId=" + pidText);
-          const entry = entries.length === 1 ? entries[0] : undefined;
-          // Windows exposes no cheap cwd probe. Bind launch-owned cwd/state to the
-          // actual node.exe creation time and independently inspect its executable/argv.
-          verified = isWindowsNode(entry) && entry.pid === pid && launch.pid === pid && launch.startTime === entry.startTime && launch.runtimeDir === runtimeDir && launch.stateDir === stateDir && launch.cli === cli;
-        } catch { /* Missing launch or process identity must never authorize replay. */ }
-      } else {
-        try {
-          // Darwin loses ps-visible environment when process.title changes. Bind the launch
-          // facts to this live process's start time, then independently verify argv and cwd.
-          const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
-          const startTime = processStartTime(pid);
-          const command = probeProcess("ps", ["-ww", "-o", "command=", "-p", pidText]);
-          const invocation = process.execPath + " " + cli;
-          const nodeInvocation = command !== null && (["openclaw", "openclaw-connect", "openclaw-node"].includes(command) || command === invocation || command.startsWith(invocation + " "));
-          const cwdArgs = ["-a", "-p", pidText, "-d", "cwd", "-Fn"];
-          const cwdOutput = probeProcess("lsof", cwdArgs) ?? probeProcess("/usr/sbin/lsof", cwdArgs);
-          const cwd = cwdOutput?.split("\\n").filter((line) => line.startsWith("n"));
-          verified = launch.pid === pid && Boolean(startTime) && launch.startTime === startTime && launch.runtimeDir === runtimeDir && launch.stateDir === stateDir && launch.cli === cli && nodeInvocation && cwd?.length === 1 && fs.realpathSync(cwd[0].slice(1)) === runtimeDir;
-        } catch { /* Missing launch or process identity must never authorize replay. */ }
-      }
-      if (!verified) {
-        throw new Error("Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker");
-      }
-      finishDesktopSetup();
-      setPhase("complete");
-      return;
-    }
-    fs.unlinkSync(pidFile);
+  ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
+  if (desktopTarget === "macos") finishDesktopSetup();
+  if (reuseNodeProcess()) {
+    if (desktopTarget !== "macos") finishDesktopSetup();
+    setPhase("complete");
+    return;
   }
   const verifyRuntime = (root) => {
     setPhase("runtime verification");
@@ -205,19 +154,24 @@ setPhase("preparation");
     const expected = "OpenClaw " + bootstrap.openclawVersion;
     if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw new Error("Cloud worker bootstrap CLI could not verify its Gateway version");
   };
-  const verifyArchive = async (source, artifact, output) => {
+  const verifyArchive = async (source, artifact) => {
     const hash = crypto.createHash("sha256");
     let bytes = 0;
     for await (const chunk of source) {
       bytes += chunk.byteLength;
       if (bytes > artifact.bytes) throw new Error("Cloud worker bootstrap archive exceeds its declared size");
       hash.update(chunk);
-      if (output) await output.writeFile(chunk);
     }
     if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
   };
-  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
+  const downloadAbort = new AbortController();
+  const downloadAttempt = async (artifact, token, archive, offset, reportPhase) => {
     reportPhase("download connection");
+    // A reset after the final bytes needs verification, not an unsatisfiable range.
+    if (offset >= artifact.bytes) {
+      await verifyArchive(fs.createReadStream(archive), artifact);
+      return;
+    }
     if (!token) throw new Error("Cloud worker bootstrap download authority is unavailable");
     const url = new URL(artifact.url);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || (artifact.tlsFingerprint && url.protocol !== "https:")) throw new Error("Cloud worker bootstrap artifact transport is invalid");
@@ -226,11 +180,15 @@ setPhase("preparation");
     if (pin && !/^[a-f0-9]{64}$/.test(pin)) throw new Error("Cloud worker bootstrap TLS fingerprint is invalid");
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, {
-      agent: false, headers: { authorization: "Bearer " + token }, signal: AbortSignal.timeout(600000),
+      agent: false, headers: { authorization: "Bearer " + token, ...(offset ? { range: "bytes=" + offset + "-" } : {}) }, signal: downloadAbort.signal,
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
+    // The response/body readers still reject; keep errors observed between their awaits.
+    request.on("error", () => {});
+    request.once("response", (response) => response.on("error", () => {}));
     // Observe transport progress without changing when the pinned request may send credentials.
     request.once("socket", (socket) => {
+      socket.setTimeout(${CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS}, () => request.destroy(Object.assign(new Error("Cloud worker bootstrap download stalled"), { code: "ETIMEDOUT" })));
       socket.once("connect", () => { reportPhase(url.protocol === "https:" ? "download TLS" : "download HTTP response"); });
       socket.once("secureConnect", () => { if (!pin) reportPhase("download HTTP response"); });
     });
@@ -247,13 +205,90 @@ setPhase("preparation");
     })().catch((error) => request.destroy(error));
     const response = await pendingResponse;
     try {
-      if (response.statusCode !== 200) throw new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode);
-      if (response.headers["content-length"] !== undefined && Number(response.headers["content-length"]) !== artifact.bytes) throw new Error("Cloud worker bootstrap archive length does not match the Gateway");
+      if (response.statusCode === 416 && offset) {
+        fs.rmSync(archive, { force: true });
+        throw Object.assign(new Error("Cloud worker bootstrap resume range was rejected"), { code: "ARTIFACT_RANGE_MISMATCH" });
+      }
+      if (response.statusCode !== 200 && response.statusCode !== 206) {
+        const error = Object.assign(new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode), { statusCode: response.statusCode });
+        if (response.statusCode === 503) {
+          let body = "";
+          for await (const chunk of response) {
+            if (Buffer.byteLength(body) + chunk.byteLength > 1024) { body = ""; break; }
+            body += chunk.toString("utf8");
+          }
+          try { if (JSON.parse(body)?.error === "transfer_in_progress") error.code = "TRANSFER_IN_PROGRESS"; }
+          catch { /* Other proxy responses remain ordinary HTTP failures. */ }
+        }
+        throw error;
+      }
+      if (response.statusCode === 200) {
+        // An older Gateway or proxy may ignore Range; never append its full response.
+        fs.rmSync(archive, { force: true });
+        offset = 0;
+      } else if (response.headers["content-range"] !== "bytes " + offset + "-" + (artifact.bytes - 1) + "/" + artifact.bytes) {
+        fs.rmSync(archive, { force: true });
+        throw Object.assign(new Error("Cloud worker bootstrap resume range does not match the Gateway"), { code: "ARTIFACT_RANGE_MISMATCH" });
+      }
+      if (response.headers["content-length"] !== undefined && Number(response.headers["content-length"]) !== artifact.bytes - offset) {
+        fs.rmSync(archive, { force: true });
+        throw Object.assign(new Error("Cloud worker bootstrap archive length does not match the Gateway"), response.statusCode === 206 ? { code: "ARTIFACT_RANGE_MISMATCH" } : {});
+      }
       reportPhase("download body");
-      const output = await fsp.open(archive, "wx", 0o600);
-      try { await verifyArchive(response, artifact, output); }
+      const output = await fsp.open(archive, offset ? "a" : "wx", 0o600);
+      try {
+        for await (const chunk of response) {
+          offset += chunk.byteLength;
+          if (offset > artifact.bytes) throw new Error("Cloud worker bootstrap archive exceeds its declared size");
+          await output.writeFile(chunk);
+        }
+      }
       finally { await output.close(); }
+      await verifyArchive(fs.createReadStream(archive), artifact);
     } finally { response.destroy(); }
+  };
+  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
+    let downloadPhase;
+    const progress = (next) => { downloadPhase = next; reportPhase(next); };
+    let attempt = 1;
+    let retries = 0;
+    let noProgressFailures = 0;
+    let offset = 0;
+    const partial = archive + ".partial";
+    try {
+      for (;;) {
+        try {
+          if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadAbort.signal });
+          downloadAbort.signal.throwIfAborted();
+          await downloadAttempt(artifact, token, partial, offset, progress);
+          fs.renameSync(partial, archive);
+          return;
+        } catch (error) {
+          if (downloadAbort.signal.aborted) throw downloadAbort.signal.reason;
+          const busy = error.code === "TRANSFER_IN_PROGRESS";
+          const transient = busy || ["ARTIFACT_RANGE_MISMATCH", "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
+          if (transient && !busy) {
+            let retainedBytes = 0;
+            try { retainedBytes = (await fsp.stat(partial)).size; }
+            catch (statError) { if (statError.code !== "ENOENT") throw statError; }
+            // Count retained progress, not bytes replayed by a proxy that ignores Range.
+            noProgressFailures = retainedBytes > offset ? 0 : noProgressFailures + 1;
+            offset = retainedBytes;
+          }
+          if (!transient || noProgressFailures === 3) {
+            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")", { cause: error }), { code: error.code });
+          }
+          if (!busy) attempt++;
+          retries++;
+          console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
+        }
+      }
+    } catch (error) {
+      if (!downloadAbort.signal.aborted) {
+        downloadAbort.abort(Object.assign(error, { downloadPhase, downloadArtifact: artifact === workerBundle ? "archive" : "node bootstrap" }));
+      }
+      throw downloadAbort.signal.reason;
+    } finally { fs.rmSync(partial, { force: true }); }
   };
   const workerArchivePath = (root) => {
     const relative = workerBundle.packageRelativePath;
@@ -302,46 +337,48 @@ setPhase("preparation");
   const stage = fs.mkdtempSync(path.join(runtimeRoot, "node-bootstrap-"));
   try {
     const archive = path.join(stage, "openclaw.tgz");
-    if (!existingRuntime) await downloadArchive(bootstrap, tokens.nodeBootstrap, archive);
     const downloadedWorker = workerBundle ? path.join(stage, "worker.tgz") : undefined;
     const installDir = existingRuntime ? runtimeDir : path.join(stage, "runtime");
     const overlap = downloadedWorker && !existingRuntime;
-    if (overlap) setPhase("installation and worker download");
-    let workerPhase;
-    const preparation = await Promise.allSettled([
-      downloadedWorker ? downloadArchive(workerBundle, tokens.workerBundle, downloadedWorker, overlap ? (next) => { workerPhase = next; } : setPhase).catch((error) => {
-        if (!overlap) throw error;
-        throw new Error("Cloud worker archive " + workerPhase + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message, { cause: error });
-      }) : undefined,
+    // Both capabilities expire from issuance; installation must not wait for the worker archive.
+    await Promise.allSettled([
       (async () => {
-      if (existingRuntime) return;
-      if (!overlap) setPhase("installation");
-      fs.mkdirSync(installDir, directoryOptions);
-      // npm 12 requires a project policy even when ignore-scripts is false.
-      // Trust only the verified artifact; dependency script policy stays unchanged.
-      fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ private: true, allowScripts: { ["file:" + archive]: true } }), { mode: 0o600 });
-      const logPath = path.join(stage, "install.log");
-      const log = fs.openSync(logPath, "w", 0o600);
-      let installed;
-      try {
-        const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-        if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
-        installed = await new Promise((resolve) => {
-          const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
-          let error;
-          child.once("error", (cause) => { error = cause; });
-          child.once("close", (status, signal) => resolve({ status, signal, error }));
-        });
-      } finally { fs.closeSync(log); }
-      if (installed.status !== 0 || installed.error) {
-        const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
-        throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
-      }
-      })(),
+        if (existingRuntime) return;
+        await downloadArchive(bootstrap, tokens.nodeBootstrap, archive);
+        downloadAbort.signal.throwIfAborted();
+        setPhase(overlap ? "installation and worker download" : "installation");
+        fs.mkdirSync(installDir, directoryOptions);
+        // npm 12 requires a project policy even when ignore-scripts is false.
+        // Trust only the verified artifact; dependency script policy stays unchanged.
+        fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ private: true, allowScripts: { ["file:" + archive]: true } }), { mode: 0o600 });
+        const logPath = path.join(stage, "install.log");
+        const log = fs.openSync(logPath, "w", 0o600);
+        let installed;
+        try {
+          const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+          if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
+          installed = await new Promise((resolve) => {
+            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
+            let error;
+            child.once("error", (cause) => { error = cause; });
+            child.once("close", (status, signal) => resolve({ status, signal, error }));
+          });
+        } finally { fs.closeSync(log); }
+        downloadAbort.signal.throwIfAborted();
+        if (installed.status !== 0 || installed.error) {
+          const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
+          throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
+        }
+        verifyRuntime(installDir);
+      })().catch((error) => {
+        if (!downloadAbort.signal.aborted) downloadAbort.abort(Object.assign(error, { downloadPhase: phase }));
+        throw downloadAbort.signal.reason;
+      }),
+      // The runtime branch owns the overlap marker; downloadArchive retains the worker's error phase.
+      downloadedWorker ? downloadArchive(workerBundle, tokens.workerBundle, downloadedWorker, overlap ? () => {} : setPhase) : undefined,
     ]);
-    // Both the download and npm must stop writing before publication or staging cleanup.
-    for (const result of preparation) if (result.status === "rejected") throw result.reason;
-    if (!existingRuntime) verifyRuntime(installDir);
+    // A started npm child must close before either branch can release its staging files.
+    if (downloadAbort.signal.aborted) throw downloadAbort.signal.reason;
     publishWorkerArchive(installDir, downloadedWorker);
     // Archive publication completes before a fresh runtime becomes reusable or capture can begin.
     if (!existingRuntime) fs.renameSync(installDir, runtimeDir);
@@ -370,57 +407,10 @@ setPhase("preparation");
     if (!setupCode) throw new Error("Cloud worker enrollment credential is unavailable");
     fs.writeFileSync(setupFile, setupCode + "\\n", { mode: 0o600 });
   }
-  const args = mode === "connect" ? ["connect", "--target-file", setupFile] : ["node", "run"];
-  setPhase("node launch");
-  const logPath = path.join(stateDir, "node.log");
-  const log = process.platform === "win32" ? undefined : fs.openSync(logPath, "a", 0o600);
-  let child;
-  let pid;
-  let parentPid;
-  let startTime;
-  try {
-    const nodeArgs = [cli, ...args, "--ephemeral", "--display-name", displayName];
-    if (process.platform === "win32") {
-      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
-      // The managed launcher owns OpenSSH job breakaway. Its hidden PowerShell child
-      // owns logging because detached processes must not inherit SSH stdio handles.
-      const launchScript = "$env:OPENCLAW_STATE_DIR = " + quote(stateDir) + "; & " + [process.execPath, ...nodeArgs].map(quote).join(" ") + " *>> " + quote(logPath) + "; exit $LASTEXITCODE";
-      const argumentList = "-NoLogo -NoProfile -NonInteractive -EncodedCommand " + Buffer.from(launchScript, "utf16le").toString("base64");
-      const launched = probeProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcher, "-FilePath", "powershell.exe", "-ArgumentList", argumentList, "-WorkingDirectory", runtimeDir]);
-      if (!/^[1-9][0-9]*$/.test(launched || "")) throw new Error("Cloud worker managed Windows launcher failed; release and reprovision the worker");
-      parentPid = Number(launched);
-      const deadline = Date.now() + 30000;
-      while (!pid && Date.now() < deadline) {
-        const entries = windowsProcesses("ParentProcessId=" + parentPid).filter(isWindowsNode);
-        if (entries.length > 1) throw new Error("Cloud worker node invocation is ambiguous; release and reprovision the worker");
-        if (entries.length === 1) { pid = entries[0].pid; startTime = entries[0].startTime; }
-        else await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      if (!pid) throw new Error("Cloud worker node start time is unavailable; release and reprovision the worker");
-    } else {
-      child = spawn(process.execPath, nodeArgs, { cwd: runtimeDir, env: nodeEnv, detached: true, windowsHide: true, stdio: ["ignore", log, log] });
-      await once(child, "spawn");
-      pid = child.pid;
-      if (process.platform !== "linux") startTime = processStartTime(pid);
-    }
-      if (process.platform !== "linux") {
-        if (!startTime) throw new Error("Cloud worker node start time is unavailable; release and reprovision the worker");
-        const temporary = launchFile + "." + crypto.randomUUID();
-        try {
-          fs.writeFileSync(temporary, JSON.stringify({ pid, startTime, runtimeDir, stateDir, cli }), { mode: 0o600, flag: "wx" });
-          fs.renameSync(temporary, launchFile);
-        } finally { fs.rmSync(temporary, { force: true }); }
-      }
-      fs.writeFileSync(pidFile, String(pid) + "\\n", { mode: 0o600 });
-    child?.unref();
-  } catch (error) {
-    if (parentPid) spawnSync("taskkill.exe", ["/PID", String(parentPid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
-    else if (pid) process.kill(-pid, "SIGTERM");
-    throw error;
-  } finally { if (log !== undefined) fs.closeSync(log); }
-  finishDesktopSetup();
+  await launchNodeProcess();
+  if (desktopTarget !== "macos") finishDesktopSetup();
   setPhase("complete");
-})().catch((error) => { console.error("Cloud worker node bootstrap " + phase + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
+})().catch((error) => { console.error("Cloud worker " + (error.downloadArtifact || "node bootstrap") + " " + (error.downloadPhase || phase) + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
 `;
   return {
     command: wrapCrabboxNodeScript(

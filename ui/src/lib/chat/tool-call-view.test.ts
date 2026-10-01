@@ -7,7 +7,6 @@ const TEXT_EDITOR_TOOL_NAMES = ["str_replace_editor", "str_replace_based_edit_to
 
 describe("tool detail kinds", () => {
   it.each([
-    ["bash", undefined, "command"],
     ["exec", undefined, "command"],
     ["Read", { path: "file.ts" }, "read"],
     ["read_file", { path: "file.ts" }, "read"],

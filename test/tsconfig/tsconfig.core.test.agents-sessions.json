@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-agents-sessions.tsbuildinfo"
+  },
+  "include": [
+    "../../src/agents/session-*.test.ts",
+    "../../src/agents/session-*.test.tsx",
+    "../../src/agents/sessions/**/*.test.ts",
+    "../../src/agents/sessions/**/*.test.tsx",
+    "../../src/config/sessions/**/*.test.ts",
+    "../../src/config/sessions/**/*.test.tsx"
+  ]
+}

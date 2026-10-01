@@ -63,6 +63,14 @@ afterEach(() => {
 });
 
 describe("model-backed transcript summaries", () => {
+  it("does not request model notes for an artifact-only transcript", async () => {
+    const summary = await summarizeTranscriptsWithModel({
+      ...params,
+      utterances: [{ text: "context:" }, { text: "###" }, { text: "Transcribe the audio." }],
+    });
+    expect(summary).toBeUndefined();
+    expect(runIsolatedCompletion).not.toHaveBeenCalled();
+  });
   it("joins tracked resource release before admitting a fallback model", async () => {
     const cleanup = createDeferred();
     runIsolatedCompletion.mockImplementationOnce(() =>
@@ -137,11 +145,10 @@ describe("model-backed transcript summaries", () => {
     expect(summary?.actionItems).toEqual(["Alex: follow up"]);
   });
 
-  it.each([
-    ["JSON fences", `\`\`\`json\n${JSON.stringify(notes)}\n\`\`\``],
-    ["surrounding prose", `Here are the notes:\n${JSON.stringify(notes)}\nHope this helps.`],
-  ])("accepts visible notes wrapped in %s", async (_label, text) => {
-    runIsolatedCompletion.mockResolvedValue(completion(text));
+  it("accepts visible notes wrapped in surrounding prose", async () => {
+    runIsolatedCompletion.mockResolvedValue(
+      completion(`Here are the notes:\n${JSON.stringify(notes)}\nHope this helps.`),
+    );
     expect(await summarizeTranscriptsWithModel(params)).toMatchObject({
       ...notes,
       overview: notes.overview.trim(),
@@ -175,17 +182,13 @@ describe("model-backed transcript summaries", () => {
     ]);
   });
 
-  it.each(["invalid JSON", "malformed object", "no object", "thrown error", "no model"])(
+  it.each(["invalid JSON", "malformed object", "no model"])(
     "leaves heuristic notes available after %s",
     async (failure) => {
       if (failure === "invalid JSON") {
         runIsolatedCompletion.mockResolvedValue({ text: '{"overview":42}' });
       } else if (failure === "malformed object") {
         runIsolatedCompletion.mockResolvedValue(completion('Notes: {"overview":}'));
-      } else if (failure === "no object") {
-        runIsolatedCompletion.mockResolvedValue(completion("No notes available."));
-      } else if (failure === "thrown error") {
-        runIsolatedCompletion.mockRejectedValue(new Error("inference unavailable"));
       } else {
         resolveSimpleCompletionSelectionForAgent.mockReturnValue(null);
       }

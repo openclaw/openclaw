@@ -41,6 +41,15 @@ function packageRef(overrides: Partial<PersistedClawPackageRef> = {}): Persisted
   };
 }
 
+function installedPlugin() {
+  return {
+    status: "found" as const,
+    pluginId: "audit",
+    record: { source: "clawhub" as const, integrity: "sha256:audit", installedAt: 1 },
+    installedVersion: "1.0.0",
+  };
+}
+
 function packageRefStore(...initial: PersistedClawPackageRef[]) {
   let refs = initial;
   return {
@@ -305,12 +314,7 @@ describe("Claw package removal", () => {
     const decisions = await planClawPackageRemovals(install, [ref], {
       deps: {
         ...store,
-        resolvePlugin: vi.fn().mockResolvedValue({
-          status: "found",
-          pluginId: "audit",
-          record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
-          installedVersion: "1.0.0",
-        }),
+        resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
       },
       referencedCleanup: {
         mode: "remove-selected",
@@ -324,12 +328,7 @@ describe("Claw package removal", () => {
         deps: {
           ...store,
           uninstallPlugin,
-          resolvePlugin: vi.fn().mockResolvedValue({
-            status: "found",
-            pluginId: "audit",
-            record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
-            installedVersion: "1.0.0",
-          }),
+          resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
         },
       }),
     ).resolves.toMatchObject({ packages: [{ action: "uninstalled" }] });
@@ -496,12 +495,7 @@ describe("Claw package removal", () => {
     const other = packageRef({ agentId: "other" });
     const deps = {
       readPackageRefs: vi.fn().mockReturnValue([ref, other]),
-      resolvePlugin: vi.fn().mockResolvedValue({
-        status: "found",
-        pluginId: "audit",
-        record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
-        installedVersion: "1.0.0",
-      }),
+      resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
     };
     const selected = ["plugin:audit@1.0.0"];
 

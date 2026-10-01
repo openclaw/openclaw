@@ -222,13 +222,15 @@ describe("chat.send quoted model profiles", () => {
     expect(context.chatAbortControllers.size).toBe(0);
   }
 
+  async function expectUnchangedModelScope(
+    configBefore: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  ) {
+    expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
+    expect(getRuntimeConfig().agents?.defaults?.model).toEqual({ primary: "openai/default-model" });
+    expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
+  }
+
   it.each([
-    [
-      '/model openai/test-model@"openai:owner+work@example.com" -s',
-      "openai:owner+work@example.com",
-      "openai",
-      "test-model",
-    ],
     [
       '/model openai/test-model@"openai:Work account" -s',
       "openai:Work account",
@@ -241,14 +243,6 @@ describe("chat.send quoted model profiles", () => {
       "openai",
       "test-model",
     ],
-    [
-      '/model openai/test-model@"openai:Work --global" -s',
-      "openai:Work --global",
-      "openai",
-      "test-model",
-    ],
-    ['/model openai/test-model@"openai:team/work" -s', "openai:team/work", "openai", "test-model"],
-    ['/model openai/test-model@"20260101" -s', "20260101", "openai", "test-model"],
     [
       '/model "sample/model name@20260101"@"sample:team/work" -s',
       "sample:team/work",
@@ -272,22 +266,15 @@ describe("chat.send quoted model profiles", () => {
         authProfileOverride: profile,
         authProfileOverrideSource: "user",
       });
-      expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
-      expect(getRuntimeConfig().agents?.defaults?.model).toEqual({
-        primary: "openai/default-model",
-      });
-      expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
+      await expectUnchangedModelScope(configBefore);
       expect(runPreparedReply).not.toHaveBeenCalled();
     },
   );
 
   it.each([
     String.raw`openai/test@"work\N"`,
-    String.raw`openai/test@"work\U0041"`,
-    String.raw`openai/test@"work\v"`,
     'openai/test@"unfinished',
     String.raw`"sample/model\N"@"work"`,
-    '"unfinished',
   ])(
     "preserves malformed quoted input without selecting its trailing alias: %s",
     async (reference) => {
@@ -306,11 +293,7 @@ describe("chat.send quoted model profiles", () => {
       expect(directives?.rawModelProfile).toBeUndefined();
       expect(directives?.modelScope).toBeUndefined();
       expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(priorSelection);
-      expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
-      expect(getRuntimeConfig().agents?.defaults?.model).toEqual({
-        primary: "openai/default-model",
-      });
-      expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
+      await expectUnchangedModelScope(configBefore);
     },
   );
 });

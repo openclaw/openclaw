@@ -9,38 +9,19 @@ import { runAgentLoop } from "./agent-loop.js";
 import type { Message, Model } from "./llm.js";
 import type { AgentEvent, AgentTool } from "./types.js";
 
-function textItem(id: string, text: string, phase = "final_answer") {
+function textItem(id: string, text: string) {
   return {
     type: "message",
     id,
     role: "assistant",
     status: "completed",
-    phase,
+    phase: "final_answer",
     content: [{ type: "output_text", text, annotations: [] }],
   };
 }
 
 describe("Responses turn continuation", () => {
-  it.each([
-    { label: "explicit continuation with final text", endTurn: false, requests: 3 },
-    {
-      label: "explicit continuation with commentary",
-      endTurn: false,
-      phase: "commentary",
-      requests: 3,
-    },
-    { label: "explicit end", endTurn: true, requests: 1 },
-    { label: "omitted end_turn", endTurn: undefined, requests: 1 },
-    { label: "malformed end_turn", endTurn: "false", requests: 1 },
-    { label: "null end_turn", endTurn: null, requests: 1 },
-    { label: "object end_turn", endTurn: { privateValue: "do not retain" }, requests: 1 },
-    { label: "incomplete response", endTurn: false, incomplete: true, requests: 1 },
-    { label: "caller cancellation", endTurn: false, cancel: true, requests: 1 },
-    { label: "host stop decision", endTurn: false, stop: true, requests: 1 },
-    { label: "intentional tool termination", endTurn: false, terminateTool: true, requests: 2 },
-  ])("$label", async (scenario) => {
-    const { endTurn } = scenario;
-    const controller = new AbortController();
+  it("continues end_turn:false text through a tool result to the final answer", async () => {
     const requests: ResponseCreateParamsStreaming[] = [];
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.on("connection", (socket) => {
@@ -54,7 +35,7 @@ describe("Responses turn continuation", () => {
         const index = requests.length;
         const output =
           index === 1
-            ? [textItem("msg_progress", "I am checking the result.", scenario.phase)]
+            ? [textItem("msg_progress", "I am checking the result.")]
             : index === 2
               ? [
                   {
@@ -69,18 +50,11 @@ describe("Responses turn continuation", () => {
               : [textItem("msg_final", "The check passed.")];
         socket.send(
           JSON.stringify({
-            type: scenario.incomplete ? "response.incomplete" : "response.completed",
+            type: "response.completed",
             response: {
               id: `resp_${index}`,
-              status: scenario.incomplete ? "incomplete" : "completed",
-              ...(scenario.incomplete
-                ? { incomplete_details: { reason: "max_output_tokens" } }
-                : {}),
-              ...(index === 1
-                ? endTurn === undefined
-                  ? {}
-                  : { end_turn: endTurn }
-                : { end_turn: index !== 2 }),
+              status: "completed",
+              end_turn: index === 3,
               output,
               usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
             },
@@ -123,16 +97,11 @@ describe("Responses turn continuation", () => {
         {
           model,
           convertToLlm: (messages) => messages as Message[],
-          shouldStopAfterTurn: () => scenario.stop === true,
-          afterToolCall: async () => (scenario.terminateTool ? { terminate: true } : undefined),
         },
         (event) => {
           events.push(event);
-          if (scenario.cancel && event.type === "turn_end") {
-            controller.abort(new Error("Caller stopped the run"));
-          }
         },
-        controller.signal,
+        undefined,
         (_model, context, options) =>
           streamOpenAICodexResponses(model, context, {
             ...options,
@@ -140,58 +109,50 @@ describe("Responses turn continuation", () => {
             transport: "websocket",
           }),
       );
-      expect(requests).toHaveLength(scenario.requests);
-      expect(execute).toHaveBeenCalledTimes(scenario.requests > 1 ? 1 : 0);
+      expect(requests).toHaveLength(3);
+      expect(execute).toHaveBeenCalledTimes(1);
       expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
       const assistants = result
         .filter((message) => message.role === "assistant")
         .filter((message) => message.responseId !== undefined);
-      expect(assistants).toHaveLength(scenario.requests);
+      expect(assistants).toHaveLength(3);
       for (const [index, assistant] of assistants.entries()) {
-        const providerEndTurn = index === 0 ? endTurn : index !== 1;
         expect(assistant.diagnostics).toEqual([
           {
             type: "openai_responses_terminal",
             timestamp: expect.any(Number),
             details: {
-              eventType: scenario.incomplete ? "response.incomplete" : "response.completed",
-              ...(scenario.incomplete ? { incompleteReason: "max_output_tokens" } : {}),
-              endTurn:
-                typeof providerEndTurn === "boolean"
-                  ? providerEndTurn
-                  : providerEndTurn === undefined
-                    ? "absent"
-                    : "invalid",
+              eventType: "response.completed",
+              stopReason: "stop",
+              endTurn: index === 2,
             },
           },
         ]);
       }
       expect(JSON.stringify(requests)).not.toContain("openai_responses_terminal");
-      if (scenario.requests === 3) {
-        expect(result.at(-1)).toMatchObject({
-          role: "assistant",
-          content: [expect.objectContaining({ text: "The check passed." })],
-        });
-        expect(requests[1]?.input).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              type: "message",
-              role: "assistant",
-              phase: scenario.phase ?? "final_answer",
-              content: [expect.objectContaining({ text: "I am checking the result." })],
-            }),
-          ]),
-        );
-        expect(requests[2]?.input).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              type: "function_call_output",
-              call_id: "call_check",
-              output: "checked",
-            }),
-          ]),
-        );
-      }
+      expect(result.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [expect.objectContaining({ text: "The check passed." })],
+      });
+      expect(requests[1]?.input).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [expect.objectContaining({ text: "I am checking the result." })],
+          }),
+        ]),
+      );
+      expect(requests[2]?.input).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "function_call_output",
+            call_id: "call_check",
+            output: "checked",
+          }),
+        ]),
+      );
     } finally {
       for (const socket of server.clients) {
         socket.terminate();

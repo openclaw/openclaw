@@ -1,5 +1,3 @@
-import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-
 const PARSE_BUFFER_MAX = 8 * 1024 * 1024;
 const PARSE_BUFFER_MAX_LINES = 1_000;
 const UNICODE_ESCAPE_QUAD = /^[\da-fA-F]{4}$/u;
@@ -22,51 +20,8 @@ export class CodexAppServerMessageDecoder {
     this.pending = undefined;
   }
 
-  /** Both transports supply LF-delimited JSON; keep UTF-8 decoding across pipe chunks. */
-  listen(input: NodeJS.ReadableStream, onMessage: (message: unknown) => void): () => void {
-    let fragments: string[] = [];
-    let closed = false;
-    const onLine = (line: string) => {
-      let completeLine = line;
-      if (fragments.length) {
-        fragments.push(line);
-        completeLine = fragments.join("");
-        fragments = [];
-      }
-      onMessage(this.parse(completeLine));
-    };
-    const onData = (chunk: string) => {
-      let start = 0;
-      let end: number;
-      while ((end = chunk.indexOf("\n", start)) !== -1) {
-        if (closed) {
-          return;
-        }
-        onLine(chunk.slice(start, end));
-        start = end + 1;
-      }
-      if (!closed && start < chunk.length) {
-        fragments.push(chunk.slice(start));
-      }
-    };
-    const onEnd = () => {
-      if (fragments.length) {
-        onLine("");
-      }
-      close();
-    };
-    const close = () => {
-      closed = true;
-      fragments = [];
-      this.clear();
-      input.off("data", onData);
-      input.off("end", onEnd);
-      input.pause();
-    };
-    input.setEncoding("utf8");
-    input.on("data", onData);
-    input.once("end", onEnd);
-    return close;
+  get hasPending(): boolean {
+    return this.pending !== undefined;
   }
 
   parse(line: string): unknown {
@@ -81,12 +36,13 @@ export class CodexAppServerMessageDecoder {
     try {
       return JSON.parse(trimmed);
     } catch (error) {
-      if (isRecoverableParseFailure(trimmed, error)) {
-        const text = rawLine.trimStart();
+      const text = rawLine.trimStart();
+      const inString = recoverableJsonStringState(text, error);
+      if (inString !== undefined) {
         this.pending = {
           fragments: [text],
           length: text.length,
-          inString: endsInsideJsonString(text),
+          inString,
         };
       } else {
         this.reportError(trimmed, error, 1);
@@ -110,8 +66,9 @@ export class CodexAppServerMessageDecoder {
       return JSON.parse(candidate);
     } catch (error) {
       // Completed messages still parse above the incomplete-recovery bounds.
-      if (withinBounds && isRecoverableParseFailure(candidate, error)) {
-        pending.inString = endsInsideJsonString(candidate);
+      const inString = withinBounds ? recoverableJsonStringState(candidate, error) : undefined;
+      if (inString !== undefined) {
+        pending.inString = inString;
         this.pending = pending;
       } else {
         this.reportError(candidate, error, pending.fragments.length);
@@ -121,31 +78,41 @@ export class CodexAppServerMessageDecoder {
   }
 }
 
-function isRecoverableParseFailure(value: string, error: unknown): boolean {
-  if (!value.startsWith("{") && !value.startsWith("[")) {
-    return false;
+/** Undefined rejects malformed JSON; false retains a trailing escape for native parsing. */
+function recoverableJsonStringState(value: string, error: unknown): boolean | undefined {
+  if (!(error instanceof SyntaxError) || (!value.startsWith("{") && !value.startsWith("["))) {
+    return undefined;
   }
-  const message = coerceErrorMessage(error);
-  return (
-    message.includes("Unterminated string") || message.includes("Unexpected end of JSON input")
-  );
-}
-
-function endsInsideJsonString(value: string): boolean {
+  const closers: string[] = [];
   for (let index = 0; index < value.length; index++) {
-    if (value[index] !== '"') {
+    const character = value[index];
+    if (character === "{" || character === "[") {
+      closers.push(character === "{" ? "}" : "]");
+    } else if (character === "}" || character === "]") {
+      closers.pop();
+    }
+    if (character !== '"') {
       continue;
     }
     const end = scanJsonString(value, index + 1);
     if (end < 0) {
-      return false;
+      return undefined;
     }
-    if (end === value.length) {
-      return true;
+    if (end >= value.length) {
+      const closing = closers.toReversed().join("");
+      for (const suffix of ['"', '":null']) {
+        try {
+          JSON.parse(`${value}\\n${suffix}${closing}`);
+          return end === value.length;
+        } catch {
+          // An unfinished string may be an object key instead of a value.
+        }
+      }
+      return undefined;
     }
     index = end;
   }
-  return false;
+  return undefined;
 }
 
 /** Finds a closing quote; incomplete or invalid escapes require native parsing. */
@@ -162,12 +129,14 @@ function scanJsonString(value: string, start: number): number {
       continue;
     }
     const escape = value[++index];
-    if (escape === "u") {
+    if (!escape) {
+      return value.length + 1;
+    } else if (escape === "u") {
       if (!UNICODE_ESCAPE_QUAD.test(value.slice(index + 1, index + 5))) {
         return -1;
       }
       index += 4;
-    } else if (!escape || !'"\\/bfnrt'.includes(escape)) {
+    } else if (!'"\\/bfnrt'.includes(escape)) {
       return -1;
     }
   }

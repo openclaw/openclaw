@@ -11,13 +11,18 @@ const getUpdateCampaignStateMock = vi.hoisted(() =>
   vi.fn<() => UpdateCampaignState | undefined>(() => undefined),
 );
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => UpdateScheduleState | null>(() => null));
+const campaignOwner = vi.hoisted(() => ({ present: true }));
 
-vi.mock("../../infra/update-campaign.js", () => ({
-  gatewayUpdateCampaign: {
-    adopt: () => undefined,
-    getState: getUpdateCampaignStateMock,
-    hold: holdUpdateCampaignMock,
-  },
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-lifecycle.js")>()),
+  currentUpdateCheckLifecycle: () => ({
+    campaign: campaignOwner.present
+      ? {
+          getState: getUpdateCampaignStateMock,
+          hold: holdUpdateCampaignMock,
+        }
+      : undefined,
+  }),
 }));
 
 vi.mock("../../infra/update-status-state.js", () => ({
@@ -30,6 +35,7 @@ vi.mock("./validation.js", () => ({
 }));
 
 beforeEach(() => {
+  campaignOwner.present = true;
   holdUpdateCampaignMock.mockReset();
   holdUpdateCampaignMock.mockReturnValue(false);
   getUpdateCampaignStateMock.mockReset();
@@ -110,13 +116,14 @@ describe("update.hold", () => {
   });
 
   it("returns ok=false when there is no active campaign", async () => {
+    campaignOwner.present = false;
     const respond = vi.fn();
     const logInfo = vi.fn();
 
     await invokeUpdateHold(respond, logInfo);
 
-    expect(holdUpdateCampaignMock).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(true, { ok: false });
+    expect(holdUpdateCampaignMock).not.toHaveBeenCalled();
     expect(logInfo).toHaveBeenCalledWith(
       expect.stringMatching(/^update\.hold refused actor=control-ui /),
       { reason: "no campaign" },

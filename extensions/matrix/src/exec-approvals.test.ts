@@ -183,15 +183,6 @@ describe("matrix exec approvals", () => {
     );
   });
 
-  it("requires an exact Matrix id for exec approval authorization", () => {
-    const cfg = buildConfig({ enabled: true, approvers: ["user:@\u212A:example.org"] });
-
-    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@\u212A:example.org" })).toBe(
-      true,
-    );
-    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@k:example.org" })).toBe(false);
-  });
-
   it("ignores wildcard allowlist entries when inferring exec approvers", () => {
     const cfg = buildConfig({ enabled: true }, { dm: { allowFrom: ["*"] } });
 

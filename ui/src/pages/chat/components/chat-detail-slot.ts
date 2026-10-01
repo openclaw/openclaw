@@ -2,86 +2,59 @@ import { html, type TemplateResult } from "lit";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
 import type { ChatProps } from "../chat-view.ts";
-import { openSlot, type SidebarLayout } from "../sidebar-layout.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import { openSlot } from "../sidebar-layout.ts";
 import "./chat-sidebar.ts";
+import "./chat-tool-output.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { selectSessionWorkspacePreview } from "./chat-session-workspace-state.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
-import { renderTaskDetailPanel } from "./chat-task-detail.ts";
-
-// Region close collapses the detail slot but leaves sidebarContent set, so
-// "task content exists" is not "panel visible"; consumers (panel render, rail
-// open-row highlight) must gate on the layout, not the content.
-function detailSlotOpen(layout: SidebarLayout): boolean {
-  return layout.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"));
-}
-
-export function openTaskDetailId(
-  content: SidebarSelection | null | undefined,
-  layout: SidebarLayout,
-): string | undefined {
-  return content?.kind === "task" && detailSlotOpen(layout) ? content.taskId : undefined;
-}
+import type { SidebarContent } from "./chat-sidebar.ts";
 
 export function renderChatDetailSlot(params: {
-  backgroundTasks: BackgroundTasksProps;
   chat: ChatProps;
   content: SidebarContent;
   host: ChatPageHost;
-  layout: SidebarLayout;
 }): TemplateResult {
   const { content, host } = params;
-  const taskId = openTaskDetailId(content, params.layout);
-  const documents: Partial<Record<SidebarContent["kind"], TemplateResult>> = {
-    task:
-      taskId === undefined
-        ? html``
-        : renderTaskDetailPanel({
-            backgroundTasks: params.backgroundTasks,
-            host,
-            loadFullAssistantMessage: params.chat.loadFullAssistantMessage,
-            task: params.backgroundTasks.tasks?.find((task) => task.id === taskId) ?? undefined,
-          }),
-  };
-  return (
-    documents[content.kind] ??
-    html`<openclaw-chat-detail-panel
+  if (content.kind === "tool-output") {
+    return html`<openclaw-chat-tool-output
       class="chat-sidebar"
       .content=${content}
-      .fileNavigation=${content.kind === "file" ? (content.navigation ?? null) : null}
-      .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
-      .attachmentRuntime=${{
-        sessionKey: params.chat.sessionKey,
-        agentId: params.chat.currentAgentId ?? params.chat.fullMessageAgentId,
-        policyKey: assistantMediaPolicyKey(
-          params.chat.selectedSession,
-          params.chat.mediaPolicyEpoch,
-        ),
-        authToken: params.chat.assistantAttachmentAuthToken,
-        connectionEpoch: params.chat.connectionEpoch,
-        resourceBasePath: params.chat.resourceBasePath,
-        resolveArtifactDownload: params.chat.resolveArtifactDownload,
-      }}
-      .basePath=${params.chat.basePath ?? ""}
-      .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
-      .embedSandboxMode=${host.embedSandboxMode}
-      .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
-      .githubRepo=${params.chat.githubRepo}
-      .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
-        openSessionWorkspaceFile(host, target)}
-      .onOpenSessionLink=${params.chat.onOpenSessionLink}
-      .onRevealInWorkspace=${(path: string) => {
-        revealSessionWorkspaceFile(host, path);
-        selectSessionWorkspacePreview(host, null);
-        host.updateSidebarLayout(openSlot(host.sidebarLayout, "workspace"));
-      }}
-      .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
-        host.handleOpenImage(item, host.beginImageOpen())}
-      .embedded=${true}
-      @chat-detail-panel-close=${() =>
-        host.handleCloseSidebar(content.kind === "attachment" ? "workspace" : "detail")}
-    ></openclaw-chat-detail-panel>`
-  );
+      .loadFullMessage=${params.chat.loadFullAssistantMessage ?? null}
+      .connectionEpoch=${params.chat.connectionEpoch}
+    ></openclaw-chat-tool-output>`;
+  }
+  return html`<openclaw-chat-detail-panel
+    class="chat-sidebar"
+    .content=${content}
+    .fileNavigation=${content.kind === "file" ? (content.navigation ?? null) : null}
+    .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
+    .attachmentRuntime=${{
+      sessionKey: params.chat.sessionKey,
+      agentId: params.chat.currentAgentId ?? params.chat.fullMessageAgentId,
+      policyKey: assistantMediaPolicyKey(params.chat.selectedSession, params.chat.mediaPolicyEpoch),
+      authToken: params.chat.assistantAttachmentAuthToken,
+      connectionEpoch: params.chat.connectionEpoch,
+      resourceBasePath: params.chat.resourceBasePath,
+      resolveArtifactDownload: params.chat.resolveArtifactDownload,
+    }}
+    .basePath=${params.chat.basePath ?? ""}
+    .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
+    .embedSandboxMode=${host.embedSandboxMode}
+    .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
+    .githubContext=${{ githubRepo: params.chat.githubRepo, githubRepositories: params.chat.githubRepositories }}
+    .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
+      openSessionWorkspaceFile(host, target)}
+    .onOpenSessionLink=${params.chat.onOpenSessionLink}
+    .onRevealInWorkspace=${(path: string) => {
+      revealSessionWorkspaceFile(host, path);
+      selectSessionWorkspacePreview(host, null);
+      host.updateSidebarLayout(openSlot(host.sidebarLayout, "workspace"));
+    }}
+    .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
+      host.handleOpenImage(item, host.beginImageOpen())}
+    .embedded=${true}
+    @chat-detail-panel-close=${() =>
+      host.handleCloseSidebar(content.kind === "attachment" ? "workspace" : "detail")}
+  ></openclaw-chat-detail-panel>`;
 }

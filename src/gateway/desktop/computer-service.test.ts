@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  registerComputerUseProvider,
-  type ComputerUseCapabilityDescriptor,
-} from "../../plugins/computer-use-contract.js";
+import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
+import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -88,6 +86,7 @@ function createFixture() {
   > = [];
   const stops: Array<() => Promise<void>> = [];
   const desktop: HostDesktopService = {
+    reconcileRuntimePolicy: async () => {},
     observe: async () => {
       throw new Error("Computer control must not acquire an observer token");
     },
@@ -177,6 +176,128 @@ function createFixture() {
 }
 
 describe("Gateway computer service", () => {
+  it.each(["native", "managed"] as const)(
+    "fences cached %s input and joins cleanup before discovering the changed desktop target",
+    async (initialTarget) => {
+      const f = createFixture();
+      const initiallyManaged = initialTarget === "managed";
+      f.config.desktop!.host!.enabled = initiallyManaged;
+      const original = await f.service.status();
+      expect(original.available).toBe(true);
+      await f.service.invoke(f.request());
+      const originalGeneration = original.computerUse!.provider.generation;
+
+      f.config.desktop!.host!.enabled = !initiallyManaged;
+      await expect(
+        f.service.invoke(
+          f.request({
+            command: "computer.act",
+            params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
+            generation: originalGeneration,
+            idempotencyKey: "stale-target-click",
+          }),
+        ),
+      ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+      expect(f.act).not.toHaveBeenCalled();
+
+      const cleanup = createDeferredCore();
+      f.physicalClose.mockImplementationOnce(() => cleanup.promise);
+      const discovered = vi.fn();
+      const discovery = Promise.all([f.service.status(), f.service.status()]).then((results) => {
+        discovered();
+        return results;
+      });
+      try {
+        await vi.waitFor(() => expect(f.physicalClose).toHaveBeenCalledOnce());
+        expect(discovered).not.toHaveBeenCalled();
+        expect(startComputerHostProcess).toHaveBeenCalledOnce();
+        expect(f.leases).toHaveLength(initiallyManaged ? 1 : 0);
+        if (initiallyManaged) {
+          expect(f.leases[0]!.release).not.toHaveBeenCalled();
+        }
+      } finally {
+        cleanup.resolve();
+      }
+
+      const results = await discovery;
+      expect(results.every((result) => result.available)).toBe(true);
+      const generations = results.map((result) => result.computerUse?.provider.generation);
+      expect(new Set(generations).size).toBe(1);
+      expect(generations[0]).not.toBe(originalGeneration);
+      expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
+      const nextEnvironment = vi.mocked(startComputerHostProcess).mock.calls[1]![0].env;
+      expect(nextEnvironment === (initiallyManaged ? process.env : f.leases[0]!.env)).toBe(true);
+      if (initiallyManaged) {
+        expect(f.leases[0]!.release).toHaveBeenCalledOnce();
+      }
+      await expect(f.service.invoke(f.request({ generation: originalGeneration }))).rejects.toThrow(
+        "COMPUTER_STALE_OBSERVATION",
+      );
+      expect(f.act).not.toHaveBeenCalled();
+      expect(f.snapshot).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not publish a native computer whose desktop target changes during readiness", async () => {
+    const f = createFixture();
+    f.config.desktop!.host!.enabled = false;
+    const started = createDeferredCore();
+    const ready = createDeferredCore();
+    const close = vi.fn<ComputerHostProcess["close"]>();
+    const startProcess = vi.mocked(startComputerHostProcess).getMockImplementation()!;
+    vi.mocked(startComputerHostProcess).mockImplementationOnce((options) => {
+      const child = startProcess(options);
+      close.mockImplementation((execution) => child.close(execution));
+      started.resolve();
+      return { ...child, close, ready: ready.promise.then(() => child.ready) };
+    });
+    const discovering = f.service.status();
+    try {
+      await started.promise;
+      f.config.desktop!.host!.enabled = true;
+    } finally {
+      ready.resolve();
+    }
+    expect(await discovering).toMatchObject({ available: false });
+    expect(close).toHaveBeenCalledOnce();
+    expect(await f.service.status()).toMatchObject({ available: true });
+    expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startComputerHostProcess).mock.calls[1]![0].env === f.leases[0]!.env).toBe(
+      true,
+    );
+    expect(f.openExecution).not.toHaveBeenCalled();
+  });
+
+  it("retires a changed desktop target during policy reconciliation without eagerly replacing it", async () => {
+    const f = createFixture();
+    f.config.desktop!.host!.enabled = false;
+    await f.service.status();
+    await f.service.invoke(f.request());
+    const cleanup = createDeferredCore();
+    f.physicalClose.mockImplementationOnce(() => cleanup.promise);
+    f.config.desktop!.host!.enabled = true;
+    const reconciled = vi.fn();
+    const reconciling = f.service.reconcileRuntimePolicy().then(reconciled);
+    try {
+      await expect(f.service.invoke(f.request({ idempotencyKey: "after-reload" }))).rejects.toThrow(
+        "COMPUTER_STALE_OBSERVATION",
+      );
+      await vi.waitFor(() => expect(f.physicalClose).toHaveBeenCalledOnce());
+      expect(reconciled).not.toHaveBeenCalled();
+      expect(startComputerHostProcess).toHaveBeenCalledOnce();
+    } finally {
+      cleanup.resolve();
+    }
+    await reconciling;
+    expect(startComputerHostProcess).toHaveBeenCalledOnce();
+    expect(f.leases).toHaveLength(0);
+    expect(await f.service.status()).toMatchObject({ available: true });
+    expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startComputerHostProcess).mock.calls[1]![0].env === f.leases[0]!.env).toBe(
+      true,
+    );
+  });
+
   it.each(["commit", "rollback"])("joins provider revocation before reload %s", async (outcome) => {
     const f = createFixture();
     const original = await f.service.status();

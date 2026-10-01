@@ -3,11 +3,6 @@ import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-/**
- * Gateway-backed agent run wait helpers.
- * Normalizes run wait responses, reads the latest assistant reply, and drains
- * pending run sets for tools that need synchronous completion semantics.
- */
 import {
   addTimerTimeoutGraceMs,
   asDateTimestampMs,
@@ -16,6 +11,8 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
@@ -144,37 +141,23 @@ function isRecoverableAgentWaitError(error: string | undefined): boolean {
   );
 }
 
-function normalizePendingRunIds(runIds: Iterable<string>): string[] {
-  const seen = new Set<string>();
-  for (const runId of runIds) {
-    const normalized = runId.trim();
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-  }
-  return [...seen];
+function normalizePendingRunIds(runIds: Iterable<string>): Set<string> {
+  return new Set(normalizeStringEntries([...runIds]));
 }
 
 function isAssistantReplyTranscriptArtifact(message: unknown): boolean {
   return (
     isTranscriptOnlyOpenClawAssistantMessage(message) ||
     isOpenClawMessageToolMirrorAssistantMessage(message) ||
-    isInterSessionInputMessage(message)
+    (isRecord(message) &&
+      isRecord(message.provenance) &&
+      message.provenance.kind === "inter_session")
   );
 }
 
-function isInterSessionInputMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const provenance = (message as { provenance?: unknown }).provenance;
-  return (
-    Boolean(provenance) &&
-    typeof provenance === "object" &&
-    !Array.isArray(provenance) &&
-    (provenance as { kind?: unknown }).kind === "inter_session"
-  );
+function readOpenClawMessageMeta(message: unknown): Record<string, unknown> | undefined {
+  const meta = isRecord(message) ? message["__openclaw"] : undefined;
+  return isRecord(meta) ? meta : undefined;
 }
 
 /** Read the latest model-authored assistant text from session history. */
@@ -184,15 +167,11 @@ export async function readLatestAssistantReply(params: {
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
-  const history = await (params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true }))<{
-    messages: unknown[];
-  }>({
+  const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
+  const agentParams = params.agentId ? { agentId: params.agentId } : {};
+  const history = await callGateway<{ messages: unknown[] }>({
     method: "chat.history",
-    params: {
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      limit: params.limit ?? 50,
-    },
+    params: { sessionKey: params.sessionKey, ...agentParams, limit: params.limit ?? 50 },
   });
   const messages = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -201,9 +180,24 @@ export async function readLatestAssistantReply(params: {
       continue;
     }
     const text = extractStoredAssistantText(message);
-    if (text?.trim()) {
+    if (!text?.trim()) {
+      continue;
+    }
+    const meta = readOpenClawMessageMeta(message);
+    if (meta?.truncated !== true) {
       return text;
     }
+    // chat.history caps long rows for display; the marker text is not the reply.
+    if (typeof meta.id !== "string" || !meta.id) {
+      return undefined;
+    }
+    const full = await callGateway<{ ok?: boolean; message?: unknown }>({
+      method: "chat.message.get",
+      params: { sessionKey: params.sessionKey, ...agentParams, messageId: meta.id },
+    }).catch(() => undefined);
+    return full?.ok === true && readOpenClawMessageMeta(full.message)?.truncated !== true
+      ? extractStoredAssistantText(full.message)
+      : undefined;
   }
   return undefined;
 }
@@ -226,16 +220,12 @@ export async function waitForAgentRun(params: {
       timeoutMs: addTimerTimeoutGraceMs(timeoutMs, 2_000),
       ...(params.signal ? { signal: params.signal } : {}),
     });
-    if (wait?.status === "timeout") {
-      return normalizeAgentWaitResult("timeout", params.runId, wait);
-    }
-    if (wait?.status === "pending") {
-      return normalizeAgentWaitResult("pending", params.runId, wait);
-    }
-    if (wait?.status === "error") {
-      return normalizeAgentWaitResult("error", params.runId, wait);
-    }
-    return normalizeAgentWaitResult("ok", params.runId, wait);
+    const status = wait?.status;
+    return normalizeAgentWaitResult(
+      status === "timeout" || status === "pending" || status === "error" ? status : "ok",
+      params.runId,
+      wait,
+    );
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
@@ -299,7 +289,7 @@ export async function waitForAgentRunReply(params: {
 
 /** Wait until the current and newly spawned pending run IDs are drained or timed out. */
 export async function waitForAgentRunsToDrain(params: {
-  getPendingRunIds: () => Iterable<string>;
+  getPendingRunIds: () => Promise<Iterable<string>>;
   initialPendingRunIds?: Iterable<string>;
   timeoutMs?: number;
   deadlineAtMs?: number;
@@ -309,8 +299,8 @@ export async function waitForAgentRunsToDrain(params: {
   const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
-  let pendingRunIds = new Set<string>(
-    normalizePendingRunIds(params.initialPendingRunIds ?? params.getPendingRunIds()),
+  let pendingRunIds = normalizePendingRunIds(
+    params.initialPendingRunIds ?? (await params.getPendingRunIds()),
   );
 
   while (pendingRunIds.size > 0 && Date.now() < deadlineAtMs) {
@@ -325,7 +315,7 @@ export async function waitForAgentRunsToDrain(params: {
       ),
     );
     const previousRunIds = pendingRunIds;
-    pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+    pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
     const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - Date.now());
     if (
       retryDelayMs > 0 &&
@@ -338,7 +328,7 @@ export async function waitForAgentRunsToDrain(params: {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, retryDelayMs);
       });
-      pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+      pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
     }
   }
 

@@ -146,9 +146,7 @@ export async function listSpawnedSessionKeys(params: {
 
 /** Resolve configured session-tool visibility, defaulting invalid or missing values to all. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
-  const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
-    ?.visibility;
-  const value = normalizeLowercaseStringOrEmpty(raw);
+  const value = normalizeLowercaseStringOrEmpty(cfg.tools?.sessions?.visibility);
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
@@ -164,11 +162,7 @@ export function resolveEffectiveSessionToolsVisibility(params: {
   if (!params.sandboxed) {
     return visibility;
   }
-  const sandboxClamp = params.cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
-  if (sandboxClamp === "spawned" && visibility !== "tree") {
-    return "tree";
-  }
-  return visibility;
+  return resolveSandboxSessionToolsVisibility(params.cfg) === "spawned" ? "tree" : visibility;
 }
 
 /** Resolve sandbox-specific session visibility clamp for agent defaults. */
@@ -216,13 +210,10 @@ function matchesCompiledWildcard(
   pattern: Extract<CompiledAgentAllowPattern, { kind: "wildcard" }>,
   lower: string,
 ): boolean {
-  let pos = 0;
-  if (pattern.first) {
-    if (!lower.startsWith(pattern.first)) {
-      return false;
-    }
-    pos = pattern.first.length;
+  if (!lower.startsWith(pattern.first)) {
+    return false;
   }
+  let pos = pattern.first.length;
 
   const endBound = pattern.last ? lower.length - pattern.last.length : lower.length;
   if (pattern.last && (!lower.endsWith(pattern.last) || endBound < pos)) {
@@ -267,15 +258,9 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       return matchesCompiledWildcard(pattern, lowerAgentId);
     });
   };
-  const isAllowed = (requesterAgentId: string, targetAgentId: string) => {
-    if (requesterAgentId === targetAgentId) {
-      return true;
-    }
-    if (!enabled) {
-      return false;
-    }
-    return matchesAllow(requesterAgentId) && matchesAllow(targetAgentId);
-  };
+  const isAllowed = (requesterAgentId: string, targetAgentId: string) =>
+    requesterAgentId === targetAgentId ||
+    (enabled && matchesAllow(requesterAgentId) && matchesAllow(targetAgentId));
   return { enabled, matchesAllow, isAllowed };
 }
 

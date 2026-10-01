@@ -110,14 +110,17 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
         preparedModelRuntime: lease.snapshot,
       },
     );
-    expect(runtimeMocks.acquire).toHaveBeenCalledWith({
-      agentId,
-      agentDir,
-      config: cfg,
-      workspaceDir,
-      loadRuntimePlugins: true,
-      runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
-    });
+    expect(runtimeMocks.acquire).toHaveBeenCalledWith(
+      {
+        agentId,
+        agentDir,
+        config: cfg,
+        workspaceDir,
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
+      },
+      { catalogMode: "static" },
+    );
     expect(lease[Symbol.asyncDispose]).not.toHaveBeenCalled();
     await acquired[Symbol.asyncDispose]();
     await acquired[Symbol.asyncDispose]();

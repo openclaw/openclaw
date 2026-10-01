@@ -2,9 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { prepareReplyToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  consumeSubagentCompletionToolHandoff,
+  registerSubagentCompletionToolHandoff,
+} from "../gateway/subagent-completion-tool-handoff.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
@@ -74,6 +79,100 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.delegated).toBe(false);
     expect(result.requesterPolicySource).toBe("current-request");
     expect(result.senderPolicy).toBeUndefined();
+  });
+
+  it.each([
+    "current",
+    "revoked",
+    "stale requester",
+    "external sender",
+    "different allow",
+    "different deny",
+    "missing lineage",
+  ])("resolves a settled batch with %s authority", async (authority) => {
+    const targetSessionKey = "agent:main:main";
+    const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;
+    for (const [index, sessionKey] of sourceSessionKeys.entries()) {
+      await writeSession(sessionKey, {
+        spawnedBy: targetSessionKey,
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: index === 1 && authority === "missing lineage" ? undefined : 1,
+        inheritedToolAllow:
+          index === 0
+            ? ["read", "exec"]
+            : authority === "different allow"
+              ? ["read"]
+              : ["exec", "read"],
+        inheritedToolDeny:
+          index === 1 && authority === "different deny" ? ["exec", "write"] : ["write"],
+      });
+    }
+    let current = true;
+    const registration = {
+      sourceSessionKey: sourceSessionKeys[0],
+      targetSessionKey,
+      targetSessionId: "requester-session",
+      idempotencyKey: "settled-batch",
+      settleBatch: { sourceSessionKeys, isCurrent: () => current },
+    };
+    const consumption = {
+      ...registration,
+      handoffId: registerSubagentCompletionToolHandoff(registration),
+      sourceTool: "subagent_settle",
+      provider: "openai",
+      model: "gpt-test",
+    };
+    const trustedInternalHandoff = consumeSubagentCompletionToolHandoff(consumption);
+    expect(trustedInternalHandoff).toBeDefined();
+    current = authority !== "revoked";
+    const resolve = () =>
+      resolveRequesterToolPolicies({
+        config: config(),
+        sessionKey: targetSessionKey,
+        sessionId:
+          authority === "stale requester" ? "replacement-session" : registration.targetSessionId,
+        ...(authority === "external sender" ? { senderId: "mallory" } : {}),
+        modelProvider: consumption.provider,
+        modelId: consumption.model,
+        inputProvenance: {
+          kind: authority === "external sender" ? "external_user" : "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: registration.sourceSessionKey,
+        },
+        trustedInternalHandoff,
+      });
+    const result = resolve();
+    if (authority !== "current") {
+      expect(result.delegated).toBe(false);
+      expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+      return;
+    }
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.groupPolicy).toBeUndefined();
+    expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"], deny: ["write"] });
+
+    const snapshot = prepareReplyToolAuthority({
+      run: {
+        config: config(),
+        sessionKey: targetSessionKey,
+        sessionId: registration.targetSessionId,
+        sessionFile: path.join(tempDir, "requester.jsonl"),
+        workspaceDir: tempDir,
+        provider: consumption.provider,
+        model: consumption.model,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: registration.sourceSessionKey,
+        },
+        trustedInternalHandoff,
+      },
+    });
+    const currentFingerprint = snapshot.fingerprint();
+    current = false;
+    expect(snapshot.fingerprint()).not.toBe(currentFingerprint);
   });
 
   it("uses a persisted child projection without re-resolving sender policy", async () => {

@@ -11,24 +11,26 @@ import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { createSkillProposalEvent } from "./plugin-hooks.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
-import { readStoredProposal } from "./store-sqlite-record.js";
-import { clearSkillProposalRollback, readSkillProposalRollback } from "./store-sqlite-rollback.js";
+import { captureSkillWorkshopStoreOptions, readStoredProposal } from "./store-client.js";
+import { clearSkillProposalRollback, readSkillProposalRollback } from "./store-rollback.js";
 import type { SkillWorkshopDirectoryStoreOptions } from "./store-sqlite-schema.js";
-import { commitPendingSkillProposalTransition } from "./store-sqlite-transition.js";
+import { commitPendingSkillProposalTransition } from "./store-transition.js";
 import { withSkillProposalCommitLock } from "./target-lock.js";
 import type { SkillProposalRecord, SkillProposalRollback } from "./types.js";
 
-export async function reconcileInterruptedSkillProposalApply(params: {
+export async function reconcileInterruptedSkillProposalApply(request: {
   record: SkillProposalRecord;
   expectedRecordJson: string;
   draftContent: string;
   skillsRoot: string;
   store: SkillWorkshopDirectoryStoreOptions;
 }): Promise<boolean> {
+  const { store: options, ...input } = request;
+  const params = { ...structuredClone(input), store: captureSkillWorkshopStoreOptions(options) };
   return await withSkillProposalCommitLock(
     params.record,
-    async () => {
-      const stored = readStoredProposal(params.record.id, params.store);
+    async (store) => {
+      const stored = await readStoredProposal(params.record.id, store);
       if (
         !stored ||
         stored.record.status !== "pending" ||
@@ -38,7 +40,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
       }
       assertInsideSkillsRoot(params.skillsRoot, stored.record.target.skillDir, "skill directory");
       assertInsideSkillsRoot(params.skillsRoot, stored.record.target.skillFile, "skill file");
-      const rollback = await readSkillProposalRollback(params.record.id, params.store);
+      const rollback = await readSkillProposalRollback(params.record.id, store);
       if (!rollback || !resolveRecoveryRollback(stored.record, rollback)) {
         return false;
       }
@@ -67,7 +69,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
           updatedAt: now,
           appliedAt: now,
         };
-        const commit = commitPendingSkillProposalTransition({
+        const commit = await commitPendingSkillProposalTransition({
           expected: stored.record,
           record: applied,
           event: createSkillProposalEvent({
@@ -76,7 +78,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
             occurredAt: now,
             payload: { recovered: true },
           }),
-          store: params.store,
+          store,
           operationLabel: "skill-workshop.apply.reconcile",
         });
         if (commit.state !== "committed") {
@@ -112,7 +114,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
       return await clearSkillProposalRollback({
         proposalId: stored.record.id,
         expectedRecordJson: params.expectedRecordJson,
-        store: params.store,
+        store,
       });
     },
     params.store,

@@ -32,6 +32,7 @@ import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -42,20 +43,9 @@ import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
-  listTasksForAgentIdForStatus,
-  listTasksForSessionKeyForStatus,
-} from "../tasks/task-status-access.js";
-import {
-  buildTaskStatusSnapshot,
-  formatTaskStatus,
-  formatTaskStatusDetail,
-  formatTaskStatusTitle,
-} from "../tasks/task-status.js";
-import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../utils/delivery-context.shared.js";
-// Status text helpers render runtime status summaries for CLI output.
+} from "../utils/delivery-context.read.js";
 import {
   buildCodexSyntheticUsageAuth,
   resolveUsageCredentialType,
@@ -64,13 +54,11 @@ import {
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { readSessionFallbackModel } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
-import { createStatusModelAuthResolver } from "./status-model-auth.js";
+import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
-// Status text assembly gathers runtime/model/session/task facts, then delegates
-// final formatting to status-message.runtime through lazy imports.
 const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",
   "github-copilot",
@@ -176,25 +164,6 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
   }
 }
 
-function formatSessionTaskLine(sessionKey: string, agentId: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey, agentId));
-  const task = snapshot.focus;
-  if (!task) {
-    return undefined;
-  }
-  const headline =
-    snapshot.activeCount > 0
-      ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
-      : snapshot.recentFailureCount > 0
-        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : "recently finished";
-  const title = formatTaskStatusTitle(task);
-  const detail = formatTaskStatusDetail(task);
-  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
-  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
-  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
-}
-
 async function resolveStatusHarnessId(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -262,25 +231,15 @@ function resolveStatusRuntimeProvider(params: {
   return params.provider;
 }
 
-function formatAgentTaskCountsLine(agentId: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
-  if (snapshot.totalCount === 0) {
-    return undefined;
-  }
-  return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
-}
-
 async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
     const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
-    return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
+    return formatCompactPluginHealthLine(await collectRuntimePluginHealthSnapshot());
   } catch {
     return "⚠️ Plugins: health unavailable";
   }
 }
 
-// Public status text builder for CLI/chat status commands. It resolves dynamic
-// runtime details just-in-time and returns the formatted multiline status body.
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
   return (await buildStatusReplyParts(params)).text;
 }
@@ -354,7 +313,7 @@ export async function buildStatusReplyParts(
     readOnly: true,
   });
   // This lookup borrows existing facts; status never starts inventory discovery.
-  const resolveAuth = createStatusModelAuthResolver({
+  const resolveModel = createStatusModelResolver({
     cfg,
     agentId: statusAgentId,
     agentDir: statusAgentDir,
@@ -381,23 +340,27 @@ export async function buildStatusReplyParts(
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
-  let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
-    ? params.modelAuthOverride
-    : await resolveAuth({
-        provider: selectedStatusProvider,
-        model: selectedLookupModel,
-        runtimeId: effectiveHarness,
-        acceptedProviderIds: selectedAuthProviders,
-      });
+  const selectedResolution = await resolveModel({
+    provider: selectedStatusProvider,
+    model: selectedLookupModel,
+    runtimeId: effectiveHarness,
+    acceptedProviderIds: selectedAuthProviders,
+    ...(Object.hasOwn(params, "modelAuthOverride")
+      ? { authLabelOverride: params.modelAuthOverride }
+      : {}),
+  });
+  let selectedModelAuth = selectedResolution.authLabel;
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
-      ? await resolveAuth({
-          provider: activeStatusProvider,
-          model: modelRefs.active.model || model,
-          runtimeId: effectiveHarness,
-          acceptedProviderIds: activeAuthProviders,
-        })
+      ? (
+          await resolveModel({
+            provider: activeStatusProvider,
+            model: modelRefs.active.model || model,
+            runtimeId: effectiveHarness,
+            acceptedProviderIds: activeAuthProviders,
+          })
+        ).authLabel
       : selectedModelAuth;
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label,
@@ -464,8 +427,7 @@ export async function buildStatusReplyParts(
       // Usage summary is optional operator context. Bound it tightly so a slow
       // provider usage probe cannot delay the status command.
       const usageSummaryTimeoutMs = useCodexSyntheticUsage ? 8000 : 3500;
-      let usageTimeout: NodeJS.Timeout | undefined;
-      const usageSummary = await Promise.race([
+      const usageSummary = await withTimeout(
         loadProviderUsageSummary({
           timeoutMs: usageSummaryTimeoutMs,
           providers: [currentUsageProvider],
@@ -476,17 +438,9 @@ export async function buildStatusReplyParts(
             ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
             : undefined,
         }),
-        new Promise<never>((_, reject) => {
-          usageTimeout = setTimeout(
-            () => reject(new Error("usage summary timeout")),
-            usageSummaryTimeoutMs,
-          );
-        }),
-      ]).finally(() => {
-        if (usageTimeout) {
-          clearTimeout(usageTimeout);
-        }
-      });
+        usageSummaryTimeoutMs,
+        { message: "usage summary timeout" },
+      );
       const usageEntry = usageSummary.providers[0];
       if (
         usageEntry &&
@@ -522,21 +476,12 @@ export async function buildStatusReplyParts(
   );
 
   let subagentsLine: string | undefined;
-  let taskLine: string | undefined;
   if (sessionKey) {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
-    // Task/subagent status should follow the internal session key alias used by
-    // runtime registries, not necessarily the external key passed to the command.
-    taskLine = params.skipDefaultTaskLookup
-      ? params.taskLineOverride
-      : (params.taskLineOverride ?? formatSessionTaskLine(requesterKey, statusAgentId));
-    if (!taskLine && !params.skipDefaultTaskLookup) {
-      taskLine = formatAgentTaskCountsLine(statusAgentId);
-    }
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const subagentReadContext = buildControlledSubagentRunsReadContext(
+    const subagentReadContext = await buildControlledSubagentRunsReadContext(
       requesterKey,
       statusAgentId,
       cfg,
@@ -556,8 +501,8 @@ export async function buildStatusReplyParts(
     resolvedFastMode ??
     resolveFastModeState({
       cfg,
-      provider,
-      model,
+      provider: selectedLookupProvider,
+      model: selectedLookupModel,
       agentId: statusAgentId,
       sessionEntry,
     }).mode;
@@ -685,6 +630,7 @@ export async function buildStatusReplyParts(
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
+    selectedEndpoint: selectedResolution.endpoint,
     activeModelAuth,
     uptimeValue: buildStatusUptimeValue(),
     usageLine: usageLine ?? undefined,
@@ -697,7 +643,6 @@ export async function buildStatusReplyParts(
       showDetails: queueOverrides,
     },
     subagentsLine,
-    taskLine,
     pluginHealthLine,
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,

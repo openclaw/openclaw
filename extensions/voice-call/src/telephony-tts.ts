@@ -1,37 +1,16 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "openclaw/plugin-sdk/speech";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { VoiceCallTtsConfig } from "./config.js";
 import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 // Telephony TTS adapter that applies voice-call overrides and emits 8kHz mulaw audio.
 
 /** Core runtime TTS API used by the telephony adapter. */
-export type TelephonyTtsRuntime = {
-  prepareTtsRequest: (params: {
-    cfg: OpenClawConfig;
-    override?: VoiceCallTtsConfig;
-    text: string;
-  }) => Promise<{
-    cfg: OpenClawConfig;
-    directives: TtsDirectiveParseResult;
-  }>;
-  textToSpeechTelephony: (params: {
-    text: string;
-    cfg: OpenClawConfig;
-    prefsPath?: string;
-    overrides?: TtsDirectiveOverrides;
-  }) => Promise<{
-    success: boolean;
-    audioBuffer?: Buffer;
-    sampleRate?: number;
-    provider?: string;
-    outputFormat?: string;
-    fallbackFrom?: string;
-    attemptedProviders?: string[];
-    error?: string;
-  }>;
-};
+export type TelephonyTtsRuntime = Pick<
+  PluginRuntime["tts"],
+  "prepareTtsRequest" | "textToSpeechTelephony"
+>;
 
 /** Provider facade used by Twilio/webhook code for telephony synthesis. */
 export type TelephonyTtsProvider = {

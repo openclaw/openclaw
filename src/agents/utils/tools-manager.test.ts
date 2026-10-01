@@ -450,76 +450,172 @@ describe("ensureTool", () => {
     );
   });
 
-  it("rejects downloads whose declared size exceeds the byte cap", async () => {
-    const response = new Response("oversized-body", {
-      status: 200,
-      headers: { "content-length": "11" },
-    });
-    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
-      release,
-      finalUrl: "https://example.com/archive.tar.gz",
-    });
-    const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.test-support.js");
-
-    await expect(
-      testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
-    ).rejects.toThrow("Download exceeds the 10-byte archive limit");
-
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-    expect(existsSync(destination)).toBe(false);
-  });
-
-  it("rejects streamed bytes above the cap and removes the partial file", async () => {
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array([1, 2, 3, 4, 5, 6]));
-          controller.enqueue(new Uint8Array([7, 8, 9, 10, 11, 12]));
-          controller.close();
-        },
-      }),
-      { status: 200, headers: { "content-length": "6" } },
+  it("installs decoded downloads when encoded Content-Length exceeds the archive cap", async () => {
+    const agentDir = expectDefined(tempAgentDir, "test agent directory");
+    const binaryName = process.platform === "win32" ? "rg.exe" : "rg";
+    const archive = "decoded archive bytes";
+    const releaseCheckRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    extractArchiveMock.mockImplementation(
+      async (params: { archivePath: string; destDir: string }) => {
+        expect(readFileSync(params.archivePath, "utf8")).toBe(archive);
+        const binary = join(params.destDir, "vendor", "bin", binaryName);
+        mkdirSync(dirname(binary), { recursive: true });
+        writeFileSync(binary, "binary");
+      },
     );
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
-      release,
-      finalUrl: "https://example.com/archive.tar.gz",
-    });
-    const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.test-support.js");
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
+        release: releaseCheckRelease,
+        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
+      })
+      .mockResolvedValueOnce({
+        // Fetch has already decoded the body; this header still describes wire bytes.
+        response: new Response(archive, {
+          status: 200,
+          headers: { "content-encoding": "gzip", "content-length": "104857601" },
+        }),
+        release: downloadRelease,
+        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
+      });
+    const { ensureTool } = await import("./tools-manager.js");
+    const binaryPath = join(agentDir, "bin", binaryName);
 
-    await expect(
-      testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
-    ).rejects.toThrow("Download exceeded the 10-byte archive limit");
+    await expect(ensureTool("rg", true)).resolves.toBe(binaryPath);
 
-    expect(release).toHaveBeenCalledOnce();
-    expect(existsSync(destination)).toBe(false);
+    expect(readFileSync(binaryPath, "utf8")).toBe("binary");
+    expect(extractArchiveMock).toHaveBeenCalledOnce();
+    expect(releaseCheckRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(join(agentDir, "bin"))).toEqual([binaryName]);
   });
 
-  it("accepts downloads exactly at the byte cap", async () => {
-    const body = new Uint8Array([1, 2, 3, 4]);
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(body, {
-        status: 200,
-        headers: { "content-length": String(body.byteLength) },
-      }),
-      release,
-      finalUrl: "https://example.com/archive.tar.gz",
+  it.each([
+    { name: "declared bytes", declaredBytes: 100 * 1024 * 1024 + 1, readsBody: false },
+    { name: "streamed bytes", declaredBytes: 1, readsBody: true },
+  ])(
+    "rejects $name above the archive cap and cleans installation staging",
+    async ({ declaredBytes, readsBody }) => {
+      const agentDir = expectDefined(tempAgentDir, "test agent directory");
+      let reads = 0;
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              reads += 1;
+              if (reads === 1) {
+                controller.enqueue(new Uint8Array([1]));
+              } else if (reads === 2) {
+                // The first byte is written; this chunk exceeds the cap before its disk write.
+                controller.enqueue(new Uint8Array(100 * 1024 * 1024));
+              } else {
+                controller.close();
+              }
+            },
+            cancel,
+          },
+          { highWaterMark: 0 },
+        ),
+        { status: 200, headers: { "content-length": String(declaredBytes) } },
+      );
+      const releaseCheckRelease = vi.fn(async () => {});
+      const downloadRelease = vi.fn(async () => {
+        await response.body?.cancel();
+      });
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce({
+          response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
+          release: releaseCheckRelease,
+          finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
+        })
+        .mockResolvedValueOnce({
+          response,
+          release: downloadRelease,
+          finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
+        });
+      const { ensureTool } = await import("./tools-manager.js");
+
+      await expect(ensureTool("rg", true)).resolves.toBeUndefined();
+
+      if (readsBody) {
+        expect(reads).toBeGreaterThanOrEqual(2);
+      } else {
+        expect(reads).toBe(0);
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(response.body?.locked).toBe(false);
+      expect(extractArchiveMock).not.toHaveBeenCalled();
+      expect(releaseCheckRelease).toHaveBeenCalledOnce();
+      expect(downloadRelease).toHaveBeenCalledOnce();
+      expect(fs.readdirSync(join(agentDir, "bin"))).toEqual([]);
+    },
+  );
+
+  it.each([
+    { name: "reports an unreadable extracted directory", readableBinary: false },
+    {
+      name: "installs a readable binary despite an unrelated directory read failure",
+      readableBinary: true,
+    },
+  ])("$name and cleans installation staging", async ({ readableBinary }) => {
+    const agentDir = expectDefined(tempAgentDir, "test agent directory");
+    const binaryName = process.platform === "win32" ? "rg.exe" : "rg";
+    let blockedDir: string | undefined;
+    let deniedRead = false;
+    const readdir = fs.readdirSync.bind(fs);
+    vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
+      if (args[0] === blockedDir && !deniedRead) {
+        deniedRead = true;
+        throw Object.assign(new Error("EACCES: cannot read extracted directory"), {
+          code: "EACCES",
+        });
+      }
+      return readdir(...args);
     });
-    const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.test-support.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const releaseCheckRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
+      blockedDir = join(params.destDir, "nested");
+      mkdirSync(blockedDir);
+      writeFileSync(join(blockedDir, binaryName), "binary");
+      if (readableBinary) {
+        const readablePath = join(params.destDir, "readable", binaryName);
+        mkdirSync(dirname(readablePath));
+        writeFileSync(readablePath, "readable binary");
+      }
+    });
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
+        release: releaseCheckRelease,
+        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
+      })
+      .mockResolvedValueOnce({
+        response: new Response("archive bytes", { status: 200 }),
+        release: downloadRelease,
+        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
+      });
+    const { ensureTool } = await import("./tools-manager.js");
 
-    await testing.downloadFile("https://example.com/archive.tar.gz", destination, body.byteLength);
+    const installed = await ensureTool("rg");
 
-    expect(release).toHaveBeenCalledOnce();
-    expect(readFileSync(destination)).toEqual(Buffer.from(body));
+    expect(deniedRead).toBe(true);
+    if (readableBinary) {
+      const binaryPath = join(agentDir, "bin", binaryName);
+      expect(installed).toBe(binaryPath);
+      expect(readFileSync(binaryPath, "utf8")).toBe("readable binary");
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("EACCES"));
+    } else {
+      expect(installed).toBeUndefined();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("EACCES"));
+    }
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Binary not found in archive"));
+    expect(releaseCheckRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(join(agentDir, "bin"))).toEqual(readableBinary ? [binaryName] : []);
   });
 
   it("bounds GitHub release metadata reads", async () => {

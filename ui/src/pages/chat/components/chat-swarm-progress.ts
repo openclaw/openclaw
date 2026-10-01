@@ -18,9 +18,9 @@ type SwarmDot = {
 };
 
 const SWARM_STATUS_LABEL_KEYS: Record<SwarmDotStatus, string> = {
-  queued: "tasksPage.status.queued",
-  running: "tasksPage.status.running",
-  done: "tasksPage.status.completed",
+  queued: "common.queued",
+  running: "common.running",
+  done: "common.completed",
   failed: "labsPage.swarm.failedOrStopped",
 };
 

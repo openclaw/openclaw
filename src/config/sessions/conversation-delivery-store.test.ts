@@ -2,7 +2,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -22,6 +25,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
+import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 type LegacyDeliveryFixture = Partial<SessionEntry> & {
@@ -74,6 +78,20 @@ async function withConversationStore(
 }
 
 describe("conversation delivery store", () => {
+  it("reopens retained delivery receipts", async () => {
+    await withConversationStore(({ scope, conversationRef }) => {
+      beginConversationDeliveryOperation(scope, {
+        operationId: "legacy",
+        operationKind: "send",
+        conversationRef,
+        message: "legacy",
+      });
+      const legacy = markConversationDeliverySent(scope, "legacy", "legacy-message");
+      closeOpenClawAgentDatabasesForTest();
+      expect(getConversationDeliveryOperation(scope, "legacy")).toEqual(legacy);
+    });
+  });
+
   it("validates retry input without recreating a missing operation", async () => {
     await withConversationStore(({ scope, conversationRef }) => {
       const input = {
@@ -277,17 +295,34 @@ describe("conversation delivery store", () => {
     });
   });
 
-  it("removes source-bound delivery evidence when its session is fully deleted", async () => {
+  it("removes only source-bound delivery evidence and its progress cache when fully deleted", async () => {
     await withConversationStore(async ({ scope, conversationRef }) => {
       const sessionKey = "agent:main:reef:direct:peer-agent";
-      beginConversationDeliveryOperation(scope, {
-        operationId: "operation-deleted-session",
-        operationKind: "send",
-        conversationRef,
-        sourceSessionKey: sessionKey,
-        message: "hello",
-      });
-      markConversationDeliverySent(scope, "operation-deleted-session", "platform-deleted");
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
+      const progressJson = JSON.stringify({ lines: ["Working"] });
+      for (const [operationId, sourceSessionKey] of [
+        ["operation-deleted-session", sessionKey],
+        ["operation-other-session", "agent:main:other"],
+      ] as const) {
+        beginConversationDeliveryOperation(scope, {
+          operationId,
+          operationKind: "send",
+          conversationRef,
+          sourceSessionKey,
+          message: "hello",
+        });
+        markConversationDeliverySent(scope, operationId, "platform-deleted");
+        database.db
+          .prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('conversation-progress', ?, ?, 1)",
+          )
+          .run(operationId, progressJson);
+      }
+      database.db
+        .prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .run("unrelated", "operation-deleted-session", "keep", 1);
 
       await deleteSessionEntryLifecycle({
         agentId: scope.agentId,
@@ -298,6 +333,18 @@ describe("conversation delivery store", () => {
       });
 
       expect(getConversationDeliveryOperation(scope, "operation-deleted-session")).toBeUndefined();
+      expect(
+        database.db
+          .prepare(
+            "SELECT key, value_json FROM cache_entries WHERE scope = 'conversation-progress'",
+          )
+          .all(),
+      ).toEqual([{ key: "operation-other-session", value_json: progressJson }]);
+      expect(
+        database.db
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("unrelated", "operation-deleted-session"),
+      ).toEqual({ value_json: "keep" });
       expect(resolveConversation(scope, conversationRef)).toMatchObject({ conversationRef });
     });
   });

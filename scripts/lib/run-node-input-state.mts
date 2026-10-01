@@ -139,31 +139,17 @@ export const collectRunNodeBundledPluginBuildEntries = (deps: RunNodeInputDeps) 
   return collectSourceCheckoutPluginBuildEntries({ cwd: deps.cwd, env: deps.env });
 };
 
-const resolveBuiltBundledPluginRuntimeEntryPath = (
-  distRoot: string,
-  pluginId: string,
-  sourceEntry: string,
-  runtimeExtension: string,
-) =>
-  path.join(
-    distRoot,
-    "extensions",
-    pluginId,
-    sourceEntry.replace(/^\.\//, "").replace(/\.[^.]+$/u, runtimeExtension),
-  );
-
 export const listBundledPluginRuntimeEntryPaths = (
   pluginEntry: BundledPluginBuildEntry,
   deps: RunNodeInputDeps,
 ) => {
-  const distRoot = deps.distRoot;
   return pluginEntry.sourceEntries
     .map((sourceEntry) =>
-      resolveBuiltBundledPluginRuntimeEntryPath(
-        distRoot,
+      path.join(
+        deps.distRoot,
+        "extensions",
         pluginEntry.id,
-        sourceEntry,
-        pluginEntry.runtimeExtension,
+        sourceEntry.replace(/^\.\//, "").replace(/\.[^.]+$/u, pluginEntry.runtimeExtension),
       ),
     )
     .toSorted((left, right) => left.localeCompare(right));

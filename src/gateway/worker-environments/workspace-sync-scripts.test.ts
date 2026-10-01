@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -14,8 +16,11 @@ import {
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const PADDED_PROCESS_START = "Thu Oct  1 00:11:43 2026";
 
-async function fixture(probeClock?: "exhaust" | "census" | "identity" | "recovery") {
+async function fixture(
+  probeClock?: "exhaust" | "budget" | "census" | "identity" | "recovery" | "prefix" | "retry",
+) {
   const root = tempDirs.make("openclaw-quiescence-test-");
   const home = path.join(root, "home");
   let workspace = path.join(root, "workspace");
@@ -32,7 +37,7 @@ async function fixture(probeClock?: "exhaust" | "census" | "identity" | "recover
   await fs.chmod(path.join(bin, "ps"), 0o755);
   const clockPath = path.join(root, "probe-clock.cjs");
   if (probeClock) {
-    // Model slow probes on the budget clock; real ps still supplies process identities.
+    // Model slow probes on the budget clock; real ps still supplies PIDs and states.
     // Exhaustion cases retain their real killable timeout, and lease expiry uses wall time.
     await fs.writeFile(
       clockPath,
@@ -44,11 +49,32 @@ const mode = ${JSON.stringify(probeClock)};
 let elapsed = 0;
 let slowProbePending = true;
 Object.defineProperty(performance, "now", { value: () => now() + elapsed });
-if (mode === "recovery") {
+let recoverySocket;
+let releaseRecovery;
+let recoveryReleased = false;
+if (mode === "recovery" || mode === "prefix" || mode === "retry") {
   const schedule = setTimeout;
-  global.setTimeout = (callback, delay, ...args) => schedule(callback, Math.min(delay, 10), ...args);
+  global.setTimeout = (callback, delay, ...args) => schedule(() => {
+    if (recoverySocket && !recoveryReleased) {
+      // Let the parent restore ps before spending another recovery pass.
+      releaseRecovery = () => callback(...args);
+    } else {
+      callback(...args);
+    }
+  }, Math.min(delay, 10));
 }
 childProcess.execFileSync = (command, args, options) => {
+  if (mode === "prefix" && command === "ps" && args[1] === "lstart=" && require("node:fs").existsSync(${JSON.stringify(path.join(root, "prefix-probes"))})) {
+    const fs = require("node:fs");
+    const callsPath = ${JSON.stringify(path.join(home, "probe-calls"))};
+    const calls = fs.existsSync(callsPath) ? fs.readFileSync(callsPath, "utf8").trim().split("\\n").length : 0;
+    fs.appendFileSync(callsPath, args.at(-1) + "\\n");
+    if (calls % 2 === 1) {
+      elapsed += options.timeout;
+      throw Object.assign(new Error("simulated unavailable ps"), { code: "ETIMEDOUT", status: null, signal: options.killSignal });
+    }
+    elapsed += 1000;
+  }
   if (mode === "recovery" && command === "ps" && args[1] === "lstart=" && require("node:fs").existsSync(${JSON.stringify(path.join(root, "stall-identity"))})) {
     elapsed += options.timeout;
     require("node:fs").appendFileSync(${JSON.stringify(path.join(root, "recovery-probes"))}, elapsed + "\\n");
@@ -63,9 +89,34 @@ childProcess.execFileSync = (command, args, options) => {
     }
     slowProbePending = false;
   }
-  try { return execFileSync(command, args, options); }
+  try {
+    const output = execFileSync(command, args, options);
+    // Exercise ps day padding regardless of the host's date or timezone.
+    return mode === "recovery" && command === "ps"
+      ? output.replace(/\\w{3} \\w{3} [ \\d]\\d \\d{2}:\\d{2}:\\d{2} \\d{4}/gu, ${JSON.stringify(PADDED_PROCESS_START)})
+      : output;
+  }
   catch (error) {
-    if (mode === "exhaust" && error.code === "ETIMEDOUT") elapsed += 60000;
+    if (mode === "budget" && error.code === "ETIMEDOUT") {
+      elapsed += 30000;
+      require("node:fs").appendFileSync(${JSON.stringify(path.join(root, "budget-probes"))}, "timeout\\n");
+    }
+    if ((mode === "exhaust" || mode === "retry") && error.code === "ETIMEDOUT") elapsed += 60000;
+    if (mode === "retry" && error.code === "ETIMEDOUT" && !recoverySocket) {
+      const fs = require("node:fs");
+      const pidPath = ${JSON.stringify(path.join(home, "watchdog-pid"))};
+      if (fs.existsSync(pidPath) && process.pid === Number(fs.readFileSync(pidPath, "utf8"))) {
+        recoverySocket = require("node:net").createConnection({
+          host: "127.0.0.1",
+          port: Number(fs.readFileSync(${JSON.stringify(path.join(home, "watchdog-probe-port"))}, "utf8")),
+        }, () => recoverySocket.write("timed-out"));
+        recoverySocket.once("data", () => {
+          recoveryReleased = true;
+          recoverySocket.end();
+          releaseRecovery?.();
+        });
+      }
+    }
     throw error;
   }
 };
@@ -235,7 +286,7 @@ describe("remote workspace quiescence scripts", () => {
   );
 
   it("surfaces an exhausted probe budget through the workspace caller", async () => {
-    const input = await fixture();
+    const input = await fixture("budget");
     await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
     const results: Awaited<ReturnType<typeof runCommandWithTimeout>>[] = [];
     const acquire = createWorkerWorkspaceQuiescence({
@@ -258,6 +309,10 @@ describe("remote workspace quiescence scripts", () => {
     expect(results[0]?.code).toBe(1);
     expect(results[0]?.stderr).toContain("slow ps probe; retrying");
     expect(results[0]?.stderr.slice(0, 900)).toContain("probe budget exhausted after 30000 ms");
+    // A renewed budget must not authorize another probe after 30s of simulated delay.
+    await expect(fs.readFile(path.join(input.home, "..", "budget-probes"), "utf8")).resolves.toBe(
+      "timeout\n",
+    );
     await expect(
       fs.readdir(path.join(input.home, ".openclaw-worker", "quiescence")),
     ).resolves.toEqual([]);
@@ -704,12 +759,10 @@ esac
   });
 
   it("resumes every worker without revisiting a recovered prefix after probe exhaustion", async () => {
-    const input = await fixture();
+    const input = await fixture("prefix");
     const workers = Array.from({ length: 16 }, () => spawnIdleWorker());
     const pids = workers.map((worker) => worker.pid!);
     const callsPath = path.join(input.home, "probe-calls");
-    const psPath = path.join(input.bin, "ps");
-    const healthyPs = await fs.readFile(psPath, "utf8");
     let watchdogPid: number | undefined;
     try {
       await fs.writeFile(input.extraProcessPath, pids.join(","));
@@ -726,27 +779,14 @@ esac
       for (const pid of pids) {
         expect(await processState(pid)).toMatch(/^T/u);
       }
-      await fs.writeFile(path.join(input.bin, "healthy-ps"), healthyPs, { mode: 0o755 });
+      // Drive the watchdog's real identity probes across a virtual shared budget.
+      await fs.writeFile(path.join(input.home, "..", "prefix-probes"), "");
+      const expiredLeaseFile = `${leaseFile}.expired`;
       await fs.writeFile(
-        psPath,
-        `#!/bin/sh
-case "$*" in
-  *"lstart= -p"*)
-    for pid do :; done
-    count=0
-    if [ -f "$HOME/probe-count" ]; then count=$(cat "$HOME/probe-count"); fi
-    count=$((count + 1))
-    printf '%s\n' "$count" > "$HOME/probe-count"
-    printf '%s\n' "$pid" >> "$HOME/probe-calls"
-    if [ $((count % 2)) -eq 0 ]; then
-      trap '' TERM
-      while :; do :; done
-    fi
-    sleep 1 ;;
-esac
-exec "$(dirname "$0")/healthy-ps" "$@"
-`,
+        expiredLeaseFile,
+        JSON.stringify({ ...lease, expiresAtMs: Date.now() - 1 }),
       );
+      await fs.rename(expiredLeaseFile, leaseFile);
       const firstPid = lease.processes[0]!.pid;
       let calls: number[] = [];
       let leaseExists = true;
@@ -770,12 +810,12 @@ exec "$(dirname "$0")/healthy-ps" "$@"
       }
       expect(calls.filter((pid) => pid === firstPid)).toHaveLength(1);
       expect(leaseExists, `probe calls: ${calls.join(",")}`).toBe(false);
+      expect(calls.length).toBeGreaterThan(pids.length);
       expect(calls.length).toBeLessThanOrEqual(35);
       for (const pid of pids) {
         expect(await processState(pid)).not.toMatch(/^T/u);
       }
     } finally {
-      await fs.writeFile(psPath, healthyPs);
       if (watchdogPid !== undefined) {
         try {
           process.kill(watchdogPid, "SIGTERM");
@@ -841,11 +881,14 @@ exec "$(dirname "$0")/healthy-ps" "$@"
       expect(exhausted.processes).toEqual(lease.processes);
       expect(exhausted.recoveryError).toContain("recovery exhausted after 4 probe passes");
       expect(exhausted.recoveryError).toContain("retry workspace recovery");
+      await expect(quiescence.resume()).rejects.toThrow(exhausted.recoveryError);
       for (const entry of lease.processes) {
-        expect(exhausted.recoveryError).toContain(JSON.stringify(entry));
+        expect(entry.start).toBe(PADDED_PROCESS_START);
+        expect(exhausted.recoveryError).toContain(
+          JSON.stringify({ ...entry, start: "Thu Oct 1 00:11:43 2026" }),
+        );
         expect(await processState(entry.pid)).toMatch(/^T/u);
       }
-      await expect(quiescence.resume()).rejects.toThrow(exhausted.recoveryError);
       await fs.unlink(stallPath);
       await quiescence.resume();
       await expect(fs.stat(leaseFile)).rejects.toThrow();
@@ -866,17 +909,35 @@ exec "$(dirname "$0")/healthy-ps" "$@"
   });
 
   it("recovers a frozen worker once a stalled ps answers again after lease expiry", async () => {
-    const input = await fixture("exhaust");
+    const input = await fixture("retry");
     const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
     const child = spawnIdleWorker();
     await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
 
+    const watchdogProbeTimedOut = createDeferred();
+    let connection: Socket | undefined;
+    const probeServer = createServer((socket) => {
+      connection = socket;
+      socket.once("data", () => watchdogProbeTimedOut.resolve());
+      socket.on("error", watchdogProbeTimedOut.reject);
+    });
+    let watchdogPid: number | undefined;
     try {
+      const listening = once(probeServer, "listening");
+      probeServer.listen(0, "127.0.0.1");
+      await listening;
+      const address = probeServer.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing probe acknowledgement listener");
+      }
+      await fs.writeFile(path.join(input.home, "watchdog-probe-port"), String(address.port));
       const nonce = await quiesce(input, false, "6000");
       const lease = JSON.parse(
         await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
       ) as { watchdog: { pid: number } };
+      watchdogPid = lease.watchdog.pid;
       expect(await waitForProcessState(child.pid!, /^T/u)).toMatch(/^T/u);
+      await fs.writeFile(path.join(input.home, "watchdog-pid"), String(lease.watchdog.pid));
 
       // ps stays stalled across the failed resume and past lease expiry, so only a
       // watchdog that keeps re-probing identity can still thaw this worker.
@@ -889,15 +950,21 @@ exec "$(dirname "$0")/healthy-ps" "$@"
       );
       expect(failed.code).not.toBe(0);
 
-      await new Promise((resolve) => {
-        setTimeout(resolve, 9_000);
-      });
+      const leaseFile = leasePath(input.home, input.workspace, nonce);
+      const expiredLeaseFile = `${leaseFile}.expired`;
+      await fs.writeFile(
+        expiredLeaseFile,
+        JSON.stringify({ ...lease, expiresAtMs: Date.now() - 1 }),
+      );
+      await fs.rename(expiredLeaseFile, leaseFile);
+      await watchdogProbeTimedOut.promise;
       expect(await processState(child.pid!)).toMatch(/^T/u);
-      // The watchdog must still be holding the lease well past expiry, not retired by a cap.
+      // An exhausted post-expiry probe must leave the watchdog able to retry recovery.
       expect(() => process.kill(lease.watchdog.pid, 0)).not.toThrow();
 
       await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
       await fs.chmod(path.join(input.bin, "ps"), 0o755);
+      connection!.write("retry");
 
       // SIGCONT precedes lease removal. Wait for the watchdog's terminal state,
       // including an unreaped zombie, before asserting its completed cleanup.
@@ -905,6 +972,17 @@ exec "$(dirname "$0")/healthy-ps" "$@"
       expect(await processState(child.pid!)).toMatch(/^[^T]/u);
       await expect(fs.stat(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
     } finally {
+      if (watchdogPid !== undefined) {
+        try {
+          process.kill(watchdogPid, "SIGTERM");
+        } catch {
+          // Already retired after recovery.
+        }
+      }
+      connection?.destroy();
+      await new Promise<void>((resolve) => {
+        probeServer.close(() => resolve());
+      });
       await stopIdleWorker(child);
       await fs.rm(input.extraProcessPath, { force: true });
     }

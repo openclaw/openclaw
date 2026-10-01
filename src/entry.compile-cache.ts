@@ -1,15 +1,17 @@
 // Manages compile-cache respawn behavior for the CLI entrypoint.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { enableCompileCache, getCompileCacheDir } from "node:module";
-import os from "node:os";
+import { existsSync } from "node:fs";
+import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
+import { resolveOpenClawCompileCacheDirectory } from "../node-compile-cache.mjs";
+import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
   isTerminalInteractiveRespawnArgv,
   shouldKeepNativeHookRelayInProcess,
 } from "./cli/respawn-policy.js";
+import { enableOwnedNodeCompileCache } from "./infra/node-compile-cache-env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
   runRespawnChildWithSignalBridge,
@@ -44,56 +46,8 @@ function shouldEnableOpenClawCompileCache(params: {
   installRoot: string;
 }): boolean {
   return (
-    !isNodeCompileCacheDisabled(params.env) && !isSourceCheckoutInstallRoot(params.installRoot)
-  );
-}
-
-function sanitizeCompileCachePathSegment(value: string): string {
-  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
-  return normalized.length > 0 ? normalized : "unknown";
-}
-
-function readPackageVersion(packageJsonPath: string): string {
-  try {
-    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as unknown;
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "version" in parsed &&
-      typeof parsed.version === "string" &&
-      parsed.version.trim().length > 0
-    ) {
-      return parsed.version;
-    }
-  } catch {
-    // Fall through to an install-metadata-only cache key.
-  }
-  return "unknown";
-}
-
-function resolveOpenClawCompileCacheDirectory(params: {
-  env?: NodeJS.ProcessEnv;
-  installRoot: string;
-}): string {
-  const env = params.env ?? process.env;
-  const packageJsonPath = path.join(params.installRoot, "package.json");
-  const version = sanitizeCompileCachePathSegment(readPackageVersion(packageJsonPath));
-  let installMarker = "no-package-json";
-  try {
-    const stat = statSync(packageJsonPath);
-    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
-  } catch {
-    // Package archives should always have package.json, but keep startup best-effort.
-  }
-  const baseDirectory =
-    env.NODE_COMPILE_CACHE && !isNodeCompileCacheDisabled(env)
-      ? env.NODE_COMPILE_CACHE
-      : path.join(os.tmpdir(), "node-compile-cache");
-  return path.join(
-    baseDirectory,
-    "openclaw",
-    version,
-    sanitizeCompileCachePathSegment(installMarker),
+    !isNodeCompileCacheDisabled(params.env ?? process.env) &&
+    !isSourceCheckoutInstallRoot(params.installRoot)
   );
 }
 
@@ -117,6 +71,10 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   const env = params.env ?? process.env;
   const argv = process.argv;
   const platform = process.platform;
+  // A recovered Unix Gateway must not acquire another short-lived stop wrapper.
+  if (platform !== "win32" && isForegroundGatewayRunArgv(argv)) {
+    return undefined;
+  }
   if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
     return undefined;
   }
@@ -208,7 +166,8 @@ export function enableOpenClawCompileCache(params: {
     return;
   }
   try {
-    enableCompileCache(resolveOpenClawCompileCacheDirectory(params));
+    const directory = resolveOpenClawCompileCacheDirectory(params);
+    enableOwnedNodeCompileCache(directory);
   } catch {
     // Best-effort only; never block startup.
   }

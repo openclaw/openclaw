@@ -4,7 +4,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { computeSkillWorkshopDiff } from "./diff.ts";
 
-export type SkillWorkshopProposalStatus = SkillsProposalsListResult["proposals"][number]["status"];
+type SkillWorkshopProposalStatus = SkillsProposalsListResult["proposals"][number]["status"];
 
 type SkillWorkshopFile = {
   path: string;

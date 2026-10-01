@@ -34,7 +34,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
-import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
 import {
   isSidebarSlotVisible,
   openSlot,
@@ -100,7 +99,10 @@ describe("chat pane retained presentation lifecycle", () => {
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const layout = promoteSidebarPanel(
         openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
         "companion",
@@ -108,7 +110,6 @@ describe("chat pane retained presentation lifecycle", () => {
       patchSettings({ sidebarSessionLayouts: { [state.sessionKey]: layout } });
       const presentation = pane as TestChatPane & {
         compact: boolean;
-        selectedSessionRailMode: (sessionKey: string) => "expanded" | "hidden";
       };
       presentation.compact = compact;
       pane.connectedClient = null;
@@ -121,9 +122,6 @@ describe("chat pane retained presentation lifecycle", () => {
       );
       expect(state.sidebarLayout.open).toBe(!compact);
       expect(isSidebarSlotVisible(state.sidebarLayout, "companion")).toBe(!compact);
-      expect(presentation.selectedSessionRailMode(state.sessionKey)).toBe(
-        compact ? "hidden" : "expanded",
-      );
       expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
       expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]).toMatchObject(layout);
       expect(isSidebarSlotVisible(openSlot(state.sidebarLayout, "workspace"), "workspace")).toBe(
@@ -137,11 +135,11 @@ describe("chat pane retained presentation lifecycle", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const page = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const dock = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const listeners = new Set<(draft: string) => void>();
     page.pane.context.nativeChatDrafts.subscribe = (listener) => {
@@ -468,13 +466,8 @@ describe("chat pane retained presentation lifecycle", () => {
     const release = vi.fn();
     state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
     state.realtimeTalkActive = true;
-    state.sidebarContent = { kind: "task", taskId: "task-live" };
+    state.sidebarContent = { kind: "markdown", content: "Review selection" };
     state.imageLightbox = { release, src: "blob:test", title: "preview" };
-    const detailHost = state as unknown as TaskDetailHost;
-    readTaskTranscript(detailHost, {
-      taskId: "task-live",
-    });
-    expect(detailHost.taskDetailState).toBeDefined();
     pane.presentationId = "p1:visible";
     const announcement = document.createElement("span");
     announcement.className = "chat-transcript-announcement";
@@ -485,9 +478,6 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(state.sidebarContent).toBeNull();
-    // The wiped detail slot can no longer reset the loader itself; retirement
-    // must stop its timer/fetch loop so hidden panes stop reading history.
-    expect(detailHost.taskDetailState).toBeUndefined();
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
 

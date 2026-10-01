@@ -1,6 +1,6 @@
 // Feishu helper module supports wiki schema behavior.
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
-import { Type, type Static } from "typebox";
+import { Type } from "typebox";
 
 const WIKI_SPACE_ID_DESCRIPTION =
   "Knowledge space ID. Treat as an opaque string and keep it quoted; never pass numeric-looking IDs as numbers.";
@@ -77,5 +77,3 @@ export const FeishuWikiSchema = Type.Union([
     title: Type.String({ description: "New title" }),
   }),
 ]);
-
-export type FeishuWikiParams = Static<typeof FeishuWikiSchema>;

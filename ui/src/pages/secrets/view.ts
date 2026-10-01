@@ -245,44 +245,32 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
         </label>
         <fieldset class="secrets-store-modes">
           <legend>${t("secretsStore.accessMode")}</legend>
-          <label
-            class="secrets-store-mode ${
-              props.draft.kind === "secret" ? "secrets-store-mode--selected" : ""
-            }"
-          >
-            <input
-              type="radio"
-              name="access-mode"
-              value="secret"
-              .checked=${props.draft.kind === "secret"}
-              ?disabled=${props.busy}
-              @change=${() => props.onDraftKindChange("secret")}
-            />
-            <span>
-              <strong>${t("secretsStore.protectedSecret")}</strong>
-              <small>${t("secretsStore.protectedSecretHint")}</small>
-            </span>
-          </label>
-          <label
-            class="secrets-store-mode ${
-              props.draft.kind === "env"
-                ? "secrets-store-mode--selected secrets-store-mode--risk"
-                : ""
-            }"
-          >
-            <input
-              type="radio"
-              name="access-mode"
-              value="env"
-              .checked=${props.draft.kind === "env"}
-              ?disabled=${props.busy}
-              @change=${() => props.onDraftKindChange("env")}
-            />
-            <span>
-              <strong>${t("secretsStore.agentReadable")}</strong>
-              <small>${t("secretsStore.agentReadableHint")}</small>
-            </span>
-          </label>
+          ${(["secret", "env"] as const).map((kind) => {
+            const selectedClass =
+              kind === "secret"
+                ? "secrets-store-mode--selected"
+                : "secrets-store-mode--selected secrets-store-mode--risk";
+            return html`<label
+              class="secrets-store-mode ${props.draft.kind === kind ? selectedClass : ""}"
+            >
+              <input
+                type="radio"
+                name="access-mode"
+                value=${kind}
+                .checked=${props.draft.kind === kind}
+                ?disabled=${props.busy}
+                @change=${() => props.onDraftKindChange(kind)}
+              />
+              <span>
+                <strong
+                  >${t(kind === "secret" ? "secretsStore.protectedSecret" : "secretsStore.agentReadable")}</strong
+                >
+                <small
+                  >${t(kind === "secret" ? "secretsStore.protectedSecretHint" : "secretsStore.agentReadableHint")}</small
+                >
+              </span>
+            </label>`;
+          })}
         </fieldset>
         ${
           props.draft.kind === "secret"
@@ -307,19 +295,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
               `
             : nothing
         }
-        ${
-          props.formError
-            ? html`<div class="callout danger" role="alert">${props.formError}</div>`
-            : nothing
-        }
-        <div class="secrets-store-dialog__actions">
-          <button class="btn primary" type="submit" ?disabled=${props.busy}>
-            ${props.busy ? t("common.saving") : t("common.save")}
-          </button>
-          <button class="btn" type="button" ?disabled=${props.busy} @click=${props.onCloseDialog}>
-            ${t("common.cancel")}
-          </button>
-        </div>
+        ${renderDialogActions(props, props.onCloseDialog)}
       </form>
     </openclaw-modal-dialog>
   `;
@@ -380,25 +356,27 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
               </div>`
             : nothing
         }
-        ${
-          props.formError
-            ? html`<div class="callout danger" role="alert">${props.formError}</div>`
-            : nothing
-        }
-        <div class="secrets-store-dialog__actions">
-          <button
-            class="btn primary"
-            type="submit"
-            ?disabled=${props.busy || !props.bulkEntryCount || props.bulkInvalidNames.length > 0}
-          >
-            ${props.busy ? t("common.saving") : t("common.save")}
-          </button>
-          <button class="btn" type="button" ?disabled=${props.busy} @click=${props.onCloseBulk}>
-            ${t("common.cancel")}
-          </button>
-        </div>
+        ${renderDialogActions(
+          props,
+          props.onCloseBulk,
+          !props.bulkEntryCount || props.bulkInvalidNames.length > 0,
+        )}
       </form>
     </openclaw-modal-dialog>
+  `;
+}
+
+function renderDialogActions(props: SecretsStoreViewProps, onClose: () => void, invalid = false) {
+  return html`
+    ${props.formError ? html`<div class="callout danger" role="alert">${props.formError}</div>` : nothing}
+    <div class="secrets-store-dialog__actions">
+      <button class="btn primary" type="submit" ?disabled=${props.busy || invalid}>
+        ${props.busy ? t("common.saving") : t("common.save")}
+      </button>
+      <button class="btn" type="button" ?disabled=${props.busy} @click=${onClose}>
+        ${t("common.cancel")}
+      </button>
+    </div>
   `;
 }
 

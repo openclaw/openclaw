@@ -1,6 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
@@ -52,6 +51,7 @@ export function collectKnownSessionRows(
 
 export async function fetchSessionLineage(params: {
   client: GatewayBrowserClient;
+  sessions: Pick<SessionCapability, "describe">;
   sessionKey: string;
   knownRows: Map<string, GatewaySessionRow>;
   isCurrent: () => boolean;
@@ -97,20 +97,23 @@ export async function fetchSessionLineage(params: {
       }
       if (!row) {
         const reconcile = depth === 0 ? params.captureReconcile() : undefined;
-        const described = await params.client.request<{ session?: GatewaySessionRow | null }>(
-          "sessions.describe",
+        const described = await params.sessions.describe(
           {
             key: currentKey,
             ...(!parseAgentSessionKey(currentKey) && currentAgentId
               ? { agentId: currentAgentId }
               : {}),
           },
+          { client: params.client },
         );
         if (!params.isCurrent()) {
           return null;
         }
         row = described?.session
-          ? { ...described.session, runtimeSampledAt: Date.now() }
+          ? {
+              ...described.session,
+              runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+            }
           : undefined;
         if (!row) {
           break;
@@ -206,7 +209,7 @@ function mergeRefreshedChildSessionRows(
 
 export function scheduleSidebarChildSessions(
   owner: {
-    readonly context: ApplicationContext<RouteId> | undefined;
+    readonly context: ApplicationContext | undefined;
     readonly childSessionScope: object;
     readonly isSessionDataHostConnected: boolean;
     retireStaleChildSessions(revalidating: ReadonlySet<string>): void;

@@ -3,13 +3,18 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   inspectManagedProcessGroup,
   waitForManagedProcessGroupExit,
 } from "../../scripts/lib/managed-child-process.mts";
 import { runE2eGlobalSetup } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import { forwardSignalToVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";
@@ -21,6 +26,13 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const PROCESS_TIMEOUT_MS = process.env.CI ? 15_000 : 5_000;
 
 describe("vitest E2E global setup", () => {
+  beforeEach(() => {
+    // CI's prebuilt runtime must not skip this fixture's modeled build commands.
+    vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", undefined);
+    vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
   it("runs both build commands sequentially with their exact environments", async () => {
     let resolveFirstCommand!: (status: number) => void;
     const firstCommand = new Promise<number>((resolve) => {
@@ -37,7 +49,7 @@ describe("vitest E2E global setup", () => {
     await setupPromise;
     expect(runCommand.mock.calls).toEqual([
       [
-        ["scripts/run-node.mjs", "--version"],
+        ["scripts/prepare-vitest-runtime.mjs"],
         {
           ...process.env,
           OPENCLAW_BUILD_PRIVATE_QA: "1",
@@ -74,7 +86,7 @@ describe("vitest E2E global setup", () => {
 
   posixIt("forwards output and SIGTERM through the runner process group", async () => {
     const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-setup-group-"));
-    const fixturePath = path.join(fixtureDir, "scripts", "run-node.mjs");
+    const fixturePath = path.join(fixtureDir, "scripts", "prepare-vitest-runtime.mjs");
     const pidPaths = ["child.pid", "descendant.pid"].map((name) => path.join(fixtureDir, name));
     let cleanup = async () => fs.rmSync(fixtureDir, { force: true, recursive: true });
     await runQaGatewayFixture(
@@ -95,16 +107,18 @@ process.stdin.once("data", () => {
 process.stdin.resume();
 `,
         );
-        const setupUrl = new URL(
-          "../../scripts/lib/vitest-build-prerequisites.mts",
-          import.meta.url,
-        ).href;
-        const runnerScript = `import { runE2eGlobalSetup } from ${JSON.stringify(setupUrl)};
+        const setupUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.vitestBuildPrerequisites);
+        const runnerScript = `import { runE2eGlobalSetup } from ${JSON.stringify(setupUrl.href)};
 process.chdir(${JSON.stringify(fixtureDir)});
 await runE2eGlobalSetup(undefined, process.env);`;
         const runner = spawn(
           process.execPath,
-          ["--import", "tsx", "--input-type=module", "--eval", runnerScript],
+          [
+            ...resolveRuntimeWorkerArgv(setupUrl).slice(0, -1),
+            "--input-type=module",
+            "--eval",
+            runnerScript,
+          ],
           { detached: true, stdio: ["pipe", "pipe", "pipe"] },
         );
         const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(

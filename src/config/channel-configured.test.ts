@@ -1,12 +1,41 @@
 // Covers channel-configured checks from bootstrap and plugin metadata.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "./channel-configured.js";
 
-vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: () => undefined,
+const bundledPlugins = vi.hoisted(() => ({
+  getBundledChannelPlugin: vi.fn<() => ChannelPlugin | undefined>(),
+  getBundledChannelSetupPlugin: vi.fn<() => ChannelPlugin | undefined>(),
 }));
 
+vi.mock("../channels/plugins/bundled.js", () => ({
+  ...bundledPlugins,
+  getBundledChannelSecrets: () => undefined,
+  getBundledChannelSetupSecrets: () => undefined,
+}));
+
+function configuredStatePlugin(
+  id: string,
+  hasConfiguredState: NonNullable<ChannelPlugin["config"]["hasConfiguredState"]>,
+): ChannelPlugin {
+  return {
+    id,
+    meta: { id, label: id, selectionLabel: id, docsPath: "/testing", blurb: "Fixture" },
+    capabilities: { chatTypes: ["direct"] },
+    config: { listAccountIds: () => ["default"], resolveAccount: () => ({}), hasConfiguredState },
+  };
+}
+
 describe("isChannelConfigured", () => {
+  beforeEach(() => {
+    bundledPlugins.getBundledChannelPlugin.mockReset();
+    bundledPlugins.getBundledChannelSetupPlugin.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("detects Telegram env configuration through the package metadata seam", () => {
     expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
   });
@@ -98,9 +127,46 @@ describe("isChannelConfigured", () => {
     ).toBe(false);
   });
 
-  it("does not treat persisted Matrix credentials as configured channel state", () => {
+  it("honors Matrix bootstrap metadata without consulting operational credential hooks", () => {
+    vi.stubEnv("MATRIX_HOMESERVER", "https://ambient.matrix.example");
+    const hasConfiguredState = vi.fn(() => {
+      throw new Error("operational credential storage must not be read during bootstrap");
+    });
+    bundledPlugins.getBundledChannelPlugin.mockReturnValue(
+      configuredStatePlugin("matrix", () => false),
+    );
+    bundledPlugins.getBundledChannelSetupPlugin.mockReturnValue(
+      configuredStatePlugin("matrix", hasConfiguredState),
+    );
+
     expect(
       isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: "state-with-matrix-creds" }),
     ).toBe(false);
+    expect(isChannelConfigured({}, "matrix", { MATRIX_ACCESS_TOKEN: "fixture-token" })).toBe(true);
+    expect(
+      isChannelConfigured(
+        { channels: { matrix: { homeserver: "https://configured.matrix.example" } } },
+        "matrix",
+        {},
+      ),
+    ).toBe(true);
+    expect(hasConfiguredState).not.toHaveBeenCalled();
+  });
+
+  it("retains setup bootstrap hooks when no configured-state metadata is declared", () => {
+    const hasConfiguredState = vi.fn(
+      ({ env }: { env?: NodeJS.ProcessEnv }) => env?.FIXTURE_TOKEN === "configured",
+    );
+    bundledPlugins.getBundledChannelPlugin.mockReturnValue(
+      configuredStatePlugin("fixture", () => false),
+    );
+    bundledPlugins.getBundledChannelSetupPlugin.mockReturnValue(
+      configuredStatePlugin("fixture", hasConfiguredState),
+    );
+    const env = { FIXTURE_TOKEN: "configured" };
+
+    expect(isChannelConfigured({}, "fixture", env)).toBe(true);
+    expect(hasConfiguredState).toHaveBeenCalledWith({ cfg: {}, env });
+    expect(isChannelConfigured({}, "fixture", {})).toBe(false);
   });
 });

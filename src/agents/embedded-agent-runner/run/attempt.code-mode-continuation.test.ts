@@ -74,7 +74,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
   });
 
   afterEach(async () => {
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
     await cleanupTempPaths(tempPaths);
   });
 
@@ -119,7 +119,14 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
           return streamAssistant(
             code === undefined
               ? [{ type: "text", text: "all changes verified" }]
-              : [{ type: "toolCall", id: `program-${turn}`, name: "exec", arguments: { code } }],
+              : [
+                  {
+                    type: "toolCall",
+                    id: `program-${turn}`,
+                    name: "exec",
+                    arguments: { title: "Continue the source repair", code },
+                  },
+                ],
           );
         },
       });

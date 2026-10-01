@@ -120,7 +120,9 @@ it.each(["agent:work:current", "global"])(
       expect(state.chatError).toContain("Failed to update permissions");
       drawPermission();
       const picker = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-      expect(picker.textContent).toContain(t("chat.permissionControls.modes.full.label"));
+      expect(picker.getAttribute("aria-label")).toContain(
+        t("chat.permissionControls.modes.full.label"),
+      );
       expect(picker.disabled).toBe(false);
       await expect(observation.refresh()).rejects.toThrow("Permission readback unavailable");
       permissionReadbackUnavailable = false;
@@ -143,7 +145,9 @@ it.each(["agent:work:current", "global"])(
         initialLists,
       );
       drawPermission();
-      expect(picker.textContent).toContain(t("chat.permissionControls.modes.guarded.label"));
+      expect(picker.getAttribute("aria-label")).toContain(
+        t("chat.permissionControls.modes.guarded.label"),
+      );
       expect(picker.disabled).toBe(false);
       expect(request).toHaveBeenCalledWith("sessions.describe", { key, agentId: "work" });
       // Actual membership events still refresh the matching windows.
@@ -152,7 +156,7 @@ it.each(["agent:work:current", "global"])(
         event: "sessions.changed",
         payload: { key: "agent:work:new", agentId: "work", reason: "create", spawnedBy: key },
       });
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(
         request.mock.calls.filter(([method]) => method === "sessions.list").length,
       ).toBeGreaterThan(initialLists);
@@ -160,7 +164,7 @@ it.each(["agent:work:current", "global"])(
         ([method]) => method === "sessions.list",
       ).length;
       emitEvent({ type: "event", event: "config.changed", payload: {} });
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
         afterMembership + 2,
       );

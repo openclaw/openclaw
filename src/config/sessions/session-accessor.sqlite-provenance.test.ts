@@ -131,8 +131,13 @@ describe("SQLite session provenance writes", () => {
         expect(stored?.entry_valid).toBe(1);
         expect(JSON.parse(String(stored?.entry_json))).toMatchObject({
           sessionId: entry.sessionId,
-          skillsSnapshot: entry.skillsSnapshot,
         });
+        const savedSkills = database.db
+          .prepare(
+            "SELECT value_json FROM session_entry_snapshots WHERE session_key = ? AND field = 'skillsSnapshot'",
+          )
+          .get(scope.sessionKey);
+        expect(JSON.parse(String(savedSkills?.value_json))).toEqual(entry.skillsSnapshot);
         expect(tracker.counts.transcript).toBe(probes);
         expect(database.db.isTransaction).toBe(false);
         expect(

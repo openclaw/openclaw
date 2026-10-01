@@ -92,6 +92,64 @@ function nativeRecord(record: UpdateRecoveryRecord): UpdateRecoveryRecord {
 }
 
 describe("retained recovery read-only compatibility", () => {
+  it("requires settled native restoration in retained preparation outcomes", () => {
+    const f = setup();
+    const record = nativeRecord(f.record);
+    record.claimKind = "recovery";
+    record.revision = 4;
+    record.package = retainedTerminalRecord(f.record).package!;
+    record.package.descriptor.retention = null;
+    record.package.observed.observation = {
+      previous: "live",
+      candidate: "staged",
+      launchers: "both",
+      successorLive: false,
+    };
+    record.primaryFailure = { code: "interrupted-preparation", effectId: null };
+    record.preparationAborted = {
+      reason: "interrupted-preparation",
+      committedAtMs: record.updatedAtMs,
+      commitRevision: record.revision,
+      observedIdentity: record.package.observed.observedIdentity,
+    };
+    expect(decodeUpdateRecovery(JSON.stringify(record), record.runId)).toEqual(record);
+
+    const native = record.nativeManager!;
+    const stopped = { ...native.original, stopped: true };
+    native.effects = [
+      {
+        effectId: randomUUID(),
+        action: "stop",
+        before: native.original,
+        after: stopped,
+        state: "observed",
+        intentRevision: 1,
+        observedRevision: 2,
+      },
+      {
+        effectId: randomUUID(),
+        action: "restore",
+        before: stopped,
+        after: native.original,
+        state: "observed",
+        intentRevision: 3,
+        observedRevision: 4,
+      },
+    ];
+    expect(decodeUpdateRecovery(JSON.stringify(record), record.runId)).toEqual(record);
+
+    const restore = native.effects[1]!;
+    restore.state = "intent";
+    delete restore.observedRevision;
+    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow(
+      "Preparation settlement cannot carry effects or serving authority",
+    );
+    native.effects.pop();
+    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow(
+      "Preparation settlement cannot carry effects or serving authority",
+    );
+  });
+
   it.each(["candidate", "previous"] as const)(
     "reopens private %s proof without exposing it in history",
     (runtime) => {

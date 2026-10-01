@@ -36,7 +36,7 @@ function fullMessage(content: string): FullMessageResult {
 class RecoveryTranscriptElement extends LitElement {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
-  private readonly transcript = new ChatTranscriptController(this);
+  private readonly transcript = new ChatTranscriptController(this, () => this.props.paneId);
 
   override createRenderRoot() {
     return this;

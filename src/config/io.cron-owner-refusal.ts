@@ -74,18 +74,20 @@ async function assertSafe(
         error,
       );
     });
-  const unresolved =
-    state?.rawJobs.filter((job) => {
-      const id = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
-      const projection = id ? state.projectedOwnersByJobId.get(id) : undefined;
-      return !hasOwner(job) && (!projection || projection.kind === "unresolved");
-    }).length ?? 0;
-  const projectedDynamicDefaults =
-    state?.rawJobs.filter((job) => {
-      const id = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
-      const projection = id ? state.projectedOwnersByJobId.get(id) : undefined;
-      return !hasOwner(job) && projection?.kind === "runtime-default";
-    }).length ?? 0;
+  let unresolved = 0;
+  let projectedDynamicDefaults = 0;
+  for (const job of state?.rawJobs ?? []) {
+    if (hasOwner(job)) {
+      continue;
+    }
+    const id = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
+    const projection = id ? state?.projectedOwnersByJobId.get(id) : undefined;
+    if (!projection || projection.kind === "unresolved") {
+      unresolved += 1;
+    } else if (projection.kind === "runtime-default") {
+      projectedDynamicDefaults += 1;
+    }
+  }
   const unverifiable = state?.invalidConfigRows?.length ?? 0;
   if (unverifiable > 0) {
     throw refused(

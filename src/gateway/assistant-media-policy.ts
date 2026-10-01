@@ -6,11 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots, getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
-import { resolveHttpProfile } from "./http-auth-user-profile.js";
-import {
-  applyHttpOperatorRoleScopeCeiling,
-  type AuthorizedControlUiReadRequest,
-} from "./http-auth-utils.js";
+import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
+import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";

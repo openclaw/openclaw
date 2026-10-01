@@ -114,6 +114,24 @@ it does not extend the run's authority. Operator sends retain normal durable
 queueing. Do not serialize either authority callback or expose these fields in
 the model-facing action schema.
 
+## Progress card handoff
+
+A waiting reply can carry the optional host-owned
+`info.adoptProgressContinuation(receipt)` capability in its reply-dispatch
+context. An editable-progress adapter uses it to transfer an already visible
+card, not to send a replacement card or credit final-answer delivery.
+
+Drain and flush the existing draft, recheck `assertPlatformSendAuthorized`, and
+pass its confirmed `messageId`, delivered `text`, prepared `snapshot`, and
+`channel`/`accountId`/`to`/`threadId` destination. Staged content or an ambiguous
+send is not a receipt. Only a `true` result transfers custody: detach the old
+stream without deleting its message. If the capability is absent or declines,
+keep ordinary reply delivery, including any media or controls alongside the
+waiting text.
+
+Core retains only bounded presentation data and its receipt. Never serialize
+the capability, expose it in action arguments, or reuse the old turn's callbacks.
+
 ## Post-delivery pins
 
 `outbound.pinDeliveredMessage` receives the same optional

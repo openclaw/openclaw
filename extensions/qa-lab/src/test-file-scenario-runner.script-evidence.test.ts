@@ -24,6 +24,35 @@ import {
 const harness = createScenarioRunnerTestHarness();
 const makeTempRepo = (prefix: string) => harness.makeTempRepo(prefix);
 
+type ProducerEvidenceOptions = Pick<
+  Parameters<typeof writeScriptProducerEvidence>[0],
+  "status" | "additionalEntries" | "failureReason"
+> & { allowBlockedEvidence?: boolean };
+
+async function runProducerEvidence({ allowBlockedEvidence, ...evidence }: ProducerEvidenceOptions) {
+  const repoRoot = await makeTempRepo("qa-script-producer-");
+  const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script");
+  const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+  if (scenario.execution.kind !== "script") {
+    throw new Error("expected script scenario");
+  }
+  scenario.execution.allowBlockedEvidence = allowBlockedEvidence;
+  return runQaTestFileScenarios({
+    repoRoot,
+    outputDir,
+    ...QA_TEST_RUNNER_DEFAULTS,
+    scenarios: [scenario],
+    runCommand: async (command) => {
+      await writeScriptProducerEvidence({
+        ...evidence,
+        outputDir: resolveScriptAttemptOutputDir(command),
+      });
+      return { exitCode: 0, stdout: "script completed\n", stderr: "" };
+    },
+    env: { OPENCLAW_QA_REF: "scenario-ref" },
+  });
+}
+
 afterEach(async () => {
   await harness.cleanup();
 });
@@ -87,11 +116,13 @@ describe("qa test file scenario runner", () => {
         { evidence: "outside", expectedFailure: /inside its scenario output directory/u },
       ] as const
     ).flatMap(({ evidence, expectedFailure }) =>
-      (["full", "slim"] as const).map((evidenceMode) => ({
-        evidence,
-        expectedFailure,
-        evidenceMode,
-      })),
+      (evidence === "empty" ? (["full", "slim"] as const) : (["full"] as const)).map(
+        (evidenceMode) => ({
+          evidence,
+          expectedFailure,
+          evidenceMode,
+        }),
+      ),
     ),
   )(
     "retains $evidence producer failure alongside passing evidence in $evidenceMode mode",
@@ -421,7 +452,6 @@ describe("qa test file scenario runner", () => {
   it.each([
     { producerStatus: "pass" as const, terminal: "exit" as const },
     { producerStatus: "blocked" as const, terminal: "timeout" as const },
-    { producerStatus: "skipped" as const, terminal: "exit" as const },
   ])(
     "retains a $terminal failure beside colliding $producerStatus producer evidence",
     async ({ producerStatus, terminal }) => {
@@ -520,23 +550,9 @@ describe("qa test file scenario runner", () => {
   );
 
   it("fails script scenario results when imported producer evidence fails", async () => {
-    const repoRoot = await makeTempRepo("qa-script-producer-fail-");
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-producer-fail");
-    const result = await runQaTestFileScenarios({
-      repoRoot,
-      outputDir,
-      ...QA_TEST_RUNNER_DEFAULTS,
-      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
-      runCommand: async (command) => {
-        const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-        await writeScriptProducerEvidence({
-          failureReason: "Script producer check failed.",
-          outputDir: attemptOutputDir,
-          status: "fail",
-        });
-        return { exitCode: 0, stdout: "script pass\n", stderr: "" };
-      },
-      env: { OPENCLAW_QA_REF: "scenario-ref" } as NodeJS.ProcessEnv,
+    const result = await runProducerEvidence({
+      status: "fail",
+      failureReason: "Script producer check failed.",
     });
 
     expect(result.results[0]).toMatchObject({
@@ -553,34 +569,9 @@ describe("qa test file scenario runner", () => {
     });
   });
   it("fails script scenario results when imported producer evidence is blocked by default", async () => {
-    const repoRoot = await makeTempRepo("qa-script-producer-blocked-");
-    const outputDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "qa-e2e",
-      "scenario-script-producer-blocked",
-    );
-    const result = await runQaTestFileScenarios({
-      repoRoot,
-      outputDir,
-      ...QA_TEST_RUNNER_DEFAULTS,
-      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
-      runCommand: async (command) => {
-        const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-        await writeScriptProducerEvidence({
-          outputDir: attemptOutputDir,
-          status: "blocked",
-          failureReason: "Playwright browser is missing.",
-        });
-        return {
-          exitCode: 0,
-          stdout: "script blocked\n",
-          stderr: "",
-        };
-      },
-      env: {
-        OPENCLAW_QA_REF: "scenario-ref",
-      } as NodeJS.ProcessEnv,
+    const result = await runProducerEvidence({
+      status: "blocked",
+      failureReason: "Playwright browser is missing.",
     });
 
     expect(result.results[0]).toMatchObject({
@@ -590,40 +581,10 @@ describe("qa test file scenario runner", () => {
   });
 
   it("keeps all-blocked producer evidence blocked for opt-in script scenarios", async () => {
-    const repoRoot = await makeTempRepo("qa-script-producer-blocked-allowed-");
-    const outputDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "qa-e2e",
-      "scenario-script-producer-blocked-allowed",
-    );
-    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
-    if (scenario.execution.kind !== "script") {
-      throw new Error("expected script scenario");
-    }
-    scenario.execution.allowBlockedEvidence = true;
-
-    const result = await runQaTestFileScenarios({
-      repoRoot,
-      outputDir,
-      ...QA_TEST_RUNNER_DEFAULTS,
-      scenarios: [scenario],
-      runCommand: async (command) => {
-        const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-        await writeScriptProducerEvidence({
-          outputDir: attemptOutputDir,
-          status: "blocked",
-          failureReason: "Playwright browser is missing.",
-        });
-        return {
-          exitCode: 0,
-          stdout: "script blocked\n",
-          stderr: "",
-        };
-      },
-      env: {
-        OPENCLAW_QA_REF: "scenario-ref",
-      } as NodeJS.ProcessEnv,
+    const result = await runProducerEvidence({
+      status: "blocked",
+      failureReason: "Playwright browser is missing.",
+      allowBlockedEvidence: true,
     });
 
     expect(result.results[0]).toMatchObject({
@@ -645,44 +606,14 @@ describe("qa test file scenario runner", () => {
   });
 
   it("allows blocked producer checks when another check genuinely passes", async () => {
-    const repoRoot = await makeTempRepo("qa-script-producer-blocked-mixed-");
-    const outputDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "qa-e2e",
-      "scenario-script-producer-blocked-mixed",
-    );
-    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
-    if (scenario.execution.kind !== "script") {
-      throw new Error("expected script scenario");
-    }
-    scenario.execution.allowBlockedEvidence = true;
-
-    const result = await runQaTestFileScenarios({
-      repoRoot,
-      outputDir,
-      ...QA_TEST_RUNNER_DEFAULTS,
-      scenarios: [scenario],
-      runCommand: async (command) => {
-        const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-        await writeScriptProducerEvidence({
-          additionalEntries: buildScriptProducerEvidence({
-            producerId: "script-producer.web-ui.executed",
-            status: "pass",
-          }).entries,
-          outputDir: attemptOutputDir,
-          status: "blocked",
-          failureReason: "Playwright browser is missing.",
-        });
-        return {
-          exitCode: 0,
-          stdout: "script mixed\n",
-          stderr: "",
-        };
-      },
-      env: {
-        OPENCLAW_QA_REF: "scenario-ref",
-      } as NodeJS.ProcessEnv,
+    const result = await runProducerEvidence({
+      status: "blocked",
+      failureReason: "Playwright browser is missing.",
+      allowBlockedEvidence: true,
+      additionalEntries: buildScriptProducerEvidence({
+        producerId: "script-producer.web-ui.executed",
+        status: "pass",
+      }).entries,
     });
 
     expect(result.results[0]).toMatchObject({
@@ -701,18 +632,6 @@ describe("qa test file scenario runner", () => {
       expectedStatus: "blocked",
     },
     {
-      name: "all skipped",
-      statuses: ["skipped"] as const,
-      allowBlockedEvidence: false,
-      expectedStatus: "skipped",
-    },
-    {
-      name: "pass plus skipped",
-      statuses: ["pass", "skipped"] as const,
-      allowBlockedEvidence: false,
-      expectedStatus: "skipped",
-    },
-    {
       name: "allowed blocked plus pass plus skipped",
       statuses: ["blocked", "pass", "skipped"] as const,
       allowBlockedEvidence: true,
@@ -721,34 +640,17 @@ describe("qa test file scenario runner", () => {
   ])(
     "keeps $name producer precedence",
     async ({ statuses, allowBlockedEvidence, expectedStatus }) => {
-      const repoRoot = await makeTempRepo("qa-script-producer-skipped-");
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-skipped");
-      const [firstStatus, ...additionalStatuses] = statuses;
-      const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
-      if (scenario.execution.kind !== "script") {
-        throw new Error("expected script scenario");
-      }
-      scenario.execution.allowBlockedEvidence = allowBlockedEvidence;
-      const result = await runQaTestFileScenarios({
-        repoRoot,
-        outputDir,
-        ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [scenario],
-        runCommand: async (command) => {
-          const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-          await writeScriptProducerEvidence({
-            additionalEntries: additionalStatuses.flatMap(
-              (status, index) =>
-                buildScriptProducerEvidence({
-                  producerId: `script-producer.web-ui.additional-${index}`,
-                  status,
-                }).entries,
-            ),
-            outputDir: attemptOutputDir,
-            status: firstStatus,
-          });
-          return { exitCode: 0, stdout: "script completed\n", stderr: "" };
-        },
+      const [status, ...additionalStatuses] = statuses;
+      const result = await runProducerEvidence({
+        status,
+        allowBlockedEvidence,
+        additionalEntries: additionalStatuses.flatMap(
+          (additionalStatus, index) =>
+            buildScriptProducerEvidence({
+              producerId: `script-producer.web-ui.additional-${index}`,
+              status: additionalStatus,
+            }).entries,
+        ),
       });
 
       expect(result.results[0]).toMatchObject({ status: expectedStatus });

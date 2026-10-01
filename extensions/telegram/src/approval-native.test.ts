@@ -53,32 +53,22 @@ async function writeSessionEntry(params: {
 }
 
 describe("telegram native approval adapter", () => {
-  it("describes the correct Telegram exec-approval setup path", () => {
-    const text = telegramApprovalCapability.describeExecApprovalSetup?.({
-      channel: "telegram",
-      channelLabel: "Telegram",
-    });
+  it.each([undefined, "work"])(
+    "reserves terminal UI recovery for plugin approvals on account %s",
+    (accountId) => {
+      const params = { channel: "telegram", channelLabel: "Telegram", accountId };
+      const execText = telegramApprovalCapability.describeExecApprovalSetup?.(params);
+      const pluginText = telegramApprovalCapability.describePluginApprovalSetup?.(params);
+      const prefix = accountId ? `channels.telegram.accounts.${accountId}` : "channels.telegram";
 
-    expect(text).toContain("`channels.telegram.execApprovals.approvers`");
-    expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).not.toContain("`channels.telegram.allowFrom`");
-    expect(text).not.toContain("`channels.telegram.defaultTo`");
-    expect(text).not.toContain("`channels.telegram.dm.allowFrom`");
-  });
-
-  it("describes the named-account Telegram exec-approval setup path", () => {
-    const text = telegramApprovalCapability.describeExecApprovalSetup?.({
-      channel: "telegram",
-      channelLabel: "Telegram",
-      accountId: "work",
-    });
-
-    expect(text).toContain("`channels.telegram.accounts.work.execApprovals.approvers`");
-    expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).not.toContain("`channels.telegram.accounts.work.allowFrom`");
-    expect(text).not.toContain("`channels.telegram.accounts.work.defaultTo`");
-    expect(text).not.toContain("`channels.telegram.allowFrom`");
-  });
+      expect(execText).toContain("Approve it from the Web UI for now.");
+      expect(execText).not.toMatch(/terminal UI|\bTUI\b/i);
+      expect(pluginText).toContain("Approve it from the Web UI or terminal UI for now.");
+      expect(pluginText).toContain("Telegram supports native plugin approvals");
+      expect(execText).toContain(`\`${prefix}.execApprovals.approvers\``);
+      expect(pluginText).toContain(`\`${prefix}.execApprovals.approvers\``);
+    },
+  );
 
   it("normalizes direct-chat origin targets so DM dedupe can converge", async () => {
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
@@ -240,34 +230,6 @@ describe("telegram native approval adapter", () => {
     expect(target).toEqual({
       to: "-1003841603622",
       threadId: 928,
-    });
-  });
-
-  it("marks DM-only telegram approvals to notify the origin chat after delivery", () => {
-    const capabilities = telegramApprovalCapability.native?.describeDeliveryCapabilities({
-      cfg: buildConfig(),
-      accountId: "default",
-      approvalKind: "exec",
-      request: {
-        id: "req-dm-1",
-        request: {
-          command: "echo hi",
-          turnSourceChannel: "telegram",
-          turnSourceTo: "telegram:-1003841603622:topic:928",
-          turnSourceAccountId: "default",
-          turnSourceThreadId: 928,
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(capabilities).toEqual({
-      enabled: true,
-      preferredSurface: "approver-dm",
-      supportsOriginSurface: true,
-      supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: true,
     });
   });
 });

@@ -42,7 +42,7 @@ extension GatewayConnection {
         return sourceResourceRevision == revision
     }
 
-    private func requestSourceResource(
+    func requestSourceResource(
         url: URL,
         maximumBytes: Int,
         lease: ServerLease,

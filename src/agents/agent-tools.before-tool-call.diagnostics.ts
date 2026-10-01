@@ -183,10 +183,6 @@ export function finalizeToolTerminalPresentation(params: {
   });
 }
 
-/**
- * Error used when before_tool_call intentionally vetoes a tool call.
- */
-
 export const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   () => import("./agent-tools.before-tool-call.runtime.js"),
   ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
@@ -527,9 +523,6 @@ export function emitToolBlockedSecurityEvent(params: {
   });
 }
 
-// Once-per-plugin-per-process deprecation signal; the field is ignored at
-// runtime because unresolved approvals always fail closed on timeout.
-
 export function buildToolContentPrivateData(
   policy: DiagnosticModelContentCapturePolicy,
   args: { input: unknown; output?: unknown; includeOutput: boolean },
@@ -697,5 +690,3 @@ export async function recordLoopOutcome(args: {
     args.ctx.onToolOutcome?.(recordedOutcome);
   }
 }
-
-/** Run the full before_tool_call policy chain for a pending tool call. */

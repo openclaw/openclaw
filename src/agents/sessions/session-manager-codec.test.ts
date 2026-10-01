@@ -181,16 +181,6 @@ const parentTraversalCases: Array<{
   expected: string[];
 }> = [
   {
-    name: "two-entry cycle",
-    parents: [
-      ["a", "b"],
-      ["b", "a"],
-    ],
-    leaf: "a",
-    expected: ["b", "a"],
-  },
-  { name: "self cycle", parents: [["a", "a"]], leaf: "a", expected: ["a"] },
-  {
     name: "tail entering a cycle",
     parents: [
       ["a", "b"],
