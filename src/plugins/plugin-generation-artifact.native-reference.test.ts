@@ -12,6 +12,7 @@ it("validates a hardlinked companion placement once per capture, including recov
     fs.writeFileSync(path.join(root, "package.json"), '{"name":"native-reference-fixture"}');
     fs.writeFileSync(path.join(root, "index.cjs"), "exports.value = 1;");
     fs.writeFileSync(path.join(root, "helper.dat"), "original companion");
+    fs.mkdirSync(path.join(root, "companion-sentinel"));
     for (let index = 0; index < 8; index++) {
       fs.writeFileSync(path.join(root, `addon-${index}.node`), `native fixture ${index}`);
     }
@@ -22,10 +23,11 @@ it("validates a hardlinked companion placement once per capture, including recov
       }
       symlink(target, link, type);
     });
-    const stats = vi.spyOn(fs, "statSync");
+    const paths = vi.spyOn(fs, "realpathSync");
     const walks = (directory: string) =>
-      stats.mock.calls.filter(([filename]) => filename === path.join(directory, "helper.dat"))
-        .length;
+      paths.mock.calls.filter(
+        ([filename]) => filename === path.join(directory, "companion-sentinel"),
+      ).length;
     const cache = createPluginCache();
     const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
     let recovery:
@@ -39,7 +41,7 @@ it("validates a hardlinked companion placement once per capture, including recov
     try {
       const first = capture();
       expect.soft(walks(first.rootDir)).toBe(1);
-      stats.mockClear();
+      paths.mockClear();
       for (let index = 0; index < 8; index++) {
         first.prepareDependency(first.resolve(path.join(root, "index.cjs")), "node:fs");
       }
@@ -48,11 +50,16 @@ it("validates a hardlinked companion placement once per capture, including recov
       const hosts = [state.path("host-first"), state.path("host-second")];
       for (const host of hosts) {
         fs.mkdirSync(host);
-        stats.mockClear();
-        first.linkHost(host);
-        expect.soft(walks(first.rootDir)).toBe(1);
       }
-      stats.mockClear();
+      paths.mockClear();
+      first.linkHost(hosts[0]!);
+      expect.soft(walks(first.rootDir)).toBe(1);
+      const successor = capture();
+      expect.soft(walks(successor.rootDir)).toBe(1);
+      paths.mockClear();
+      successor.linkHost(hosts[1]!);
+      expect.soft(walks(successor.rootDir)).toBe(1);
+      paths.mockClear();
       recovery = first.captureRecoverySource();
       expect.soft(walks(recovery.rootDir)).toBe(1);
       expect(fs.readFileSync(path.join(recovery.rootDir, "helper.dat"), "utf8")).toBe(
@@ -74,7 +81,7 @@ it("validates a hardlinked companion placement once per capture, including recov
         "Native plugin companions cannot be preserved",
       );
     } finally {
-      stats.mockRestore();
+      paths.mockRestore();
       denial.mockRestore();
       await recovery?.disposeAsync();
       for (const artifact of artifacts) {
