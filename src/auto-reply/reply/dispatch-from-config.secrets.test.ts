@@ -1,6 +1,10 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
@@ -174,23 +178,15 @@ describe("credential prompt dispatch boundary", () => {
         (result) => ({ result }),
         (error: unknown) => ({ error }),
       );
-      // A Vitest timeout aborts the context signal, so a stuck wait still reaches `finally`.
-      const testAborted = new Promise<never>((_resolve, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => reject(new Error("test aborted", { cause: signal.reason })),
-          { once: true },
-        );
-      });
-      testAborted.catch(() => {});
       try {
-        await Promise.race([
-          producerCalled.promise,
-          testAborted,
-          dispatch.then((outcome) => {
-            throw new Error(`dispatch settled before the producer ran: ${JSON.stringify(outcome)}`);
-          }),
-        ]);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            producerCalled.promise,
+            dispatch,
+            "dispatch settled before the producer ran",
+          ),
+          signal,
+        );
         if (terminal || deny) {
           transport.resolve();
           await callbackFinished.promise;
@@ -199,13 +195,14 @@ describe("credential prompt dispatch boundary", () => {
           answer.resolve({ status: "cancelled" });
         } else {
           const payload = asNullableRecord(
-            await Promise.race([
-              received.promise,
-              testAborted,
-              dispatch.then((outcome) => {
-                throw new Error(`dispatch settled before delivery: ${JSON.stringify(outcome)}`);
-              }),
-            ]),
+            await withinTest(
+              awaitGateBeforeSettlement(
+                received.promise,
+                dispatch,
+                "dispatch settled before delivery",
+              ),
+              signal,
+            ),
           );
           expect(route ? mocks.routeReply : deliver).toHaveBeenCalledOnce();
           expect(payload?.channelData).toEqual({ askUser: { questionId } });
