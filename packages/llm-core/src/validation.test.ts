@@ -348,6 +348,23 @@ describe("validateToolArguments — root references", () => {
     });
   });
 
+  it("coerces percent-encoded local definition references", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        value: { $ref: "#/definitions/Partial%3CFilter%3E" },
+      },
+      definitions: {
+        "Partial<Filter>": {
+          type: "object",
+          properties: { limit: { type: "number" } },
+          required: ["limit"],
+        },
+      },
+    };
+    expect(validate(parameters, { limit: "5" })).toEqual({ value: { limit: 5 } });
+  });
+
   it("coerces references inside tuple and allOf schemas", () => {
     const parameters = {
       type: "object",
