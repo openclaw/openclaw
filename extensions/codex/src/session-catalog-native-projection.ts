@@ -109,10 +109,7 @@ export function projectCodexCatalogNativeThread(
   } else if (rawPreview === null) {
     row.preview = null;
   }
-  const source =
-    typeof thread.source === "string"
-      ? detachCodexCatalogString(truncateUtf16Safe(thread.source, 500))
-      : undefined;
+  const source = thread.source;
   if (
     source === "cli" ||
     source === "vscode" ||
