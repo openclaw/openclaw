@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts"
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import { installControlUiE2ePageDiagnosticRing } from "./control-ui-e2e-diagnostics.ts";
+import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   installControlUiRpcDiagnostics,
@@ -114,6 +115,102 @@ describe("shared proof capture", () => {
       }
     },
   );
+
+  it.each([
+    { stall: "script", paused: true },
+    { stall: "native", paused: false },
+  ])("publishes $stall renderer stall evidence without page origins", async ({ paused }) => {
+    vi.useFakeTimers();
+    const parent = tempDirs.make("control-ui-renderer-stall-");
+    vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const sent: string[] = [];
+    let samples = 0;
+    const session = Object.assign(new EventEmitter(), {
+      send: async (method: string) => {
+        sent.push(method);
+        if (method === "Performance.getMetrics") {
+          samples += 1;
+          const elapsed = samples === 1 ? 0 : 0.5;
+          return {
+            metrics: [
+              { name: "TaskDuration", value: 10 + elapsed },
+              { name: "ScriptDuration", value: 4 + elapsed },
+              { name: "LayoutDuration", value: 1 },
+            ],
+          };
+        }
+        if (method === "Debugger.pause" && paused) {
+          queueMicrotask(() =>
+            session.emit("Debugger.paused", {
+              callFrames: [
+                {
+                  functionName: "layoutPins",
+                  url: "http://127.0.0.1:4173/assets/index-private.js?token=private",
+                  location: { lineNumber: 9, columnNumber: 3 },
+                },
+                {
+                  functionName: "",
+                  url: "blob:https://private.invalid/id",
+                  location: { lineNumber: 0, columnNumber: 0 },
+                },
+              ],
+            }),
+          );
+        }
+        return {};
+      },
+      detach: async () => {
+        sent.push("detach");
+      },
+    });
+    const stalled = createDeferredCore<unknown>();
+    // SAFETY: a never-settling read models a renderer whose main thread stays busy.
+    const page = {
+      addInitScript: async () => {},
+      evaluate: () => stalled.promise,
+      screenshot: async () => Buffer.from("proof"),
+      frames: () => [],
+      context: () => ({
+        browser: () => ({ isConnected: () => true }),
+        newCDPSession: async () => session,
+      }),
+      isClosed: () => false,
+      url: () => "http://127.0.0.1:4173/chat",
+    } as unknown as Page;
+    await installControlUiE2eRendererStallProbe(page);
+    const capture = captureControlUiE2eFailureDiagnostics(page, {
+      error: new Error("click timed out"),
+      label: "comment pin",
+    });
+    await vi.advanceTimersByTimeAsync(5_000 + 3_000);
+    await capture;
+    const root = path.join(parent, readdirSync(parent)[0]!);
+    const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
+    expect(report).toMatchObject({
+      rendererRead: "deadline",
+      rendererStall: {
+        busyMs: { task: 500, script: 500, layout: 0, style: 0 },
+        sampleMs: 500,
+        stack: paused
+          ? [
+              {
+                functionName: "layoutPins",
+                script: "/assets/index-private.js",
+                line: 10,
+                column: 4,
+              },
+              { functionName: "(anonymous)", script: "", line: 1, column: 1 },
+            ]
+          : null,
+      },
+    });
+    expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid/u);
+    expect(sent).toContain("Debugger.pause");
+    expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+    expect(vi.getTimerCount()).toBe(0);
+    stalled.resolve(null);
+  });
 
   it("retains first observed lifecycle facts through close without reattaching listeners", async () => {
     vi.useFakeTimers();
