@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   replaceSessionEntry,
   replaceTranscriptEvents,
@@ -47,11 +48,13 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
+import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const observed = vi.hoisted(() => ({
@@ -173,6 +176,49 @@ it("retains the prepared metadata target when caller scope and environment chang
     expect(await read()).toBe(true);
     expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
     expect(fs.existsSync(target.storePath)).toBe(false);
+  });
+});
+
+it("reads an exact ended-session archive in the history worker", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionId = "deleted-session-archive";
+    const fixture = await seed(state, "main", sessionId);
+    const content = [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "archived-message",
+        parentId: null,
+        message: { role: "user", content: "archived content" },
+      },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join("\n");
+    const encoded = encodeSessionArchiveContent(`${content}\n`);
+    const archivePath = state.path(
+      `deleted.jsonl.deleted.2026-09-29T00-00-00.000Z${encoded.suffix}`,
+    );
+    fs.writeFileSync(archivePath, encoded.bytes);
+    const source = createArchivedSessionTranscriptSource({
+      agentId: "main",
+      archivedPath: archivePath,
+      sessionId,
+      storePath: fixture.target.storePath,
+    });
+    if (!source.available) {
+      throw new Error("expected an available archive source");
+    }
+    const workersBefore = observed.workers.length;
+
+    await expect(source.readTail({ maxBytes: 64 * 1_024, maxMessages: 10 })).resolves.toMatchObject(
+      {
+        messages: [expect.objectContaining({ role: "user", content: "archived content" })],
+        totalMessages: 1,
+      },
+    );
+
+    expect(observed.workers.length).toBeGreaterThan(workersBefore);
+    expect(observed.workers.at(-1)?.threadId).toBeGreaterThan(0);
   });
 });
 
@@ -425,6 +471,28 @@ it.each([
         registration.finish();
         finished = true;
       };
+      const captureSource = stateReadWorker.captureOpenClawStateReadSource;
+      const registryReads = vi
+        .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+        .mockImplementation(() => {
+          const source = captureSource();
+          return {
+            ...source,
+            createTransport(command) {
+              const transport = source.createTransport(command);
+              if (command.type !== "agentDatabaseRegistry.read") {
+                return transport;
+              }
+              return {
+                ...transport,
+                startRead(...args) {
+                  observed.dispatch?.({ input: { command } });
+                  return transport.startRead(...args);
+                },
+              };
+            },
+          };
+        });
       try {
         expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
           "registration-a-message",
@@ -432,6 +500,7 @@ it.each([
         expect(started && finished).toBe(true);
       } finally {
         observed.dispatch = undefined;
+        registryReads.mockRestore();
         registration.finish();
       }
     });

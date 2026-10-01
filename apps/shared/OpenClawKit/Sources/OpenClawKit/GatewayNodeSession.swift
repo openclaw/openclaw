@@ -125,6 +125,7 @@ public actor GatewayNodeSession {
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var operatorScopes: Set<String>?
+    var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
     private var snapshotWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
@@ -922,6 +923,7 @@ extension GatewayNodeSession {
             self.serverCapabilities = Set(
                 GatewayServerCapability.allCases.filter { ok.supportsServerCapability($0) })
             self.operatorScopes = ok.advertisedOperatorScopes()
+            self.reactionAccess = GatewayReactionAccessFacts(hello: ok)
             self.attachmentLimits = ok.advertisedAttachmentLimits()
             let snapshotMainSessionKey = ok.snapshot.sessiondefaults?["mainSessionKey"]?.value as? String
             let trimmedMainSessionKey = snapshotMainSessionKey?
@@ -955,6 +957,7 @@ extension GatewayNodeSession {
         self.serverMethods = nil
         self.serverCapabilities = nil
         self.operatorScopes = nil
+        self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil
         self.drainSnapshotWaiters(returning: false)

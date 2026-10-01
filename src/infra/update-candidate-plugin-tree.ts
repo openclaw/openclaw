@@ -7,6 +7,7 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
@@ -27,9 +28,6 @@ import {
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
-
-export { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
-export type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
 
 async function dependencyOwner(
   target: string,
@@ -114,6 +112,17 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const stores = new Set<string>();
   const moduleAliases = new Map<string, string>();
   const moduleOwners = new Set<string>();
+  const isRecoveryArtifact = (file: string) => {
+    for (let current = file; path.dirname(current) !== current; current = path.dirname(current)) {
+      if (
+        moduleOwners.has(path.dirname(current)) &&
+        isPackageUpdateRecoveryArtifactName(path.basename(current))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
   const retainedHostRoot = params.retainedHostRoot;
   const retainedHost = retainedHostRoot
     ? { root: retainedHostRoot, moduleOnlyRoots: new Set<string>() }
@@ -316,7 +325,10 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     }
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
-      if (isOwnedHostEdge(file)) {
+      if (isRecoveryArtifact(file)) {
+        // Recovery controls and retained backups are not runtime dependencies.
+        continue;
+      } else if (isOwnedHostEdge(file)) {
         // The complete-wave owner pass records the authoritative host identity.
         continue;
       } else if (entry.isDirectory()) {
@@ -422,7 +434,14 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     const storeLookup = lookupRoots(stores);
     const stagingLookup = lookupRoots(staging);
     let added = false;
-    for (const [file, { real }] of edges) {
+    for (const [file, { real, target }] of edges) {
+      if (isRecoveryArtifact(file)) {
+        edges.delete(file);
+        continue;
+      }
+      if (isRecoveryArtifact(real) || isRecoveryArtifact(target)) {
+        throw new Error("Package recovery state cannot be a runtime dependency.");
+      }
       const directory = stagingLookup(real);
       if (directory && staging.delete(directory)) {
         // Explicit links still demand their source bytes and normal validation.
@@ -505,7 +524,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     [...hosts].filter((root) => root !== params.retainedHostRoot).map(projected),
   );
   const entries = [...footprints.values()].filter((entry) => {
-    if (insideHost(entry.path) || copyOwner(entry.path) === undefined) {
+    if (
+      isRecoveryArtifact(entry.path) ||
+      insideHost(entry.path) ||
+      copyOwner(entry.path) === undefined
+    ) {
       return false;
     }
     // Owner selection precedes scanning; bind its exception to the actual inventory.

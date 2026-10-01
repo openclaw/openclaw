@@ -1,4 +1,3 @@
-// Formats port probe results for diagnostics and CLI output.
 import net from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -189,7 +188,6 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   return hints;
 }
 
-/** Formats one listener row for CLI diagnostics. */
 function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
@@ -198,7 +196,6 @@ function formatPortListener(listener: PortListener): string {
   return `${pid}${user}: ${command}${address}`;
 }
 
-/** Formats port diagnostics into CLI output lines. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status === "free") {
     return [`Port ${diagnostics.port} is free.`];

@@ -6,11 +6,7 @@ import {
 import { AgentSessionExecution } from "./agent-session-execution.js";
 import { extractTextContent, normalizeBranchSummaryResult } from "./agent-session-utils.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
-import type {
-  ExtensionRunner,
-  ReplacedSessionContext,
-  TreePreparation,
-} from "./extensions/index.js";
+import type { ExtensionRunner, TreePreparation } from "./extensions/index.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { BranchSummaryEntry } from "./session-manager.js";
 import { recordSessionModelUsage } from "./session-model-usage.js";
@@ -102,7 +98,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
           fromExtension = true;
         }
 
-        // Allow extensions to override instructions and label
         if (result?.customInstructions !== undefined) {
           customInstructions = result.customInstructions;
         }
@@ -219,36 +214,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         this.branchSummaryAbortController = undefined;
       }
     }
-  }
-
-  /**
-   * Get all user messages from session for fork selector.
-   */
-  getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
-    return this.sessionManager.getEntries().flatMap((entry) => {
-      if (entry.type !== "message" || entry.message.role !== "user") {
-        return [];
-      }
-      const text = extractTextContent(entry.message.content);
-      return text ? [{ entryId: entry.id, text }] : [];
-    });
-  }
-
-  createReplacedSessionContext(): ReplacedSessionContext {
-    const context = Object.defineProperties(
-      {},
-      Object.getOwnPropertyDescriptors(this.currentExtensionRunner.createCommandContext()),
-    ) as ReplacedSessionContext;
-    context.sendMessage = (message, options) => this.sendCustomMessage(message, options);
-    context.sendUserMessage = (content, options) => this.sendUserMessage(content, options);
-    return context;
-  }
-
-  /**
-   * Check if extensions have handlers for a specific event type.
-   */
-  hasExtensionHandlers(eventType: string): boolean {
-    return this.currentExtensionRunner.hasHandlers(eventType);
   }
 
   /**

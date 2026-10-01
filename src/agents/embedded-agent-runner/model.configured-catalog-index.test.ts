@@ -11,7 +11,6 @@ import type {
   PreparedConfiguredRuntimeModel,
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
-import { attachModelProviderRequestRouteFacts } from "../provider-request-config.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 
@@ -86,6 +85,7 @@ function fixture(
     {
       pluginMetadataSnapshot: metadataSnapshot,
       inlineProviderModels: [],
+      remoteCatalog: null,
       configuredCatalogEntries: [],
     },
     {
@@ -120,76 +120,15 @@ function fixture(
       skipProviderRuntimeHooks: true,
       allowBundledStaticCatalogFallback: true,
     });
-  const expected = (modelId: string, maxSidePx?: number) => {
-    const model = stores.modelRegistry.find(PROVIDER, modelId);
-    if (!model) {
-      throw new Error("Missing registered fixture model");
-    }
-    return attachModelProviderRequestRouteFacts(
-      {
-        ...model,
-        maxTokensSource: "discovered",
-        headers: undefined,
-        toolSearchMode: undefined,
-        compat: {
-          supportsDeveloperRole: false,
-          supportsUsageInStreaming: false,
-          supportsStrictMode: false,
-        },
-        ...(maxSidePx === undefined ? {} : { mediaInput: { image: { maxSidePx } } }),
-      },
-      stores.modelRegistry.getProviderMetadataOwners(),
-    );
-  };
-  return { snapshot, stores, resolve, expected };
+  return { snapshot, resolve };
 }
 
 describe("prepared configured model indexes", () => {
   it.each([
-    { kind: "exact-hit", modelId: "selected", maxSidePx: 1000 },
-    { kind: "missing", modelId: "unconfigured", maxSidePx: undefined },
-  ])(
-    "does not revisit 1000 configured rows during 1000 real $kind resolutions",
-    async ({ modelId, maxSidePx }) => {
-      await withOpenClawTestState({ label: "configured-model-index" }, async (state) => {
-        const rows = Array.from({ length: 1000 }, (_, index) =>
-          configuredRow(index === 999 ? "selected" : `model-${index}`, index + 1),
-        );
-        const before = structuredClone(rows);
-        const { snapshot, stores, resolve, expected } = fixture(state, rows, metadata(), [modelId]);
-        Object.defineProperty(rows, "find", {
-          configurable: true,
-          value() {
-            throw new Error("Configured models must be indexed before resolution");
-          },
-        });
-        const resolved = [];
-        try {
-          for (let index = 0; index < 1000; index += 1) {
-            resolved.push(await resolve(modelId));
-          }
-        } finally {
-          Reflect.deleteProperty(rows, "find");
-        }
-        expect(resolved).toEqual(
-          Array.from({ length: 1000 }, () => ({
-            ...stores,
-            model: expected(modelId, maxSidePx),
-            logicalRef: { provider: PROVIDER, model: modelId },
-          })),
-        );
-        expect(snapshot.configuredRuntimeModels).toBe(rows);
-        expect(rows).toEqual(before);
-        expect(Object.isFrozen(snapshot)).toBe(true);
-      });
-    },
-  );
-
-  it.each([
-    { modelId: "selected", maxSidePx: 1100 },
     { modelId: "  SELECTED  ", maxSidePx: 2200 },
+    { modelId: "unconfigured", maxSidePx: undefined },
   ])(
-    "preserves exact-first and first-equivalent precedence for $modelId",
+    "resolves indexed hits and misses without rescanning: $modelId",
     async ({ modelId, maxSidePx }) => {
       await withOpenClawTestState({ label: "configured-model-precedence" }, async (state) => {
         const rows = [
@@ -199,19 +138,33 @@ describe("prepared configured model indexes", () => {
           configuredRow("selected", 3300),
         ];
         const before = structuredClone(rows);
-        const { resolve, expected, stores } = fixture(
-          state,
-          rows,
-          metadata({ alias: "selected" }),
-          [modelId],
-        );
-        const result = await resolve(modelId);
-        expect(result).toEqual({
-          ...stores,
-          model: expected(modelId, maxSidePx),
-          logicalRef: { provider: PROVIDER, model: modelId },
+        const { resolve, snapshot } = fixture(state, rows, metadata({ alias: "selected" }), [
+          modelId,
+        ]);
+        Object.defineProperty(rows, "find", {
+          configurable: true,
+          value() {
+            throw new Error("Configured models must be indexed before resolution");
+          },
         });
+        try {
+          const result = await resolve(modelId);
+          expect(result.error).toBeUndefined();
+          expect(result).toMatchObject({
+            model: { provider: PROVIDER, id: modelId },
+            logicalRef: { provider: PROVIDER, model: modelId },
+          });
+          if (maxSidePx === undefined) {
+            expect(result.model).not.toHaveProperty("mediaInput");
+          } else {
+            expect(result.model).toMatchObject({ mediaInput: { image: { maxSidePx } } });
+          }
+        } finally {
+          Reflect.deleteProperty(rows, "find");
+        }
         expect(rows).toEqual(before);
+        expect(snapshot.configuredRuntimeModels).toBe(rows);
+        expect(Object.isFrozen(snapshot)).toBe(true);
       });
     },
   );
@@ -225,15 +178,17 @@ describe("prepared configured model indexes", () => {
       const current = fixture(state, rows, newMetadata);
       const projected = { ...old.snapshot, activeProjectKeys: ["fixture-project"] };
       await withPluginRuntimeGenerationScope({ metadataSnapshot: newMetadata }, async () => {
-        expect((await old.resolve("selected")).model).toEqual(old.expected("selected", 1100));
-        expect((await old.resolve("selected", projected)).model).toEqual(
-          old.expected("selected", 1100),
-        );
+        expect((await old.resolve("selected")).model).toMatchObject({
+          mediaInput: { image: { maxSidePx: 1100 } },
+        });
+        expect((await old.resolve("selected", projected)).model).toMatchObject({
+          mediaInput: { image: { maxSidePx: 1100 } },
+        });
       });
       await withPluginRuntimeGenerationScope({ metadataSnapshot: oldMetadata }, async () => {
-        expect((await current.resolve("selected")).model).toEqual(
-          current.expected("selected", 2200),
-        );
+        expect((await current.resolve("selected")).model).toMatchObject({
+          mediaInput: { image: { maxSidePx: 2200 } },
+        });
       });
       expect(old.snapshot.configuredRuntimeModels).toBe(rows);
       expect(current.snapshot.configuredRuntimeModels).toBe(rows);

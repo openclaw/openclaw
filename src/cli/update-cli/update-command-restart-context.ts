@@ -146,7 +146,6 @@ export async function prepareUpdateRestart(
     serviceUpdateVerdict,
     serviceManagerUid,
     skipLegacyServiceRestart,
-    serviceStateReadEnv,
     serviceMutationAllowed,
     serviceMutationSkipMessage,
     gatewayPort,

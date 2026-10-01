@@ -39,14 +39,9 @@ export type NormalizedIngressSubject = {
 };
 
 /** Public, redacted form of a normalized allowlist entry. */
-type ChannelIngressNormalizedEntry = {
+type ChannelIngressNormalizedEntry = Omit<MatchableIdentifier, "opaqueId"> & {
   opaqueEntryId: string;
-  kind: ChannelIngressIdentifierKind;
   wildcard?: boolean;
-  authentication?: IdentifierAuthentication;
-  /** @deprecated Use `authentication: "mutable"`. Remove in the next Plugin SDK major. */
-  dangerous?: boolean;
-  sensitivity?: "normal" | "pii";
 };
 
 /** Internal normalized allowlist entry with its raw comparable value retained. */

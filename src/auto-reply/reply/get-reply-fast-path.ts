@@ -29,8 +29,8 @@ import {
   usesFullReplyRuntime,
 } from "./reply-config-runtime-mode.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+import type { SessionInitResult } from "./session-init.types.js";
 import { resolveSessionResetCommand } from "./session-reset-command.js";
-import type { SessionInitResult } from "./session.js";
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
@@ -63,19 +63,8 @@ export function resolveGetReplyConfig(params: {
   return applyMergePatch(params.getRuntimeConfig(), configOverride) as OpenClawConfig;
 }
 
-export function shouldUseReplyFastTestBootstrap(params: {
-  isFastTestEnv: boolean;
-  configOverride?: OpenClawConfig;
-}): boolean {
-  return (
-    params.isFastTestEnv &&
-    isCompleteReplyConfig(params.configOverride) &&
-    !usesFullReplyRuntime(params.configOverride)
-  );
-}
-
 export function shouldUseReplyFastTestRuntime(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   isFastTestEnv: boolean;
 }): boolean {
   return (

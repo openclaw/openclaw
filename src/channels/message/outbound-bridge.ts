@@ -101,27 +101,6 @@ function toMessageSendResult(
   };
 }
 
-function adaptOutboundBridgeContext<
-  TContext extends {
-    onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
-  },
->(
-  ctx: TContext,
-  resultParams: MessageSendResultParams,
-): ChannelMessageOutboundBridgeContext<TContext> {
-  const { onDeliveryResult, ...outboundCtx } = ctx;
-  return {
-    ...outboundCtx,
-    ...(onDeliveryResult
-      ? {
-          onDeliveryResult: async (result: ChannelMessageOutboundBridgeResult) => {
-            await onDeliveryResult(toMessageSendResult(result, resultParams));
-          },
-        }
-      : {}),
-  };
-}
-
 async function sendThroughOutboundBridge<
   TContext extends Pick<
     ChannelMessageSendTextContext,
@@ -140,8 +119,18 @@ async function sendThroughOutboundBridge<
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
   };
+  const { onDeliveryResult, ...outboundCtx } = ctx;
   return toMessageSendResult(
-    await send(adaptOutboundBridgeContext(ctx, resultParams)),
+    await send({
+      ...outboundCtx,
+      ...(onDeliveryResult
+        ? {
+            onDeliveryResult: async (result: ChannelMessageOutboundBridgeResult) => {
+              await onDeliveryResult(toMessageSendResult(result, resultParams));
+            },
+          }
+        : {}),
+    }),
     resultParams,
   );
 }

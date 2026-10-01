@@ -52,7 +52,28 @@ describe("release preparation arguments", () => {
     expect(() => parseReleasePrepareArgs(["--version", "2026.7.2", "--jobs", "17"])).toThrow(
       "Expected 1 through 16",
     );
+    expect(() => parseReleasePrepareArgs(["--check", "--check", "--unknown"])).toThrow(
+      "Use only one mode flag; received --check and --check.",
+    );
+    expect(parseReleasePrepareArgs(["--jobs", "2", "--", "--jobs", "0x4"])).toMatchObject({
+      jobs: 4,
+    });
+    expect(() => parseReleasePrepareArgs(["--help", "--manifest", "-h"])).toThrow(
+      "Missing value for --manifest.",
+    );
   });
+});
+
+it("rejects alpha preparation before constructing write steps", () => {
+  expect(() =>
+    createReleasePrepareSteps({
+      android: false,
+      version: "2026.9.24-alpha.1",
+      rootDir: "/repo",
+      mode: "write",
+      jobs: 2,
+    }),
+  ).toThrow("Alpha releases are retired;");
 });
 
 describe("release preparation plan", () => {

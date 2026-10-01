@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
+import { prepareRuntimePluginsConfig } from "../plugins/config-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
@@ -46,20 +47,8 @@ export type ConfigWriteAfterWrite =
   | { mode: "none"; reason: string };
 
 export type ConfigWriteFollowUp =
-  | {
-      mode: "auto";
-      requiresRestart: false;
-    }
-  | {
-      mode: "none";
-      reason: string;
-      requiresRestart: false;
-    }
-  | {
-      mode: "restart";
-      reason: string;
-      requiresRestart: true;
-    };
+  | (Exclude<ConfigWriteAfterWrite, { mode: "restart" }> & { requiresRestart: false })
+  | (Extract<ConfigWriteAfterWrite, { mode: "restart" }> & { requiresRestart: true });
 
 export function resolveConfigWriteAfterWrite(
   afterWrite?: ConfigWriteAfterWrite,
@@ -237,6 +226,7 @@ export function setRuntimeConfigSnapshot(
 
 function publishRuntimeConfigSnapshot(config: OpenClawConfig, sourceConfig?: OpenClawConfig): void {
   const scope = runtimeSessionChangeScope(runtimeConfigSnapshot, config);
+  prepareRuntimePluginsConfig(config);
   runtimeConfigSnapshotGeneration += 1;
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
@@ -348,6 +338,7 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
 export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean } = {}): void {
   runtimeConfigSnapshotGeneration += 1;
   clearExecutablePathCache();
+  prepareRuntimePluginsConfig(null);
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;

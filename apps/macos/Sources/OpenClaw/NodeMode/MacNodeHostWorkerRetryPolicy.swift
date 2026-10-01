@@ -90,7 +90,7 @@ struct MacNodeHostWorkerRetryPolicy: Sendable {
             if delay >= self.maximumDelayNanoseconds / 2 {
                 return self.maximumDelayNanoseconds
             }
-            delay = min(delay * 2, self.maximumDelayNanoseconds)
+            delay *= 2
         }
         return delay
     }

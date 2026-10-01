@@ -10,9 +10,13 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runCommandBuffered, withCommandProcessScope } from "openclaw/plugin-sdk/process-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -481,16 +485,10 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
   let messageCount = 0;
   const result = await visitJsonlLines(file, (line) => {
     const parsed = parseJsonRecord(line.trim());
-    if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
-      updatedAt = parsed.timestamp.trim();
-    }
+    updatedAt = normalizeOptionalString(parsed.timestamp) ?? updatedAt;
     if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
-      if (typeof parsed.payload.id === "string" && parsed.payload.id.trim()) {
-        sessionId = parsed.payload.id.trim();
-      }
-      if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
-        cwd = parsed.payload.cwd.trim();
-      }
+      sessionId = normalizeOptionalString(parsed.payload.id) ?? sessionId;
+      cwd = normalizeOptionalString(parsed.payload.cwd) ?? cwd;
       return;
     }
     const messageText = readResponseItemMessageText(parsed);
@@ -634,15 +632,7 @@ function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResu
 }
 
 function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
-  if (!paramsJSON?.trim()) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(paramsJSON) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
 }
 
 async function readFileMtimeIso(file: string): Promise<string | undefined> {

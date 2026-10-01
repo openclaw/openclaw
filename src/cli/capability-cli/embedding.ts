@@ -21,28 +21,21 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
   agent?: string;
 }) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
   const { getMemoryEmbeddingCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
   const { createEmbeddingProvider } =
     await import("../../plugin-sdk/memory-core-bundled-runtime.js");
   const modelRef = requireProviderModelOverride(params.model);
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { cfg, agentDir } = await resolveLocalCapabilityAgent({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
+    agent: params.agent,
   });
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const result = await createEmbeddingProvider({
     config: cfg,
-    agentDir: resolveAgentDir(cfg, agentId),
+    agentDir,
     provider: requestedProvider,
     fallback: "none",
     model: modelRef?.model ?? "",

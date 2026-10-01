@@ -156,15 +156,20 @@ function renderStatusRow(props: TalkViewProps) {
   });
 }
 
+function renderConfiguredTalkValue(field: "provider" | "model" | "voice", value: string) {
+  return renderSettingsRow({
+    title: t(`talkPage.${field}.title`),
+    description: t(`talkPage.${field}.description`),
+    control: renderSettingsValue(value, { mono: true }),
+  });
+}
+
 function renderProviderRow(props: TalkViewProps) {
   if (props.catalog.kind !== "ready" || props.catalog.providers.length === 0) {
-    return renderSettingsRow({
-      title: t("talkPage.provider.title"),
-      description: t("talkPage.provider.description"),
-      control: renderSettingsValue(props.selection.provider ?? t("talkPage.provider.auto"), {
-        mono: true,
-      }),
-    });
+    return renderConfiguredTalkValue(
+      "provider",
+      props.selection.provider ?? t("talkPage.provider.auto"),
+    );
   }
   const selected = findProviderOption(props.catalog.providers, props.selection.provider);
   // A configured provider missing from the catalog (for example a disabled
@@ -195,11 +200,7 @@ function renderModelRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
   const { model } = effectiveTalkValues(props.selection, provider);
   if (!provider) {
-    return renderSettingsRow({
-      title: t("talkPage.model.title"),
-      description: t("talkPage.model.description"),
-      control: renderSettingsValue(model ?? t("talkPage.model.default"), { mono: true }),
-    });
+    return renderConfiguredTalkValue("model", model ?? t("talkPage.model.default"));
   }
   const known = provider.models.length
     ? provider.models
@@ -249,11 +250,7 @@ function renderVoiceRow(props: TalkViewProps) {
     voice !== null &&
     !voices.includes(voice);
   if (voices.length === 0) {
-    return renderSettingsRow({
-      title: t("talkPage.voice.title"),
-      description: t("talkPage.voice.description"),
-      control: renderSettingsValue(voice ?? t("talkPage.voice.default"), { mono: true }),
-    });
+    return renderConfiguredTalkValue("voice", voice ?? t("talkPage.voice.default"));
   }
   const options = [
     { value: TALK_PICKER_UNSET, label: t("talkPage.voice.default") },

@@ -5,7 +5,10 @@ import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-re
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.js";
@@ -466,33 +469,38 @@ function decodeCurrentCodexAppServerBinding(
     : undefined;
 }
 
-/** Consume synchronously so each list phase acquires fresh binding authority. */
-export function* readCurrentCodexAppServerBindings(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">,
+/** Acquire fresh rows off-thread; decode lazily to preserve caller failure ordering. */
+export async function* readCurrentCodexAppServerBindings(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">,
   identities: readonly CodexAppServerBindingIdentity[],
-): Generator<CodexAppServerThreadBinding | undefined, undefined, void> {
-  let keys: string[] | undefined;
-  if (state.lookupMany && identities.length > 1 && identities.length <= 10_000) {
-    try {
-      keys = identities.map(bindingStoreKey);
-    } catch {
-      // A later invalid identity must not precede an earlier row's validation.
+): AsyncGenerator<CodexAppServerThreadBinding | undefined, undefined, void> {
+  const lookupMany = state.lookupMany?.bind(state);
+  for (let offset = 0; offset < identities.length; offset += 10_000) {
+    const batch = identities.slice(offset, offset + 10_000);
+    let keys: string[] | undefined;
+    if (lookupMany) {
+      try {
+        keys = batch.map(bindingStoreKey);
+      } catch {
+        // A later invalid identity must not precede an earlier row's validation.
+      }
     }
-  }
-  if (!keys || !state.lookupMany) {
-    for (const identity of identities) {
-      yield readCurrentCodexAppServerBinding(state, identity);
+    if (!keys || !lookupMany) {
+      for (const identity of batch) {
+        const key = bindingStoreKey(identity);
+        yield decodeCurrentCodexAppServerBinding(key, await state.lookup(key), identity);
+      }
+      continue;
     }
-    return;
-  }
-  // Query failures retain the storage owner's terminal handling; never retry the read.
-  const values = state.lookupMany(keys);
-  for (let index = 0; index < identities.length; index++) {
-    const value = values[index]!;
-    if (!value.ok) {
-      throw value.error;
+    // Query failures retain the storage owner's terminal handling; never retry the read.
+    const values = await lookupMany(keys);
+    for (let index = 0; index < batch.length; index++) {
+      const value = values[index]!;
+      if (!value.ok) {
+        throw value.error;
+      }
+      yield decodeCurrentCodexAppServerBinding(keys[index]!, value.value, batch[index]!);
     }
-    yield decodeCurrentCodexAppServerBinding(keys[index]!, value.value, identities[index]!);
   }
 }
 
@@ -526,18 +534,8 @@ export function readCurrentCodexNativeSubagentSubmissions(
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
 ): readonly CodexNativeSubagentSubmission[] {
-  const key = bindingStoreKey(identity);
-  const raw = state.lookup(key);
-  const stored = readStoredCodexAppServerBinding(raw);
-  if (raw !== undefined && !stored) {
-    throw new Error(`Invalid Codex app-server binding row: ${key}`);
-  }
-  if (
-    stored?.state !== "active" ||
-    !ownsStoredSessionGeneration(identity, stored) ||
-    (identity.kind === "session" && owner.sessionId !== identity.sessionId) ||
-    !matchesCodexNativeSubagentSubmissionBinding(stored.binding, owner)
-  ) {
+  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+  if (!stored) {
     return [];
   }
   const submissions = readCodexNativeSubagentSubmissions(stored.nativeSubagentSubmissions);
@@ -551,6 +549,17 @@ export function readCurrentNativePendingAssignments(
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
 ): readonly CodexNativeSubagentPendingAssignment[] {
+  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+  return (
+    readNativePendingAssignments(stored?.nativeSubagentAssignments)?.assignments ?? []
+  ).filter((entry) => matchesNativeAssignmentLifecycle(entry.owner, owner));
+}
+
+function readCurrentNativeSubagentBinding(
+  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+  identity: CodexAppServerBindingIdentity,
+  owner: CodexNativeSubagentHistoryOwner,
+): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
   const key = bindingStoreKey(identity);
   const raw = state.lookup(key);
   const stored = readStoredCodexAppServerBinding(raw);
@@ -563,11 +572,9 @@ export function readCurrentNativePendingAssignments(
     (identity.kind === "session" && owner.sessionId !== identity.sessionId) ||
     !matchesCodexNativeSubagentSubmissionBinding(stored.binding, owner)
   ) {
-    return [];
+    return undefined;
   }
-  return (readNativePendingAssignments(stored.nativeSubagentAssignments)?.assignments ?? []).filter(
-    (entry) => matchesNativeAssignmentLifecycle(entry.owner, owner),
-  );
+  return stored;
 }
 
 export function preserveNativeTaskImport(current: StoredCodexAppServerBinding | undefined) {
@@ -665,21 +672,16 @@ export function readPluginAppPolicyContext(
     }
   }
   const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
-  if (
-    record.pluginAppIds !== undefined &&
-    (!record.pluginAppIds ||
-      typeof record.pluginAppIds !== "object" ||
-      Array.isArray(record.pluginAppIds))
-  ) {
+  const pluginAppIds =
+    record.pluginAppIds === undefined ? {} : asOptionalRecord(record.pluginAppIds);
+  if (!pluginAppIds) {
     return undefined;
   }
-  if (record.pluginAppIds && typeof record.pluginAppIds === "object") {
-    for (const [configKey, appIds] of Object.entries(record.pluginAppIds)) {
-      if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
-        return undefined;
-      }
-      parsedPluginAppIds[configKey] = appIds;
+  for (const [configKey, appIds] of Object.entries(pluginAppIds)) {
+    if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
+      return undefined;
     }
+    parsedPluginAppIds[configKey] = appIds;
   }
   return {
     fingerprint: record.fingerprint,

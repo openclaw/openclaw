@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   type CrabboxState,
+  crabboxCaptureUnsupportedSentence,
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   listCrabboxLegacyWarmLeases,
@@ -72,6 +73,11 @@ export function registerCrabboxWarmImageCommands(program: CliProgram, state: Cra
           lines.push(
             `${image.profileKey}: ${image.checkpointId ?? "no checkpoint"} (${image.state})`,
           );
+          if (image.captureUnsupported) {
+            lines.push(
+              `  Capture unsupported: ${crabboxCaptureUnsupportedSentence(image.captureUnsupported.message)} Workers use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+            );
+          }
           if (image.capture) {
             const uncertain = image.capture.phase === "uncertain";
             const label = uncertain

@@ -305,11 +305,12 @@ type NativeHookRelayRetention = Readonly<{
 /** Records bundled native execution custody without granting action permission. */
 export type NativeHookRelayExecutionAdmission = Readonly<{
   toolNames: readonly string[];
+  /** A returned guard runs after async admission; a reason denies execution before allow. */
   admit: (
     invocation: NativeHookRelayInvocation,
     assertCurrent: () => void,
     preparation: Readonly<{ signal?: AbortSignal; assertCurrent: () => void }>,
-  ) => void | Promise<void>;
+  ) => void | (() => string | void) | Promise<void | (() => string | void)>;
 }>;
 
 export type NativeHookRelayOwnerOptions = {

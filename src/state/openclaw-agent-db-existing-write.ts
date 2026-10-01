@@ -30,7 +30,6 @@ export function withExistingAgentLeaseWrite<T>(
     {
       operationLabel: "agent.database.maintenance.admission",
       schemaSql: existingAgentLeaseSchema,
-      busyTimeoutMs: 0,
     },
   );
 }

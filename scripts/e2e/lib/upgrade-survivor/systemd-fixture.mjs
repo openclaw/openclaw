@@ -532,7 +532,7 @@ function run() {
     readUnit(true);
     return;
   }
-  if (["stop-policy", "stop-timeout-ms"].includes(operation) && !args.length) {
+  if (["stop-policy", "stop-timeout-ms", "stop-context"].includes(operation) && !args.length) {
     // A running generation keeps its loaded policy even if an on-disk edit is
     // invalid or removed. Only a successful reload replaces that snapshot.
     const unit = fs.existsSync(loadedPath)
@@ -549,7 +549,17 @@ function run() {
       if (!unit) {
         fail("Cannot stop an absent fixture unit.");
       }
-      console.log(unit.stopTimeoutMs);
+      if (operation === "stop-context") {
+        console.log(
+          JSON.stringify({
+            stopTimeoutMs: unit.stopTimeoutMs === Infinity ? "Infinity" : unit.stopTimeoutMs,
+            killMode: unit.killMode,
+            controlGroup: runtimePaths().controlGroup || "",
+          }),
+        );
+      } else {
+        console.log(unit.stopTimeoutMs);
+      }
     }
     return;
   }

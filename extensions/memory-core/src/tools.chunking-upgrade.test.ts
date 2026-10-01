@@ -54,133 +54,61 @@ describe("memory_search during a chunking upgrade", () => {
     return dbPath;
   }
 
-  it("serves keyword results through memory_search while an upgrade rebuild cannot embed", async () => {
-    const cfg = fixture.createConfig({ minScore: 0 });
-    const filePath = path.join(fixture.paths.memory, "upgrade-fallback.md");
-    await fs.writeFile(filePath, "UpgradeKeywordFallback()\nfinish()");
-    await seedPriorChunkingVersionIndex(cfg);
-    // The changed file forces the upgrade rebuild to request a fresh embedding
-    // instead of republishing from the embedding cache.
-    await fs.writeFile(
-      filePath,
-      "UpgradeKeywordFallback() changed after the prior index was published.",
-    );
-    fixture.provider.embedBatchPermanentFailure = Object.assign(
-      new Error("openai embeddings failed: 429 insufficient_quota"),
-      { status: 429, code: "insufficient_quota" },
-    );
-
-    const tool = createMemorySearchTool({
-      config: cfg,
-      agentId: "main",
-      oneShotCliRun: true,
-    });
-    if (!tool) {
-      throw new Error("memory_search tool missing");
-    }
-    try {
-      const result = await tool.execute("upgrade-keyword-fallback", {
-        query: "UpgradeKeywordFallback",
-        corpus: "memory",
-      });
-      expect(result.details).toMatchObject({
-        results: [expect.objectContaining({ path: "memory/upgrade-fallback.md" })],
-      });
-    } finally {
-      await closeAllMemorySearchManagers();
-      closeOpenClawAgentDatabasesForTest();
-    }
-  });
-
-  it("keeps memory_search paused when a pending upgrade has no usable FTS index", async () => {
-    const cfg = fixture.createConfig({ minScore: 0 });
-    const filePath = path.join(fixture.paths.memory, "upgrade-fts-paused.md");
-    await fs.writeFile(filePath, "UpgradeFtsPaused()\nfinish()");
-    const dbPath = await seedPriorChunkingVersionIndex(cfg);
-    // The changed file forces the upgrade rebuild to request a fresh embedding
-    // instead of republishing from the embedding cache.
-    await fs.writeFile(filePath, "UpgradeFtsPaused() changed after the prior index was published.");
-    // Occupy the FTS table name with a view so every schema ensure — including
-    // the upgrade rebuild's republish — fails to restore a usable keyword index.
-    const sabotaged = new DatabaseSync(dbPath);
-    try {
-      sabotaged.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
-      sabotaged.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
-    } finally {
-      sabotaged.close();
-    }
-    fixture.provider.embedBatchPermanentFailure = Object.assign(
-      new Error("openai embeddings failed: 429 insufficient_quota"),
-      { status: 429, code: "insufficient_quota" },
-    );
-
-    const tool = createMemorySearchTool({
-      config: cfg,
-      agentId: "main",
-      oneShotCliRun: true,
-    });
-    if (!tool) {
-      throw new Error("memory_search tool missing");
-    }
-    try {
-      const result = await tool.execute("upgrade-fts-paused", {
-        query: "UpgradeFtsPaused",
-        corpus: "memory",
-      });
-      expect(result.details).toMatchObject({
-        results: [],
-        disabled: true,
-        unavailable: true,
-        error: expect.stringContaining("insufficient_quota"),
-        warning: expect.stringContaining("Rebuilding may call the configured embedding provider"),
-      });
-    } finally {
-      await closeAllMemorySearchManagers();
-      closeOpenClawAgentDatabasesForTest();
-    }
-  });
-
-  it("pauses memory_search when a pending upgrade coincides with a changed scope", async () => {
-    const wikiPath = path.join(fixture.paths.root, "wiki");
-    await fs.mkdir(wikiPath, { recursive: true });
-    await fs.writeFile(path.join(wikiPath, "note.md"), "UpgradeScopeWiki alpha note.");
-    const cfgWithWiki = fixture.createConfig({ extraPaths: [wikiPath], minScore: 0 });
-    const cfgWithoutWiki = fixture.createConfig({ minScore: 0 });
-    const filePath = path.join(fixture.paths.memory, "upgrade-scope.md");
-    await fs.writeFile(filePath, "UpgradeScopeMemory alpha note.");
-    await seedPriorChunkingVersionIndex(cfgWithWiki);
-    // The changed file forces the upgrade rebuild to request a fresh embedding;
-    // without it the embedding cache satisfies the whole rebuild, which then
-    // republishes a valid index under the narrowed scope.
-    await fs.writeFile(filePath, "UpgradeScopeMemory note changed after the prior index.");
-    fixture.provider.embedBatchPermanentFailure = Object.assign(
-      new Error("openai embeddings failed: 429 insufficient_quota"),
-      { status: 429, code: "insufficient_quota" },
-    );
-
-    const tool = createMemorySearchTool({
-      config: cfgWithoutWiki,
-      agentId: "main",
-      oneShotCliRun: true,
-    });
-    if (!tool) {
-      throw new Error("memory_search tool missing");
-    }
-    try {
-      const result = await tool.execute("upgrade-changed-scope", {
-        query: "UpgradeScopeMemory",
-        corpus: "memory",
-      });
-      expect(result.details).toMatchObject({
-        results: [],
-        disabled: true,
-        unavailable: true,
-        error: expect.stringContaining("insufficient_quota"),
-        warning: expect.stringContaining("Rebuilding may call the configured embedding provider"),
-      });
-    } finally {
-      await closeAllMemorySearchManagers();
-      closeOpenClawAgentDatabasesForTest();
-    }
-  });
+  it.each(["keyword fallback", "missing FTS", "changed scope"] as const)(
+    "handles an upgrade with %s",
+    async (scenario) => {
+      const cfg = fixture.createConfig({ minScore: 0 });
+      const filePath = path.join(fixture.paths.memory, "upgrade.md");
+      await fs.writeFile(filePath, "UpgradeKeywordFallback alpha note.");
+      let indexedConfig = cfg;
+      if (scenario === "changed scope") {
+        const wikiPath = path.join(fixture.paths.root, "wiki");
+        await fs.mkdir(wikiPath, { recursive: true });
+        await fs.writeFile(path.join(wikiPath, "note.md"), "UpgradeScopeWiki alpha note.");
+        indexedConfig = fixture.createConfig({ extraPaths: [wikiPath], minScore: 0 });
+      }
+      const dbPath = await seedPriorChunkingVersionIndex(indexedConfig);
+      // A changed file prevents the embedding cache from satisfying the rebuild.
+      await fs.writeFile(filePath, "UpgradeKeywordFallback changed after publication.");
+      if (scenario === "missing FTS") {
+        const db = new DatabaseSync(dbPath);
+        try {
+          db.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
+          db.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
+        } finally {
+          db.close();
+        }
+      }
+      fixture.provider.embedBatchPermanentFailure = Object.assign(
+        new Error("openai embeddings failed: 429 insufficient_quota"),
+        { status: 429, code: "insufficient_quota" },
+      );
+      const tool = createMemorySearchTool({ config: cfg, agentId: "main", oneShotCliRun: true });
+      if (!tool) {
+        throw new Error("memory_search tool missing");
+      }
+      try {
+        const result = await tool.execute("upgrade", {
+          query: "UpgradeKeywordFallback",
+          corpus: "memory",
+        });
+        expect(result.details).toMatchObject(
+          scenario === "keyword fallback"
+            ? { results: [expect.objectContaining({ path: "memory/upgrade.md" })] }
+            : {
+                results: [],
+                disabled: true,
+                unavailable: true,
+                error: expect.stringContaining("insufficient_quota"),
+                warning: expect.stringContaining(
+                  "Rebuilding may call the configured embedding provider",
+                ),
+              },
+        );
+      } finally {
+        await closeAllMemorySearchManagers();
+        closeOpenClawAgentDatabasesForTest();
+      }
+    },
+  );
 });

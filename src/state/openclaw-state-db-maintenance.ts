@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
@@ -19,8 +18,8 @@ import {
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
-  type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import { migrateCronDeliveryAttemptState } from "./openclaw-state-db-cron-delivery-migration.js";
 import {
   hasDanglingSkillWorkshopCollectionReviewIndex,
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
@@ -39,7 +38,6 @@ import {
   readStateSchemaMigrationVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
@@ -171,6 +169,8 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   15: LAZY_ADDITIVE_STATE_TABLES,
   16: LAZY_ADDITIVE_STATE_TABLES,
   17: LAZY_ADDITIVE_STATE_TABLES,
+  18: LAZY_ADDITIVE_STATE_TABLES,
+  19: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -179,9 +179,7 @@ export function assertOpenClawStateDatabaseOwner(
   database: DatabaseSync,
   options: { pathname: string },
 ): { schema_version?: unknown } {
-  const hasMetadataTable = database
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta' LIMIT 1")
-    .get();
+  const hasMetadataTable = tableExists(database, "schema_meta");
   let metadata;
   try {
     metadata = hasMetadataTable
@@ -269,7 +267,7 @@ export const openClawStateMigrationAssertions = new Map<
   number,
   (database: DatabaseSync, options: { pathname: string }) => void
 >(
-  ([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] as const).map(
+  ([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] as const).map(
     (version) =>
       [
         version,
@@ -315,10 +313,6 @@ export function markCurrentStateSchemaVersion(
       "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
     ).run(version, now);
   }
-}
-
-export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
-  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
 
 /** Historical jobs lost the creator's origin; preserve attribution without guessing authority. */
@@ -562,6 +556,10 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateGitHubPublicationRequesterAuthority,
     applied: "Added original requester authority to GitHub publication receipts (v18)",
+  },
+  {
+    migrate: migrateCronDeliveryAttemptState,
+    applied: "Recorded cron completion delivery attempt uncertainty (v20)",
   },
 ];
 

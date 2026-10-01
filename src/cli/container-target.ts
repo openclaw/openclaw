@@ -1,4 +1,3 @@
-// CLI container targeting: parse --container and re-exec the command inside Docker/Podman.
 import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -234,7 +233,8 @@ export function maybeRunCliInContainer(
   if (!parsed.ok) {
     throw new Error(parsed.error);
   }
-  const containerName = resolveCliContainerTarget(argv, resolvedDeps.env);
+  const containerName =
+    parsed.container ?? normalizeOptionalString(resolvedDeps.env.OPENCLAW_CONTAINER);
   if (!containerName) {
     return { handled: false, argv: parsed.argv };
   }

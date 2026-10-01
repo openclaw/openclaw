@@ -17,8 +17,6 @@ type ChildMessage = Exclude<
   { type: "ready" | "owned" | "pipe" | "pipe-prefix" | "execa-result" }
 >;
 
-type Send = (message: BrokerRequest, handle?: SendHandle) => Promise<void>;
-
 /** Native pipes remain native streams; only lifecycle and IPC cross the broker. */
 export class BrokerChild extends EventEmitter implements ChildProcess {
   private readonly callbackContext = new AsyncResource("OpenClawSpawnBrokerChild");
@@ -50,7 +48,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   constructor(
     readonly requestId: number,
     argv: string[],
-    private readonly transmit: Send,
+    private readonly transmit: (message: BrokerRequest, handle?: SendHandle) => Promise<void>,
   ) {
     super();
     this.spawnfile = argv[0]!;

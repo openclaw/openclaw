@@ -522,23 +522,18 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
     cacheBust: true,
     nowMs: generation,
   });
-  const fn = resolveTransformFn(mod, transform.exportName);
+  const fn = resolveFunctionModuleExport<HookTransformFn>({
+    mod,
+    exportName: transform.exportName,
+    fallbackExportNames: ["default", "transform"],
+  });
+  if (!fn) {
+    throw new Error("hook transform module must export a function");
+  }
   if (generation === transformCacheBustVersion) {
     transformCache.set(cacheKey, fn);
   }
   return fn;
-}
-
-function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): HookTransformFn {
-  const candidate = resolveFunctionModuleExport<HookTransformFn>({
-    mod,
-    exportName,
-    fallbackExportNames: ["default", "transform"],
-  });
-  if (!candidate) {
-    throw new Error("hook transform module must export a function");
-  }
-  return candidate;
 }
 
 function safeRealpathSync(candidate: string): string | null {

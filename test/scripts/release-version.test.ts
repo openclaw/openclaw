@@ -103,6 +103,12 @@ function readJson(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
 
+it("rejects alpha release preparation before reading or changing packages", () => {
+  expect(() => planReleaseVersion({ version: "2026.9.24-alpha.1" })).toThrow(
+    "Alpha releases are retired;",
+  );
+});
+
 describe("release version argument parsing", () => {
   it("defaults to check mode and keeps Android opt-in", () => {
     expect(parseReleaseVersionArgs(["--version", "2026.7.2-beta.1"])).toMatchObject({
@@ -110,6 +116,26 @@ describe("release version argument parsing", () => {
       mode: "check",
       version: "2026.7.2-beta.1",
     });
+  });
+
+  it("keeps last-value ordering and rejects incomplete options after help", () => {
+    expect(
+      parseReleaseVersionArgs([
+        "--write",
+        "--version",
+        "2026.7.1",
+        "--",
+        "--check",
+        "--version",
+        "2026.7.2",
+      ]),
+    ).toMatchObject({ mode: "check", version: "2026.7.2" });
+    expect(() => parseReleaseVersionArgs(["--help", "--root", "-h"])).toThrow(
+      "Missing value for --root.",
+    );
+    expect(() => parseReleaseVersionArgs(["--version=2026.7.2"])).toThrow(
+      "Unknown argument: --version=2026.7.2",
+    );
   });
 });
 

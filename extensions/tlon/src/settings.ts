@@ -2,6 +2,8 @@
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
+export const TLON_PENDING_APPROVAL_LIMIT = 100;
+
 /** Pending approval request stored for persistence */
 export type PendingApproval = {
   id: string;
@@ -54,26 +56,15 @@ const SETTINGS_BUCKET = "tlon";
  * Settings-store doesn't support nested objects, so we store as JSON string.
  */
 function parseChannelRules(value: unknown): TlonSettingsStore["channelRules"] {
-  if (!value) {
-    return undefined;
-  }
-
+  let parsed = value;
   if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
-      if (isChannelRulesObject(parsed)) {
-        return parsed;
-      }
+      parsed = JSON.parse(value);
     } catch {
       return undefined;
     }
   }
-
-  if (isChannelRulesObject(value)) {
-    return value;
-  }
-
-  return undefined;
+  return isChannelRulesObject(parsed) ? parsed : undefined;
 }
 
 /**

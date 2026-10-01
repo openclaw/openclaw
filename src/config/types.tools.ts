@@ -1,5 +1,3 @@
-// Defines tool availability and allowlist configuration types.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { z } from "zod";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig } from "./types.base.js";
@@ -84,10 +82,7 @@ export function parseToolsBySenderTypedKey(
   rawKey: string,
 ): { type: ToolsBySenderKeyType; value: string } | undefined {
   const trimmed = rawKey.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
     const prefix = `${type}:`;
     if (!lowered.startsWith(prefix)) {

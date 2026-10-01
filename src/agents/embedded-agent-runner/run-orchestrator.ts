@@ -5,6 +5,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -33,6 +34,7 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -43,6 +45,7 @@ import {
 } from "../agent-scope.js";
 import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
+import type { AgentHarnessPluginSelection } from "../harness/runtime-plugin-load-plan.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
@@ -76,10 +79,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
-import {
-  createEmbeddedRunStageSummaryEmitter,
-  createEmbeddedRunStageTracker,
-} from "./run/attempt-stage-timing.js";
+import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
 import type {
@@ -213,11 +213,7 @@ async function runEmbeddedAgentInternal(
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
-    (channelHint
-      ? isMarkdownCapableMessageChannel(channelHint)
-        ? "markdown"
-        : "plain"
-      : "markdown");
+    (!channelHint || isMarkdownCapableMessageChannel(channelHint) ? "markdown" : "plain");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
   throwIfAborted();
 
@@ -267,7 +263,19 @@ async function runEmbeddedAgentInternal(
         if (cliDispatched) {
           return cliDispatched;
         }
-        const startupStages = createEmbeddedRunStageTracker();
+        const preReplyTarget = { ...runSessionTarget, ...params.sessionTarget };
+        const preReplyGeneration = await prepareCronRootSessionGeneration(
+          {
+            ...preReplyTarget,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey ?? preReplyTarget.sessionKey,
+            lifecycleRevision: preReplyTarget.expectedLifecycleRevision,
+          },
+          (reason) => laneController.laneTaskAbortController.abort(reason),
+        );
+        using _ = { [Symbol.dispose]: () => preReplyGeneration?.release() };
+        const preReplyAssertCurrent = preReplyGeneration?.assertCurrent;
+        const startupStages = createStageTimingTracker(Date.now);
         const requestedWorkspaceResolution = resolveRunWorkspaceDir({
           workspaceDir: params.workspaceDir,
           sessionKey: params.sessionKey,
@@ -310,22 +318,18 @@ async function runEmbeddedAgentInternal(
           model: requestedRuntimeSelection.modelId,
           requestedRouteResolution: params.requestedRouteResolution,
           fallbacksOverride: runtimePluginFallbacksOverride,
-        }).map((candidate, index) =>
-          requestedHarnessRuntime &&
+        }).map((candidate, index) => {
+          const selection: AgentHarnessPluginSelection = {
+            provider: candidate.provider,
+            modelId: candidate.model,
+          };
           // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
-          (index === 0 || explicitHarnessRuntime)
-            ? {
-                provider: candidate.provider,
-                modelId: candidate.model,
-                runtime: requestedHarnessRuntime,
-                agentId: requestedWorkspaceResolution.agentId,
-              }
-            : {
-                provider: candidate.provider,
-                modelId: candidate.model,
-                agentId: requestedWorkspaceResolution.agentId,
-              },
-        );
+          if (requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)) {
+            selection.runtime = requestedHarnessRuntime;
+          }
+          selection.agentId = requestedWorkspaceResolution.agentId;
+          return selection;
+        });
         const preparedInput = {
           config,
           agentId: requestedWorkspaceResolution.agentId,
@@ -489,14 +493,10 @@ async function runEmbeddedAgentInternal(
                 modelId,
                 trigger: params.trigger,
                 ...buildAgentHookContextChannelFields(params),
-                ...buildAgentHookContextIdentityFields({
-                  trigger: params.trigger,
-                  senderId: params.senderId,
-                  chatId: params.chatId,
-                  channelContext: params.channelContext,
-                }),
+                ...buildAgentHookContextIdentityFields(params),
               };
               const hookResult = await runBeforeAgentReplyForTurn({
+                assertCurrent: preReplyAssertCurrent,
                 runId: params.runId,
                 trigger: params.trigger,
                 event: { cleanedBody: params.prompt },
@@ -543,6 +543,7 @@ async function runEmbeddedAgentInternal(
                     });
               const runTerminal = terminal;
               return await runPreparedEmbeddedLoop(refresh, {
+                preReplyGeneration,
                 onInitialWriterPrepared: (resource) => {
                   initialWriterResource = resource;
                 },
@@ -698,7 +699,7 @@ async function runEmbeddedAgentInternal(
           result.meta.executionTrace?.runner !== "cli" &&
           params.isFinalFallbackAttempt === undefined
         ) {
-          settleRequesterRun(params, result, () => {
+          await settleRequesterRun(params, result, () => {
             throwIfAborted();
             params.preparedRunAdmission?.assertSourceCurrent();
           });
@@ -719,7 +720,7 @@ async function runEmbeddedAgentInternal(
         // candidate is skipped. The outer entry releases its children in that case.
         const failure =
           params.isFinalFallbackAttempt === undefined
-            ? settleFailedRequesterRun(
+            ? await settleFailedRequesterRun(
                 params,
                 error,
                 // Internal loop stops end inference, not the parent's authority to

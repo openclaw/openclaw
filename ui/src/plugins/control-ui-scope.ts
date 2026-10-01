@@ -122,6 +122,7 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
     sessions: services(host.sessions, { observe: 1 }),
     agents: services(host.agents),
     navigation: services(host.navigation),
+    dock: host.dock ? services(host.dock) : undefined,
     ui: services(host.ui),
     components: services(host.components),
   };

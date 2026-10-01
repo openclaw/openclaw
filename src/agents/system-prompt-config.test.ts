@@ -59,6 +59,7 @@ function preparedOwner(
     {
       pluginMetadataSnapshot: metadataSnapshot,
       inlineProviderModels: [],
+      remoteCatalog: null,
       configuredCatalogEntries: entries,
     },
     ModelRegistry.inMemory(templateAuthStorage),

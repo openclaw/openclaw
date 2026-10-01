@@ -33,21 +33,17 @@ const optionalCronTimestampSchema = z
   .unknown()
   .optional()
   .transform((value) => normalizeTimestamp(value));
-const optionalCronDurationSchema = z
-  .unknown()
-  .optional()
-  .transform((value) => asSafeIntegerInRange(value, { min: 0 }));
-const optionalCronTokenCountSchema = z
+const optionalCronNonnegativeIntegerSchema = z
   .unknown()
   .optional()
   .transform((value) => asSafeIntegerInRange(value, { min: 0 }));
 const cronUsageSchema = z
   .object({
-    input_tokens: optionalCronTokenCountSchema,
-    output_tokens: optionalCronTokenCountSchema,
-    total_tokens: optionalCronTokenCountSchema,
-    cache_read_tokens: optionalCronTokenCountSchema,
-    cache_write_tokens: optionalCronTokenCountSchema,
+    input_tokens: optionalCronNonnegativeIntegerSchema,
+    output_tokens: optionalCronNonnegativeIntegerSchema,
+    total_tokens: optionalCronNonnegativeIntegerSchema,
+    cache_read_tokens: optionalCronNonnegativeIntegerSchema,
+    cache_write_tokens: optionalCronNonnegativeIntegerSchema,
   })
   .transform((usage) =>
     Object.values(usage).some((tokenCount) => tokenCount !== undefined) ? usage : undefined,
@@ -82,7 +78,7 @@ const cronRunLogEntrySchema = z.looseObject({
   runId: optionalNonBlankCronStringSchema,
   diagnostics: z.unknown().optional(),
   runAtMs: optionalCronTimestampSchema,
-  durationMs: optionalCronDurationSchema,
+  durationMs: optionalCronNonnegativeIntegerSchema,
   nextRunAtMs: optionalCronTimestampSchema,
   triggerFired: z
     .unknown()
@@ -169,7 +165,7 @@ export function parseCronRunLogEntryObject(
   }
 
   // Diagnostics are redacted at authoring; this read/migration path only normalizes stored shape.
-  const entry: CronRunLogEntry = {
+  return {
     ts: entryObj.ts,
     jobId: entryObj.jobId,
     action: "finished",
@@ -193,32 +189,15 @@ export function parseCronRunLogEntryObject(
     model: entryObj.model,
     provider: entryObj.provider,
     usage: entryObj.usage,
+    delivered: entryObj.delivered,
+    deliveryStatus: entryObj.deliveryStatus,
+    deliveryError: entryObj.deliveryError,
+    deliverySuppressionReason: entryObj.deliverySuppressionReason,
+    failureNotificationDelivery: entryObj.failureNotificationDelivery,
+    delivery: entryObj.delivery,
+    sessionId: entryObj.sessionId,
+    sessionKey: entryObj.sessionKey,
   };
-  if (entryObj.delivered !== undefined) {
-    entry.delivered = entryObj.delivered;
-  }
-  if (entryObj.deliveryStatus !== undefined) {
-    entry.deliveryStatus = entryObj.deliveryStatus;
-  }
-  if (entryObj.deliveryError !== undefined) {
-    entry.deliveryError = entryObj.deliveryError;
-  }
-  if (entryObj.deliverySuppressionReason !== undefined) {
-    entry.deliverySuppressionReason = entryObj.deliverySuppressionReason;
-  }
-  if (entryObj.failureNotificationDelivery !== undefined) {
-    entry.failureNotificationDelivery = entryObj.failureNotificationDelivery;
-  }
-  if (entryObj.delivery !== undefined) {
-    entry.delivery = entryObj.delivery;
-  }
-  if (entryObj.sessionId !== undefined) {
-    entry.sessionId = entryObj.sessionId;
-  }
-  if (entryObj.sessionKey !== undefined) {
-    entry.sessionKey = entryObj.sessionKey;
-  }
-  return entry;
 }
 
 /** Encodes Cron-owned outcome fields for retained history. */
@@ -299,6 +278,18 @@ export function resolveCronRunRecordTimestamp(
   return record.endedAt ?? record.lastEventAt ?? record.createdAt;
 }
 
+/** Shared newest-first order for history pages, retention, and recovery. */
+export function compareCronRunRecordsNewestFirst(
+  left: CronRunRecord,
+  right: CronRunRecord,
+): number {
+  return (
+    resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
+    right.createdAt - left.createdAt ||
+    right.id.localeCompare(left.id)
+  );
+}
+
 /** Reads internal trigger recovery data without adding it to run-history responses. */
 export function cronRunRecordToTriggerEval(
   record: Pick<CronRunRecord, "detail">,
@@ -358,7 +349,7 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
   const wireDetail = { ...record.detail };
   delete wireDetail.storeKey;
   // Cron detail is canonical write-time state; history reads do not rederive error reasons.
-  const entry = parseCronRunLogEntryObject(
+  return parseCronRunLogEntryObject(
     {
       // Released rows stored these only on the history row; current detail wins
       // when operator cancellation and the underlying execution have different outcomes.
@@ -373,15 +364,4 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
     },
     { jobId: record.jobId },
   );
-  if (!entry) {
-    return null;
-  }
-  // The parsed entry is private; materialize the legacy reader’s absent indexed fields on it.
-  return Object.assign(entry, {
-    delivered: entry.delivered,
-    deliveryStatus: entry.deliveryStatus,
-    deliveryError: entry.deliveryError,
-    sessionId: entry.sessionId,
-    sessionKey: entry.sessionKey,
-  });
 }

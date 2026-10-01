@@ -299,16 +299,12 @@ describe("sidebar session feedback", () => {
     it.each(["owner:profile-ada", "involving-me"])(
       "does not claim no matches before initial data, during refresh, or after a list error (%s)",
       async (filter) => {
-        const { sidebar, context, request, sessions } = await mountRoster(undefined, []);
+        const { sidebar, context, sessions } = await mountRoster(undefined, []);
         await useSidebarMode(sidebar, context, mode);
         await selectFilter(sidebar, filter);
         await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
         const pending = createDeferred<never>();
-        if (mode === "roster") {
-          request.mockImplementation(async () => await pending.promise);
-        } else {
-          sessions.list.mockImplementation(async () => await pending.promise);
-        }
+        sessions.list.mockImplementation(async () => await pending.promise);
         const refresh =
           mode === "roster"
             ? rosterActivityStore(context).refresh()

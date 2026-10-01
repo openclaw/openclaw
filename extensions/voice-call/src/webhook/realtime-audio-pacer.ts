@@ -1,5 +1,6 @@
 // Realtime telephony audio pacing for mulaw streams.
 import { randomUUID } from "node:crypto";
+import type { StreamFrameAdapter } from "./stream-frame-adapter.js";
 
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
@@ -42,13 +43,6 @@ type RealtimeMarkBoundary = {
 /** WebSocket send callback for realtime audio frames. */
 type RealtimeAudioSend = (message: string) => boolean;
 
-/** Provider-specific serializer for media, clear, and mark frames. */
-interface RealtimeAudioSerializer {
-  media(payloadBase64: string): string;
-  clear(): string;
-  mark(name: string): string;
-}
-
 /** Paces outgoing mulaw audio frames at telephony cadence. */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
@@ -74,7 +68,7 @@ export class RealtimeAudioPacer {
       /** Fires whenever queued audio and playback state are discarded. */
       onPlaybackReset?: () => void;
       send: RealtimeAudioSend;
-      serializer: RealtimeAudioSerializer;
+      serializer: Pick<StreamFrameAdapter, "serializeMedia" | "serializeClear" | "serializeMark">;
     },
   ) {}
 
@@ -196,7 +190,7 @@ export class RealtimeAudioPacer {
     this.clearTimer();
     this.resetQueue();
     this.resetPlaybackState();
-    this.params.send(this.params.serializer.clear());
+    this.params.send(this.params.serializer.serializeClear());
     return clearedAudioBytes;
   }
 
@@ -327,7 +321,9 @@ export class RealtimeAudioPacer {
 
   private sendAudioItem(item: Extract<RealtimeAudioQueueItem, { type: "audio" }>): boolean {
     this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-    const sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
+    const sent = this.params.send(
+      this.params.serializer.serializeMedia(item.chunk.toString("base64")),
+    );
     if (sent) {
       item.segment.sentMs += item.durationMs;
       this.sentAudioMs += item.durationMs;
@@ -352,7 +348,7 @@ export class RealtimeAudioPacer {
 
   /** Send a queued mark frame and bind it to the playback prefix before it. */
   private sendMarkItem(item: Extract<RealtimeAudioQueueItem, { type: "mark" }>): boolean {
-    const sent = this.params.send(this.params.serializer.mark(item.name));
+    const sent = this.params.send(this.params.serializer.serializeMark(item.name));
     if (sent) {
       this.markBoundaries.push({
         name: item.name,

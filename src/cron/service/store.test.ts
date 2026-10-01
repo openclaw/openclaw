@@ -12,19 +12,23 @@ import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import {
   CronRunReceiptConflictError,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { cronNotificationJob, type CronNotificationIntent } from "./notification-intents.js";
-import {
-  cronRunReceiptMutationHooks,
-  prepareCronRunReceiptOwnerMutationHooks,
-} from "./run-receipts.js";
+import { prepareCronRunReceiptOwnerMutation } from "./run-receipts.js";
 import { createCronServiceState } from "./state.js";
-import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import {
+  ensureLoaded,
+  persist,
+  persistOrRestore,
+  snapshotStoreForRollback,
+  captureCronJobMutationSource,
+  persistCronJobMutation,
+} from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-store-seam",
@@ -266,7 +270,7 @@ describe("cron service store seam coverage", () => {
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(
       expectedActiveJobIds,
     );
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         sourceIndex: 0,
         reason: "invalid-schedule",
@@ -307,7 +311,7 @@ describe("cron service store seam coverage", () => {
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         sourceIndex: 0,
         reason: "invalid-payload",
@@ -381,7 +385,7 @@ describe("cron service store seam coverage", () => {
       repairableState.id,
       surviving.id,
     ]);
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         sourceIndex: 0,
         reason: "invalid-schedule",
@@ -429,7 +433,7 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state);
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         reason: "invalid-state",
         job: expect.objectContaining({ id: invalidState.id }),
@@ -739,7 +743,7 @@ describe("cron service store seam coverage", () => {
     );
     expect(state.pendingQuarantineConfigJobs).toEqual([]);
     expect(notify).toHaveBeenCalledOnce();
-    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({ reason: "invalid-schedule" }),
     ]);
     expect(onEvent).toHaveBeenCalledTimes(1);
@@ -774,7 +778,7 @@ describe("cron service store seam coverage", () => {
       }),
     );
     const snapshot = snapshotStoreForRollback(state);
-    const ownerHooks = await prepareCronRunReceiptOwnerMutationHooks({
+    const ownerMutation = await prepareCronRunReceiptOwnerMutation({
       state,
       previousJob: job,
       nextJob: { ...job, agentId: "beta" },
@@ -786,19 +790,25 @@ describe("cron service store seam coverage", () => {
 
     try {
       await expect(
-        persistOrRestore(state, snapshot, {
-          transactionHooks: cronRunReceiptMutationHooks({
-            state,
+        persistCronJobMutation({
+          state,
+          source: captureCronJobMutationSource(state),
+          previous: snapshot.store!,
+          next: state.store!,
+          method: "cron.update",
+          assertCurrent: ownerMutation?.assertCurrent,
+          receiptMutation: {
             jobId: job.id,
-            ownerHooks,
+            owner: ownerMutation?.prepared,
             triggerStateChanged: false,
-          }),
+            scheduleChanged: false,
+          },
         }),
       ).rejects.toBeInstanceOf(CronRunReceiptConflictError);
       expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("alpha");
       expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
     } finally {
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: receipt,
         status: "superseded",
         finishedAtMs: STORE_TEST_NOW + 1,

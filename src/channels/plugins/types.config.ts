@@ -1,17 +1,18 @@
-import type { ConfigUiPresentation } from "../../shared/config-ui-hints-types.js";
+import type { ConfigUiHint } from "../../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 
 /** Optional UI metadata for a JSON Schema property. */
-export type ChannelConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  presentation?: ConfigUiPresentation;
-  itemTemplate?: unknown;
-};
+export type ChannelConfigUiHint = Pick<
+  ConfigUiHint,
+  | "label"
+  | "help"
+  | "tags"
+  | "advanced"
+  | "sensitive"
+  | "placeholder"
+  | "presentation"
+  | "itemTemplate"
+>;
 
 /** Normalized validation issue emitted by a channel runtime parser. */
 export type ChannelConfigRuntimeIssue = {

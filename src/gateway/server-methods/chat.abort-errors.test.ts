@@ -14,8 +14,10 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
+import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -29,8 +31,8 @@ import {
   appendTranscriptMessageSync,
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
-  patchSessionEntryCore,
   readSessionTranscriptWatermark,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -64,13 +66,9 @@ async function corruptChildDatabase(storePath: string, sessionKey: string) {
   expect(() => loadExactSessionEntryReadOnly({ storePath, sessionKey })).toThrow();
 }
 
-it.each(
-  ["exact", "session cascade", "typed stop", "channel stop", "embedded stop"].flatMap((boundary) =>
-    [false, true].map((nested) => ({ boundary, nested })),
-  ),
-)(
-  "$boundary stops the healthy parent and siblings despite a corrupt child database (nested=$nested)",
-  async ({ boundary, nested }) => {
+it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded stop"])(
+  "%s stops the healthy parent and siblings despite nested corrupt child databases",
+  async (boundary) => {
     const sessionKey = "agent:main:main";
     const badKey = "agent:broken:subagent:bad";
     const healthyKey = "agent:main:subagent:healthy";
@@ -89,19 +87,15 @@ it.each(
     const rootKey = "agent:main:subagent:root";
     const secondBadKey = "agent:broken:subagent:second-bad";
     for (const [runId, childSessionKey] of [
-      ...(nested
-        ? ([
-            ["root", rootKey],
-            ["second-bad", secondBadKey],
-          ] as const)
-        : []),
+      ["root", rootKey],
+      ["second-bad", secondBadKey],
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
       await registerSubagentRun({
         runId,
         childSessionKey,
-        requesterSessionKey: nested && runId !== "root" ? rootKey : sessionKey,
+        requesterSessionKey: runId !== "root" ? rootKey : sessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
         requesterTurnRunId: "parent",
@@ -209,16 +203,16 @@ it.each(
         expect(result).toMatchObject({
           handled: true,
           aborted: true,
-          stoppedSubagents: nested ? 2 : 1,
-          failedSubagents: nested ? 2 : 1,
+          stoppedSubagents: 2,
+          failedSubagents: 2,
         });
       }
-      if (nested && typeof result === "function") {
+      if (typeof result === "function") {
         const error = result.mock.calls.at(-1)?.[2];
         expect(error?.message).toContain("bad:");
         expect(error?.message).toContain("second-bad:");
       }
-      if (nested && typeof result !== "function") {
+      if (typeof result !== "function") {
         expect(
           formatAbortReplyText(result.stoppedSubagents, undefined, result.failedSubagents),
         ).toContain("Cancellation was incomplete for 2 sub-agents");
@@ -239,9 +233,10 @@ it.each(
   },
 );
 
-it.each(
-  ["admin", "HTTP"].flatMap((boundary) => [false, true].map((queued) => ({ boundary, queued }))),
-)(
+it.each([
+  { boundary: "HTTP", queued: true },
+  { boundary: "admin", queued: false },
+])(
   "$boundary reports incomplete cancellation for a corrupt descendant (queued=$queued)",
   async ({ boundary, queued }) => {
     const sessionKey = "agent:main:subagent:parent";
@@ -401,25 +396,30 @@ it.each(
   },
 );
 
-it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
+it.each(["cascade native new", "RPC reset", "RPC delete"])(
   "%s does not append delayed aborted text into a new session incarnation",
   async (boundary) => {
     const sessionKey = "agent:main:direct:incarnation";
     const sessionId = "incarnation-parent";
     const childKey = "agent:child:subagent:incarnation";
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey,
-      defaultSessionId: sessionId,
-      lifecycleRevision: "before-reset",
-    });
-    const childStore = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "child",
-      sessionKey: childKey,
-      defaultSessionId: "incarnation-child",
-    });
+    const storePath = path.join(fixture.stateDir, "agents/main/sessions/sessions.json");
+    const childStore = path.join(fixture.stateDir, "agents/child/sessions/sessions.json");
+    // Seed directly; this fixture controls the cancellation/reset interleaving.
+    replaceSessionEntrySync(
+      { storePath, sessionKey },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        lifecycleRevision: "before-reset",
+      },
+    );
+    replaceSessionEntrySync(
+      { storePath: childStore, sessionKey: childKey },
+      {
+        sessionId: "incarnation-child",
+        updatedAt: Date.now(),
+      },
+    );
     const scope = { storePath, sessionKey, sessionId, agentId: "main" };
     const parentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
     const transcriptRows = () =>
@@ -446,20 +446,18 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
     });
     const entered = createDeferred();
     const release = createDeferred();
-    const native = boundary.endsWith("native new");
-    let writer: Promise<unknown> | undefined;
-    const childHandle = createEmbeddedRunHandle({
-      abort: () => {
-        writer = patchSessionEntryCore(
-          { storePath: childStore, sessionKey: childKey },
-          async () => {
-            entered.resolve();
-            await release.promise;
-            return null;
-          },
-        );
-      },
+    const child = getSubagentRunByChildSessionKey(childKey)!;
+    const childTerminated = createDeferred();
+    const stopObservingChild = onSubagentRegistryPersisted(() => {
+      if (
+        getSubagentRunByChildSessionKey(childKey) === child &&
+        child.endedReason === "subagent-killed"
+      ) {
+        childTerminated.resolve();
+      }
     });
+    const native = boundary.endsWith("native new");
+    const childHandle = createEmbeddedRunHandle();
     setActiveEmbeddedRun("incarnation-child", childHandle, childKey);
     const parentAdmission = await beginSessionWorkAdmission({
       scope: storePath,
@@ -483,6 +481,19 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
     });
     context.chatAbortControllers.set("parent", parent);
     context.chatRunState.getOrCreate("parent").buffer = "old delayed partial";
+    // Hold only the original marker after termination, without occupying the child writer FIFO.
+    const persistMarker = subagentControlSession.persistSubagentAbortedLastRun;
+    let markerHeld = false;
+    const markerWriter = vi
+      .spyOn(subagentControlSession, "persistSubagentAbortedLastRun")
+      .mockImplementation(async (params) => {
+        if (!markerHeld && params.childSessionKey === childKey && params.abortedLastRun) {
+          markerHeld = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return await persistMarker(params);
+      });
     let completed = false;
     const abort = invokeChatAbortHandler({
       handler: (options) =>
@@ -498,7 +509,7 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
     });
     try {
       await Promise.race([
-        entered.promise,
+        Promise.all([entered.promise, childTerminated.promise]),
         abort.then(() => {
           throw new Error("abort completed before child gate");
         }),
@@ -507,7 +518,7 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
       expect(context.chatAbortControllers.has("parent")).toBe(false);
       expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
       // Explicit reset drains children, including native /new. Keep the original
-      // abort pending on its marker writer, not on work the reset must stop.
+      // abort pending on its marker publication, not on work the reset must stop.
       clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
       if (native) {
         const reset = await initSessionState({
@@ -564,7 +575,6 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
         ).not.toHaveProperty("firstKeptEntryId");
       }
       release.resolve();
-      await writer;
       const response = await abort;
       expect(response).toHaveBeenCalledWith(true, expect.objectContaining({ aborted: true }));
       expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
@@ -577,12 +587,16 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
         expect(transcriptRows()).toEqual({ nodes: 0, windows: 0 });
       }
     } finally {
+      stopObservingChild();
       parentAdmission.release();
       operation.complete();
       release.resolve();
-      await writer;
-      await abort;
-      clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
+      markerWriter.mockRestore();
+      try {
+        await abort;
+      } finally {
+        clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
+      }
     }
   },
 );

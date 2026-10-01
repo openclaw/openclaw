@@ -14,6 +14,7 @@ import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-sup
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -397,32 +398,11 @@ it.each(["stdout", "stderr"] as const)(
 
 it("refuses a grown WAL family at the post-inventory capacity gate", async () => {
   const root = await fs.realpath(tempDirs.make("rehearsal-wal-growth-"));
+  await materializeUpdateCandidateStateWorker(root);
   const stateDir = path.join(root, "source");
   const database = path.join(stateDir, "state", "openclaw.sqlite");
   await fs.mkdir(path.dirname(database), { recursive: true });
   const db = openNodeSqliteDatabase(database);
-  const ready = path.join(root, "inventory-ready");
-  const runner = path.join(root, "inventory-runner.mjs");
-  // Execute the real inventory child, then grow the synthetic WAL before the parent remeasures it.
-  await fs.writeFile(
-    runner,
-    `
-    import fs from "node:fs";
-    import { spawnSync } from "node:child_process";
-    let input = "";
-    for await (const chunk of process.stdin) input += chunk;
-    const request = JSON.parse(input);
-    if (request.mode !== "inventory") throw new Error("snapshot must not be launched after WAL growth");
-    const child = spawnSync(process.execPath, process.argv.slice(2), { input, encoding: "utf8" });
-    if (child.status !== 0) { process.stderr.write(child.stderr); process.exit(child.status ?? 1); }
-    fs.writeFileSync(${JSON.stringify(ready)}, "inventory-complete");
-    while (!fs.existsSync(${JSON.stringify(ready + ".grown")})) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-    process.stdout.write(child.stdout);
-  `,
-  );
-  useRehearsalWorkerFixture(runner);
   try {
     db.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE payload(bytes BLOB);",
@@ -434,6 +414,23 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       checkedPath: root,
       availableBytes: free,
       totalBytes: free,
+    });
+    const run = commands.runUtf8CommandWithTimeout;
+    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (...args) => {
+      const [argv, options] = args;
+      if (!argv.some((arg) => /[/\\]update-candidate-state\.worker\.[cm]?[jt]s$/.test(arg))) {
+        return run(...args);
+      }
+      if (typeof options === "number" || typeof options.input !== "string") {
+        throw new Error("Expected a serialized inventory request");
+      }
+      expect(JSON.parse(options.input)).toMatchObject({ mode: "inventory" });
+      const result = await run(...args);
+      // Grow the real WAL after inventory settles, before the parent remeasures it.
+      if (result.code === 0 && result.termination === "exit") {
+        db.exec("INSERT INTO payload VALUES (zeroblob(2097152));");
+      }
+      return result;
     });
     const controller = new AbortController();
     const operation = prepareUpdateCandidateStateSnapshot({
@@ -449,9 +446,6 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       (error: unknown) => ({ error }),
     );
     try {
-      await waitForFile(ready);
-      db.exec("INSERT INTO payload VALUES (zeroblob(2097152));");
-      await fs.writeFile(ready + ".grown", "continue");
       expect(await outcome).toMatchObject({
         error: {
           capacity: expect.objectContaining({ reason: "snapshot-capacity-insufficient" }),
@@ -463,7 +457,6 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
         (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
       ).toEqual([]);
     } finally {
-      await fs.writeFile(ready + ".grown", "release");
       controller.abort();
       await outcome;
     }

@@ -25,6 +25,7 @@ import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-displ
 import {
   parseStoredTranscriptEvent,
   readDisplayableActiveEventById,
+  readDisplayableActiveResetMetadataById,
   readHistoricalHistoryAnchorPage,
   resolveHistoricalHistoryEvent,
 } from "./session-accessor.sqlite-history-interval.js";
@@ -541,10 +542,7 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   if (!event) {
     return undefined;
   }
-  const positioned = positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0];
-  return positioned && event.serializedBytes !== undefined
-    ? { ...positioned, serializedBytes: event.serializedBytes }
-    : positioned;
+  return positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0];
 }
 
 /** Select ID candidates and projected-history presence from one validated snapshot. */
@@ -601,6 +599,21 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
   options: TranscriptAnchorPageOptions,
 ): SessionTranscriptMessageAnchorPage {
   const history = resolveVisibleHistoryProjection(projection);
+  if (options.closedResetInterval === true && options.direction === "older") {
+    const closingReset = readDisplayableActiveResetMetadataById(projection, options.messageId);
+    if (closingReset) {
+      const closedPage = readHistoricalHistoryAnchorPage(
+        projection,
+        history.displaySource,
+        closingReset,
+        options,
+        true,
+      );
+      if (closedPage) {
+        return closedPage;
+      }
+    }
+  }
   const windowChange = resolveHistoryReadWindowChange(
     projection,
     history,

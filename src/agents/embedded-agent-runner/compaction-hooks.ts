@@ -1,6 +1,3 @@
-/**
- * Runs compaction hooks and post-compaction side effects for embedded sessions.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -16,14 +13,6 @@ import {
 } from "../sessions/compaction/request-budget.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { log } from "./logger.js";
-
-function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
-  const mode = config?.agents?.defaults?.compaction?.postIndexSync;
-  if (mode === "off" || mode === "async" || mode === "await") {
-    return mode;
-  }
-  return "async";
-}
 
 type PostCompactionSession = {
   config?: OpenClawConfig;
@@ -108,7 +97,6 @@ function syncPostCompactionSessionMemory(
   return Promise.resolve();
 }
 
-/** Emits post-compaction transcript and memory-index side effects for a compacted session file. */
 export async function runPostCompactionSideEffects(params: PostCompactionSession): Promise<void> {
   params.assertActive?.();
   const sessionFile = params.sessionFile.trim();
@@ -125,7 +113,7 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
   await syncPostCompactionSessionMemory({
     ...params,
     sessionFile,
-    mode: resolvePostCompactionIndexSyncMode(params.config),
+    mode: params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async",
   });
   params.assertActive?.();
 }

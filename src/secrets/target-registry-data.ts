@@ -17,8 +17,6 @@ const WEB_PROVIDER_SECRET_CONFIGS = [
   { contract: "webFetchProviders", configPath: "webFetch.apiKey" },
 ] as const;
 
-type WebProviderSecretConfig = (typeof WEB_PROVIDER_SECRET_CONFIGS)[number];
-
 function createOpenClawConfigSecretTargetEntry(
   pathPattern: string,
   options: Partial<
@@ -57,20 +55,6 @@ function createPluginOpenClawConfigSecretTargetEntry(
   return createOpenClawConfigSecretTargetEntry(pathPattern, { pathPatternSegments });
 }
 
-function hasSensitiveConfigHint(
-  plugin: PluginManifestRecord,
-  configPath: WebProviderSecretConfig["configPath"],
-): boolean {
-  return plugin.configUiHints?.[configPath]?.sensitive === true;
-}
-
-function hasWebProviderContract(
-  plugin: PluginManifestRecord,
-  contract: WebProviderSecretConfig["contract"],
-): boolean {
-  return (plugin.contracts?.[contract]?.length ?? 0) > 0;
-}
-
 function listPluginWebProviderSecretTargetRegistryEntries(
   plugins: readonly PluginManifestRecord[],
 ): SecretTargetRegistryEntry[] {
@@ -78,8 +62,8 @@ function listPluginWebProviderSecretTargetRegistryEntries(
   for (const record of plugins) {
     for (const config of WEB_PROVIDER_SECRET_CONFIGS) {
       if (
-        hasWebProviderContract(record, config.contract) &&
-        hasSensitiveConfigHint(record, config.configPath)
+        (record.contracts?.[config.contract]?.length ?? 0) > 0 &&
+        record.configUiHints?.[config.configPath]?.sensitive === true
       ) {
         entries.push(createPluginOpenClawConfigSecretTargetEntry(record.id, config.configPath));
       }
@@ -258,13 +242,11 @@ export function buildSecretTargetRegistryFromPlugins(
   });
 }
 
-/** Returns only core-owned secret target registry entries. */
 /** Returns static core secret target registry entries without plugin-derived targets. */
 export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
 }
 
-/** Returns the process-cached registry including bundled plugin/channel metadata. */
 /** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
 export function getSecretTargetRegistry(params?: {
   config?: OpenClawConfig;
@@ -290,10 +272,7 @@ export function getSecretTargetRegistry(params?: {
       env: params.env ?? process.env,
     });
   }
-  if (cachedSecretTargetRegistry) {
-    return cachedSecretTargetRegistry;
-  }
-  cachedSecretTargetRegistry = loadSecretTargetRegistryFromPluginMetadata({
+  cachedSecretTargetRegistry ??= loadSecretTargetRegistryFromPluginMetadata({
     env: process.env,
   });
   return cachedSecretTargetRegistry;

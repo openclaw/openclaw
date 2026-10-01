@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { WORKER_RPC_SET_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
+import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
 import {
@@ -70,12 +71,34 @@ function turnClaim() {
 }
 
 describe("node worker tunnel lifetime", () => {
+  it("reads the current destination's launch vocabulary with a legacy fallback while offline", async () => {
+    const nodeTransport = transport();
+    const nodes = await nodeTransport.listCurrentNodes();
+    const node = nodes[0]!;
+    nodeTransport.listCurrentNodes = async () => nodes;
+    let currentTransport: NodeWorkerSupervisorTransport | undefined = nodeTransport;
+    const manager = createManager(environment(), { getTransport: () => currentTransport });
+    const handle = await manager.start(startRequest());
+    const legacy = resolveNodeWorkerLaunchToolNames(node.workerHost);
+    await expect(handle.readLaunchToolNames()).resolves.toEqual(legacy);
+
+    node.workerHost.launchToolNames = [];
+    await expect(handle.readLaunchToolNames()).resolves.toEqual([]);
+    node.workerHost.launchToolNames = ["read", "presence"];
+    await expect(handle.readLaunchToolNames()).resolves.toEqual(["read", "presence"]);
+
+    nodeTransport.listCurrentNodes = async () => [];
+    await expect(handle.readLaunchToolNames()).resolves.toEqual(legacy);
+    currentTransport = undefined;
+    await expect(handle.readLaunchToolNames()).resolves.toEqual(legacy);
+  });
+
   it("revalidates the exact claim when a same-run replacement launches", async () => {
     const record = environment();
     let currentClaim = turnClaim();
     const authorizations: boolean[] = [];
     const launchSizes: number[] = [];
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => {
         authorizations.push(request.isDispatchAuthorized());
         launchSizes.push(measureNodeWorkerLaunchBytes(request.deviceId, request.input));
@@ -114,7 +137,7 @@ describe("node worker tunnel lifetime", () => {
     const record = environment();
     const errorText =
       "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out";
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => ({
         launchId: request.input.launchId,
         planHash: "b".repeat(64),
@@ -140,7 +163,7 @@ describe("node worker tunnel lifetime", () => {
 
   it("reuses only the exact same epoch binding", async () => {
     const record = environment();
-    const manager = await createManager(record);
+    const manager = createManager(record);
 
     const first = await manager.start(startRequest());
     await expect(manager.start(startRequest())).resolves.toBe(first);
@@ -161,7 +184,7 @@ describe("node worker tunnel lifetime", () => {
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
     nodeTransport.invoke = withWorkspaceDrain(invoke);
     const transfer = workspaceTransfer();
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       workspaceTransfer: transfer,
     });
@@ -186,7 +209,7 @@ describe("node worker tunnel lifetime", () => {
       return { ok: true, payloadJSON: "null" };
     });
     nodeTransport.invoke = withWorkspaceDrain(invoke);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       launchNodeWorker: async (request) => ({
         launchId: request.input.launchId,
@@ -235,7 +258,7 @@ describe("node worker tunnel lifetime", () => {
         .mockResolvedValue({ ok: true, payloadJSON: "null" });
       nodeTransport.invoke = withWorkspaceDrain(invoke);
       const transfer = { ...workspaceTransfer(), closeAll: vi.fn(async () => {}) };
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
         workspaceTransfer: transfer,
       });
@@ -293,7 +316,7 @@ describe("node worker tunnel lifetime", () => {
       };
       const transfer = workspaceTransfer();
       transfer.prepareRepository = vi.fn(async () => {});
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
         workspaceTransfer: transfer,
       });
@@ -364,7 +387,7 @@ describe("node worker tunnel lifetime", () => {
         );
       });
     const launchNodeWorker = vi.fn(launch);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker,
     });
     const first = await manager.start(startRequest());
@@ -420,7 +443,7 @@ describe("node worker tunnel lifetime", () => {
       });
     };
     const launchNodeWorker = vi.fn(launch);
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       launchNodeWorker,
     });
     const handle = await manager.start(startRequest());

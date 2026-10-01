@@ -22,7 +22,6 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
-import { resolveJobPayloadTextForMain } from "./jobs-scheduling.js";
 import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
 import {
   type CronJobExecutionResult,
@@ -90,6 +89,7 @@ export async function executeJobCore(
       };
     }
     const evaluation = await evaluator({
+      deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
       job,
       script: job.trigger.script,
       state: job.state.triggerState,
@@ -130,7 +130,18 @@ export async function executeJobCore(
       effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
     }
   }
-  options?.assertRunCurrent?.();
+  if (options?.assertRunCurrent) {
+    await options.assertRunCurrent();
+    if (options.activeJobMarker?.cancellation?.kind === "requested") {
+      return { status: "error", error: options.activeJobMarker.cancellation.reason };
+    }
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    if (!isCronActiveJobMarkerCurrent(options.activeJobMarker)) {
+      return { status: "error", error: "Gateway restarting." };
+    }
+  }
   options?.onPayloadExecutionStarted?.();
   if (effectiveJob.payload.kind === "script") {
     const result = await executeScriptCronJob(state, effectiveJob, abortSignal, options);
@@ -228,7 +239,10 @@ async function executeMainSessionCronJob(
     CronRunTelemetry &
     Pick<CronRunDeliveryResult, "delivered" | "deliveryAttempted" | "deliveryError" | "delivery">
 > {
-  const text = resolveJobPayloadTextForMain(job);
+  const text =
+    job.payload.kind === "systemEvent" && typeof job.payload.text === "string"
+      ? job.payload.text.trim()
+      : undefined;
   if (!text) {
     const kind = job.payload.kind;
     return {
@@ -344,6 +358,7 @@ async function executeDetachedCronJob(
       };
     }
     const res = await state.deps.runCommandJob({
+      deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
       job,
       abortSignal,
     });
@@ -390,6 +405,7 @@ async function executeDetachedCronJob(
   }
 
   const res = await state.deps.runIsolatedAgentJob({
+    deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
     admissionSource:
       job.owner?.sessionKey ||
@@ -459,6 +475,7 @@ async function executeScriptCronJob(
     };
   }
   const result = await state.deps.runScriptJob({
+    deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
     streamBatch: options?.streamBatch,
     abortSignal,
@@ -472,7 +489,18 @@ async function executeScriptCronJob(
   if (abortSignal?.aborted) {
     return { status: "error" as const, error: abortErrorMessage(abortSignal) };
   }
-  options?.assertRunCurrent?.();
+  if (options?.assertRunCurrent) {
+    await options.assertRunCurrent();
+    if (options.activeJobMarker?.cancellation?.kind === "requested") {
+      return { status: "error" as const, error: options.activeJobMarker.cancellation.reason };
+    }
+    if (!isCronActiveJobMarkerCurrent(options.activeJobMarker)) {
+      return { status: "error" as const, error: "Gateway restarting." };
+    }
+    if (abortSignal?.aborted) {
+      return { status: "error" as const, error: abortErrorMessage(abortSignal) };
+    }
+  }
   if (result.status !== "ok") {
     return result;
   }

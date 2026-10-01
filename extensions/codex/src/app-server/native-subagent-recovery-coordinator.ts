@@ -12,7 +12,6 @@ type NativeSubagentRecoveryDependencies = {
   isRegisteredChild: (child: ChildState) => boolean;
   currentChild: (threadId: string) => ChildState | undefined;
   parentState: (parentThreadId: string) => ParentState | undefined;
-  isRetiredParent: (state: ParentState) => boolean;
   reconcileChildState: (child: ChildState) => Promise<boolean>;
   processCompletion: (
     state: ParentState,

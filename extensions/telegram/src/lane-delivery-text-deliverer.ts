@@ -180,16 +180,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     let mediaPayload: ReplyPayload;
     if (getReplyPayloadTtsSupplement(payload)) {
       mediaPayload = buildTtsSupplementMediaPayload(params.applyTextToPayload(payload, text));
-    } else if (payload.audioAsVoice === true) {
-      const {
-        text: _text,
-        presentation: _presentation,
-        interactive: _interactive,
-        btw: _btw,
-        spokenText: _spokenText,
-        ...voicePayload
-      } = params.applyTextToPayload(payload, text);
-      mediaPayload = copyReplyPayloadMetadata(payload, { ...voicePayload, spokenText: text });
     } else {
       const {
         text: _text,
@@ -197,8 +187,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         interactive: _interactive,
         btw: _btw,
         ...rest
-      } = payload;
-      mediaPayload = copyReplyPayloadMetadata(payload, rest);
+      } = payload.audioAsVoice === true ? params.applyTextToPayload(payload, text) : payload;
+      mediaPayload = copyReplyPayloadMetadata(
+        payload,
+        payload.audioAsVoice === true ? { ...rest, spokenText: text } : rest,
+      );
     }
     return withFallbackTelegramButtons(
       withMediaChannelData(mediaPayload, options),

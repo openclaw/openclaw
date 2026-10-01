@@ -84,7 +84,7 @@ let activeDispatcher:
   | undefined;
 
 /** Retain the exact loopback listener until the real Gateway transport adopts it. */
-export async function reserveGatewayTestListener(port = 0) {
+export async function reserveGatewayTestListener(port: number | TestPortClaim = 0) {
   const rejectEarlyConnection = (socket: Socket) => socket.destroy();
   const { claim, listener, releaseListener } = await reserveTestPortListener({
     offsets: [0, 1, 2, 3, 4],

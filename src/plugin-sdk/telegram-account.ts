@@ -1,4 +1,3 @@
-// Telegram account helpers resolve Telegram plugin account config and display metadata.
 import type { OpenClawConfig } from "./config-contracts.js";
 import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 

@@ -72,13 +72,12 @@ function isOwnerSender(
   return owners.includes(sender);
 }
 
-function recordPendingGroupHistoryEntry(params: {
-  msg: AdmittedWebInboundMessage;
-  body?: string;
-  groupHistories: Map<string, GroupHistoryEntry[]>;
-  groupHistoryKey: string;
-  groupHistoryLimit: number;
-}) {
+function skipGroupMessageAndStoreHistory(
+  params: ApplyGroupGatingParams,
+  verboseMessage: string,
+  body?: string,
+) {
+  params.logVerbose(verboseMessage);
   const senderIdentity = getSenderIdentity(params.msg);
   const sender =
     senderIdentity.name && senderIdentity.e164
@@ -92,7 +91,7 @@ function recordPendingGroupHistoryEntry(params: {
     limit: params.groupHistoryLimit,
     entry: {
       sender,
-      body: params.body ?? params.msg.payload.body,
+      body: body ?? params.msg.payload.body,
       timestamp: params.msg.event.timestamp,
       id: params.msg.event.id,
       senderJid: senderIdentity.jid ?? params.msg.platform.senderJid,
@@ -109,21 +108,6 @@ function recordPendingGroupHistoryEntry(params: {
           }
         : {}),
     },
-  });
-}
-
-function skipGroupMessageAndStoreHistory(
-  params: ApplyGroupGatingParams,
-  verboseMessage: string,
-  body?: string,
-) {
-  params.logVerbose(verboseMessage);
-  recordPendingGroupHistoryEntry({
-    msg: params.msg,
-    body,
-    groupHistories: params.groupHistories,
-    groupHistoryKey: params.groupHistoryKey,
-    groupHistoryLimit: params.groupHistoryLimit,
   });
   return { shouldProcess: false } as const;
 }

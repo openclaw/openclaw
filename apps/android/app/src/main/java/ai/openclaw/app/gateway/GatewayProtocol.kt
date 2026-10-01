@@ -850,6 +850,8 @@ enum class GatewayMethod(
   SessionSuggestionsAdd("session.suggestions.add"),
   SessionSuggestionsList("session.suggestions.list"),
   SessionSuggestionsResolve("session.suggestions.resolve"),
+  SessionReactionsSet("session.reactions.set"),
+  SessionReactionsList("session.reactions.list"),
   SessionTyping("session.typing"),
   SessionsCompanionAsk("sessions.companion.ask"),
   SessionsCompanionState("sessions.companion.state"),
@@ -978,6 +980,7 @@ enum class GatewayMethod(
   UsersMerge("users.merge"),
   GatewayStopRequest("gateway.stop.request"),
   DiagnosticsHeapSnapshot("diagnostics.heapSnapshot"),
+  SessionsCatalogImport("sessions.catalog.import"),
 }
 
 enum class GatewayEvent(
@@ -991,11 +994,13 @@ enum class GatewayEvent(
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
+  SessionNarration("session.narration"),
   SessionObserver("session.observer"),
   SessionOperation("session.operation"),
   SessionSharing("session.sharing"),
   SessionSharingEvidence("session.sharing.evidence"),
   SessionSuggestion("session.suggestion"),
+  SessionReaction("session.reaction"),
   SessionTyping("session.typing"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),

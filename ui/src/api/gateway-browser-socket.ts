@@ -1,9 +1,93 @@
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  type ErrorShape,
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
-import { gatewayWebSocketTransportUrl } from "../dev-gateway.ts";
+import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+import { formatUiError } from "../lib/format-error.ts";
+
+const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
+export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
+
+function getErrorName(err: unknown): string | undefined {
+  const name = err && typeof err === "object" && "name" in err ? err.name : undefined;
+  return typeof name === "string" && name.trim() ? name : undefined;
+}
+
+function isBrowserWebSocketSecurityError(err: unknown): boolean {
+  const name = getErrorName(err)?.toLowerCase();
+  const message = formatUiError(err).toLowerCase();
+  return (
+    name === "securityerror" ||
+    message.includes("security error") ||
+    message.includes("mixed content") ||
+    message.includes("insecure websocket")
+  );
+}
+
+export function formatBrowserWebSocketConstructorError(err: unknown, url: string): ErrorShape {
+  const securityError = isBrowserWebSocketSecurityError(err);
+  const browserMessage = formatUiError(err);
+  const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
+  const details = {
+    code: securityError
+      ? BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
+      : BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
+    browserErrorName: getErrorName(err),
+    browserMessage,
+  };
+  if (securityError) {
+    return {
+      code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
+      message:
+        "Browser refused the Gateway WebSocket for security reasons." +
+        (isPlaintextWs
+          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
+          : " Check the Gateway WebSocket URL and browser security policy."),
+      details,
+    };
+  }
+  return {
+    code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
+    message: `Could not create the Gateway WebSocket: ${browserMessage}`,
+    details,
+  };
+}
+
+export async function probeGatewayReachability(url: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const gateway = new URL(url, window.location.href);
+    gateway.protocol = gateway.protocol.replace(/^ws/u, "http");
+    const probe = new URL(
+      uiDevGatewayResourceUrl(new URL("/healthz", gateway).href),
+      window.location.href,
+    );
+    if (probe.origin !== new URL(window.location.href).origin) {
+      return false;
+    }
+    const response = await fetch(probe, {
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      signal,
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const body: unknown = await response.json();
+    return (
+      body !== null &&
+      typeof body === "object" &&
+      "ok" in body &&
+      body.ok === true &&
+      "status" in body &&
+      body.status === "live"
+    );
+  } catch {
+    return false;
+  }
+}
 
 export function createBrowserGatewaySocket(
   url: string,

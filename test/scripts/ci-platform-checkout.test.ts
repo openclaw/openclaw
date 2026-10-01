@@ -403,6 +403,9 @@ it.concurrent.each([
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
     };
+    const preflightScripts = {
+      "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
+    };
     const releasePolicy = Object.fromEntries(
       [
         "scripts/lib/release-context.mjs",
@@ -474,6 +477,7 @@ it.concurrent.each([
           ...evidenceScripts,
           ...nodeSetupScripts,
           ...platformScripts,
+          ...preflightScripts,
           ...releasePolicy,
           ...candidateFiles,
         })) {
@@ -654,6 +658,12 @@ it.concurrent.each([
         for (const [name, contents] of Object.entries(platformScripts)) {
           expect(existsSync(path.join(harness, name)), name).toBe(kind === "platform");
           if (kind === "platform") {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
+        for (const [name, contents] of Object.entries(preflightScripts)) {
+          expect(existsSync(path.join(harness, name)), name).toBe(preflight);
+          if (preflight) {
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
           }
         }

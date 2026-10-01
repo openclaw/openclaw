@@ -32,7 +32,6 @@ import type {
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
-  isConversationHookName,
   isPluginHookAgentTrigger,
   isPluginHookName,
   isPluginHookReplyDispatchKind,
@@ -49,6 +48,22 @@ import type {
   PluginHookRegistrationOptions,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
+
+const conversationHookNames = new Set<PluginHookName>([
+  "before_model_resolve",
+  "agent_turn_prepare",
+  "before_prompt_build",
+  "before_agent_reply",
+  "llm_input",
+  "llm_output",
+  "before_agent_finalize",
+  "agent_end",
+  "before_agent_run",
+]);
+
+function isConversationHookName(hookName: PluginHookName): boolean {
+  return conversationHookNames.has(hookName);
+}
 
 function normalizeHookEligibility<T>(value: unknown, isEligible: (item: unknown) => item is T) {
   if (!Array.isArray(value)) {
@@ -311,32 +326,21 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       return;
     }
     const description = entry?.hook.description ?? opts?.description ?? "";
-    const hookEntry: HookEntry = entry
-      ? {
-          ...entry,
-          hook: {
-            ...entry.hook,
-            name: hookName,
-            description,
-            source: "openclaw-plugin",
-            pluginId: record.id,
-          },
-          metadata: { ...entry.metadata, events: normalizedEvents },
-        }
-      : {
-          hook: {
-            name: hookName,
-            description,
-            source: "openclaw-plugin",
-            pluginId: record.id,
-            filePath: record.source,
-            baseDir: path.dirname(record.source),
-            handlerPath: record.source,
-          },
-          frontmatter: {},
-          metadata: { events: normalizedEvents },
-          invocation: { enabled: true },
-        };
+    const hookEntry: HookEntry = {
+      ...(entry ?? { frontmatter: {}, invocation: { enabled: true } }),
+      hook: {
+        ...(entry?.hook ?? {
+          filePath: record.source,
+          baseDir: path.dirname(record.source),
+          handlerPath: record.source,
+        }),
+        name: hookName,
+        description,
+        source: "openclaw-plugin",
+        pluginId: record.id,
+      },
+      metadata: { ...entry?.metadata, events: normalizedEvents },
+    };
     record.hookNames.push(hookName);
     registry.hooks.push({
       pluginId: record.id,
@@ -392,10 +396,8 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    if (
-      isConversationHookName(hookName) &&
-      !resolveConversationAccessAllowed(record.origin, policy)
-    ) {
+    const conversationAccessAllowed = resolveConversationAccessAllowed(record.origin, policy);
+    if (isConversationHookName(hookName) && !conversationAccessAllowed) {
       if (record.origin !== "bundled") {
         reportRegistrationWarning(
           record,
@@ -439,6 +441,9 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
       ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
         ? { requiresToolAuthority: true }
+        : {}),
+      ...(hookName === "session_end" && conversationAccessAllowed
+        ? { conversationAccessAllowed: true }
         : {}),
       source: record.source,
     } as TypedPluginHookRegistration);

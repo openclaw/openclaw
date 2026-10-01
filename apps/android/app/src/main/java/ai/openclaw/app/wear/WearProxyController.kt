@@ -202,11 +202,7 @@ internal class WearProxyController(
       .firstOrNull { (id) -> id == selected }
       ?.takeIf { selectedAgent -> boundedAgents.none { (id) -> id == selectedAgent.first } }
       ?.let { selectedAgent ->
-        if (boundedAgents.size == MAX_AGENT_COUNT) {
-          boundedAgents[boundedAgents.lastIndex] = selectedAgent
-        } else {
-          boundedAgents += selectedAgent
-        }
+        boundedAgents[boundedAgents.lastIndex] = selectedAgent
       }
     return buildJsonObject {
       put(
@@ -355,7 +351,6 @@ internal class WearProxyController(
         .asArrayOrNull()
         ?.mapNotNull { projectSession(it, agentId) }
         .orEmpty()
-        .toMutableList()
     val selectedSessionValid =
       selectedSessionKey
         ?.takeIf { selectedKey -> sessions.none { session -> session.stringOrNull("key") == selectedKey } }

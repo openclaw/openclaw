@@ -15,6 +15,7 @@ import {
   openFromForeground,
   expectForegroundUnchanged,
 } from "./command-palette.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -185,11 +186,10 @@ suite.define(() => {
           );
           await input.fill("appearance");
           await palette.getByRole("option", { name: /^Appearance audit/ }).waitFor();
-          await palette
-            .locator(".cmd-palette__search")
-            .getByRole("status")
-            .filter({ hasText: "Models unavailable" })
-            .waitFor();
+          await expect
+            .poll(() => palette.locator(".cmd-palette__results").getAttribute("aria-busy"))
+            .toBe("false");
+          expect(await palette.locator(".cmd-palette__source-error").count()).toBe(0);
           const search = palette.locator(".cmd-palette__search");
           const original = (await palette.locator(".cmd-palette").boundingBox())!;
           const inputTop = (await input.boundingBox())!.y;
@@ -524,7 +524,7 @@ suite.define(() => {
         );
         const module = await holdModuleResponse(
           page,
-          /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
         );
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));

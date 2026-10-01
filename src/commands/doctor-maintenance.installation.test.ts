@@ -23,6 +23,7 @@ import * as sqliteWorkerStores from "../infra/sqlite-worker-store.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -179,9 +180,10 @@ afterEach(() => {
 async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
+  bun?: boolean;
   installFails?: boolean;
   stopFailsWithPairedDevice?: boolean;
-  tokenRecovery?: "success" | "refused" | "service-failure" | "writer-unavailable";
+  tokenRecovery?: "success" | "refused" | "service-failure" | "writer-unavailable" | "no-consent";
   revoked?: "unchanged" | "restored" | "recovery-pending" | "unclassified";
   initiallyStopped?: boolean;
   releaseStateBeforeFinish?: boolean;
@@ -226,12 +228,19 @@ async function runInstallationCase(params: {
     });
   }
   mockDoctorServicePlatform(params.platform);
+  if (params.tokenRecovery) {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: params.tokenRecovery !== "no-consent",
+      configurable: true,
+    });
+    mocks.confirm.mockResolvedValue(true);
+  }
   mockSystemAccountHome();
   const home = await fs.realpath(tempDirs.make("openclaw-doctor-installation-"));
   mocks.runtimePath =
     params.consent?.mixed === "version-managed-runtime"
       ? path.join(home, ".nvm", "versions", "node", "v26.8.1", "bin", "node")
-      : path.join(home, "runtime", "node");
+      : path.join(home, "runtime", params.bun ? "bun" : "node");
   const oldRoot = path.join(home, "prefix-a/lib/node_modules/openclaw");
   mocks.activeRoot = path.join(home, "prefix-b/lib/node_modules/openclaw");
   for (const [root, version] of [
@@ -378,12 +387,11 @@ async function runInstallationCase(params: {
           expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
           events.push("install");
           if (params.tokenRecovery) {
-            expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toBe(
-              "maintenance-fixture-token",
-            );
-            expect(JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token).toBe(
-              "maintenance-fixture-token",
-            );
+            const ref = JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token;
+            expect(ref).toMatchObject({ source: "store" });
+            expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toEqual(ref);
+            const stored = readSecretStoreValue({ scope: { kind: "team" }, name: ref.id });
+            expect(stored.ok && stored.value === "maintenance-fixture-token").toBe(true);
           }
           if (params.revoked) {
             throw new GatewayServiceAuthorityError(
@@ -430,6 +438,13 @@ async function runInstallationCase(params: {
         const cli = params.profile ? `openclaw --profile ${params.profile}` : "openclaw";
         expect(notes).toContain(`${cli} doctor --fix`);
         expect(notes).toContain(`${cli} gateway install --force`);
+        if (params.bun) {
+          expect(events).toEqual([]);
+          expect(running).toBe(true);
+          expect(command).toEqual(originalCommand);
+          expect(notes).toContain("automatic installation repair was skipped");
+          return;
+        }
         if (params.updateInProgress) {
           expect(notes).toContain("deferred to update finalization");
           expect(events).toEqual([]);
@@ -489,7 +504,10 @@ async function runInstallationCase(params: {
         : undefined;
       const admission = beginDoctorMaintenance({
         root: mocks.activeRoot,
-        options: { repair: true, nonInteractive: true },
+        options: {
+          repair: true,
+          nonInteractive: !params.tokenRecovery || params.tokenRecovery === "no-consent",
+        },
         runtime,
       });
       if (pairedDeviceDatabasePath && authWorkerOpen) {
@@ -587,11 +605,16 @@ async function runInstallationCase(params: {
           expect(finishError).toBeUndefined();
           const bytes = await fs.readFile(configPath!, "utf8");
           const refused =
-            params.tokenRecovery === "refused" || params.tokenRecovery === "writer-unavailable";
+            params.tokenRecovery === "refused" ||
+            params.tokenRecovery === "writer-unavailable" ||
+            params.tokenRecovery === "no-consent";
           expect(events).toEqual([
             "stop",
             "repair-state",
-            ...(params.tokenRecovery === "writer-unavailable" ? [] : ["write-config"]),
+            ...(params.tokenRecovery === "writer-unavailable" ||
+            params.tokenRecovery === "no-consent"
+              ? []
+              : ["write-config"]),
             ...(refused ? [] : ["install"]),
           ]);
           if (refused) {
@@ -600,11 +623,17 @@ async function runInstallationCase(params: {
             expect(running).toBe(false);
             expect(command).toEqual(originalCommand);
             expect(mocks.health).not.toHaveBeenCalled();
+            if (params.tokenRecovery === "no-consent") {
+              expect(
+                mocks.note.mock.calls.map(([message]) => String(message)).join("\n"),
+              ).toContain("Skipped Gateway token preservation and service repair");
+            }
           } else {
-            expect(JSON.parse(bytes).gateway.auth.token).toBe("maintenance-fixture-token");
+            expect(JSON.parse(bytes).gateway.auth.token).toMatchObject({ source: "store" });
             expect(writerContext?.cfgForPersistence).toEqual(writerContext?.cfg);
             expect(running).toBe(!installFails);
           }
+          expect(bytes.includes("maintenance-fixture-token")).toBe(false);
           return;
         }
         if (params.inspectionScenario === "competing-update") {
@@ -711,7 +740,7 @@ async function runInstallationCase(params: {
   );
 }
 
-it.each(["success", "refused", "service-failure", "writer-unavailable"] as const)(
+it.each(["success", "refused", "service-failure", "writer-unavailable", "no-consent"] as const)(
   "delegates maintenance token recovery before native service mutation (%s)",
   async (tokenRecovery) =>
     runInstallationCase({
@@ -801,3 +830,6 @@ it("keeps installation reconciliation guidance on the selected profile", async (
 
 it("leaves two-prefix installation drift with update finalization", async () =>
   runInstallationCase({ platform: "linux", mode: "direct", updateInProgress: true }));
+
+it("reports split-root Bun drift without rewriting or stopping the service", async () =>
+  runInstallationCase({ platform: "linux", mode: "direct", bun: true }));

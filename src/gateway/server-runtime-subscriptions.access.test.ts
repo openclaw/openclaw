@@ -1,12 +1,11 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   patchSessionEntryCore,
-  persistSessionResetLifecycle,
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
@@ -135,13 +134,19 @@ it("keeps concurrent draft and saved metadata reads available while another sess
     await upsertSessionEntryCore(scope, { sessionId: "selected", updatedAt: 1 });
     start();
     const metadata = { commands: [], models: [], swarmEnabled: false };
+    const readerCount = 50;
+    const entered = createDeferred();
     const release = createDeferred();
+    let enteredReaders = 0;
     const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => {
+      if (++enteredReaders === readerCount) {
+        entered.resolve();
+      }
       await release.promise;
       return metadata;
     });
     const context = createDirectChatContext({ readChatMetadata });
-    const readers = Array.from({ length: 50 }, (_, index) => {
+    const readers = Array.from({ length: readerCount }, (_, index) => {
       const respond = vi.fn<RespondFn>();
       const pending = handleChatMetadataRequest({
         req: { type: "req", id: `metadata-${index}`, method: "chat.metadata" },
@@ -155,6 +160,11 @@ it("keeps concurrent draft and saved metadata reads available while another sess
     });
     const settled = Promise.allSettled(readers.map(({ pending }) => pending));
     try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        Promise.race(readers.map(({ pending }) => pending)),
+        "Metadata request settled before all readers entered",
+      );
       expect(readChatMetadata).toHaveBeenCalledTimes(readers.length);
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:unrelated-creation" },
@@ -188,12 +198,18 @@ it.each([false, true])(
         BEGIN SELECT RAISE(ABORT, 'injected reset failure'); END;`);
       }
       try {
-        const reset = persistSessionResetLifecycle({
-          ...scope,
-          previousEntry: entry,
-          nextEntry: { ...entry, lifecycleRevision: "after", updatedAt: 2 },
-          nextSessionFile: scope.sessionKey,
-          workspaceDir,
+        const reset = applySessionEntryLifecycleMutation({
+          agentId: scope.agentId,
+          activeSessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          upserts: [
+            {
+              sessionKey: scope.sessionKey,
+              entry: { ...entry, lifecycleRevision: "after", updatedAt: 2 },
+              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: workspaceDir },
+            },
+          ],
+          skipMaintenance: true,
         });
         if (rollback) {
           await expect(reset).rejects.toThrow("injected reset failure");

@@ -7,10 +7,6 @@ import { classifyRateLimitWindow } from "../failover/retry-evidence.js";
 import { AgentSessionExtensions } from "./agent-session-extensions.js";
 
 export abstract class AgentSessionExecution extends AgentSessionExtensions {
-  // =========================================================================
-  // Auto-Retry
-  // =========================================================================
-
   /**
    * Check if an error is retryable (overloaded, rate limit, server errors).
    * Context overflow errors are NOT retryable (handled by compaction instead).
@@ -20,7 +16,6 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
-    // Context overflow is handled by compaction, not retry
     const contextWindow = this.model?.contextWindow ?? 0;
     if (isContextOverflow(message, contextWindow)) {
       return false;
@@ -70,7 +65,6 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       this.agent.state.messages = messages.toSpliced(failedIndex, 1);
     }
 
-    // Wait with exponential backoff (abortable)
     this.retryAbortController = new AbortController();
     try {
       await sleep(delayMs, this.retryAbortController.signal);
@@ -92,27 +86,8 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
     return true;
   }
 
-  /**
-   * Cancel in-progress retry.
-   */
+  /** Cancel an in-progress retry. */
   abortRetry(): void {
     this.retryAbortController?.abort();
-  }
-
-  /** Whether auto-retry is currently in progress */
-  get isRetrying(): boolean {
-    return this.retryAbortController !== undefined;
-  }
-
-  /** Whether auto-retry is enabled */
-  get autoRetryEnabled(): boolean {
-    return this.settingsManager.getRetryEnabled();
-  }
-
-  /**
-   * Toggle auto-retry setting.
-   */
-  setAutoRetryEnabled(enabled: boolean): void {
-    this.settingsManager.setRetryEnabled(enabled);
   }
 }

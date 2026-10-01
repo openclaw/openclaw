@@ -208,7 +208,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     leafMessage: Parameters<typeof mergeOrphanedTrailingUserPrompt>[0]["leafMessage"],
     prompt = "newest inbound message",
   ) {
-    return mergeOrphanedTrailingUserPrompt({ prompt, trigger: "user", leafMessage });
+    return mergeOrphanedTrailingUserPrompt({ prompt, leafMessage });
   }
   it("does not replay the initiating user turn into an approved-exec continuation", () => {
     expect(

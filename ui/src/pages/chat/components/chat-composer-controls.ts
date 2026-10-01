@@ -23,21 +23,20 @@ import {
   voiceStatusLabel,
 } from "./chat-voice-activity.ts";
 
-export type ChatRunControlsProps = {
+export type ChatRunControlsProps = Omit<
+  ComposerVoiceButtonProps,
+  "idleLabel" | "onDirectDictationStart"
+> & {
   canAbort: boolean;
   canSend: boolean;
-  submitDisabledReason?: string | null;
   submitPending?: boolean;
-  connected: boolean;
   draft: string;
   hasAttachments?: boolean;
   preparingAttachments?: boolean;
-  isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
   alternateFollowUpMode?: ChatFollowUpMode;
   suggestionComposer?: boolean;
   submissionLabel?: string;
-  sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
   voiceDetail?: string | null;
@@ -45,14 +44,10 @@ export type ChatRunControlsProps = {
   voiceVideoCapable?: boolean;
   voiceVideoEnabled?: boolean;
   voiceVideoPending?: boolean;
-  dictation?: ComposerDictationController;
-  onDictationPointerDown?: (event: PointerEvent) => void;
   onPrimaryActionPointerDown?: (event: PointerEvent) => void;
   onAbort?: () => void;
   onSend: (submissionAction?: Event) => void;
-  onToggleVoice?: () => void;
   onToggleCamera?: () => void;
-  microphonePicker?: TemplateResult | typeof nothing;
 };
 
 type MicrophonePickerProps = {
@@ -94,6 +89,12 @@ function releaseMicrophonePickerFocus(dropdown: EventTarget | null, item: HTMLEl
       trigger.blur();
     }
   });
+}
+
+function renderMicrophoneNotice(className: string, message: string, role?: "status" | "alert") {
+  return html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
+    <div class=${className} role=${role ?? nothing}>${message}</div>
+  </wa-dropdown-item>`;
 }
 
 export function renderMicrophonePicker(props: MicrophonePickerProps) {
@@ -173,16 +174,11 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
       <div class="chat-talk-input-picker__heading">${label}</div>
       ${
         unavailable
-          ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-              <div
-                class="chat-talk-input-picker__empty${
-                  unavailableIsFault ? " chat-talk-input-picker__empty--fault" : ""
-                }"
-                role="status"
-              >
-                ${realtimeTalkDeviceIssueMessage(unavailable, "audioinput")}
-              </div>
-            </wa-dropdown-item>`
+          ? renderMicrophoneNotice(
+              `chat-talk-input-picker__empty${unavailableIsFault ? " chat-talk-input-picker__empty--fault" : ""}`,
+              realtimeTalkDeviceIssueMessage(unavailable, "audioinput"),
+              "status",
+            )
           : html`
               ${options.map((option) => {
                 const selected = option.deviceId === props.selectedDeviceId;
@@ -211,29 +207,28 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
               })}
               ${
                 props.loading
-                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-                      <div class="chat-talk-input-picker__note" role="status">
-                        ${t("common.loading")}
-                      </div>
-                    </wa-dropdown-item>`
+                  ? renderMicrophoneNotice(
+                      "chat-talk-input-picker__note",
+                      t("common.loading"),
+                      "status",
+                    )
                   : nothing
               }
               ${
                 props.issue
-                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-                      <div class="chat-talk-input-picker__warning" role="alert">
-                        ${realtimeTalkDeviceIssueMessage(props.issue, "audioinput")}
-                      </div>
-                    </wa-dropdown-item>`
+                  ? renderMicrophoneNotice(
+                      "chat-talk-input-picker__warning",
+                      realtimeTalkDeviceIssueMessage(props.issue, "audioinput"),
+                      "alert",
+                    )
                   : nothing
               }
               ${
                 props.voiceActive
-                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-                      <div class="chat-talk-input-picker__hint">
-                        ${t("chat.composer.microphoneAppliesNextSession")}
-                      </div>
-                    </wa-dropdown-item>`
+                  ? renderMicrophoneNotice(
+                      "chat-talk-input-picker__hint",
+                      t("chat.composer.microphoneAppliesNextSession"),
+                    )
                   : nothing
               }
             `

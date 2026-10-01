@@ -103,6 +103,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
+import androidx.compose.ui.test.IdlingResource
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
@@ -2340,12 +2341,13 @@ class ChatComposerLayoutTest {
         down(center)
         up()
       }
-      composeRule.waitUntil {
+      awaitBranchSwitch(calls)
+      assertEquals(
+        "android-screenshot-branch-02",
         controller.messages.value
           .lastOrNull()
-          ?.entryId == "android-screenshot-branch-02" &&
-          !controller.sessionBranchSwitching.value
-      }
+          ?.entryId,
+      )
       composeRule.onNode(isDialog()).assertDoesNotExist()
       val request = calls.single { it.method == "sessions.branches.switch" }
       assertEquals(JsonPrimitive(AndroidScreenshotFixture.mainSessionKey), request.params["sessionKey"])
@@ -2469,8 +2471,7 @@ class ChatComposerLayoutTest {
       composeRule.onNodeWithText("Release plan 02: review this alternative before preparing the release.").assertExists()
 
       composeRule.runOnIdle { release.complete(Unit) }
-      composeRule.waitUntil { !controller.sessionBranchSwitching.value }
-      composeRule.waitForIdle()
+      awaitBranchSwitch(calls)
       assertFalse("The completed fresh opening must close", fresh.isShowing)
       composeRule.onNode(isDialog()).assertDoesNotExist()
       assertEquals(
@@ -2733,12 +2734,13 @@ class ChatComposerLayoutTest {
         down(center)
         up()
       }
-      composeRule.waitUntil {
+      awaitBranchSwitch(calls)
+      assertEquals(
+        "android-screenshot-branch-02",
         controller.messages.value
           .lastOrNull()
-          ?.entryId == "android-screenshot-branch-02" &&
-          !controller.sessionBranchSwitching.value
-      }
+          ?.entryId,
+      )
       composeRule.waitForIdle()
       assertFalse("The completed eligible selection must close its opening", dialog.isShowing)
       composeRule.onNode(isDialog()).assertDoesNotExist()
@@ -2879,8 +2881,7 @@ class ChatComposerLayoutTest {
       branchRow(2).assertIsNotEnabled()
       val reads = calls.count { it.method == "sessions.branches.list" }
       composeRule.runOnIdle { release.complete(Unit) }
-      composeRule.waitUntil { !controller.sessionBranchSwitching.value }
-      composeRule.waitForIdle()
+      awaitBranchSwitch(calls)
       val switched = calls.single { it.method == "sessions.branches.switch" }
       assertEquals(JsonPrimitive(AndroidScreenshotFixture.mainSessionKey), switched.params["sessionKey"])
       assertEquals(JsonPrimitive("main"), switched.params["agentId"])
@@ -2915,6 +2916,29 @@ class ChatComposerLayoutTest {
     composeRule.onNode(isDialog()).assertExists()
     branchRow(2).assertIsDisplayed()
     return checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+  }
+
+  /**
+   * Drains the admitted selection until its coroutine completes. Its Room work resumes from the
+   * database's IO context, which Compose idling cannot see, so a wall-clock poll races slow hosts.
+   */
+  private fun awaitBranchSwitch(calls: Collection<BranchRequest>) {
+    val selection =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() = calls.lastOrNull { it.method == "sessions.branches.switch" }?.job?.isCompleted == true
+
+        override fun getDiagnosticMessageIfBusy(): String =
+          "Branch switch requests=${calls.count { it.method == "sessions.branches.switch" }} " +
+            "switching=${controller.sessionBranchSwitching.value} loading=${controller.sessionBranchesLoading.value}"
+      }
+    composeRule.registerIdlingResource(selection)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(selection)
+    }
+    assertFalse("The admitted switch has settled", controller.sessionBranchSwitching.value)
   }
 
   private fun showBranchChat(direction: LayoutDirection = LayoutDirection.Ltr): MainViewModel {
@@ -4466,16 +4490,17 @@ class ChatComposerLayoutTest {
       response = { """{"entry":{"key":"$originalSession","modelOverride":null},"resolved":{"modelProvider":"openai","model":"gpt-5.2"}}""" },
     ) { admitted, release ->
       val catalog = controllerFlow<List<GatewayModelSummary>>("_modelCatalog")
+      // Commands can arrive before models.list finishes; capture the catalog only after its model exists.
+      composeRule.waitUntil { composeRule.runOnIdle { catalog.value.any { it.providerQualifiedRef() == "openai/gpt-5.2" } } }
       val availableCatalog = catalog.value
 
       fun publishAvailability(reason: GatewayModelUnavailableReason?) {
-        composeRule.runOnIdle {
-          catalog.value =
-            availableCatalog.map {
-              if (it.providerQualifiedRef() == "openai/gpt-5.2") it.copy(available = reason == null, unavailableReason = reason) else it
-            }
-        }
-        composeRule.waitUntil { composeRule.runOnIdle { model.chatModelCatalog.value == catalog.value } }
+        val expectedCatalog =
+          availableCatalog.map {
+            if (it.providerQualifiedRef() == "openai/gpt-5.2") it.copy(available = reason == null, unavailableReason = reason) else it
+          }
+        composeRule.runOnIdle { catalog.value = expectedCatalog }
+        composeRule.waitUntil { composeRule.runOnIdle { model.chatModelCatalog.value == expectedCatalog } }
         composeRule.runOnIdle {
           assertEquals(
             reason,

@@ -54,7 +54,7 @@ describe("session accessor boundary guard", () => {
     ).toEqual([]);
   });
 
-  it("allows the exact beta.5 compatibility exports without opening aliases", () => {
+  it("rejects retired beta.5 compatibility exports and aliases", () => {
     expect(
       findSessionStoreRuntimeFileBackedCompatExportViolations(
         ...parseFixture(`
@@ -64,7 +64,18 @@ describe("session accessor boundary guard", () => {
         export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
       `),
       ),
-    ).toEqual([]);
+    ).toEqual([
+      { line: 2, reason: 'exports retired file-backed SDK session helper "loadSessionStore"' },
+      { line: 3, reason: 'exports retired file-backed SDK session helper "updateSessionStore"' },
+      {
+        line: 4,
+        reason: 'exports retired file-backed SDK session helper "resolveSessionFilePath"',
+      },
+      {
+        line: 5,
+        reason: 'exports retired file-backed SDK session helper "resolveSessionStoreEntry"',
+      },
+    ]);
     expect(
       findSessionStoreRuntimeFileBackedCompatExportViolations(
         ...parseFixture(`
@@ -75,11 +86,11 @@ describe("session accessor boundary guard", () => {
     ).toEqual([
       {
         line: 2,
-        reason: 'exports unratcheted file-backed SDK session helper "resolveSessionFilePath"',
+        reason: 'exports retired file-backed SDK session helper "resolveSessionFilePath"',
       },
       {
         line: 3,
-        reason: 'exports unratcheted file-backed SDK session helper "saveSessionStore"',
+        reason: 'exports retired file-backed SDK session helper "saveSessionStore"',
       },
     ]);
   });

@@ -6,6 +6,8 @@ import { closeTrackedBrowserTabsForSessions as closeTrackedBrowserTabs } from ".
 
 type CloseTrackedBrowserTabsParams = Parameters<typeof closeTrackedBrowserTabs>[0];
 
+export const supportsSessionEntryCurrent = true;
+
 /** Route lifecycle cleanup through the currently running Browser runtime when available. */
 export async function closeTrackedBrowserTabsForSessions(
   params: CloseTrackedBrowserTabsParams,

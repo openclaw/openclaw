@@ -11,10 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
-import {
-  commitMainSessionRecovery,
-  type MainSessionRecoveryStoreTarget,
-} from "./main-session-recovery-store.js";
+import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-recovery-delivery.js";
 import {
   mainSessionRecoveryLog,
@@ -84,31 +81,6 @@ async function writeRestartRecoveryTombstoneNotice(params: {
     : "code" in result && result.code === "session-rebound"
       ? "stale"
       : "failed";
-}
-
-async function claimMainRestartRecoveryTombstone(
-  params: MainSessionRecoveryStoreTarget & {
-    observation: MainSessionRecoveryObservation;
-    reason: string;
-  },
-): Promise<SessionEntry | null> {
-  const claim = await commitMainSessionRecovery({
-    command: {
-      kind: "tombstone",
-      now: Date.now(),
-      observation: params.observation,
-      reason: params.reason,
-    },
-    requireWriteSuccess: true,
-    target: params,
-  });
-  if (claim.transition.kind !== "tombstoned" || !claim.entry) {
-    return null;
-  }
-  mainSessionRecoveryLog.warn(
-    `tombstoned main-session restart recovery: ${params.sessionKey} (${params.reason})`,
-  );
-  return claim.entry;
 }
 
 export async function tombstoneMainRestartRecoveryWithNotice(params: {
@@ -193,14 +165,26 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
     }
     return "notice_failed";
   }
-  const tombstonedEntry = await claimMainRestartRecoveryTombstone(params);
-  if (!tombstonedEntry) {
+  const claim = await commitMainSessionRecovery({
+    command: {
+      kind: "tombstone",
+      now: Date.now(),
+      observation: params.observation,
+      reason: params.reason,
+    },
+    requireWriteSuccess: true,
+    target: params,
+  });
+  if (claim.transition.kind !== "tombstoned" || !claim.entry) {
     return "skipped";
   }
+  mainSessionRecoveryLog.warn(
+    `tombstoned main-session restart recovery: ${params.sessionKey} (${params.reason})`,
+  );
   await sendRestartRecoveryTombstoneNotice({
     ...params,
     deliveryContext,
-    entry: tombstonedEntry,
+    entry: claim.entry,
   });
   return "tombstoned";
 }

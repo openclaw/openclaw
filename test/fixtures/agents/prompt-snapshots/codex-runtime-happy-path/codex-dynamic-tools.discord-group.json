@@ -47,7 +47,7 @@
             "type": "string"
           },
           "completionTarget": {
-            "description": "parent: return results in a private requester turn; no automatic channel delivery. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
+            "description": "parent: return results in a private requester turn; no automatic channel delivery. After sessions_yield, answer under the conversation's normal reply rules (NO_REPLY stays silent). Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
             "enum": ["parent"],
             "type": "string"
           },
@@ -71,6 +71,10 @@
               },
               {
                 "const": "auto",
+                "type": "string"
+              },
+              {
+                "const": "ultrafast",
                 "type": "string"
               }
             ]
@@ -154,7 +158,7 @@
             "type": "string"
           },
           "runTimeoutSeconds": {
-            "description": "Per-run timeout in seconds; overrides the configured subagent default. Zero disables the timeout.",
+            "description": "Child run timeout in seconds; overrides the configured subagent default and is preserved on native continuations. Zero disables the timeout; requester wake turns use their own budget.",
             "minimum": 0,
             "type": "integer"
           },
@@ -177,6 +181,10 @@
           "thread": {
             "description": "Bind to the current conversation or a new thread, as supported by the channel; true defaults mode=\"session\"; unavailable with visible=true.",
             "type": "boolean"
+          },
+          "user": {
+            "description": "The person's requester_profile.id, required when several people have steered this turn.",
+            "type": "string"
           },
           "visible": {
             "description": "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; no thread/thinking/lightContext or attachment staging.",

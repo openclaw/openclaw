@@ -14,7 +14,6 @@ import {
   readRegularFile,
   statRegularFile,
   walkDirectory,
-  type WalkDirectoryEntry,
 } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import type { MemoryChunk } from "./markdown-chunks.js";
@@ -90,11 +89,6 @@ async function statEnumerableMemoryFile(absPath: string): Promise<fsSync.Stats |
     }
     throw error;
   }
-}
-
-function normalizeRelPath(value: string): string {
-  const trimmed = value.trim().replace(/^[./]+/, "");
-  return trimmed.replace(/\\/g, "/");
 }
 
 function expandHomePath(value: string): string {
@@ -175,7 +169,10 @@ export function matchesExtraMemoryPathEntry(
 }
 
 export function isMemoryPath(relPath: string): boolean {
-  const normalized = normalizeRelPath(relPath);
+  const normalized = relPath
+    .trim()
+    .replace(/^[./]+/, "")
+    .replace(/\\/g, "/");
   if (!normalized) {
     return false;
   }
@@ -196,16 +193,6 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   return (
     classifyMemoryMultimodalPath(filePath, multimodal ?? DISABLED_MULTIMODAL_SETTINGS) !== null
   );
-}
-
-function shouldDescendMemoryEntry(
-  entry: WalkDirectoryEntry,
-  shouldSkipPath?: (absPath: string) => boolean,
-): boolean {
-  if (shouldSkipPath?.(entry.path)) {
-    return false;
-  }
-  return entry.kind === "directory" && entry.name !== ".openclaw-repair";
 }
 
 class MemorySourceScanError extends Error {
@@ -252,7 +239,9 @@ async function collectMemoryFilesFromDir(
     walkDirectory(dir, {
       symlinks: "skip",
       descend: (entry) =>
-        shouldDescendMemoryEntry(entry, shouldSkipPath) &&
+        !shouldSkipPath?.(entry.path) &&
+        entry.kind === "directory" &&
+        entry.name !== ".openclaw-repair" &&
         (!extraPathEntries ||
           extraPathEntries.some((extraPathEntry) =>
             matchesExtraMemoryPathEntry(extraPathEntry, entry.path, { directory: true }),
@@ -445,12 +434,12 @@ export async function buildFileEntry(
   };
 }
 
-async function loadMultimodalEmbeddingInput(
+export async function buildMultimodalChunkForIndexing(
   entry: Pick<
     MemoryFileEntry,
-    "absPath" | "contentText" | "mimeType" | "kind" | "size" | "dataHash"
+    "absPath" | "contentText" | "mimeType" | "kind" | "hash" | "size" | "dataHash"
   >,
-): Promise<EmbeddingInput | null> {
+): Promise<MultimodalMemoryChunk | null> {
   if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
     return null;
   }
@@ -458,8 +447,7 @@ async function loadMultimodalEmbeddingInput(
   if (regularFile.missing) {
     return null;
   }
-  const stat = regularFile.stat;
-  if (stat.size !== entry.size) {
+  if (regularFile.stat.size !== entry.size) {
     return null;
   }
   let buffer: Buffer;
@@ -480,7 +468,7 @@ async function loadMultimodalEmbeddingInput(
   if (entry.dataHash && entry.dataHash !== dataHash) {
     return null;
   }
-  return {
+  const embeddingInput: EmbeddingInput = {
     text: entry.contentText,
     parts: [
       { type: "text", text: entry.contentText },
@@ -491,18 +479,6 @@ async function loadMultimodalEmbeddingInput(
       },
     ],
   };
-}
-
-export async function buildMultimodalChunkForIndexing(
-  entry: Pick<
-    MemoryFileEntry,
-    "absPath" | "contentText" | "mimeType" | "kind" | "hash" | "size" | "dataHash"
-  >,
-): Promise<MultimodalMemoryChunk | null> {
-  const embeddingInput = await loadMultimodalEmbeddingInput(entry);
-  if (!embeddingInput) {
-    return null;
-  }
   return {
     chunk: {
       startLine: 1,

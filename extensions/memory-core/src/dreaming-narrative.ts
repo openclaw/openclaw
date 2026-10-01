@@ -8,8 +8,6 @@ import {
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { appendNarrativeEntry, clampDreamDiaryContextEntry } from "./dreaming-dreams-file.js";
 
-// ── Types ──────────────────────────────────────────────────────────────
-
 export type DreamingCompletion = Pick<PluginRuntime["subagent"], "complete">;
 
 export type NarrativePhaseData = {
@@ -31,8 +29,6 @@ type Logger = {
   warn: (message: string) => void;
   error: (message: string) => void;
 };
-
-// ── Constants ──────────────────────────────────────────────────────────
 
 const NARRATIVE_SYSTEM_PROMPT = [
   "You are keeping a dream diary. Write a single entry in first person.",
@@ -75,16 +71,9 @@ function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
 function formatFallbackWriteFailure(err: unknown): string {
   const code = extractErrorCode(err);
   const name = readErrorName(err);
-  if (code && name) {
-    return `code=${code} name=${name}`;
-  }
-  if (code) {
-    return `code=${code}`;
-  }
-  if (name) {
-    return `name=${name}`;
-  }
-  return "unknown error";
+  return (
+    [code && `code=${code}`, name && `name=${name}`].filter(Boolean).join(" ") || "unknown error"
+  );
 }
 
 const REQUEST_SCOPED_FALLBACK_NARRATIVE =
@@ -152,27 +141,17 @@ function isModelUnavailableMessage(message: string): boolean {
   );
 }
 
-// ── Prompt building ────────────────────────────────────────────────────
-
 function buildNarrativePrompt(data: NarrativePhaseData): string {
-  const lines: string[] = [];
-  lines.push("Write a dream diary entry from these memory fragments:\n");
-
-  for (const snippet of data.snippets.slice(0, 12)) {
-    lines.push(`- ${snippet}`);
-  }
-
-  if (data.themes?.length) {
-    lines.push("\nRecurring themes:");
-    for (const theme of data.themes.slice(0, 6)) {
-      lines.push(`- ${theme}`);
-    }
-  }
-
-  if (data.promotions?.length) {
-    lines.push("\nMemories that crystallized into something lasting:");
-    for (const promo of data.promotions.slice(0, 5)) {
-      lines.push(`- ${promo}`);
+  const lines = [
+    "Write a dream diary entry from these memory fragments:\n",
+    ...data.snippets.slice(0, 12).map((snippet) => `- ${snippet}`),
+  ];
+  for (const [heading, entries, limit] of [
+    ["\nRecurring themes:", data.themes, 6],
+    ["\nMemories that crystallized into something lasting:", data.promotions, 5],
+  ] as const) {
+    if (entries?.length) {
+      lines.push(heading, ...entries.slice(0, limit).map((entry) => `- ${entry}`));
     }
   }
 
@@ -199,8 +178,6 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
 
   return lines.join("\n");
 }
-
-// ── Orchestrator ───────────────────────────────────────────────────────
 
 export type DreamNarrativeRequest = {
   /** Agent whose configured model and credentials own the completion. */

@@ -231,22 +231,23 @@ export function createPluginSecretRefSetupCli(params: PluginSecretRefSetupCliPar
     };
   };
 
+  const parseMapping = (value: string, flag: string, targetPlaceholder: string) => {
+    const separator = value.indexOf("=");
+    if (separator <= 0 || separator === value.length - 1) {
+      throw new Error(
+        `Invalid ${flag} value "${value}". Use <${targetPlaceholder}>=<${params.secretIdPlaceholder}>.`,
+      );
+    }
+    return [value.slice(0, separator).trim(), value.slice(separator + 1).trim()] as const;
+  };
+
   const parseProviderKeyMappings = (values: string[] | undefined): SecretRefProviderMapping[] =>
     (values ?? []).map((value) => {
-      const separator = value.indexOf("=");
-      if (separator <= 0 || separator === value.length - 1) {
-        throw new Error(
-          `Invalid --provider-key value "${value}". Use <model-provider-id>=<${params.secretIdPlaceholder}>.`,
-        );
-      }
-      const providerId = value.slice(0, separator).trim();
+      const [providerId, secretId] = parseMapping(value, "--provider-key", "model-provider-id");
       assertValidPluginModelProviderId("--provider-key", providerId);
       return {
         providerId,
-        secretId: params.normalizeSecretId(
-          `--provider-key ${providerId}`,
-          value.slice(separator + 1).trim(),
-        ),
+        secretId: params.normalizeSecretId(`--provider-key ${providerId}`, secretId),
       };
     });
 
@@ -254,20 +255,9 @@ export function createPluginSecretRefSetupCli(params: PluginSecretRefSetupCliPar
     values: string[] | undefined,
   ): SecretRefConfigTargetMapping[] =>
     (values ?? []).map((value) => {
-      const separator = value.indexOf("=");
-      if (separator <= 0 || separator === value.length - 1) {
-        throw new Error(
-          `Invalid --target value "${value}". Use <openclaw-config-path>=<${params.secretIdPlaceholder}>.`,
-        );
-      }
-      const target = parsePluginSecretTargetSpecifier(
-        params.productName,
-        value.slice(0, separator).trim(),
-      );
-      const secretId = params.normalizeSecretId(
-        `--target ${target.path}`,
-        value.slice(separator + 1).trim(),
-      );
+      const [targetPath, valueId] = parseMapping(value, "--target", "openclaw-config-path");
+      const target = parsePluginSecretTargetSpecifier(params.productName, targetPath);
+      const secretId = params.normalizeSecretId(`--target ${target.path}`, valueId);
       return Object.assign(
         { path: target.path, secretId },
         target.agentId ? { agentId: target.agentId } : {},

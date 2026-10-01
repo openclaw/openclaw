@@ -1,4 +1,3 @@
-// Channel route target helpers normalize channel route targets for delivery.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";

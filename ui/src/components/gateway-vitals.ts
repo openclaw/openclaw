@@ -10,19 +10,8 @@ import type { SparklineSample } from "./sparkline-tile.ts";
 registerDebugEnglish();
 
 export type GatewayStatusSnapshot = {
-  eventLoop?: {
-    utilization?: number;
-    cpuCoreRatio?: number;
-    cpuBreakdown?: NonNullable<SystemInfoResult["eventLoop"]>["cpuBreakdown"];
-    delayP99Ms?: number;
-    delayMaxMs?: number;
-    reasons?: string[];
-  };
-  processMemory?: {
-    rssBytes: number;
-    heapUsedBytes: number;
-    heapTotalBytes: number;
-  };
+  eventLoop?: Partial<NonNullable<SystemInfoResult["eventLoop"]>>;
+  processMemory?: SystemInfoResult["processMemory"];
 };
 
 export type GatewayStatusSample<T extends GatewayStatusSnapshot = GatewayStatusSnapshot> = {

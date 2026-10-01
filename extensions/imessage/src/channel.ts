@@ -1,6 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { formatTrimmedAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -53,7 +52,6 @@ import {
   imessageSecurityAdapter,
   imessageSetupWizard,
 } from "./shared.js";
-import { probeIMessageStatusAccount } from "./status-core.js";
 import { isIMessagePhoneLikeHandle } from "./target-identifiers.js";
 import {
   inferIMessageTargetChatType,
@@ -136,43 +134,6 @@ const loadIMessageApprovalReactionsModule = createLazyRuntimeModule(
 const loadIMessageQuestionReactionsModule = createLazyRuntimeModule(
   () => import("./question-reactions.js"),
 );
-
-async function prepareForwardedIMessageApprovalPayload(params: {
-  payload: Parameters<NonNullable<ChannelOutboundAdapter["beforeDeliverPayload"]>>[0]["payload"];
-  approvalKind: ChannelApprovalKind;
-}): Promise<void> {
-  const prepared = (
-    await loadIMessageApprovalReactionsModule()
-  ).addIMessageApprovalReactionHintToStructuredPayload(params);
-  if (prepared) {
-    Object.assign(params.payload, prepared);
-  }
-}
-
-async function registerDeliveredIMessageApprovalPayload(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
-): Promise<void> {
-  const accountId = resolveIMessageAccount({
-    cfg: params.cfg,
-    accountId: params.target.accountId,
-  }).accountId;
-  (
-    await loadIMessageQuestionReactionsModule()
-  ).registerIMessageQuestionReactionTargetForDeliveredPayload({
-    accountId,
-    target: params.target,
-    payload: params.payload,
-    results: params.results,
-  });
-  await (
-    await loadIMessageApprovalReactionsModule()
-  ).registerIMessageApprovalReactionTargetForDeliveredPayload({
-    accountId,
-    target: params.target,
-    payload: params.payload,
-    results: params.results,
-  });
-}
 
 const imessageMessageAdapter = defineChannelMessageAdapter({
   id: "imessage",
@@ -382,11 +343,13 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             dbPath: snapshot.dbPath ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) =>
-          await probeIMessageStatusAccount({
-            account,
+          await (
+            await loadIMessageChannelRuntime()
+          ).probeIMessageAccount({
             timeoutMs,
-            probeIMessageAccount: async (params) =>
-              await (await loadIMessageChannelRuntime()).probeIMessageAccount(params),
+            cliPath: account.config.cliPath,
+            dbPath: account.config.dbPath,
+            ...(account.config.remoteHost ? { remoteHost: account.config.remoteHost } : {}),
           }),
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,
@@ -480,15 +443,28 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           if (hint?.kind !== "approval-pending") {
             return;
           }
-          await prepareForwardedIMessageApprovalPayload({
+          const prepared = (
+            await loadIMessageApprovalReactionsModule()
+          ).addIMessageApprovalReactionHintToStructuredPayload({
             payload,
             approvalKind: hint.approvalKind,
           });
+          if (prepared) {
+            Object.assign(payload, prepared);
+          }
         },
         renderPresentation: ({ payload, presentation }) =>
           questionGatewayRuntime.prepareReactionPayloadForDelivery({ payload, presentation }),
-        afterDeliverPayload: async (params) =>
-          await registerDeliveredIMessageApprovalPayload(params),
+        afterDeliverPayload: async ({ cfg, target, payload, results }) => {
+          const accountId = resolveIMessageAccount({ cfg, accountId: target.accountId }).accountId;
+          const delivery = { accountId, target, payload, results };
+          (
+            await loadIMessageQuestionReactionsModule()
+          ).registerIMessageQuestionReactionTargetForDeliveredPayload(delivery);
+          await (
+            await loadIMessageApprovalReactionsModule()
+          ).registerIMessageApprovalReactionTargetForDeliveredPayload(delivery);
+        },
         deliveryCapabilities: {
           durableFinal: {
             text: true,

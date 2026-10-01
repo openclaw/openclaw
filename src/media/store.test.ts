@@ -826,19 +826,16 @@ describe("media store", () => {
         originalFilename: `${"a".repeat(59)}\u1100\u1161.txt`,
         expectedIdPattern: /^a{59}\uac00---[a-f0-9-]{36}\.txt$/,
         expectedExtractedFilename: `${"a".repeat(59)}\uac00.txt`,
-        maxBaseNameLength: 60,
       },
       {
         name: "truncates long original filenames",
         originalFilename: `${"a".repeat(100)}.txt`,
-        expectedIdPattern: /^a+---[a-f0-9-]{36}\.txt$/,
-        maxBaseNameLength: 60,
+        expectedIdPattern: /^a{1,60}---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "does not split supplementary-plane letters at the filename cap",
         originalFilename: `${"a".repeat(59)}𐐀.txt`,
         expectedIdPattern: /^a{59}---[a-f0-9-]{36}\.txt$/,
-        maxBaseNameLength: 60,
       },
       {
         name: "falls back to UUID-only when the original basename is blank",

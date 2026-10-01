@@ -41,6 +41,11 @@ workspace and identity checks or the meeting transcript caller checks.
 `coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
 allow `bundle-mcp` (configured MCP servers).
 
+The [`tts` tool](/tools/tts/api#tool-profiles) is not part of any restricted
+profile. To let an agent on `minimal`, `coding`, or `messaging` call it, add
+`tts` to `tools.alsoAllow`. [Automatic TTS](/tools/tts/output#auto-tts-behavior)
+is not a tool, so profiles do not affect it.
+
 An unset profile also leaves core tools unfiltered, but does not itself opt into
 optional plugin tools. Explicit `full` contributes a wildcard to plugin tool
 selection, including optional tools from enabled plugins. Plugin configuration,

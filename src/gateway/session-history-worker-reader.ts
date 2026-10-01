@@ -62,12 +62,31 @@ export async function readSessionHistoryRequest(
     };
   }
   if (request.kind === "recent-page") {
+    if (request.params.exactArchivePath) {
+      const { ArchivedTranscriptReader } = await import("./session-transcript-archive-reader.js");
+      return {
+        kind: "recent-page",
+        result: await new ArchivedTranscriptReader({
+          exactArchivePath: request.params.exactArchivePath,
+          sessionId: request.params.target.sessionId,
+        }).readRecentWithStats(request.params.options),
+      };
+    }
     return {
       kind: "recent-page",
       result: await options.readers.readRecentSessionMessagesWithStatsAsync(
         request.params.target,
         request.params.options,
       ),
+    };
+  }
+  if (request.kind === "reactions") {
+    return { kind: "reactions", result: options.readers.readReactions() };
+  }
+  if (request.kind === "conversation-binding") {
+    return {
+      kind: "conversation-binding",
+      result: options.readers.readConversationBinding(request.params.conversationRef),
     };
   }
   if (request.kind === "transcript-binding") {

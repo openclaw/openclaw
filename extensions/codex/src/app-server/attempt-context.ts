@@ -9,10 +9,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import type {
-  SessionTranscriptTargetParams,
-  TranscriptTurnAdmission,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
@@ -29,7 +26,10 @@ import {
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
-import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import {
+  readCodexMirroredSessionHistoryMessages,
+  type CodexMirroredSessionHistoryTarget,
+} from "./session-history.js";
 import { stabilizeJsonValue } from "./thread-fingerprints.js";
 import {
   areCodexDynamicToolFingerprintsCompatible,
@@ -41,16 +41,13 @@ import {
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 
-export async function readMirroredSessionHistoryMessages(params: {
-  agentId?: string;
-  sessionFile: string;
-  sessionId: string;
-  sessionKey?: string;
-  sessionTarget?: Partial<SessionTranscriptTargetParams>;
-  admission?: TranscriptTurnAdmission;
-  signal?: AbortSignal;
-  contextTokenBudget?: number;
-}): Promise<AgentMessage[] | undefined> {
+export async function readMirroredSessionHistoryMessages(
+  params: CodexMirroredSessionHistoryTarget & {
+    admission?: TranscriptTurnAdmission;
+    signal?: AbortSignal;
+    contextTokenBudget?: number;
+  },
+): Promise<AgentMessage[] | undefined> {
   const { admission, signal, contextTokenBudget, ...target } = params;
   const messages = await readCodexMirroredSessionHistoryMessages(
     target,
@@ -134,6 +131,7 @@ export function buildCodexSystemPromptReport(params: {
   developerInstructions: string;
   workspaceBootstrapContext: CodexWorkspaceBootstrapContext;
   omitWorkspaceReferences?: boolean;
+  parentLocalEgress?: boolean;
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
@@ -166,9 +164,10 @@ export function buildCodexSystemPromptReport(params: {
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
       injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
       omitReferenceFiles: params.omitWorkspaceReferences,
+      omitPersonalProfiles: !params.parentLocalEgress,
       developerInstructionFiles: [
         ...(params.workspaceBootstrapContext.threadDeveloperInstructionFiles ?? []),
-        ...(params.workspaceBootstrapContext.turnScopedDeveloperInstructionFiles ?? []),
+        ...(params.workspaceBootstrapContext.personaFiles ?? []),
       ],
       memoryToolRoutedBootstrapFiles:
         params.workspaceBootstrapContext.memoryToolRoutedBootstrapFiles ?? [],
@@ -242,6 +241,7 @@ function buildCodexBootstrapInjectionStats(params: {
   bootstrapFiles: CodexBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
   omitReferenceFiles?: boolean;
+  omitPersonalProfiles?: boolean;
   developerInstructionFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolRouted?: boolean;
@@ -286,6 +286,7 @@ function buildCodexBootstrapInjectionStats(params: {
       };
     }
     const omitted =
+      (params.omitPersonalProfiles && file.personalUser === true) ||
       memoryToolRoutedFile ||
       (params.omitReferenceFiles &&
         readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);

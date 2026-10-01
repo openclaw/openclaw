@@ -246,3 +246,37 @@ it("keeps the optional schedule unknown when local identity cannot resolve its c
   expect(getUpdateSchedule()).toBeNull();
   expect(install).toHaveBeenCalledExactlyOnceWith(false, expect.any(AbortSignal));
 });
+
+it("omits app-owned install and stale package targets from the protocol schedule", async () => {
+  setUpdateScheduleCache({
+    next: {
+      channel: "dev",
+      autoEnabled: false,
+      install: { kind: "package" },
+      target: { kind: "package", version: "99.0.0" },
+    },
+  });
+  install.mockResolvedValue({
+    root: "/opt/OpenClaw.app/openclaw",
+    installReceipt: null,
+    status: {
+      root: "/opt/OpenClaw.app/openclaw",
+      installKind: "host",
+      packageManager: "unknown",
+      installOwner: {
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      },
+    },
+  });
+
+  const result = await status(
+    { update: { channel: "dev", auto: { enabled: false } } },
+    { refreshCheckout: true },
+  );
+
+  expect(result.schedule).toEqual({ channel: "dev", autoEnabled: false });
+  expect(result.updateAvailable).toBeNull();
+});

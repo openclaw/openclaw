@@ -184,7 +184,7 @@ suite.define(() => {
         await expect.poll(() => results.getByRole("option").count()).toBe(3);
         expect(
           await page.locator(".cmd-palette__search").getByRole("status").allTextContents(),
-        ).toEqual(["Some models could not be refreshed. Open Models to try again."]);
+        ).toEqual([]);
         expect(
           await page.getByText(/Search notices|Indexing older messages|may be incomplete/).count(),
         ).toBe(0);

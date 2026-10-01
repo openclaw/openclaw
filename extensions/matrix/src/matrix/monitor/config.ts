@@ -94,23 +94,6 @@ function isMatrixDangerousNameMatchingEnabled(params: {
   );
 }
 
-function addUniqueMatrixAllowlistEntry(params: {
-  entries: string[];
-  seen: Set<string>;
-  entry: string;
-}): void {
-  const trimmed = params.entry.trim();
-  if (!trimmed) {
-    return;
-  }
-  const key = normalizeMatrixUserId(trimmed);
-  if (params.seen.has(key)) {
-    return;
-  }
-  params.seen.add(key);
-  params.entries.push(trimmed);
-}
-
 function logMatrixAllowlistResolution(params: {
   label: string;
   resolution: ReturnType<typeof buildAllowlistResolutionSummary>;
@@ -262,6 +245,14 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
   });
   const effective: string[] = [];
   const seen = new Set<string>();
+  const addEntry = (entry: string) => {
+    const trimmed = entry.trim();
+    const key = normalizeMatrixUserId(trimmed);
+    if (trimmed && !seen.has(key)) {
+      seen.add(key);
+      effective.push(trimmed);
+    }
+  };
   const startupByInput = new Map(
     (params.startupResolvedEntries ?? []).map((entry) => [entry.input, entry.id] as const),
   );
@@ -270,20 +261,16 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
   for (const entry of liveEntries) {
     const query = normalizeMatrixUserLookupEntry(entry);
     if (entry === "*") {
-      addUniqueMatrixAllowlistEntry({ entries: effective, seen, entry });
+      addEntry(entry);
       continue;
     }
     if (isMatrixQualifiedUserId(query)) {
-      addUniqueMatrixAllowlistEntry({
-        entries: effective,
-        seen,
-        entry: normalizeMatrixUserId(query),
-      });
+      addEntry(normalizeMatrixUserId(query));
       continue;
     }
     const startupId = startupByInput.get(entry);
     if (allowNameMatching && startupId) {
-      addUniqueMatrixAllowlistEntry({ entries: effective, seen, entry: startupId });
+      addEntry(startupId);
       continue;
     }
     if (allowNameMatching) {
@@ -291,7 +278,7 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
       continue;
     }
     if (params.failClosedOnUnresolved) {
-      addUniqueMatrixAllowlistEntry({ entries: effective, seen, entry });
+      addEntry(entry);
     }
   }
 
@@ -316,7 +303,7 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
     ? filterFailClosedMatrixAllowlistEntries(canonicalized)
     : filterResolvedMatrixAllowlistEntries(canonicalized);
   for (const entry of resolvedEntries) {
-    addUniqueMatrixAllowlistEntry({ entries: effective, seen, entry });
+    addEntry(entry);
   }
 
   return effective;

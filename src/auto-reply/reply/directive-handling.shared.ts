@@ -1,4 +1,3 @@
-// Shared directive parsing helpers used by model and auth directive handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
 import type { StickyModelSelectionDispatchOutcome } from "../../agents/sticky-model-selection.js";
@@ -10,7 +9,6 @@ import {
   sessionSnapshotChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { SYSTEM_MARK } from "../../infra/system-message.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
@@ -44,18 +42,6 @@ export const DIRECTIVE_ACK_MESSAGES = {
 } as const;
 
 export const withOptions = (line: string, options: string) => `${line}\nOptions: ${options}.`;
-
-export const formatElevatedRuntimeHint = () =>
-  `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
-
-export const formatInternalExecPersistenceDeniedText = () =>
-  "Exec defaults require operator.admin for gateway callers; skipped persistence.";
-
-export const formatInternalVerbosePersistenceDeniedText = () =>
-  "Verbose defaults require operator.admin for gateway callers; skipped persistence.";
-
-export const formatInternalVerboseCurrentReplyOnlyText = () =>
-  "Verbose logging set for the current reply only.";
 
 export function formatModelSelectionScopeAck(params: {
   isDefault: boolean;

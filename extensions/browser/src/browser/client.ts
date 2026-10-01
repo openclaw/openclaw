@@ -11,6 +11,7 @@ import type {
   BrowserStatus,
   BrowserTabsResult,
   BrowserTransport,
+  ProfileStatus,
   SnapshotAriaNode,
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
@@ -30,9 +31,9 @@ export type {
   BrowserStatus,
   BrowserTab,
   BrowserTabsResult,
-  BrowserTransport,
+  ProfileStatus,
 } from "./client.types.js";
-export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
+export type { BrowserDoctorReport } from "./doctor.js";
 
 const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
 const BROWSER_DOCTOR_REQUEST_TIMEOUT_MS = 7_500;
@@ -73,21 +74,6 @@ async function sendTabCloseRequest(
     signal: opts?.signal,
   });
 }
-
-export type ProfileStatus = {
-  name: string;
-  transport?: BrowserTransport;
-  cdpPort: number | null;
-  cdpUrl: string | null;
-  color: string;
-  driver: "openclaw" | "existing-session" | "extension";
-  running: boolean;
-  tabCount: number;
-  isDefault: boolean;
-  isRemote: boolean;
-  missingFromConfig?: boolean;
-  reconcileReason?: string | null;
-};
 
 export type BrowserResetProfileResult = {
   ok: true;
@@ -228,17 +214,6 @@ export async function browserStop(
   await sendProfilePost(baseUrl, "/stop", opts, 15000);
 }
 
-export async function browserResetProfile(
-  baseUrl?: BrowserClientTarget,
-  opts?: { profile?: string },
-): Promise<BrowserResetProfileResult> {
-  return await requestBrowserJson<BrowserResetProfileResult>(baseUrl, "/reset-profile", {
-    profile: opts?.profile,
-    method: "POST",
-    timeoutMs: 20000,
-  });
-}
-
 export type BrowserCreateProfileResult = {
   ok: true;
   profile: string;
@@ -250,49 +225,11 @@ export type BrowserCreateProfileResult = {
   isRemote: boolean;
 };
 
-export async function browserCreateProfile(
-  baseUrl: BrowserClientTarget,
-  opts: {
-    name: string;
-    color?: string;
-    cdpUrl?: string;
-    userDataDir?: string;
-    driver?: "openclaw" | "existing-session";
-  },
-): Promise<BrowserCreateProfileResult> {
-  return await postBrowserJson(
-    baseUrl,
-    "/profiles/create",
-    {
-      name: opts.name,
-      color: opts.color,
-      cdpUrl: opts.cdpUrl,
-      userDataDir: opts.userDataDir,
-      driver: opts.driver,
-    },
-    10000,
-  );
-}
-
 export type BrowserDeleteProfileResult = {
   ok: true;
   profile: string;
   deleted: boolean;
 };
-
-export async function browserDeleteProfile(
-  baseUrl: BrowserClientTarget,
-  profile: string,
-): Promise<BrowserDeleteProfileResult> {
-  return await requestBrowserJson<BrowserDeleteProfileResult>(
-    baseUrl,
-    `/profiles/${encodeURIComponent(profile)}`,
-    {
-      method: "DELETE",
-      timeoutMs: 20000,
-    },
-  );
-}
 
 function normalizeBrowserTabsResult(value: unknown): BrowserTabsResult {
   const result = asNullableRecord(value);
@@ -372,24 +309,6 @@ export async function browserCloseTabByRawTargetId(
 ): Promise<void> {
   const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
   await sendTabCloseRequest(baseUrl, path, opts);
-}
-
-/** Execute legacy index-based tab actions. */
-export async function browserTabAction(
-  baseUrl: BrowserClientTarget,
-  opts: {
-    action: "list" | "new" | "close" | "select";
-    index?: number;
-    profile?: string;
-  },
-): Promise<unknown> {
-  return await postBrowserJson(
-    baseUrl,
-    "/tabs/action",
-    { action: opts.action, index: opts.index },
-    10_000,
-    { profile: opts.profile },
-  );
 }
 
 export async function browserSnapshot(

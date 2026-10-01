@@ -69,14 +69,7 @@ export type UpdateFailureReportSubmitResult =
       fallbackUrl?: undefined;
       message: string;
       savedReportPath: string;
-      status: "pending";
-      url?: undefined;
-    }
-  | {
-      fallbackUrl?: undefined;
-      message: string;
-      savedReportPath: string;
-      status: "retryable";
+      status: "pending" | "retryable";
       url?: undefined;
     }
   | {

@@ -99,37 +99,45 @@ it("coalesces manual and periodic work and rejects commits after a config change
   expect(sweep).toHaveBeenCalledTimes(1);
 });
 
-it("waits for an admitted worker to relinquish its writer before shutdown completes", async () => {
-  const config: OpenClawConfig = {
-    session: { maintenance: { coldStorage: { enabled: true } } },
-  };
-  const completion = createDeferred<{ archivedTranscripts: number }>();
-  const started = createDeferred();
-  sweep.mockImplementation(async ({ assertCurrent }: { assertCurrent: () => void }) => {
-    started.resolve();
-    const result = await completion.promise;
-    assertCurrent();
-    return result;
-  });
-  maintenance = startSessionColdStorageMaintenance({
-    scheduler,
-    getRuntimeConfig: () => config,
-    onError: vi.fn(),
-  });
-  void clock.wake();
-  await started.promise;
-  let drained = false;
-  const stopped = maintenance.stop().then(() => {
-    drained = true;
-  });
-  await Promise.resolve();
-  expect(drained).toBe(false);
-  completion.resolve({ archivedTranscripts: 1 });
-  await stopped;
-  expect(drained).toBe(true);
-  await clock.advanceBy(120_000);
-  expect(sweep).toHaveBeenCalledTimes(1);
-});
+it.each(["periodic", "manual"] as const)(
+  "waits for an admitted %s worker to relinquish its writer before shutdown completes",
+  async (trigger) => {
+    const config: OpenClawConfig = {
+      session: { maintenance: { coldStorage: { enabled: true } } },
+    };
+    const getRuntimeConfig = () => config;
+    const completion = createDeferred<{ archivedTranscripts: number }>();
+    const started = createDeferred();
+    sweep.mockImplementation(async ({ assertCurrent }: { assertCurrent: () => void }) => {
+      started.resolve();
+      const result = await completion.promise;
+      assertCurrent();
+      return result;
+    });
+    maintenance = startSessionColdStorageMaintenance({
+      scheduler,
+      getRuntimeConfig,
+      onError: vi.fn(),
+    });
+    if (trigger === "periodic") {
+      void clock.wake();
+    } else {
+      requestGatewaySessionColdStorageMaintenance(getRuntimeConfig);
+    }
+    await started.promise;
+    let drained = false;
+    const stopped = maintenance.stop().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    completion.resolve({ archivedTranscripts: 1 });
+    await stopped;
+    expect(drained).toBe(true);
+    await clock.advanceBy(120_000);
+    expect(sweep).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("acknowledges Run now before worker completion and exposes committed progress after failure", async () => {
   const { sessionReadHandlers } = await import("./server-methods/sessions-read.js");

@@ -18,6 +18,7 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
@@ -76,9 +77,14 @@ export function chatSendHoldReason(
   host: ChatHost,
   sessionKey: string,
   initialTurnPending = false,
+  agentId?: string,
 ): string | null {
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
+  }
+  const sendDisabledReason = chatProviderReviewRow(host, sessionKey, agentId)?.sendDisabledReason;
+  if (sendDisabledReason) {
+    return sendDisabledReason;
   }
   return chatSendPendingReason(host, sessionKey, initialTurnPending);
 }

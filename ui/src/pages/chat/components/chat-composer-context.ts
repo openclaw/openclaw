@@ -70,60 +70,16 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
-function parseHexRgb(hex: string): [number, number, number] | null {
-  const h = hex.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
-    return null;
-  }
-  return [
-    Number.parseInt(h.slice(0, 2), 16),
-    Number.parseInt(h.slice(2, 4), 16),
-    Number.parseInt(h.slice(4, 6), 16),
-  ];
-}
-
-let cachedThemeNoticeColors: {
-  warnRgb: [number, number, number];
-  dangerRgb: [number, number, number];
-} | null = null;
-
-function getThemeNoticeColors() {
-  if (cachedThemeNoticeColors) {
-    return cachedThemeNoticeColors;
-  }
-  const rootStyle = getComputedStyle(document.documentElement);
-  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
-  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
-  cachedThemeNoticeColors = {
-    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
-    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
-  };
-  return cachedThemeNoticeColors;
-}
-
 function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
-): {
-  pct: number;
-  used: number;
-  limit: number;
-  input: number | null;
-  output: number | null;
-  cost: number | null;
-  detail: string;
-  color: string;
-  bg: string;
-  warning: boolean;
-  approximate: boolean;
-  fromLastPrompt: boolean;
-} | null {
-  const used = session?.totalTokens;
+) {
+  const used = asNonNegativeFiniteNumber(session?.totalTokens);
   const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
     session,
     defaultContextTokens,
   );
-  if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
+  if (used === undefined || !limit) {
     return null;
   }
   const approximate = session?.totalTokensFresh === false;
@@ -135,45 +91,23 @@ function getContextNoticeViewModel(
   // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
   const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
   const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
-  const cost =
-    typeof session?.estimatedCostUsd === "number" &&
-    Number.isFinite(session.estimatedCostUsd) &&
-    session.estimatedCostUsd >= 0
-      ? session.estimatedCostUsd
-      : null;
-  const usage = {
+  const cost = asNonNegativeFiniteNumber(session?.estimatedCostUsd) ?? null;
+  let color = "var(--muted)";
+  let bg = "color-mix(in srgb, var(--muted) 8%, transparent)";
+  if (warning) {
+    const mix = Math.min(Math.max((ratio - CONTEXT_NOTICE_RATIO) / 0.1, 0), 1);
+    color = `color-mix(in srgb, var(--warn), var(--danger) ${mix * 100}%)`;
+    bg = `color-mix(in srgb, ${color} ${8 + 8 * mix}%, transparent)`;
+  }
+  return {
+    pct,
     fromLastPrompt,
     used,
     limit,
     input,
     output,
     cost,
-  };
-  if (!warning) {
-    return {
-      pct,
-      ...usage,
-      detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
-      color: "var(--muted)",
-      bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
-      warning,
-      approximate,
-    };
-  }
-  const { warnRgb, dangerRgb } = getThemeNoticeColors();
-  const [wr, wg, wb] = warnRgb;
-  const [dr, dg, db] = dangerRgb;
-  const mix = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  const r = Math.round(wr + (dr - wr) * mix);
-  const g = Math.round(wg + (dg - wg) * mix);
-  const b = Math.round(wb + (db - wb) * mix);
-  const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * mix;
-  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
-  return {
-    pct,
-    ...usage,
-    detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+    detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
     color,
     bg,
     warning,

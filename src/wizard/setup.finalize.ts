@@ -1,4 +1,3 @@
-// Setup finalize helpers write onboarding output and follow-up state.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
@@ -12,11 +11,10 @@ import {
   resolveControlUiHandoffTarget,
   waitForControlUiDocument,
 } from "../commands/control-ui-handoff.js";
-import {
-  buildGatewayInstallPlan,
-  gatewayInstallErrorHint,
-} from "../commands/daemon-install-helpers.js";
+import { gatewayInstallErrorHint } from "../commands/daemon-install-helpers.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
+import { prepareGatewayServiceInstall } from "../commands/gateway-service-setup.js";
+import { resolveGatewaySetupRuntime } from "../commands/gateway-setup-runtime.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommandNonExiting } from "../commands/health.js";
@@ -57,7 +55,7 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
-import { resolveOnboardingGatewayRuntime } from "./setup.service-runtime.js";
+import { getLocalizedGatewayDaemonRuntimeOptions } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
@@ -410,18 +408,24 @@ export async function ensureGatewayServiceForOnboarding(params: {
         ].join(" ");
       } else {
         const existingCommand = await service.readCommand(process.env);
-        const selection = await resolveOnboardingGatewayRuntime({
+        const selection = await resolveGatewaySetupRuntime({
           env: process.env,
           existingCommand,
           runtime: opts.daemonRuntime,
-          flow,
-          prompter,
+          selectRuntime:
+            flow === "quickstart"
+              ? undefined
+              : (suggested) =>
+                  prompter.select({
+                    message: t("wizard.finalize.daemonRuntime"),
+                    options: getLocalizedGatewayDaemonRuntimeOptions(),
+                    initialValue: suggested,
+                  }),
         });
-        const plan = await buildGatewayInstallPlan({
-          env: selection.env,
+        const installation = await prepareGatewayServiceInstall({
+          service,
+          selection,
           port: settings.port,
-          runtime: selection.runtime,
-          pinnedRuntimePath: selection.pinnedRuntimePath,
           existingCommand,
           warn: (message, title) => {
             installWarnings.push({ message, title });
@@ -429,14 +433,18 @@ export async function ensureGatewayServiceForOnboarding(params: {
           config: nextConfig,
         });
         await flushInstallWarnings();
-
+        if (flow === "quickstart" && !selection.pinnedRuntimePath) {
+          await prompter.note(
+            t(
+              installation.runtime === "bun"
+                ? "wizard.finalize.quickstartBunRuntime"
+                : "wizard.finalize.quickstartNodeRuntime",
+            ),
+            t("wizard.finalize.daemonRuntime"),
+          );
+        }
         progress.update(t("wizard.finalize.gatewayServiceInstalling"));
-        await service.install({
-          env: process.env,
-          stdout: process.stdout,
-          ...plan,
-          runtimePinUpdate: selection.runtimePinUpdate,
-        });
+        await installation.install();
         gateway = { status: "ready", action: "installed" };
       }
     } catch (err) {

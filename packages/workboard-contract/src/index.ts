@@ -1,3 +1,5 @@
+import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -294,6 +296,8 @@ export type WorkboardAutomation = {
 
 export type WorkboardBoardMetadata = {
   id: string;
+  kind?: "cards" | "sessions";
+  sessions?: WorkboardSessionsBoardSpec;
   name?: string;
   description?: string;
   icon?: string;
@@ -308,6 +312,8 @@ export type WorkboardBoardMetadata = {
 
 export type WorkboardBoardSummary = {
   id: string;
+  kind?: "cards" | "sessions";
+  sessions?: WorkboardSessionsBoardSpec;
   name?: string;
   description?: string;
   icon?: string;
@@ -391,3 +397,19 @@ export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
 };
+export {
+  createDefaultWorkboardSessionsBoardSpec,
+  normalizeWorkboardSessionsBoardSpec,
+  patchWorkboardSessionsBoardSpec,
+} from "./sessions-board.js";
+export type {
+  WorkboardSessionFacts,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardSpec,
+  WorkboardSessionsBoardView,
+  WorkboardSessionsColumn,
+  WorkboardSessionsColumnMatch,
+  WorkboardSessionsObserverHealth,
+} from "./sessions-board.js";

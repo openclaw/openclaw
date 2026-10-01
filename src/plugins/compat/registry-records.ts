@@ -248,31 +248,32 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "deprecated-session-store-beta5-api",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-05-21",
     deprecated: "2026-07-12",
     warningStarts: "2026-07-12",
-    removeAfter: "2026-10-12",
     replacement:
-      "`getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations",
-    docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
+      "Use `getSessionEntry(...)` and `listSessionEntries(...)` for reads; `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` for row mutations; and session identity with `session-transcript-runtime` for active transcripts. The supported-plugin cutoff excludes v2026.7.1-beta.5 and other packages importing the retired bridge.",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis",
     surfaces: [
       "openclaw/plugin-sdk/session-store-runtime loadSessionStore",
       "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
       "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
       "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
+      "openclaw/plugin-sdk/session-store-runtime LoadSessionStoreOptions",
+      "openclaw/plugin-sdk/session-store-runtime UpdateSessionStoreOptions",
       "openclaw package root loadSessionStore",
       "openclaw package root saveSessionStore",
     ],
-    diagnostics: ["plugin SDK deprecation"],
+    diagnostics: ["plugin compatibility registry and migration guide"],
     tests: [
       "src/plugin-sdk/session-store-runtime.test.ts",
       "src/index.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "The beta.5 session-store import set and package-root whole-store aliases remain available while official plugins and package consumers migrate to row-level session access.",
+      "The September 30, 2026 approved cutoff retired the beta.5 session-store bridge, its option types, and package-root loadSessionStore/saveSessionStore aliases ahead of the former October 12 window. Plugins must use scoped row APIs and identity-backed transcript APIs; the session-store-runtime subpath and resolveStorePath remain available.",
   },
   {
     code: "plugin-sdk-session-agent-resolution-aliases",
@@ -347,10 +348,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/hooks",
     surfaces: ["before_tool_call block result", "before_tool_call approval result"],
     diagnostics: ["hook runner contract probe"],
-    tests: [
-      "src/plugins/hooks.security.test.ts",
-      "src/agents/agent-tools.before-tool-call.e2e.test.ts",
-    ],
+    tests: ["src/agents/agent-tools.before-tool-call.e2e.test.ts"],
   },
   {
     code: "hook.llm-observer.privacy-payload",

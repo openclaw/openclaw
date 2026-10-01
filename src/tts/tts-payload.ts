@@ -217,6 +217,7 @@ export async function maybeApplyTtsToPayloadCore(
           cfg,
           config,
           timeoutMs: config.timeoutMs,
+          agentId: params.agentId,
         });
         textForAudio = summary.summary;
         wasSummarized = true;

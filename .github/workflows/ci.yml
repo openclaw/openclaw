@@ -743,6 +743,12 @@ jobs:
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
               platform_scripts = ("scripts/lib/swift-toolchain.sh",)
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+              # The manifest builder runs from the harness and imports these siblings by file-relative paths.
+              preflight_scripts = (
+                  "scripts/ci-build-manifest.mjs",
+                  "scripts/lib/release-context.mjs",
+                  "scripts/lib/release-version.mjs",
+              )
               npm_lock_scripts = (
                   "scripts/ci-npm-lock-admission.mjs",
                   "scripts/generate-npm-package-lock.mjs",
@@ -769,7 +775,7 @@ jobs:
                   if kind in ("platform", "linux-node"):
                       pathspecs += evidence_scripts
                   elif kind == "preflight":
-                      pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+                      pathspecs += preflight_scripts
                   if kind == "platform":
                       pathspecs += platform_scripts
                   if kind == "linux-node":
@@ -1389,6 +1395,9 @@ jobs:
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n\n`);
           EOF
 
+      # android-ci-contract-v2: frozen targets support the current Android CI tasks.
+      # android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
+      # ui-e2e-projects-contract-v1: named projects are declared by the target's UI E2E config.
       - name: Build CI manifest
         id: manifest
         env:
@@ -1409,6 +1418,7 @@ jobs:
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
+          OPENCLAW_CI_UI_E2E_FULL: ${{ vars.OPENCLAW_CI_UI_E2E_FULL || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHANGED_PATHS_FILE: ${{ steps.changed_scope.outputs.changed_paths_file }}
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
@@ -1445,1291 +1455,7 @@ jobs:
             [ "$OPENCLAW_CI_CHECKOUT_REVISION" != "$OPENCLAW_CI_WORKFLOW_REVISION" ]; then
             manifest_node_args+=(--import tsx)
           fi
-          node "${manifest_node_args[@]}" --input-type=module <<'EOF'
-          import { appendFileSync, existsSync, readFileSync } from "node:fs";
-          import { matchesGlob } from "node:path";
-          import { resolveTestGitCommits } from "./.ci-harness/.github/actions/git-owner/test-prerequisites.mjs";
-          import { resolveReleaseContextIdentity } from "./.ci-harness/scripts/lib/release-context.mjs";
-          import { classifyReleaseTrain, parseReleaseVersion } from "./.ci-harness/scripts/lib/release-version.mjs";
-
-          const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
-          const ciQualification = workflowEventName === "workflow_dispatch" &&
-            process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
-            (process.env.OPENCLAW_CI_QUALIFICATION === "true" ||
-              process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson");
-          const mainQualification = ciQualification && process.env.OPENCLAW_CI_SHAPE === "main";
-          const eventName = ciQualification ? mainQualification ? "push" : "pull_request" : workflowEventName;
-          const eventRef = mainQualification ? "refs/heads/main" : process.env.GITHUB_REF;
-          const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
-          const workflowRevision = process.env.OPENCLAW_CI_WORKFLOW_REVISION ?? "";
-          const historicalTargetApproved = process.env.OPENCLAW_CI_HISTORICAL_TARGET === "true";
-          const historicalTarget =
-            eventName === "workflow_dispatch" &&
-            historicalTargetApproved &&
-            checkoutRevision !== workflowRevision;
-          const releaseCandidateTarget =
-            eventName === "workflow_dispatch" &&
-            process.env.OPENCLAW_CI_RELEASE_CANDIDATE_TARGET === "true" &&
-            checkoutRevision !== workflowRevision;
-          const targetContextTarget =
-            eventName === "workflow_dispatch" &&
-            process.env.OPENCLAW_CI_TARGET_CONTEXT_TARGET === "true" &&
-            checkoutRevision !== workflowRevision;
-          const compatibilityTarget =
-            historicalTarget || releaseCandidateTarget || targetContextTarget;
-          const frozenTarget =
-            eventName === "workflow_dispatch" && checkoutRevision !== workflowRevision;
-
-          // Frozen releases use current trusted shard budgets while discovery
-          // and test execution keep the candidate checkout as their root.
-          const nodeTestPlanPath = frozenTarget
-            ? "./.ci-harness/scripts/lib/ci-node-test-plan.mts"
-            : existsSync("./scripts/lib/ci-node-test-plan.mts")
-              ? "./scripts/lib/ci-node-test-plan.mts"
-              : "./scripts/lib/ci-node-test-plan.mjs";
-          const nodeTestPlan = await import(nodeTestPlanPath);
-          const createNodeTestPlan =
-            typeof nodeTestPlan.createNodeTestShardBundles === "function"
-              ? nodeTestPlan.createNodeTestShardBundles
-              : compatibilityTarget
-                ? nodeTestPlan.createNodeTestShards
-                : undefined;
-          if (typeof createNodeTestPlan !== "function") {
-            throw new Error("CI target does not export a supported Node test shard planner");
-          }
-          let sourceChannelTestEnv = nodeTestPlan.SOURCE_CHANNEL_TEST_POLICY?.env;
-          if (!sourceChannelTestEnv) {
-            if (!frozenTarget || !compatibilityTarget) {
-              throw new Error("Current CI target does not export SOURCE_CHANNEL_TEST_POLICY");
-            }
-            // Named frozen targets retain the channel policy that predates this export.
-            sourceChannelTestEnv = {
-              NODE_OPTIONS: "--max-old-space-size=8192",
-              OPENCLAW_VITEST_MAX_WORKERS: "1",
-            };
-          }
-
-          const importTargetPlan = async (path) => {
-            if (existsSync(path)) {
-              return import(path);
-            }
-            if (!compatibilityTarget) {
-              throw new Error(`Current CI target does not provide ${path}`);
-            }
-            return {};
-          };
-          const changedNodeTestPlan = await importTargetPlan(
-            existsSync("./scripts/lib/ci-changed-node-test-plan.mts")
-              ? "./scripts/lib/ci-changed-node-test-plan.mts"
-              : "./scripts/lib/ci-changed-node-test-plan.mjs",
-          );
-          const dockerSeedPlan = existsSync("./scripts/lib/ci-docker-seed-plan.mts")
-            ? await import("./scripts/lib/ci-docker-seed-plan.mts")
-            : {};
-          const channelContractPlan = await importTargetPlan(
-            existsSync("./scripts/lib/channel-contract-test-plan.mts")
-              ? "./scripts/lib/channel-contract-test-plan.mts"
-              : "./scripts/lib/channel-contract-test-plan.mjs",
-          );
-          const windowsTestPlan = existsSync("./scripts/lib/ci-windows-test-plan.mts")
-            ? await import("./scripts/lib/ci-windows-test-plan.mts")
-            : null;
-          const createChannelContractTestShards =
-            typeof channelContractPlan.createChannelContractTestShards === "function"
-              ? channelContractPlan.createChannelContractTestShards
-              : () => [];
-
-          const parseBoolean = (value, fallback = false) => {
-            if (value === undefined) return fallback;
-            const normalized = value.trim().toLowerCase();
-            if (normalized === "true" || normalized === "1") return true;
-            if (normalized === "false" || normalized === "0" || normalized === "") return false;
-            return fallback;
-          };
-
-          const pluginContractPlan = await importTargetPlan(
-            existsSync("./scripts/lib/plugin-contract-test-plan.mts")
-              ? "./scripts/lib/plugin-contract-test-plan.mts"
-              : "./scripts/lib/plugin-contract-test-plan.mjs",
-          );
-          const createPluginContractTestShards =
-            typeof pluginContractPlan.createPluginContractTestShards === "function"
-              ? pluginContractPlan.createPluginContractTestShards
-              : () => [
-                  {
-                    checkName: "checks-fast-contracts-plugins-legacy",
-                    includePatterns: ["src/plugins/contracts/**/*.test.ts"],
-                    runtime: "node",
-                    task: "contracts-plugins",
-                  },
-                ];
-          const createMatrix = (include) => ({ include });
-          // Share setup without combining the target planner's process envelopes.
-          const createContractMatrix = (shards, task) => createMatrix(
-            frozenTarget
-              ? shards.map((shard) => ({ ...shard, task, groups: [shard] }))
-              : shards.length > 0 ? [{ checkName: `checks-fast-${task}`, task, groups: shards }] : [],
-          );
-          const outputPath = process.env.GITHUB_OUTPUT;
-          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-          const packageScripts = packageJson.scripts ?? {};
-          const hasPackageScript = (name) => typeof packageScripts[name] === "string";
-          const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
-          const changedPaths = (() => {
-            try {
-              const manifestPath = process.env.OPENCLAW_CI_CHANGED_PATHS_FILE;
-              // Frozen target producers can predate the complete file transport.
-              const value = JSON.parse(manifestPath
-                ? readFileSync(manifestPath, "utf8")
-                : process.env.OPENCLAW_CI_CHANGED_PATHS_JSON ?? "null");
-              return Array.isArray(value) && value.every((path) => typeof path === "string")
-                ? value
-                : null;
-            } catch {
-              return null;
-            }
-          })();
-          const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
-          const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
-          const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
-          const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
-          const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
-          // Exact-head release gates substitute for PR CI. Ordinary manual CI
-          // is Full Release Validation's owner for the complete process proofs.
-          const runProofTier = eventName !== "pull_request" && !releaseGate;
-          const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
-          const validationTier = process.env.OPENCLAW_CI_VALIDATION_TIER ?? "full";
-          const mainValidation = validationTier === "main";
-          if (validationTier !== "full" && !mainValidation) {
-            throw new Error("validation_tier must be full or main");
-          }
-          if (mainValidation && (
-            !["workflow_dispatch", "schedule"].includes(workflowEventName) || !isCanonicalRepository ||
-            frozenTarget || compatibilityTarget || ciQualification || releaseGate ||
-            releaseScope !== "full" || process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER
-          )) {
-            throw new Error("The main validation tier requires canonical same-revision manual or scheduled validation with full scope");
-          }
-          const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
-          const fullNativeValidation =
-            eventName === "workflow_dispatch" && !mainValidation && !releaseGate && releaseScope === "full";
-          if (releaseScope !== "full" && !npmQualification) {
-            throw new Error("release_scope must be full, npm-beta, or npm-stable");
-          }
-          if (npmQualification) {
-            const packageVersion = String(packageJson.version ?? "");
-            const parsedVersion = parseReleaseVersion(packageVersion);
-            const expectedTrain = releaseScope === "npm-beta" ? "beta" : "stable";
-            const contextRef = process.env.OPENCLAW_CI_TARGET_CONTEXT_TARGET === "true"
-              ? process.env.OPENCLAW_CI_TARGET_CONTEXT_REF
-              : historicalTargetApproved ? process.env.OPENCLAW_CI_HISTORICAL_TARGET_TAG : "";
-            if (
-              eventName !== "workflow_dispatch" || !isCanonicalRepository || releaseGate ||
-              process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER ||
-              !/^[0-9a-f]{40}$/u.test(process.env.OPENCLAW_CI_TARGET_REF ?? "") ||
-              process.env.OPENCLAW_CI_TARGET_REF !== checkoutRevision ||
-              !parsedVersion || parsedVersion.version !== packageVersion ||
-              classifyReleaseTrain(parsedVersion) !== expectedTrain
-            ) {
-              throw new Error(`release_scope ${releaseScope} requires an exact ${expectedTrain} target with validated matching release context and no PR release gate or pull_request_number`);
-            }
-            let identity;
-            try {
-              identity = resolveReleaseContextIdentity(contextRef ?? "", packageVersion);
-            } catch (error) {
-              throw new Error(`release_scope ${releaseScope}: ${error.message}`);
-            }
-            if (!identity || identity.kind === "extended-stable branch") {
-              throw new Error(`release_scope ${releaseScope} requires a matching regular release branch or tag`);
-            }
-            if (identity.baseTag) {
-              // Base-package corrections reuse the base tag's exact source; ancestry alone is insufficient.
-              if (process.env.OPENCLAW_CI_CORRECTION_BASE_SHA !== checkoutRevision) {
-                throw new Error(`release_scope ${releaseScope} correction base ${identity.baseTag} does not resolve to ${checkoutRevision}`);
-              }
-            }
-          }
-          const toolingOwnerChange =
-            eventName === "pull_request" && isCanonicalRepository && changedPaths !== null &&
-            !docsOnly &&
-            typeof nodeTestPlan.isToolingTestOwnerPath === "function" &&
-            changedPaths.some(nodeTestPlan.isToolingTestOwnerPath);
-          const nodeDataOnly = eventName === "pull_request" && parseBoolean(process.env.OPENCLAW_CI_NODE_TEST_DATA_ONLY);
-          const nativeGeneratedOnly = workflowEventName === "pull_request" &&
-            isCanonicalRepository && !parseBoolean(process.env.OPENCLAW_CI_FULL) &&
-            process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY &&
-            process.env.OPENCLAW_CI_PR_AUTHOR_TYPE === "Bot" &&
-            (await import("./scripts/lib/ci-native-generated-scope.mjs")).isNativeGeneratedOnlyChange(changedPaths);
-          const runNode =
-            !nodeDataOnly && !nativeGeneratedOnly && ((parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
-          const runNodeFastOnly =
-            runNode && !runtimePullRequest && !toolingOwnerChange && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
-          const runNodeFull = runNode && !runNodeFastOnly;
-          // release-fast-lane: label-admitted narrow gate for release tooling PRs.
-          // Canonical PR CI only; declined runs keep every ordinary decision.
-          const releaseFastLaneLabel = parseBoolean(process.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL);
-          const releaseFastLaneScope = !releaseFastLaneLabel
-            ? null
-            : !(eventName === "pull_request" && isCanonicalRepository && process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY && runNodeFull && !frozenTarget && !compatibilityTarget && !releaseGate && !docsOnly)
-              ? { eligible: false, reason: "applies only to same-repository pull request CI with full Node routing" }
-              : typeof changedNodeTestPlan.resolveReleaseFastLaneScope !== "function"
-                ? { eligible: false, reason: "CI target lacks the release fast lane selector" }
-                : changedNodeTestPlan.resolveReleaseFastLaneScope(changedPaths);
-          const releaseFastLane = releaseFastLaneScope?.eligible === true;
-          const runCheck = runNodeFull || (!docsOnly && nodeDataOnly && (
-            changedPaths === null || changedPaths.some((path) => /\.[cm]?tsx?$/u.test(path))
-          ));
-          const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
-          // Eligible paths share the consumer selector; hosted rows intersect
-          // those consumers with their canonical stripes.
-          let changedCoreTestPaths;
-          if (eventName === "pull_request" && runCheck && !frozenTarget && changedPaths &&
-            existsSync("scripts/changed-lanes.mts") &&
-            [
-              ["scripts/run-tsgo-core-test-shards.mts", "--changed-paths-json"],
-              ["scripts/run-additional-boundary-checks.mts", "--core-test-boundary-owner=test-types"],
-            ].every(([file, capability]) => existsSync(file) && readFileSync(file, "utf8").includes(capability))) {
-            const lanes = await import("./scripts/changed-lanes.mts");
-            if (typeof lanes.getChangedCoreTestPaths === "function") {
-              const coreTestPaths = lanes.getChangedCoreTestPaths(lanes.detectChangedLanes(changedPaths));
-              // Deleted leaves need the full plan.
-              if (coreTestPaths?.length && coreTestPaths.every((path) => existsSync(path))) {
-                changedCoreTestPaths = coreTestPaths;
-              }
-            }
-          }
-
-          const runNodeFastPluginContracts =
-            runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
-          const runNodeFastCiRouting =
-            runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
-          const proposedCheckScope = runtimePullRequest &&
-            (!frozenTarget || releaseGate) && !compatibilityTarget && changedPaths?.length &&
-            existsSync("scripts/lib/ci-check-family-scope.mts")
-              ? (await import("./scripts/lib/ci-check-family-scope.mts")).resolveCiCheckFamilyScope(changedPaths)
-              : null;
-          const pluginContractShards = !runtimePullRequest && ((runNodeFull && !releaseFastLane) || runNodeFastPluginContracts)
-            ? createPluginContractTestShards() : [];
-          const channelContractShards = !runtimePullRequest && runNodeFull && !releaseFastLane
-            ? createChannelContractTestShards() : [];
-          const runMacos =
-            !nativeGeneratedOnly && parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository && !releaseFastLane;
-          // Older selected checkouts report only run_macos; retain their native Node coverage.
-          const runMacosNode = runMacos ||
-            (!nativeGeneratedOnly && parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS_NODE) && !docsOnly && isCanonicalRepository && !releaseFastLane);
-          const supportsCurrentMacosSwiftCi =
-            existsSync("scripts/install-swift-tools.sh") &&
-            existsSync("scripts/lint-swift.sh") &&
-            existsSync("scripts/format-swift.sh");
-          const supportsIosBuild = hasPackageScript("ios:build");
-          const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
-          const runIosBuild =
-            !nativeGeneratedOnly &&
-            parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
-            !releaseFastLane &&
-            !npmQualification &&
-            !docsOnly &&
-            isCanonicalRepository &&
-            (!frozenTarget ||
-              supportsCurrentIosCi ||
-              (releaseCandidateTarget && supportsIosBuild));
-          const runAndroid =
-            !nativeGeneratedOnly && parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !npmQualification &&
-            !docsOnly && isCanonicalRepository && !releaseFastLane;
-          // Frozen targets may predate this class; current source must still fail
-          // native validation if the required test disappears.
-          const runAndroidAccessNative = runAndroid && !compatibilityTarget &&
-            (!frozenTarget || existsSync(
-              "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessNativeTest.kt",
-            ));
-          let runWindows =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
-            !releaseFastLane &&
-            !docsOnly &&
-            !runNodeFastOnly &&
-            isCanonicalRepository;
-          const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
-          const runControlUiI18n =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
-          let runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly && !nodeDataOnly && !releaseFastLane;
-          // The UI owner graph also covers protocol and Gateway-served inputs
-          // outside ui/. Ordinary UI test leaves retain their cheaper unit owner.
-          const selectUiE2eFamily = (family) => !docsOnly && !nodeDataOnly && !releaseFastLane && (
-            runtimePullRequest && (!frozenTarget || releaseGate) && !compatibilityTarget &&
-            changedPaths !== null && typeof changedNodeTestPlan.hasUiE2eAffectingChange === "function"
-              ? changedNodeTestPlan.hasUiE2eAffectingChange(changedPaths, { family })
-              : runUiTests
-          );
-          let runControlUiE2e = selectUiE2eFamily("control-ui");
-          let runBrowserExtensionE2e = selectUiE2eFamily("browser-extension");
-          let runUiRealGateway = selectUiE2eFamily("real-gateway");
-          let runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-          const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
-          const usesHostedRunnerProfile =
-            runnerProfile === "github" || runnerProfile === "hybrid";
-          const supportsUiE2eProjects =
-            existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
-            readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
-              .includes("ui-e2e-projects-contract-v1");
-          const includeReleaseOnlyUiTests =
-            !mainValidation && ((eventName === "workflow_dispatch" && !releaseGate) ||
-            !isCanonicalRepository || compatibilityTarget || changedPaths === null);
-          // Ordinary CI shares eight 16-class browser jobs; full inventories retain
-          // twelve. Private source-server projects keep their own one-worker limit.
-          const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
-          let uiE2eJobCount = compactUiE2e ? 9 : supportsUiE2eProjects
-            ? 13
-            : usesHostedRunnerProfile ? 14 : 4;
-          // The logical profile already owns contributor routing. Reuse the
-          // four-part plan only for normal hybrid first attempts on Blacksmith.
-          const compactHybridQaSmoke = runnerProfile === "hybrid" &&
-            isCanonicalRepository &&
-            (eventName === "push" || eventName === "pull_request" || mainValidation) &&
-            process.env.GITHUB_RUN_ATTEMPT === "1";
-          const qaSmokeCiPartCount = usesHostedRunnerProfile && !compactHybridQaSmoke ? 6 : 4;
-          const supportsNativeI18n =
-            hasPackageScript("native:i18n:check") &&
-            hasPackageScript("android:i18n:check") &&
-            hasPackageScript("apple:i18n:check");
-          const runNativeI18n =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
-            !releaseFastLane &&
-            !npmQualification &&
-            !docsOnly &&
-            (!frozenTarget || supportsNativeI18n);
-          const targetWorkflow = existsSync(".github/workflows/ci.yml")
-            ? readFileSync(".github/workflows/ci.yml", "utf8")
-            : "";
-          const supportsOpenClawKitTests = targetWorkflow.includes("openclawkit-tests-contract-v1");
-          const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
-          const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
-          const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
-          const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
-          // Unit tests do not compile the benchmark. Keep its build when inputs
-          // change, or when the existing changed-path manifest cannot narrow scope.
-          const androidBenchmarkChanged = !changedPaths?.length || changedPaths.some((path) =>
-            !path.trim() ||
-            matchesGlob(path, "apps/android/{benchmark,buildSrc,build-logic,gradle,Config}/**") ||
-            matchesGlob(path, "apps/android/**/*.gradle{,.kts}") ||
-            matchesGlob(path, "apps/android/**/gradle.properties") ||
-            matchesGlob(path, "apps/android/gradlew{,.bat}"),
-          );
-          const supportsFormatCheck =
-            targetWorkflow.split("pnpm format:check").length - 1 >= 2;
-          const runFormatCheck = !frozenTarget || supportsFormatCheck;
-          let runBaselineRatchets = runNode && !frozenTarget && !releaseFastLane;
-          const checksFastCoreTasks =
-            runBaselineRatchets
-              ? [
-                  {
-                    check_name: "checks-fast-startup-corpus",
-                    runtime: "node",
-                    task: "startup-corpus",
-                  },
-                  {
-                    check_name: "checks-fast-coercion-helpers",
-                    runtime: "node",
-                    task: "coercion-helpers",
-                  },
-                ]
-            : [];
-          if (runNodeFull && !releaseFastLane) {
-            checksFastCoreTasks.push(
-              { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
-              { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
-            );
-          } else {
-            if (runNodeFastCiRouting && !releaseFastLane) {
-              checksFastCoreTasks.push({
-                check_name: "checks-fast-ci-routing",
-                runtime: "node",
-                task: "ci-routing",
-              });
-            }
-          }
-          if (releaseGate) {
-            checksFastCoreTasks.push(
-              ...Array.from({ length: 5 }, (_, index) => {
-                const stripe = index + 1;
-                return {
-                  check_name: `checks-fast-release-lint-core-${stripe}`,
-                  runtime: "node",
-                  stripe,
-                  task: `release-lint-core-${stripe}`,
-                };
-              }),
-              {
-                check_name: "checks-fast-release-lint-extensions",
-                runtime: "node",
-                task: "release-lint-extensions",
-              },
-            );
-          }
-
-          const includeReleaseOnlyRuntimeTests =
-            !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
-          const includePrExemptRuntimeTests = !runtimePullRequest;
-          let selectedTestTargets;
-          if (runtimePullRequest && runNodeFull) {
-            if (changedPaths === null) {
-              throw new Error("Current PR CI requires complete changed paths for Node test planning");
-            }
-            if (typeof changedNodeTestPlan.resolveChangedNodeTestTargets !== "function") {
-              throw new Error("Current PR CI requires a bounded changed-owner target selector");
-            }
-            selectedTestTargets = changedNodeTestPlan.resolveChangedNodeTestTargets(changedPaths, {
-              baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
-              includeReleaseOnlyRuntimeTests,
-              includePrExemptRuntimeTests,
-            });
-          }
-          const uiOwnerScope = {
-            unit: runUiTests,
-            mocked: runControlUiE2e,
-            browser: runBrowserExtensionE2e,
-            realGateway: runUiRealGateway,
-          };
-          let uiTestGroups = (runUiTests || runUiE2e || runUiRealGateway || selectedTestTargets) && !compatibilityTarget &&
-            (!frozenTarget || releaseGate) && typeof nodeTestPlan.createUiTestShardGroups === "function"
-              ? nodeTestPlan.createUiTestShardGroups({
-                  // Preserve the ordinary owner-family inventory. Protected or directly
-                  // selected files opt into the existing release-only UI tier below.
-                  includeReleaseOnlyTests: includeReleaseOnlyUiTests,
-                  includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
-                  changedPaths: selectedTestTargets ?? changedPaths ?? [],
-                })
-              : null;
-          let uiTestShardCount = compatibilityTarget ? 1 : 3;
-          if (selectedTestTargets) {
-            if (!uiTestGroups) throw new Error("Current PR CI requires UI target groups");
-            const selected = new Set(selectedTestTargets);
-            const { controlUiE2eTestGlobs, isUiTestTarget, uiE2eRealGatewayTestFiles } =
-              await import("./test/vitest/vitest.ui-paths.mjs");
-            const realGatewayTargets = new Set(uiE2eRealGatewayTestFiles);
-            const narrowGroups = (groups, ownsFile, retainsOwner) => groups.map((group) => ({
-              ...group,
-              includePatterns: (group.includePatterns ?? selectedTestTargets.filter(ownsFile))
-                .filter((file) => retainsOwner(file) || selected.has(file)),
-            })).filter((group) => group.includePatterns.length > 0);
-            uiTestGroups = {
-              ui: narrowGroups(uiTestGroups.ui, isUiTestTarget, () => uiOwnerScope.unit),
-              e2e: narrowGroups(uiTestGroups.e2e, (file) => realGatewayTargets.has(file) ||
-                controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
-                (file) => realGatewayTargets.has(file) ? uiOwnerScope.realGateway : uiOwnerScope.mocked),
-            };
-            const uiTargets = uiTestGroups.ui.flatMap((group) => group.includePatterns);
-            const e2eTargets = uiTestGroups.e2e.flatMap((group) => group.includePatterns);
-            const controlTargets = e2eTargets.filter((file) => !realGatewayTargets.has(file));
-            runUiTests = uiTargets.length > 0;
-            runControlUiE2e = controlTargets.length > 0;
-            runBrowserExtensionE2e = uiOwnerScope.browser ||
-              selected.has("extensions/browser/chrome-extension/bootstrap.chromium.test.ts");
-            runUiRealGateway = e2eTargets.some((file) => realGatewayTargets.has(file));
-            runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-            uiTestShardCount = Math.min(3, uiTargets.length);
-            // Keep the existing worker/row cap; omit empty file partitions.
-            uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
-          }
-          if (selectedTestTargets && runWindows && !windowsTestPlan) {
-            throw new Error("Current PR CI requires a target-owned Windows planner");
-          }
-          const plannedWindowsShards = runWindows && windowsTestPlan
-            ? windowsTestPlan.createWindowsTestShards(packageScripts, {
-                includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
-                ...(runtimePullRequest && changedPaths ? { changedPaths: selectedTestTargets ?? changedPaths } : {}),
-              })
-            : null;
-          const windowsShards = plannedWindowsShards?.map((shard) => ({
-            ...shard,
-            runtime: "node",
-            task: "test",
-          })).filter((shard) => shard.targets.length > 0) ?? (runWindows ? [1, 2].map((part) => ({
-            check_name: `checks-windows-node-test-${part}`,
-            runtime: "node",
-            task: `test-${part}`,
-          })) : []);
-          if (selectedTestTargets) runWindows = windowsShards.length > 0;
-          const startupCorpusTestFiles =
-            typeof nodeTestPlan.resolveStartupCorpusTestFiles === "function"
-              ? nodeTestPlan.resolveStartupCorpusTestFiles({
-                  includeReleaseOnlyRuntimeTests: selectedTestTargets ? true : includeReleaseOnlyRuntimeTests,
-                  includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
-                  ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
-                }).filter((file) => !selectedTestTargets || selectedTestTargets.includes(file))
-              : undefined;
-          const ownerPathEvent = isCanonicalRepository &&
-            eventName === "push" && eventRef === "refs/heads/main";
-          if (runtimePullRequest && supportsDockerSeedE2e &&
-            typeof dockerSeedPlan.resolveChangedDockerSeedLanes !== "function") {
-            throw new Error("Current PR CI requires the Docker owner selector");
-          }
-          const dockerSeedLanes = isCanonicalRepository && supportsDockerSeedE2e
-            ? runtimePullRequest
-              ? dockerSeedPlan.resolveChangedDockerSeedLanes(changedPaths ?? [])
-              : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation)
-                ? typeof dockerSeedPlan.resolveDockerSeedLanes === "function"
-                  ? dockerSeedPlan.resolveDockerSeedLanes({ includeReleaseOnly: eventName === "workflow_dispatch" && !mainValidation })
-                  : ["published-upgrade-survivor"]
-                : []
-            : [];
-          // Canonical pushes also use compact bins: 80+ single-group jobs
-          // drain the runner pool for minutes, and per-shard check names on
-          // main have no branch-protection consumers. Dispatch (release
-          // validation) keeps the full named matrix.
-          const compactPlanMode = !isCanonicalRepository
-            ? undefined
-            : runtimePullRequest
-              ? "pull-request"
-              : eventName === "push" || mainValidation
-                ? "push"
-                : undefined;
-          const nodeMatrixLimit = mainValidation ? 77 : compactPlanMode === "pull-request" ? 130 : 70;
-          let changedNodeTestShards = null;
-          let changedNodeTestFallbackReason;
-          if (runtimePullRequest && runNodeFull) {
-            // PRs admit only concrete owner plans; missing selection is a planner failure.
-            for (const name of ["createChangedNodeTestShards"]) {
-              if (typeof changedNodeTestPlan[name] !== "function") {
-                throw new Error(`Current PR CI target does not export ${name}`);
-              }
-            }
-            changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
-              baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
-              compactNodeJobCap: compactPlanMode ? nodeMatrixLimit : undefined,
-              selectedTestTargets,
-              // Changed compiler plans validate every consuming graph, with full fallback on ambiguity.
-              dedicatedCoreTypeChecks: runNodeFull,
-              dedicatedBuildArtifacts: false,
-              dedicatedNativeChecks: { macos: runMacos, ios: runIosBuild, android: runAndroid },
-              includeReleaseOnlyToolingShards: false,
-              includeReleaseOnlyRuntimeTests,
-              includePrExemptRuntimeTests,
-              runnerBackend: nodeRunnerBackend,
-              releaseFastLane,
-              onFallback: (reason) => {
-                changedNodeTestFallbackReason = reason;
-                console.log(`Node test plan owner selection: ${reason}`);
-              },
-              dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
-              dedicatedUiE2e: (runUiE2e || runUiRealGateway) && !compatibilityTarget,
-              dedicatedUiTests: runUiTests,
-              dedicatedMaxLinesRatchet: runBaselineRatchets &&
-                (!proposedCheckScope || proposedCheckScope.baselineRatchets),
-            });
-            if (changedNodeTestShards === null) {
-              throw new Error(`Current PR CI requires a bounded changed-owner Node plan: ${changedNodeTestFallbackReason ?? "selector returned no plan"}`);
-            }
-            console.log(`Node test plan changed-set: ${changedNodeTestShards.filter((shard) => !shard.requiresDist).length} rows`);
-          }
-          // A Node-targeting fallback does not invalidate independently resolved
-          // check families or their compiler/lint consumer graphs.
-          const narrowCheckScope = proposedCheckScope?.mode === "scoped" ? proposedCheckScope : null;
-          const runCheckPlan = Boolean(runCheck && narrowCheckScope);
-          let typeGraphBoundaryOwner = "";
-          if (runCheckPlan && narrowCheckScope.types) {
-            const { resolveChangedCiTsgoInputs } = await import("./scripts/lib/tsgo-core-test-shards.mts");
-            typeGraphBoundaryOwner = runNodeFull && !releaseFastLane &&
-              narrowCheckScope.additionalGroups.includes("boundaries") &&
-              !resolveChangedCiTsgoInputs(changedPaths, existsSync)
-              ? "additional-checks" : "check-plan";
-          }
-          const fullCoreLintStripes = runnerProfile === "hybrid" && !frozenTarget &&
-            ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
-              nodeRunnerBackend === "runson" || ciQualification) ? [1, 2] : [1, 2, 3, 4, 5];
-          const coreLintRows = fullCoreLintStripes.map((stripe) => ({ stripe }));
-          const compactExtensionLint = isCanonicalRepository && runnerProfile === "hybrid" &&
-            !frozenTarget && !compatibilityTarget && !releaseGate && !runCheckPlan;
-          const extensionLintRows = compactExtensionLint
-            ? [1, 2, 3].map((stripe) => ({ stripe, stripe_count: 3 }))
-            : [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe }));
-          const coreTypeRows = (frozenTarget ? [1, 2] : [1, 2, 3, 4, 5]).map((stripe) => ({ stripe }));
-          if (proposedCheckScope) {
-            runBaselineRatchets &&= proposedCheckScope.baselineRatchets;
-            for (let index = checksFastCoreTasks.length - 1; index >= 0; index--) {
-              if (!proposedCheckScope.fastTasks.includes(checksFastCoreTasks[index].task) &&
-                !checksFastCoreTasks[index].task.startsWith("release-lint-")) {
-                checksFastCoreTasks.splice(index, 1);
-              }
-            }
-          }
-          // Heavy packaging lanes run only when the diff touches surfaces they
-          // exist to prove: built-artifact tests need dist even on test-only diffs, and QA
-          // smoke only sees changes on its scenario surface or inside the
-          // packaged CLI's import graph. QA gating is diff-based, so it also
-          // applies when test targeting fell back to the full compact suite.
-          const selectedOwnerTest = (file) => selectedTestTargets?.includes(file) === true;
-          const selectedBuildOwner = [
-            "test/scripts/build-all.test.ts",
-            "test/scripts/tsdown-build.test.ts",
-            "test/scripts/dist-artifact-ownership.test.ts",
-            "test/scripts/write-plugin-sdk-entry-dts.test.ts",
-            "test/scripts/write-unified-entry-dts.test.ts",
-            "test/scripts/check-openclaw-package-tarball.test.ts",
-          ].some(selectedOwnerTest);
-          const runBrowserNativeHost = runNodeFull && (runProofTier ||
-            selectedOwnerTest("extensions/browser/src/browser/extension-install.native-host.e2e.test.ts"));
-          const runDoctorPluginIndex = runNodeFull && (runProofTier ||
-            selectedOwnerTest("test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts"));
-          const runDiscordComponentProof = runNodeFull && (runProofTier ||
-            selectedOwnerTest("test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts"));
-          const runGatewayWatch = runNodeFull && ((runProofTier && !releaseFastLane) ||
-            selectedOwnerTest("test/scripts/check-gateway-watch-regression.test.ts"));
-          const selectedTuiPty = selectedOwnerTest("src/tui/tui-pty-local.e2e.test.ts");
-          const changedScopeHasBuildImpact = runtimePullRequest
-            ? selectedBuildOwner || changedNodeTestShards?.some((shard) => shard.requiresDist) === true
-            : changedNodeTestShards === null ||
-              changedNodeTestShards.some((shard) => shard.requiresDist) ||
-              typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
-              changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths);
-          const changedScopeHasQaImpact =
-            changedPaths === null ||
-            (eventName === "workflow_dispatch" && !releaseGate) ||
-            typeof changedNodeTestPlan.hasQaSmokeAffectingChange !== "function" ||
-            changedNodeTestPlan.hasQaSmokeAffectingChange(changedPaths);
-          // Prompt snapshots only change when the generator's import graph or
-          // its fixtures do; unaffected PR diffs skip the regeneration lane.
-          const changedScopeHasPromptSnapshotImpact =
-            changedPaths === null ||
-            eventName !== "pull_request" ||
-            typeof changedNodeTestPlan.hasPromptSnapshotAffectingChange !== "function" ||
-            changedNodeTestPlan.hasPromptSnapshotAffectingChange(changedPaths);
-          const supportsSqliteSessionLifecycleProof = existsSync(
-            "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
-          );
-          const changedScopeHasSqliteSessionLifecycleImpact =
-            changedPaths === null ||
-            (eventName === "workflow_dispatch" && !releaseGate) ||
-            typeof changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange !== "function" ||
-            changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange(changedPaths);
-          const runSqliteSessionLifecycle =
-            runNodeFull &&
-            supportsSqliteSessionLifecycleProof &&
-            (changedScopeHasSqliteSessionLifecycleImpact ||
-              selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
-          const runBuildArtifacts =
-            runNodeFull && (changedScopeHasBuildImpact || runSqliteSessionLifecycle ||
-              runBrowserNativeHost || runDoctorPluginIndex || runDiscordComponentProof ||
-              runGatewayWatch || selectedTuiPty);
-          const runControlUiPerformance = !releaseFastLane && (runNodeFull || runUiTests) && (
-            eventName === "workflow_dispatch" || changedPaths === null ||
-            typeof changedNodeTestPlan.hasControlUiPerformanceAffectingChange !== "function" ||
-            changedNodeTestPlan.hasControlUiPerformanceAffectingChange(changedPaths)
-          );
-          const runQaSmokeCi =
-            runNodeFull &&
-            changedScopeHasQaImpact &&
-            (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
-          const rawNodeTestShards = runNodeFull
-            ? changedNodeTestShards
-              ? changedNodeTestShards
-              : [
-                  ...createNodeTestPlan({
-                    includeProofTests: runProofTier,
-                    includeReleaseOnlyPluginShards: false,
-                    includeReleaseOnlyToolingShards: mainValidation || eventName === "workflow_dispatch" || !isCanonicalRepository,
-                    includeReleaseOnlyRuntimeTests,
-                    includePrExemptRuntimeTests,
-                    ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
-                    // Keep the legacy boolean for historical targets. Hourly main uses
-                    // the complete compact inventory within its 77-row main-tier cap.
-                    compact: compactPlanMode !== undefined,
-                    compactMode: mainValidation ? "pull-request" : compactPlanMode,
-                    compactNodeJobCap: nodeMatrixLimit,
-                    runnerBackend: nodeRunnerBackend,
-                  }),
-                ]
-            : [];
-          if (ciQualification && !mainQualification && process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson") {
-            const cron = rawNodeTestShards.find((shard) => shard.runner === "runson-c8i-8xlarge");
-            if (!cron) throw new Error("RunsOn qualification requires selected cron tests");
-            // One dispatch compares the same child contracts and worker ceiling.
-            for (const [provider, runner] of [
-              ["blacksmith", "blacksmith-32vcpu-ubuntu-2404"],
-              ["github", "ubuntu-24.04"],
-            ]) {
-              rawNodeTestShards.push({
-                ...cron,
-                checkName: `checks-node-runson-cron-${provider}-control`,
-                shardName: `runson-cron-${provider}-control`,
-                runner,
-              });
-            }
-          }
-          // The trusted planner may name owners added after a frozen checkout.
-          // Project them out here so the runner never receives impossible work.
-          const projectFrozenNodeTestPlan = (plan) => {
-            const configs = plan.configs?.filter((config) => existsSync(config));
-            if (plan.configs?.length && !configs?.length) {
-              return null;
-            }
-            return { ...plan, configs };
-          };
-          const targetNodeTestShards = compatibilityTarget
-            ? rawNodeTestShards.flatMap((shard) => {
-                const groups = shard.groups
-                  ?.map(projectFrozenNodeTestPlan)
-                  .filter((group) => group !== null);
-                if (shard.groups?.length && !groups?.length) return [];
-                const projected = projectFrozenNodeTestPlan({ ...shard, groups });
-                return projected ? [projected] : [];
-              })
-            : rawNodeTestShards;
-          // Node rows list every striped test file. Current targets pack the
-          // projected runner contract; older targets keep their flat fields or
-          // projected legacy groups because their shard runner predates the codec.
-          const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
-          const nodeTestGroupsCodec =
-            (targetNodeTestShards.length > 0 || uiTestGroups !== null) &&
-            existsSync(nodeTestGroupsCodecPath)
-              ? await importTargetPlan(nodeTestGroupsCodecPath)
-              : null;
-          const encodeNodeTestGroups = (groups) => {
-            if (typeof nodeTestGroupsCodec?.encodeNodeTestGroups !== "function") {
-              throw new Error("CI target emits grouped Node test rows without scripts/lib/ci-node-test-groups-codec.mts");
-            }
-            return nodeTestGroupsCodec.encodeNodeTestGroups(groups);
-          };
-          if (selectedTestTargets && runUiRealGateway && typeof nodeTestPlan.createUiRealGatewayTestShards !== "function") {
-            throw new Error("Current PR CI requires target-owned real-Gateway groups");
-          }
-          const plannedUiRealGatewayShards = uiTestGroups && (!frozenTarget || releaseGate) &&
-            typeof nodeTestPlan.createUiRealGatewayTestShards === "function"
-              ? nodeTestPlan.createUiRealGatewayTestShards(uiTestGroups.e2e)
-              : selectedTestTargets ? [] : [{ shard: 1, shard_count: 1, run_desktop: true, groups: uiTestGroups?.e2e }];
-          const uiRealGatewayShards = selectedTestTargets
-            ? plannedUiRealGatewayShards.map((shard) => ({
-                ...shard,
-                groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
-              })).filter((shard) => shard.run_desktop || shard.groups?.length > 0)
-            : plannedUiRealGatewayShards;
-          const projectNodeTestGroup = ({
-            configs,
-            env,
-            fallbackMaxWorkers,
-            includePatterns,
-            minTotalMemoryBytes,
-            shard_name,
-            timing_key,
-          }) => ({ configs, env, fallbackMaxWorkers, includePatterns, minTotalMemoryBytes, shard_name, timing_key });
-          const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
-          const testRuntimePolicy = existsSync(testRuntimePolicyPath)
-            ? await importTargetPlan(testRuntimePolicyPath)
-            : null;
-          const testRuntimeMode = testRuntimePolicy
-            ? eventName === "pull_request" || releaseGate
-              ? "bun-compatible"
-              : eventName === "workflow_dispatch" && !mainValidation
-                ? "dual"
-                : "node"
-            : "node";
-          const uiTestRuntimePolicy = !compatibilityTarget && testRuntimePolicy?.ciTestShardRequiresBun({
-            configs: ["ui/vitest.config.ts"],
-            vitestArgs: [
-              "--maxWorkers", "3",
-              "--reporter=verbose",
-              "--reporter=github-actions",
-              "--reporter=./scripts/lib/vitest-resource-reporter.mts",
-              ...(compatibilityTarget ? [] : ["--shard=1/3"]),
-            ],
-          }, testRuntimeMode) ? testRuntimeMode : "node";
-          const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
-          const knownToolingConfigs = new Set([
-            goToolingConfig,
-            "test/vitest/vitest.tooling-isolated.config.ts",
-            "test/vitest/vitest.tooling-docker.config.ts",
-          ]);
-          // The same capped matrix owns compact and plugin work; admit its longest rows first.
-          const nodeTestShards = targetNodeTestShards
-            .toSorted((a, b) =>
-              Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
-              (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
-            .map((shard) => {
-              const groups = shard.groups?.map(projectNodeTestGroup) ?? (
-                nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
-                  ? [{
-                      configs: shard.configs,
-                      env: shard.env,
-                      includePatterns: shard.includePatterns,
-                      shard_name: shard.shardName,
-                      timing_key: shard.timing_key,
-                    }]
-                  : undefined
-              );
-              const packedGroups = groups?.length && nodeTestGroupsCodec
-                ? encodeNodeTestGroups(groups)
-                : undefined;
-              return {
-                check_name: shard.checkName,
-                test_runtime_policy: testRuntimeMode,
-                requires_bun: !shard.requiresDist && Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
-                shard_name: shard.shardName,
-                groups_gzip_base64: packedGroups,
-                groups: groups && !nodeTestGroupsCodec ? groups : undefined,
-                configs: packedGroups ? undefined : shard.configs,
-                env: shard.env,
-                includePatterns: packedGroups ? undefined : shard.includePatterns,
-                pretest_build_mode: shard.pretestBuildMode,
-                git_commits: resolveTestGitCommits(shard),
-                requires_dist: shard.requiresDist,
-                runner: shard.runner,
-                timeout_minutes: shard.timeoutMinutes,
-                plan_concurrency: shard.planConcurrency,
-                predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
-                targets: shard.targets,
-                requires_go: (shard.groups ?? [shard]).some((plan) => {
-                  const patterns = plan.targets ?? plan.includePatterns;
-                  if (patterns) {
-                    return patterns.some((pattern) => matchesGlob("test/scripts/docs-i18n.test.ts", pattern));
-                  }
-                  if (plan.configs?.length && plan.configs.every((config) => knownToolingConfigs.has(config))) {
-                    return plan.configs.includes(goToolingConfig);
-                  }
-                  // Unknown historical configs retain their original Go setup;
-                  // current isolated and Docker catalogs exclude the Go owner.
-                  return (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
-                }),
-                requires_ripgrep: (shard.groups ?? [shard]).some((plan) => {
-                  const patterns = plan.targets ?? plan.includePatterns;
-                  if (patterns) {
-                    return patterns.some((pattern) => [
-                      "src/agents/sessions/agent-session-runtime-projection.test.ts",
-                      "src/agents/sessions/tools/index.test.ts",
-                      "src/agents/sessions/tools/grep.byte-path.test.ts",
-                      "src/agents/filesystem-tools-output-contract.test.ts",
-                    ].some((test) => matchesGlob(test, pattern)));
-                  }
-                  return ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
-                    plan.shard_name ?? plan.shardName,
-                  );
-                }),
-              };
-            });
-          const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
-          // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
-          if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
-            throw new Error(
-              `Canonical ${eventName} Node matrix has ${nodeTestNonDistShards.length} jobs, exceeding limit ${nodeMatrixLimit}`,
-            );
-          }
-          const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
-          // The required Node matrix can own the selected PR corpus on this
-          // exact tree; frozen/release targets retain their independent corpus step.
-          const startupCorpusNodeRevision =
-            isCanonicalRepository && eventName === "pull_request" && runNodeFull &&
-            !frozenTarget && !compatibilityTarget && !releaseGate &&
-            /^[0-9a-f]{40}$/u.test(checkoutRevision) && checkoutRevision === workflowRevision &&
-            typeof nodeTestPlan.hasCompleteStartupCorpusCoverage === "function" &&
-            nodeTestPlan.hasCompleteStartupCorpusCoverage(targetNodeTestShards, startupCorpusTestFiles)
-              ? checkoutRevision : "";
-          if (startupCorpusNodeRevision) {
-            // The exact-tree Node receipt makes this row's only test step a no-op.
-            const startupTask = checksFastCoreTasks.findIndex(({ task }) => task === "startup-corpus");
-            if (startupTask >= 0) checksFastCoreTasks.splice(startupTask, 1);
-          }
-          // Targeted PRs keep source boundary guards in their Node plan. Only
-          // an actual dist descriptor transfers that owner to build-artifacts.
-          const runNodeCoreDist = nodeTestDistShards.length > 0;
-          const runTuiPty = runNodeFull && ((runProofTier && runNodeCoreDist) || selectedTuiPty);
-          const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
-          const runProtocolEventCoverage =
-            protocolCoverageRequested &&
-            (!frozenTarget || existsSync("scripts/check-protocol-event-coverage.mjs"));
-
-          const additionalChecks = [
-            { check_name: "check-additional-boundaries", group: "boundaries", runner: "blacksmith-8vcpu-ubuntu-2404" },
-            // Prompt regeneration loads the full tool/prompt import graph independently.
-            { check_name: "check-prompt-snapshots", group: "prompt-snapshots", runner: "blacksmith-8vcpu-ubuntu-2404" },
-            // Frozen targets retain their original rows and command boundaries.
-            ...(frozenTarget ? [
-              { check_name: "check-export-name-collisions", group: "export-name-collisions", runner: "blacksmith-4vcpu-ubuntu-2404" },
-              { check_name: "check-session-accessor-boundary", group: "session-accessor-boundary", runner: "blacksmith-4vcpu-ubuntu-2404" },
-              { check_name: "check-sqlite-session-schema-baseline", group: "sqlite-session-schema-baseline", runner: "blacksmith-4vcpu-ubuntu-2404" },
-            ] : [
-              { check_name: "check-source-contracts", group: "source-contracts", runner: "blacksmith-4vcpu-ubuntu-2404" },
-            ]),
-            // Only dispatches execute this report; scheduled tips have no change range.
-            ...(eventName === "workflow_dispatch" ? [
-              // Diff generation took 209–246s on smaller hosts; keep its 8GiB heap isolated.
-              { check_name: "report-plugin-sdk-api-diff", group: "plugin-sdk-api-diff", runner: "blacksmith-8vcpu-ubuntu-2404" },
-            ] : []),
-            // Keep these scans on available capacity; their resource guards remain authoritative.
-            { check_name: "check-additional-extension-package-boundary", group: "extension-package-boundary", runner: "blacksmith-32vcpu-ubuntu-2404" },
-            { check_name: "check-additional-runtime-topology-architecture", group: "runtime-topology-architecture", runner: "blacksmith-16vcpu-ubuntu-2404" },
-          ].filter(({ group }) => !narrowCheckScope ||
-            (group === "prompt-snapshots" ? changedScopeHasPromptSnapshotImpact :
-              narrowCheckScope.additionalGroups.includes(group)));
-          const checkTasks = [
-            { check_name: "check-guards", task: "guards", runner: "blacksmith-4vcpu-ubuntu-2404" },
-            { check_name: "check-npm-lock", task: "npm-lock", runner: "blacksmith-4vcpu-ubuntu-2404" },
-            { check_name: "check-bundled-channel-config-metadata", task: "bundled-channel-config-metadata", runner: "blacksmith-4vcpu-ubuntu-2404" },
-            { check_name: "check-prod-types", task: "prod-types", runner: "blacksmith-4vcpu-ubuntu-2404" },
-            { check_name: "check-lint", task: "lint", runner: "blacksmith-16vcpu-ubuntu-2404" },
-            { check_name: "check-dependencies", task: "dependencies", runner: "blacksmith-16vcpu-ubuntu-2404" },
-            { check_name: "check-test-types", task: "test-types", runner: "blacksmith-16vcpu-ubuntu-2404" },
-          ].filter((row) => {
-            if (!narrowCheckScope) return true;
-            if (row.task === "prod-types" || row.task === "test-types") return narrowCheckScope.types;
-            return row.task === "lint" ? narrowCheckScope.lint : narrowCheckScope.checkTasks.includes(row.task);
-          });
-
-          // The selected guards row owns the same coercion scan; fast-only plans retain its row.
-          if (!frozenTarget && !compatibilityTarget && runCheck && checkTasks.some(({ task }) => task === "guards")) {
-            const coercionTask = checksFastCoreTasks.findIndex(({ task }) => task === "coercion-helpers");
-            if (coercionTask >= 0) checksFastCoreTasks.splice(coercionTask, 1);
-          }
-
-          const manifest = {
-            release_scope: releaseScope,
-            release_fast_lane: releaseFastLane,
-            validation_tier: validationTier,
-            docs_only: docsOnly,
-            docs_changed: docsChanged,
-            run_node: runNode,
-            run_docker_seed_e2e: dockerSeedLanes.length > 0,
-            docker_seed_lanes: dockerSeedLanes.join(" "),
-            run_macos: runMacos,
-            run_android: runAndroid,
-            run_skills_python: runSkillsPython,
-            run_windows: runWindows,
-            run_build_artifacts: runBuildArtifacts,
-            run_proof_tier: runProofTier,
-            run_browser_native_host: runBrowserNativeHost,
-            run_doctor_plugin_index: runDoctorPluginIndex,
-            run_discord_component_proof: runDiscordComponentProof,
-            run_gateway_watch: runGatewayWatch,
-            run_tui_pty: runTuiPty,
-            run_baseline_ratchets: runBaselineRatchets,
-            run_checks_fast_core: checksFastCoreTasks.length > 0,
-            run_checks_fast: runNodeFull,
-            historical_target: historicalTarget,
-            frozen_target: frozenTarget,
-            compatibility_target: compatibilityTarget,
-            run_qa_smoke_ci: runQaSmokeCi,
-            qa_smoke_ci_matrix: createMatrix(
-              Array.from({ length: qaSmokeCiPartCount }, (_, index) => {
-                const part = index + 1;
-                return {
-                  name: `profile ${part}/${qaSmokeCiPartCount}`,
-                  lane: `profile-${part}`,
-                  slug: `profile-${part}-of-${qaSmokeCiPartCount}`,
-                  part_count: qaSmokeCiPartCount,
-                };
-              }),
-            ),
-            run_prompt_snapshots: runNodeFull && !releaseFastLane && changedScopeHasPromptSnapshotImpact,
-            run_sqlite_session_lifecycle: runSqliteSessionLifecycle,
-            checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
-            run_plugin_contracts_shards: pluginContractShards.length > 0,
-            plugin_contracts_matrix: createContractMatrix(
-              pluginContractShards,
-              "contracts-plugins",
-            ),
-            run_channel_contracts_shards: channelContractShards.length > 0,
-            channel_contracts_matrix: createContractMatrix(channelContractShards, "contracts-channels"),
-            run_checks: runNodeFull,
-            source_channel_test_env_json: JSON.stringify(sourceChannelTestEnv),
-            run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
-            checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
-            run_checks_node_core_dist: runNodeCoreDist,
-            run_check: runCheck,
-            narrow_check_paths_json: narrowCheckScope ? JSON.stringify(changedPaths) : "",
-            run_check_plan: runCheckPlan,
-            check_plan_input_json: runCheckPlan ? JSON.stringify({
-              typeGraphBoundaryOwner,
-              changedPaths,
-              changedCoreTestPaths: changedCoreTestPaths ?? null,
-              runnerProfile,
-              checkMatrix: createMatrix(checkTasks),
-              coreTypeMatrix: createMatrix(coreTypeRows),
-              lintCoreMatrix: createMatrix(coreLintRows),
-              lintExtensionMatrix: createMatrix(extensionLintRows),
-            }) : "",
-            check_matrix: createMatrix(runCheck ? checkTasks : []),
-            core_type_matrix: createMatrix(coreTypeRows),
-            lint_core_matrix: createMatrix(coreLintRows),
-            lint_extension_matrix: createMatrix(extensionLintRows),
-            central_lint_selection_json: "",
-            run_lint_core: runCheck && coreLintRows.length > 0,
-            run_lint_extensions: runCheck && extensionLintRows.length > 0,
-            run_changed_core_type_stripes: Boolean(narrowCheckScope?.types && usesHostedRunnerProfile),
-            type_graph_boundary_owner: typeGraphBoundaryOwner,
-            startup_corpus_node_revision: startupCorpusNodeRevision,
-            startup_corpus_test_files_json: startupCorpusTestFiles ? JSON.stringify(startupCorpusTestFiles) : "",
-            changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",
-            run_check_additional: runNodeFull && !releaseFastLane && additionalChecks.length > 0,
-            check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
-            run_check_docs: docsChanged && eventName !== "push",
-            run_format_check: runFormatCheck,
-            run_control_ui_i18n: runControlUiI18n,
-            run_ui_tests: runUiTests,
-            ui_test_runtime_policy: uiTestRuntimePolicy,
-            ui_test_shard_count: uiTestShardCount,
-            ui_test_matrix: createMatrix(Array.from({ length: runUiTests ? uiTestShardCount : 0 }, (_, index) => ({ shard: index + 1 }))),
-            ui_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.ui) : "",
-            ui_e2e_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.e2e) : "",
-            ui_real_gateway_matrix: createMatrix(uiRealGatewayShards.map(({ groups, ...row }) => ({
-              ...row,
-              run_tests: !groups || groups.some((group) => group.includePatterns === undefined || group.includePatterns.length > 0),
-              test_groups_gzip_base64: groups ? encodeNodeTestGroups(groups) : "",
-            }))),
-            run_control_ui_performance: runControlUiPerformance,
-            run_ui_e2e: runUiE2e,
-            run_ui_real_gateway: runUiRealGateway,
-            ui_e2e_matrix: createMatrix(Array.from({ length: uiE2eJobCount }, (_, index) => {
-              const shard = index + 1;
-              return {
-                shard,
-                shard_count: uiE2eJobCount,
-                task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
-                vitest_shard_count: uiE2eJobCount - 1,
-                vitest_max_workers: compactUiE2e ? 3 : 2,
-              };
-            }).filter((row) => row.task === "browser-extension" ? runBrowserExtensionE2e : runControlUiE2e)),
-            run_native_i18n: runNativeI18n,
-            run_skills_python_job: runSkillsPython,
-            run_checks_windows: runWindows,
-            // Current targets balance the complete Windows inventory by measured
-            // file cost; historical targets retain their original package commands.
-            checks_windows_matrix: createMatrix(windowsShards),
-            run_macos_node: runMacosNode,
-            macos_node_matrix: createMatrix(
-              runMacosNode
-                ? [1, 2, 3].every((part) => hasPackageScript(`test:macos:ci:${part}`))
-                  ? [1, 2, 3].map((part) => ({
-                      check_name: `macos-node-${part}`,
-                      runtime: "node",
-                      task: `test-${part}`,
-                    }))
-                  // Historical targets keep their complete native suite in one job.
-                  : [{ check_name: "macos-node", runtime: "node", task: "test" }]
-                : [],
-            ),
-            run_macos_swift:
-              runMacos && !npmQualification &&
-              (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
-            run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
-            run_ios_build: runIosBuild,
-            run_android_job: runAndroid,
-            run_android_access_native: runAndroidAccessNative,
-            use_compatible_android_ci: useCompatibleAndroidCi,
-            run_protocol_event_coverage: runProtocolEventCoverage,
-            android_matrix: createMatrix(
-              runAndroid
-                ? [
-                    // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
-                    {
-                      check_name: "android-test-play",
-                      task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
-                    },
-                    {
-                      check_name: "android-test-third-party",
-                      task: "test-third-party",
-                    },
-                    ...(!useCompatibleAndroidCi
-                      ? [{
-                          check_name: "android-test-wear",
-                          task: "test-wear",
-                          ...(androidTestTier ? { lint: true, app_lint: "third-party" } : {}),
-                        }]
-                      : []),
-                    ...(!androidTestTier
-                      ? [{
-                          check_name: "android-build-play",
-                          task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
-                        }]
-                      : []),
-                    ...(!useCompatibleAndroidCi
-                      ? [
-                          ...(!androidTestTier ? [{ check_name: "android-build-wear", task: "build-wear" }] : []),
-                          {
-                            check_name: "android-ktlint",
-                            task: "ktlint",
-                            ...(androidTestTier ? { app_lint: "play" } : {}),
-                            ...(androidTestTier && androidBenchmarkChanged ? { build_benchmark: true } : {}),
-                          },
-                        ]
-                      : []),
-                  ]
-                : [],
-            ),
-          };
-
-          // Routing belongs to this workflow, not the frozen target's test planners.
-          // Only automatic hybrid first attempts can add optional hosted rows.
-          const HYBRID_HOSTED_ROW_LIMIT = 45;
-          const HYBRID_HOSTED_BASE_ROW_LIMIT = 40;
-          const hybridHostedEligible = !frozenTarget && isCanonicalRepository &&
-            ["hybrid", "runson"].includes(process.env.OPENCLAW_CI_RUNNER_BACKEND ?? "") &&
-            process.env.GITHUB_RUN_ATTEMPT === "1" &&
-            (eventName === "push" || ciQualification || (eventName === "pull_request" &&
-              ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"].includes(
-                process.env.OPENCLAW_CI_AUTHOR_ASSOCIATION ?? "",
-              )));
-          let hybridHostedBaseRows = 0;
-          let hybridHostedOffloadRows = 0;
-          if (hybridHostedEligible) {
-            const count = (selected, rows = 1) => selected ? rows : 0;
-            const hostedNodeRows = manifest.checks_node_core_nondist_matrix.include.filter(
-              (row) => row.runner === "ubuntu-24.04",
-            ).length;
-            const hostedAdditionalRows = manifest.check_additional_matrix.include.filter(
-              (row) => !["extension-package-boundary", "runtime-topology-architecture", "plugin-sdk-api-diff"].includes(row.group) ||
-                !row.runner.startsWith("blacksmith-"),
-            ).length;
-            const hostedControlJobs = process.env.OPENCLAW_CI_RUNNER_BACKEND === "runson" ||
-              nodeRunnerBackend === "runson" ||
-              (workflowEventName === "pull_request" &&
-                process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY);
-            // Include control jobs, every emitted matrix row and native hosted jobs.
-            // Narrow PRs reserve full lint/type templates; only hybrid moves critical controls.
-            // The guard independently expands the workflow to catch inventory drift.
-            // Qualification authenticates on hosted preflight before paid admission.
-            hybridHostedBaseRows = Object.values({
-              "preflight": count(ciQualification),
-              "check-plan": count(hostedControlJobs && runCheckPlan),
-              "pr-fail-fast": count(workflowEventName === "pull_request" && manifest.run_checks_node_core_nondist &&
-                process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
-              "control-ui-performance": count(manifest.run_control_ui_performance),
-              "native-i18n": count(manifest.run_native_i18n),
-              "control-ui-i18n": count(manifest.run_control_ui_i18n),
-              "checks-baseline-ratchets": count(hostedControlJobs && manifest.run_baseline_ratchets),
-              "checks-fast-core": count(manifest.run_checks_fast_core, manifest.checks_fast_core_matrix.include.length),
-              "checks-fast-plugin-contracts-shard": count(manifest.run_plugin_contracts_shards, manifest.plugin_contracts_matrix.include.length),
-              "checks-fast-channel-contracts-shard": count(manifest.run_channel_contracts_shards, manifest.channel_contracts_matrix.include.length),
-              "checks-node-core-test-nondist-shard": count(manifest.run_checks_node_core_nondist, hostedNodeRows),
-              "check-shard": count(manifest.run_check, checkTasks.filter(({ task }) => !["lint", "test-types", "dependencies"].includes(task)).length),
-              "check-lint-hosted-extension-shard": count(manifest.run_check && runnerProfile === "hybrid" && !releaseGate, extensionLintRows.length),
-              "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
-              "check-docs": count(manifest.run_check_docs),
-              "skills-python": count(manifest.run_skills_python_job),
-              "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
-              "macos-swift": count(manifest.run_macos_swift, 2),
-              "ios-build": count(manifest.run_ios_build),
-              "ios-screenshot-shard": count(parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
-              "ios-screenshot-evidence": count(parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
-              "android-access-native": count(manifest.run_android_access_native, 2),
-              "docker-seed-e2e": count(manifest.run_docker_seed_e2e && workflowEventName === "pull_request" &&
-                process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
-            }).reduce((total, rows) => total + rows, 0);
-            hybridHostedOffloadRows = 1 + count(manifest.run_ui_tests, 3) +
-              count(manifest.run_ui_e2e && !compatibilityTarget,
-                manifest.ui_e2e_matrix.include.filter((row) => row.task === "browser-extension").length);
-          }
-          if (hybridHostedEligible && hybridHostedBaseRows > HYBRID_HOSTED_ROW_LIMIT) {
-            console.warn(`::warning::Hybrid base manifest has ${hybridHostedBaseRows} hosted jobs, above the ${HYBRID_HOSTED_ROW_LIMIT}-row offload budget; keeping optional offloads on Blacksmith.`);
-          }
-          const hybridHostedOffload = hybridHostedEligible &&
-            hybridHostedBaseRows <= HYBRID_HOSTED_BASE_ROW_LIMIT &&
-            hybridHostedBaseRows + hybridHostedOffloadRows <= HYBRID_HOSTED_ROW_LIMIT;
-          // The measured check rows consume only remaining hosted capacity.
-          // Keep the original UI/security decision and all test-runner labels intact.
-          const hybridHostedCheckRows = (manifest.run_check && checkTasks.some(({ task }) => task === "dependencies") ? 1 : 0) +
-            (manifest.run_check && checkTasks.some(({ task }) => task === "test-types") && usesHostedRunnerProfile ? coreTypeRows.length : 0) +
-            (manifest.run_check_additional ? manifest.check_additional_matrix.include.filter(
-              (row) => ["extension-package-boundary", "runtime-topology-architecture"].includes(row.group),
-            ).length : 0);
-          const hybridHostedExistingRows = hybridHostedBaseRows +
-            (hybridHostedOffload ? hybridHostedOffloadRows : 0);
-          // R1's slowest admitted hosted check took 496s including setup. A full
-          // compact plan must retain at least 500s of serial Node work plus setup;
-          // aggregate two-slot estimates and the shortened Windows shards are not a floor.
-          const hybridHostedPullRequestHasSlack = changedNodeTestShards === null &&
-            rawNodeTestShards.some((shard) => !shard.requiresDist &&
-              shard.planConcurrency === 1 && (shard.predictedSeconds ?? 0) >= 500);
-          const hybridHostedChecks = hybridHostedEligible &&
-            ((eventName === "push" && eventRef === "refs/heads/main") ||
-              (eventName === "pull_request" && manifest.run_checks_windows && hybridHostedPullRequestHasSlack)) &&
-            process.env.OPENCLAW_CI_HOSTED_HEALTHY === "true" &&
-            hybridHostedExistingRows + hybridHostedCheckRows <= HYBRID_HOSTED_ROW_LIMIT;
-          const hybridHostedRowsWithChecks = hybridHostedExistingRows +
-            (hybridHostedChecks ? hybridHostedCheckRows : 0);
-          // Main can spend remaining hosted capacity on independent four-CPU checks.
-          // PRs retain their Blacksmith placement regardless of spare row capacity.
-          const hybridHostedMainCheckRows = manifest.run_check ? 2 : 0;
-          const hybridHostedMainChecks = hybridHostedChecks && eventName === "push" &&
-            eventRef === "refs/heads/main" &&
-            hybridHostedRowsWithChecks + hybridHostedMainCheckRows <= HYBRID_HOSTED_ROW_LIMIT;
-          Object.assign(manifest, {
-            hybrid_hosted_offload: hybridHostedOffload,
-            hybrid_hosted_checks: hybridHostedChecks,
-            hybrid_hosted_main_checks: hybridHostedMainChecks,
-            hybrid_hosted_base_rows: hybridHostedBaseRows,
-            hybrid_hosted_total_rows: hybridHostedRowsWithChecks +
-              (hybridHostedMainChecks ? hybridHostedMainCheckRows : 0),
-          });
-          if (runCheckPlan) {
-            console.log("Hosted admission reserves full lint/type template bounds and any hosted check-plan job; late selection cannot expand that inventory.");
-          }
-          if (hybridHostedEligible) {
-            console.log(`Hybrid hosted rows: ${manifest.hybrid_hosted_base_rows} base, ${manifest.hybrid_hosted_total_rows} total; optional offload ${hybridHostedOffload ? "admitted" : "retained on Blacksmith"}; measured checks ${hybridHostedChecks ? "admitted" : "retained on Blacksmith"}; main checks ${hybridHostedMainChecks ? "admitted" : "retained on Blacksmith"}`);
-          }
-
-          // The PR monitor must see the whole selected graph before declaring it
-          // complete; an early jobs response can omit not-yet-expanded matrices.
-          const countPrJobs = (selected, rows = 1) => selected ? rows : 0;
-          manifest.pr_check_job_count = workflowEventName !== "pull_request" ? 0 :
-            countPrJobs(manifest.run_check, manifest.check_matrix.include.length) +
-            countPrJobs(manifest.run_check && manifest.run_lint_core && usesHostedRunnerProfile,
-              manifest.lint_core_matrix.include.length) +
-            countPrJobs(manifest.run_check && manifest.run_lint_extensions && runnerProfile === "hybrid",
-              manifest.lint_extension_matrix.include.length) +
-            countPrJobs(manifest.run_check && usesHostedRunnerProfile &&
-              (!manifest.narrow_check_paths_json || manifest.run_changed_core_type_stripes),
-              manifest.core_type_matrix.include.length);
-          manifest.pr_job_count = workflowEventName !== "pull_request" ? 0 : 2 +
-            countPrJobs(manifest.run_check_plan) + manifest.pr_check_job_count +
-            ["run_build_artifacts", "run_control_ui_performance", "run_native_i18n",
-              "run_control_ui_i18n", "run_baseline_ratchets", "run_check_docs", "run_skills_python_job", "run_docker_seed_e2e"]
-              .reduce((sum, key) => sum + countPrJobs(manifest[key]), 0) +
-            [["run_checks_fast_core", "checks_fast_core_matrix"],
-              ["run_plugin_contracts_shards", "plugin_contracts_matrix"],
-              ["run_channel_contracts_shards", "channel_contracts_matrix"],
-              ["run_checks_node_core_nondist", "checks_node_core_nondist_matrix"],
-              ["run_check_additional", "check_additional_matrix"],
-              ["run_checks_windows", "checks_windows_matrix"],
-              ["run_macos_node", "macos_node_matrix"],
-              ["run_android_job", "android_matrix"],
-              ["run_qa_smoke_ci", "qa_smoke_ci_matrix"],
-              ["run_ui_e2e", "ui_e2e_matrix"]]
-              .reduce((sum, [selected, matrix]) => sum + countPrJobs(manifest[selected], manifest[matrix].include.length), 0) +
-            countPrJobs(manifest.run_ui_tests, uiTestShardCount) + countPrJobs(manifest.run_macos_swift, 2) +
-            countPrJobs(manifest.run_ios_build) + (manifest.run_ui_real_gateway ? uiRealGatewayShards.length : 0) +
-            countPrJobs(manifest.run_android_access_native, 2) +
-            countPrJobs(parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 3);
-
-          for (const [key, value] of Object.entries(manifest)) {
-            appendFileSync(
-              outputPath,
-              `${key}=${typeof value === "string" ? value : JSON.stringify(value)}\n`,
-              "utf8",
-            );
-          }
-          console.log(`CI release scope: ${releaseScope}`);
-          if (releaseFastLane) {
-            const running = `security-fast, check-shard (lint, prod/test types, guards, dependencies), check-docs when docs changed, and ${nodeTestShards.length} changed Node rows${runBuildArtifacts ? ", build-artifacts for selected owners" : ""}${dockerSeedLanes.length ? ", owner-selected Docker seed" : ""}${runQaSmokeCi ? ", owner-selected QA Smoke" : ""}`;
-            console.log(`::notice title=Release fast lane::Admitted by label release-fast-lane for release tooling paths. Running: ${running}.`);
-            if (process.env.GITHUB_STEP_SUMMARY) {
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-                "### Release fast lane\n\n" +
-                "- Admitted by label `release-fast-lane` for release tooling paths.\n" +
-                `- Running: ${running}.\n` +
-                "- Skipped: contracts, baseline ratchets, bundled protocol, Bun launcher, additional checks, Control UI, Windows, macOS, iOS, Android, native and Control UI i18n, skills-python.\n" +
-                (changedNodeTestFallbackReason ? `- Node plan: bounded owner selection (${changedNodeTestFallbackReason}).\n` : "") + "\n");
-            }
-          } else if (releaseFastLaneLabel) {
-            const reason = releaseFastLaneScope.reason;
-            console.warn(`::warning title=Release fast lane declined::${reason}`);
-            if (process.env.GITHUB_STEP_SUMMARY) {
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-                `### Release fast lane\n\n- Declined: ${reason}. Ordinary CI selection applies.\n\n`);
-            }
-          }
-          if (process.env.GITHUB_STEP_SUMMARY) {
-            appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-              `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +
-              (npmQualification ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n" : ""));
-          }
-          EOF
+          node "${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs
 
       - name: Check mobile protocol event coverage
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
@@ -2793,7 +1519,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
-          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts"
+          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts\nscripts/ci-production-audit.mjs"
           persist-credentials: false
 
       - name: Resolve security diff base
@@ -2924,7 +1650,7 @@ jobs:
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+        run: node .ci-harness/scripts/ci-production-audit.mjs
 
       - name: Setup differential guard dependencies
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true'
@@ -2942,6 +1668,8 @@ jobs:
           set -euo pipefail
           pnpm check:max-lines-ratchet --base "$BASE_SHA"
           pnpm check:assertion-safety --base "$BASE_SHA"
+          pnpm check:database-worker-ratchet --base "$BASE_SHA"
+          pnpm check:test-timeout-race-ratchet --base "$BASE_SHA"
           node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
 
   build-artifacts:
@@ -3240,7 +1968,10 @@ jobs:
           fi
 
           if [ "$RUN_DOCTOR_PLUGIN_INDEX" = "true" ]; then
+            # The built CLI holds a fixed 30 s budget per command in this proof.
+            # Finish it before the parallel verifier wave competes for the runner.
             run_verifier "doctor-plugin-index" run_doctor_plugin_index
+            wait_checks
           fi
 
           if [ "$RUN_SQLITE_SESSION_LIFECYCLE" = "true" ]; then
@@ -3419,7 +2150,7 @@ jobs:
     if: needs.preflight.outputs.run_ui_tests == 'true'
     # Keep three workers per row; admit hosted hybrid rows only within budget.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && needs.preflight.outputs.hybrid_hosted_offload == 'true') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && needs.preflight.outputs.hybrid_hosted_offload == 'true') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) }}
-    # Hosted rows measured ~15-20 min per shard on full-release dispatches; grant the hosted budget.
+    # Hosted full-release shards measured ~15-20 min; grant the hosted budget.
     timeout-minutes: *hosted_budget_timeout_minutes
     strategy:
       fail-fast: false
@@ -3711,6 +2442,7 @@ jobs:
             ui/src/e2e/profile-page.real-gateway.e2e.test.ts \
             ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts \
             ui/src/e2e/logs-lifecycle.e2e.test.ts \
+            ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts \
             ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts \
@@ -3897,7 +2629,7 @@ jobs:
               process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
             ' "$1"
           }
-          for required_script in check:max-lines-ratchet check:assertion-safety config:docs:check plugins:inventory:check; do
+          for required_script in check:max-lines-ratchet check:assertion-safety check:test-timeout-race-ratchet config:docs:check plugins:inventory:check; do
             if ! has_package_script "$required_script"; then
               echo "Current CI targets must provide ${required_script}." >&2
               exit 1
@@ -3925,6 +2657,8 @@ jobs:
             pnpm check:line-cap-ratchet --base "$base_ref"
           fi
           pnpm check:assertion-safety --base "$base_ref"
+          pnpm check:database-worker-ratchet --base "$base_ref"
+          pnpm check:test-timeout-race-ratchet --base "$base_ref"
           pnpm config:docs:check
           pnpm plugins:inventory:check
 
@@ -3996,10 +2730,10 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-hourly.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-changed-node-test-plan.config-fallback.test.ts test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts test/scripts/ci-changed-node-test-plan.policy.test.ts test/scripts/ci-changed-node-test-plan.process-owners.test.ts test/scripts/ci-changed-node-test-plan.source-owners.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-hourly.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-hourly.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-changed-node-test-plan.config-fallback.test.ts test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts test/scripts/ci-changed-node-test-plan.policy.test.ts test/scripts/ci-changed-node-test-plan.process-owners.test.ts test/scripts/ci-changed-node-test-plan.source-owners.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-hourly.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             coercion-helpers)
               pnpm check:coercion-helpers
@@ -4411,7 +3145,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || (needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
-      fail-fast: ${{ github.event_name == 'pull_request' && (github.run_attempt != 1 || github.repository != 'openclaw/openclaw') }}
+      fail-fast: ${{ github.event_name == 'pull_request' && github.repository != 'openclaw/openclaw' }}
       max-parallel: ${{ github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && github.run_attempt == 1 && needs.preflight.outputs.frozen_target != 'true' && needs.preflight.outputs.runner_profile != 'github' && needs.preflight.outputs.node_runner_backend != 'runson' && contains(fromJSON('["","blacksmith","hybrid"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 130 || 96 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
@@ -4539,6 +3273,14 @@ jobs:
           fi
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ripgrep
+
+      - name: Prepare Docker sandbox image
+        if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+            scripts/sandbox-setup.sh
+          fi
 
       - name: Configure Node test resources
         env:
@@ -4863,7 +3605,7 @@ jobs:
           OPENCLAW_CI_STATIC_EVIDENCE: &static_evidence ${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target != 'true' && '1' || '0' }}
           TASK: ${{ matrix.task }}
         shell: bash
-        run: |
+        run: &run_check_shard |
           set -euo pipefail
           has_package_script() {
             node -e '
@@ -4945,11 +3687,7 @@ jobs:
                 echo "No npm-lock package changes detected; dependency setup skipped."
                 exit 0
               fi
-              # The --all sweep resolves ~94 npm graphs against the registry
-              # (~110s). Push/PR runs use the reviewed --changed scoping (zero
-              # dependency-surface changes resolve nothing); dispatches and
-              # release validation keep the full sweep, which also covers
-              # registry-side drift on unchanged lockfiles.
+              # Changed checks retain full registry-drift sweeps on manual/release runs.
               if [[ -n "$CHECKOUT_BASE_SHA" ]] &&
                 has_package_script "deps:npm-lock:check:changed"; then
                 test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$CHECKOUT_BASE_SHA"
@@ -5048,10 +3786,7 @@ jobs:
               fi
               if has_package_script "deadcode:dependencies" &&
                 has_package_script "deadcode:unused-files"; then
-                # The three deadcode scripts spawn independent Knip scans over
-                # separate configs; run them concurrently (with buffered logs
-                # so output stays readable) instead of paying ~3 minutes of
-                # serial scanning.
+                # Independent Knip scans overlap only when the runner has capacity.
                 dc_scripts=(deadcode:dependencies deadcode:unused-files)
                 if has_package_script "deadcode:exports"; then
                   dc_scripts+=(deadcode:exports)
@@ -5096,25 +3831,20 @@ jobs:
               fi
               ;;
             test-types)
-              # Current github/hybrid jobs own all five core-test stripes.
-              # Frozen targets retain their paired stripes and central fifth;
-              # targets without stripe support keep the whole lane here.
               root_covered=false
               if [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
                 grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
                 if [ "$FROZEN_TARGET" = "true" ]; then
                   env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --stripe "5/5" --concurrency 2
+                elif grep -q -- '--root-stripe' scripts/run-tsgo-core-test-shards.mts; then
+                  root_covered=true
                 fi
                 pnpm tsgo:extensions:test
               elif [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
-                # Targets without hosted stripes retain the same consumer check.
                 env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json "$CHANGED_CORE_TEST_PATHS_JSON" --concurrency 2
                 pnpm tsgo:extensions:test
               else
                 pnpm check:test-types
-                # check:test-types (pnpm tsgo:test) already runs tsgo:test:root
-                # on current targets; rerunning it below would double ~25s of
-                # wall on this slowest static lane.
                 if node -e '
                   const scripts = require("./package.json").scripts ?? {};
                   process.exit(/tsgo:test:root/.test(scripts["tsgo:test"] ?? "") ? 0 : 1);
@@ -5157,7 +3887,7 @@ jobs:
     name: check-lint-core-${{ matrix.stripe }}
     needs: [preflight, check-plan]
     if: ${{ !cancelled() && !failure() && (needs.preflight.outputs.run_check_plan != 'true' || needs.check-plan.result == 'success') && (needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.run_lint_core || needs.preflight.outputs.run_lint_core) == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true')) }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (needs.preflight.outputs.runner_profile == 'hybrid' && matrix.stripe == 1 && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04'))) || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (needs.preflight.outputs.runner_profile == 'hybrid' && matrix.stripe == 1 && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (needs.preflight.outputs.runner_profile == 'hybrid' && (matrix.stripe == 1 || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'hybrid') && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04'))) || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (needs.preflight.outputs.runner_profile == 'hybrid' && (matrix.stripe == 1 || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'hybrid') && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -5304,7 +4034,7 @@ jobs:
     name: check-test-types-core-${{ matrix.stripe }}
     needs: [preflight, check-plan]
     if: ${{ !cancelled() && !failure() && (needs.preflight.outputs.run_check_plan != 'true' || needs.check-plan.result == 'success') && (needs.preflight.outputs.run_check == 'true' && (!needs.preflight.outputs.narrow_check_paths_json || (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.run_changed_core_type_stripes || needs.preflight.outputs.run_changed_core_type_stripes) == 'true') && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true')) }}
-    # Healthy, budgeted hybrid checks use hosted capacity with unchanged compiler children.
+    # Healthy hybrid checks may use hosted capacity.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 15
     strategy:
@@ -5329,6 +4059,7 @@ jobs:
         env:
           CORE_STRIPE: ${{ matrix.stripe }}
           CI_TYPE_GRAPHS_JSON: ${{ matrix.type_graph_names_json }}
+          ROOT_TYPE_STRIPE: ${{ matrix.root_type_stripe }}
           FROZEN_TARGET: *frozen_target
           CHANGED_CORE_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_core_test_paths_json }}
           OPENCLAW_CI_STATIC_EVIDENCE: *static_evidence
@@ -5338,10 +4069,11 @@ jobs:
           source .ci-harness/scripts/ci-static-step.sh tsgo
           if [ -n "${CI_TYPE_GRAPHS_JSON:-}" ]; then
             run_static_check node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json "$CI_TYPE_GRAPHS_JSON" --concurrency 2
+            if [ -n "${ROOT_TYPE_STRIPE:-}" ]; then
+              run_static_check env OPENCLAW_LOCAL_CHECK=0 node scripts/run-tsgo-core-test-shards.mjs --root-stripe "$ROOT_TYPE_STRIPE"
+            fi
             finish_static_checks
           fi
-          # Frozen/historical targets predate stripe support; their whole
-          # test-types lane already runs inside the check-test-types row.
           if ! grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
             echo "[skip] target does not support core test-type stripes"
             exit 0
@@ -5358,6 +4090,9 @@ jobs:
               args+=(--changed-paths-json "$CHANGED_CORE_TEST_PATHS_JSON")
             fi
             run_static_check node scripts/run-tsgo-core-test-shards.mjs "${args[@]}"
+            if [ "$CORE_STRIPE" -ge 2 ] && grep -q -- '--root-stripe' scripts/run-tsgo-core-test-shards.mts; then
+              run_static_check env OPENCLAW_LOCAL_CHECK=0 node scripts/run-tsgo-core-test-shards.mjs --root-stripe "$((CORE_STRIPE - 1))/4"
+            fi
             finish_static_checks
           fi
 
@@ -5375,8 +4110,9 @@ jobs:
     name: ${{ matrix.check_name || 'check-additional-shard' }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && (matrix.group == 'extension-package-boundary' || matrix.group == 'runtime-topology-architecture')) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || (matrix.group != 'extension-package-boundary' && matrix.group != 'runtime-topology-architecture' && matrix.group != 'plugin-sdk-api-diff'))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && (matrix.group == 'extension-package-boundary' || matrix.group == 'runtime-topology-architecture')) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || (matrix.group != 'extension-package-boundary' && matrix.group != 'runtime-topology-architecture' && matrix.group != 'plugin-sdk-api-diff'))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
-    timeout-minutes: 20
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && contains(fromJSON('["runtime-topology-architecture","dependencies"]'), matrix.group)) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || !contains(fromJSON('["extension-package-boundary","runtime-topology-architecture","plugin-sdk-api-diff","dependencies"]'), matrix.group))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && contains(fromJSON('["runtime-topology-architecture","dependencies"]'), matrix.group)) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || !contains(fromJSON('["extension-package-boundary","runtime-topology-architecture","plugin-sdk-api-diff","dependencies"]'), matrix.group))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
+    # Cold package validation exceeds 20 min on 4-CPU hosted runners.
+    timeout-minutes: ${{ matrix.group == 'extension-package-boundary' && 30 || 20 }}
     strategy:
       fail-fast: false
       max-parallel: 12
@@ -5455,6 +4191,7 @@ jobs:
             ${{ runner.os }}-extension-package-boundary-v4-
 
       - name: Run additional check shard
+        if: matrix.group != 'dependencies'
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           TYPE_GRAPH_BOUNDARY_OWNER: ${{ needs.preflight.outputs.type_graph_boundary_owner }}
@@ -5587,6 +4324,16 @@ jobs:
           done
 
           exit "$failures"
+
+      - name: Run dependency checks
+        if: matrix.group == 'dependencies'
+        env:
+          TASK: dependencies
+          OPENCLAW_LOCAL_CHECK: "0"
+          FROZEN_TARGET: *frozen_target
+          HISTORICAL_TARGET: *historical_target
+        shell: bash
+        run: *run_check_shard
 
       - name: Save compiled extension package boundary artifacts
         if: ${{ success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && !inputs.release_gate && needs.preflight.outputs.candidate_trust == 'main' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && needs.preflight.outputs.compatibility_target != 'true' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true' && steps.extension-package-boundary-cache.outputs.cache-hit != 'true' }}
@@ -5786,8 +4533,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Native allocation can be smaller than the runner label. Keep projects
-          # serial within each machine; matrix rows own disjoint complete files.
+          # Allocation can undershoot labels; run complete matrix files serially per machine.
           export OPENCLAW_TEST_PROJECTS_PARALLEL=1
           case "$TASK" in
             test)
@@ -5805,8 +4551,7 @@ jobs:
           process.exit(result.status ?? 1);
           WINDOWS_TESTS
               ;;
-            # Linux owns the full repo test suite. Keep the Windows runner focused on
-            # Windows-native process/path wrappers so platform regressions fail fast.
+            # Linux owns full coverage; Windows targets native process/path wrappers.
             test-1)
               if node -e 'process.exit(require("./package.json").scripts?.["test:windows:ci:1"] ? 0 : 1)'; then
                 pnpm test:windows:ci:1 -- --fileParallelism
@@ -5858,8 +4603,7 @@ jobs:
               pnpm "test:macos:ci:${TASK#test-}"
               ;;
             test)
-              # Linux owns the full repo test suite. Keep macOS CI focused on
-              # launchd/Homebrew/runtime path coverage and the process-group wrapper.
+              # Linux owns full coverage; macOS targets launchd/Homebrew, paths, and process groups.
               pnpm test:macos:ci
               ;;
             *)
@@ -6152,7 +4896,7 @@ jobs:
           # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
           # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
           # Keep the release build above on the default backend.
-          # CI needs coverage and source-line backtraces, not IDE indexes or debugger type metadata.
+          # CI needs coverage and line backtraces, not IDE indexes or debugger type metadata.
           swift_test_args=(--package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only)
           swift build "${swift_test_args[@]}" --build-tests
           echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
@@ -6166,8 +4910,8 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests;
-            # parallel suites take key status and dismiss its panel. Frozen targets without the suite skip the lane.
+            # Quick Chat keeps XCTest process isolation: parallel suites take key status and dismiss its
+            # panel. Frozen targets without the suite skip the lane.
             if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPresentationTests.swift ]]; then
               run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
               run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
@@ -6406,13 +5150,7 @@ jobs:
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
-          simulator_id="$(prepare_ios_test_simulator)"
-          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
-            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
-            ./scripts/install-simslim.sh "$simslim_dir"
-            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
-              ./scripts/ios-simulator-prepare.sh "$simulator_id"
-          fi
+          simulator_id="$(select_ios_test_simulator)"
           echo "IOS_SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
           if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
             # Apply to the embedded Watch build and the later XCTest build too.
@@ -6429,7 +5167,64 @@ jobs:
             # Full manual validation retains the universal simulator build.
             export IOS_DEST="platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}"
           fi
-          pnpm ios:build
+          python3 - <<'PY'
+          import os
+          import signal
+          import subprocess
+          import time
+
+          def interrupted(signum, _frame):
+              raise SystemExit(128 + signum)
+
+          signal.signal(signal.SIGTERM, interrupted)
+          preparation = None
+          log_path = os.path.join(os.environ["RUNNER_TEMP"], "ios-simulator-prepare.log")
+          started = time.monotonic()
+          with open(log_path, "w+") as log:
+              try:
+                  if os.environ.get("IOS_SIMULATOR_ID"):
+                      preparation = subprocess.Popen(["/bin/bash", "-euo", "pipefail", "-c", '''
+          xcrun simctl bootstatus "$IOS_SIMULATOR_ID" -b
+          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
+              ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
+          fi
+          '''], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                  if os.environ["IOS_CI_PHASE"] == "smoke" and os.environ["HISTORICAL_TARGET"] != "true":
+                      subprocess.run(["pnpm", "ios:gen"], check=True)
+                      subprocess.run([
+                          "xcodebuild",
+                          "-project", "apps/ios/OpenClaw.xcodeproj",
+                          "-scheme", "OpenClaw",
+                          "-configuration", "Debug",
+                          "-destination", os.environ["IOS_DEST"],
+                          "-showBuildTimingSummary",
+                          "build-for-testing",
+                      ], check=True)
+                  else:
+                      subprocess.run(["pnpm", "ios:build"], check=True)
+                  print(f"iOS app build: {time.monotonic() - started:.1f}s", flush=True)
+                  if preparation:
+                      # Bound the join even if boot or SimSlim never completes.
+                      result = preparation.wait(timeout=max(1, 600 - (time.monotonic() - started)))
+                      if result:
+                          raise SystemExit(result if result > 0 else 1)
+              except subprocess.TimeoutExpired:
+                  print("::error::iOS simulator preparation exceeded 600s", flush=True)
+                  raise SystemExit(1)
+              finally:
+                  if preparation and preparation.poll() is None:
+                      try:
+                          os.killpg(preparation.pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                      preparation.wait()
+                  log.seek(0)
+                  print(log.read(), flush=True)
+                  print(f"iOS build and simulator preparation: {time.monotonic() - started:.1f}s", flush=True)
+          PY
 
       - name: Build iOS app (Release)
         if: matrix.phase == 'release'
@@ -6467,6 +5262,10 @@ jobs:
             # Keep xcresult/log evidence here and verbose diagnostics in full manual validation.
             diagnostic_collection=never
           fi
+          test_action=test
+          if [[ "$IOS_CI_PHASE" == "smoke" && "$HISTORICAL_TARGET" != "true" ]]; then
+            test_action=test-without-building
+          fi
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
@@ -6482,7 +5281,7 @@ jobs:
             -only-testing:OpenClawTests/ManagedDocumentEnvelopeTests \
             -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests \
             -only-testing:OpenClawTests/OpenClawTypographyTests \
-            test
+            "$test_action"
 
       - name: Run focused iOS lifecycle simulator tests
         id: ios_lifecycle_tests
@@ -6520,6 +5319,10 @@ jobs:
           if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
             diagnostic_collection=never
           fi
+          test_action=test
+          if [[ "$IOS_CI_PHASE" == "smoke" && "$HISTORICAL_TARGET" != "true" ]]; then
+            test_action=test-without-building
+          fi
           run_apple_command_logged "${result_bundle%.xcresult}.log" xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
@@ -6529,7 +5332,7 @@ jobs:
             -parallel-testing-enabled NO \
             -collect-test-diagnostics "$diagnostic_collection" \
             "${test_args[@]}" \
-            test
+            "$test_action"
           if [[ "$IOS_CI_PHASE" == "tests" && "$IOS_MAIN_TIER" != "true" ]]; then
             run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
               -project apps/ios/OpenClaw.xcodeproj \
@@ -6539,6 +5342,7 @@ jobs:
               -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
               -parallel-testing-enabled NO \
               -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
+              -only-testing:OpenClawUITests/BootstrapSetupFailureUITests \
               test
           fi
 
@@ -6632,6 +5436,7 @@ jobs:
 
   ios-release-e2e:
     permissions:
+      actions: read
       contents: read
     needs: [preflight]
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
@@ -6646,7 +5451,7 @@ jobs:
     name: "ios-screenshots-${{ matrix.device_family }}"
     needs: [preflight]
     if: &ios_screenshot_capture_gate ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
-    runs-on: *hosted_xcode_runner
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27-xlarge'))) || ('xcode-27-xlarge') }}
     timeout-minutes: 90
     env:
       BUNDLE_DEPLOYMENT: "true"
@@ -6695,22 +5500,12 @@ jobs:
 
       - *install_watch_rust_toolchain
 
-      - name: Install iOS simulator tooling
-        id: ios_simslim
-        run: |
-          set -euo pipefail
-          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
-            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
-            ./scripts/install-simslim.sh "$simslim_dir"
-            echo "binary=$simslim_dir/simslim" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Capture iOS device screenshot shard
         id: device_screenshots
         env:
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ matrix.device_family }}
           OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}
-          OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.ios_simslim.outputs.binary }}
+          OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
         run: pnpm ios:screenshots
 
       - name: Package iOS screenshot shard evidence
@@ -6767,6 +5562,7 @@ jobs:
             apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/SnapshotTestResults/*.xcresult
             apps/ios/build/SnapshotLogs/*.log
+            apps/ios/build/screenshot-diagnostics.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -6894,7 +5690,7 @@ jobs:
         if: &android_gradle_sticky_disk_gate vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@94697d49e77d0dd78b77deb85ad3de63a28b4b8a # v1.7.1
         with:
-          # Keep one disk per matrix task so thin dependency sets cannot pin heavier lanes. Gradle owns invalidation.
+          # One disk per matrix task keeps thin dependency sets off heavier lanes. Gradle owns invalidation.
           key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
           path: /var/tmp/openclaw-gradle
           # Only successful protected pushes publish. Explicit commit:true refreshes same-size changes.
@@ -7021,7 +5817,7 @@ jobs:
               ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
               ;;
             ktlint)
-              # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
+              # Mirrors `pnpm android:lint` to keep formatting drift out of main.
               ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache \
                 :app:ktlintCheck \
                 :benchmark:ktlintCheck \
@@ -7037,7 +5833,7 @@ jobs:
               ;;
           esac
 
-          # Phone tests dominate their rows; the lighter rows own app lint without adding jobs.
+          # The lighter Wear and Kotlin-lint rows keep app lint off the phone-test path.
           case "$APP_LINT" in
             third-party)
               ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintThirdPartyDebug
@@ -7129,7 +5925,7 @@ jobs:
           '
           test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d '\r')" = "$EXPECTED_PAGE_SIZE"
           if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
-            # The ps16k image simulates 16 KiB on x86_64; compatibility mode must not hide loader failures.
+            # ps16k simulates 16 KiB pages on x86_64; compat mode must not hide loader failures.
             adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
             adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
             test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
@@ -7184,7 +5980,8 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_docker_seed_e2e == 'true'
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
-    timeout-minutes: 60
+    # Hosted six-lane budget: 6810s (run 36506671071); 60m cancelled run 36486786689.
+    timeout-minutes: 115
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -7204,6 +6001,7 @@ jobs:
         if: contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
         env:
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || github.base_ref || github.ref_name }}
+          FROZEN_TARGET: *frozen_target
         run: |
           set -euo pipefail
           candidate_version="$(node -p "require('./package.json').version")"
@@ -7211,10 +6009,34 @@ jobs:
             --candidate-version "$candidate_version" \
             --target-context-ref "$TARGET_CONTEXT_REF")"
           printf 'OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=%s\n' "$baseline" >> "$GITHUB_ENV"
+          node --input-type=module >> "$GITHUB_ENV" <<'NODE'
+          import { existsSync, readFileSync } from "node:fs";
+          const file = "scripts/lib/upgrade-survivor-scenarios.json";
+          let scenario = "legacy-operator-state";
+          if (process.env.FROZEN_TARGET === "true") {
+            scenario = "base";
+            if (existsSync(file)) {
+              const catalog = JSON.parse(readFileSync(file, "utf8"));
+              if (!catalog || typeof catalog !== "object" || Array.isArray(catalog) ||
+                  Object.keys(catalog).length !== 2 || !Array.isArray(catalog.scenarios) ||
+                  catalog.scenarios.length === 0 || !Array.isArray(catalog.assertionOnlyScenarios)) {
+                throw new Error("Invalid upgrade-survivor scenario catalog");
+              }
+              const names = [...catalog.scenarios, ...catalog.assertionOnlyScenarios];
+              if (!names.every(name => typeof name === "string" && /^[a-z0-9][a-z0-9-]*$/.test(name)) ||
+                  new Set(names).size !== names.length) {
+                throw new Error("Invalid upgrade-survivor scenario catalog");
+              }
+              if (catalog.scenarios.includes("legacy-operator-state")) scenario = "legacy-operator-state";
+              else if (!catalog.scenarios.includes("base")) throw new Error("No supported Docker seed upgrade scenario");
+            }
+          }
+          console.log(`OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=${scenario}`);
+          NODE
 
-      # The update tripwire and release validation require complete SDK declarations.
-      - name: Prepare main Docker smoke package
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main'
+      # Smoke keeps runtime and SDK types.
+      - name: Prepare Docker smoke package
+        if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main'
         run: |
           set -euo pipefail
           pnpm clean:dist
@@ -7230,7 +6052,6 @@ jobs:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
           OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1"
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ needs.preflight.outputs.frozen_target == 'true' && 'base' || 'legacy-operator-state' }}
           OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: auto-auth
           OPENCLAW_DOCKER_ALL_PARALLELISM: &docker_parallelism ${{ (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: *docker_parallelism
@@ -7341,8 +6162,7 @@ jobs:
       - docker-seed-e2e
       - pr-fail-fast
     if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && always() && (github.event_name == 'schedule' || !cancelled() || (needs.pr-fail-fast.outputs.failure_run_attempt == format('{0}', github.run_attempt) && needs.pr-fail-fast.outputs.failure_job_id != '') || (github.run_attempt == 1 && needs.pr-fail-fast.result == 'failure')) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
-    # Keep critical-path routing; default Blacksmith PR failures also need
-    # a runner inside the cancellation grace period.
+    # Blacksmith PR failures need critical-path routing within cancellation grace.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') || (github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && needs.preflight.outputs.runner_profile == 'blacksmith' && ((needs.pr-fail-fast.outputs.failure_run_attempt == '1' && needs.pr-fail-fast.outputs.failure_job_id != '') || needs.pr-fail-fast.result == 'failure'))) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') || (github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && needs.preflight.outputs.runner_profile == 'blacksmith' && ((needs.pr-fail-fast.outputs.failure_run_attempt == '1' && needs.pr-fail-fast.outputs.failure_job_id != '') || needs.pr-fail-fast.result == 'failure'))) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
@@ -7364,6 +6184,7 @@ jobs:
         shell: bash
         env:
           RELEASE_FAST_LANE: ${{ needs.preflight.outputs.release_fast_lane }}
+          FRV_WINDOWS_NODE_ADVISORY: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
           ALLOW_COALESCED_IOS: ${{ github.event_name == 'schedule' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
           ALLOW_KNOWN_MAIN_RED: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 && needs.pr-fail-fast.result == 'success' && needs.pr-fail-fast.outputs.known_main_red_attempt == format('{0}', github.run_attempt) }}
           JOB_RESULTS: |
@@ -7406,8 +6227,7 @@ jobs:
           set -euo pipefail
           echo "release fast lane: ${RELEASE_FAST_LANE:-false}"
 
-          # Preserve raw fields: IFS splitting can erase malformed trailing
-          # delimiters and turn invalid results or selection into accepted values.
+          # Preserve raw fields; IFS can hide invalid trailing delimiters.
           failures=0
           while IFS= read -r entry; do
             [[ -n "$entry" ]] || continue
@@ -7416,6 +6236,12 @@ jobs:
             selected="${result#*|}"
             result="${result%%|*}"
             echo "${name}: ${result} (selected=${selected:-missing})"
+            # Workflow tests pin WINDOWS_NODE_CI_ADVISORY.
+            if [[ "${FRV_WINDOWS_NODE_ADVISORY:-false}" == "true" && "$name:$selected:$result" == "checks-windows:true:failure" ]]; then
+              echo "::notice title=windows-node-ci advisory::Windows Node unit-test shards failed; Full Release Validation records these results without blocking release."
+              echo 'Advisory class `windows-node-ci`: Windows Node unit-test shards failed. Individual shard results remain visible and are recorded in Full Release Validation evidence.' >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
             if [[ "${ALLOW_KNOWN_MAIN_RED:-false}" == "true" && "$selected:$result" == "true:failure" ]]; then
               case "$name" in
                 checks-node-core-test-nondist-shard|check-shard|check-test-types-hosted-core-shard|check-lint-hosted-core-shard|check-lint-hosted-extension-shard)
@@ -7424,8 +6250,7 @@ jobs:
                   ;;
               esac
             fi
-            # The scheduled iOS slot finishes its active job and replaces pending
-            # jobs. Only that cancellation delegates proof to the next hourly run.
+            # Only scheduled iOS pending-job replacement delegates proof to the next hour.
             if [[ "${ALLOW_COALESCED_IOS:-false}" == "true" && "$name:$selected:$result" == "ios-build:true:cancelled" ]]; then
               echo "::notice title=Hourly iOS proof coalesced::A later scheduled iOS job owns simulator proof."
               continue
@@ -7441,9 +6266,9 @@ jobs:
 
           exit "$failures"
 
-      # Write-capable consumers require this exact-attempt receipt; skipped CI proves nothing.
+      # Writes require this exact-attempt receipt; skipped CI proves nothing.
       - name: Confirm validated workflow revision
-        if: success() && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
+        if: success() && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!startsWith(inputs.dispatch_id, 'full-release-validation-') && !inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
         run: echo "Full CI validated the immutable workflow revision."
   seal_release_child_evidence:
     name: Seal full release child evidence

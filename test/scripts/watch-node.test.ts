@@ -45,7 +45,7 @@ describe("watch-node shutdown cleanup", () => {
 
     const run = runWatchMain({
       args: ["gateway"],
-      createWatcher: () => ({ close: async () => {}, on: () => {} }),
+      createWatcher: () => ({ close: async () => {} }),
       lockDisabled: true,
       process: fakeProcess as unknown as NodeJS.Process,
       spawn: () => child as never,
@@ -72,7 +72,7 @@ describe("watch-node shutdown cleanup", () => {
 
     const run = runWatchMain({
       args: ["gateway"],
-      createWatcher: () => ({ close: async () => {}, on: () => {} }),
+      createWatcher: () => ({ close: async () => {} }),
       lockDisabled: true,
       process: fakeProcess as unknown as NodeJS.Process,
       signalProcess: (pid, signal) => {
@@ -102,7 +102,7 @@ describe("watch-node shutdown cleanup", () => {
 
     const run = runWatchMain({
       args: ["gateway"],
-      createWatcher: () => ({ close: async () => {}, on: () => {} }),
+      createWatcher: () => ({ close: async () => {} }),
       env: {},
       lockDisabled: true,
       process: fakeProcess as unknown as NodeJS.Process,

@@ -211,17 +211,9 @@ export async function reconcileProvisionalSubagentKill(params: {
   }
   // The child-session index stays current across awaits. Re-read it at each
   // decision boundary so a newly registered generation can supersede this run.
-  const resolveGeneration = () => {
-    const nextRunCreatedAt = findNextSubagentRunCreatedAt(
-      params.getRunsForChildSession(entry.childSessionKey),
-      entry,
-    );
-    return {
-      nextRunCreatedAt,
-    };
-  };
-  const initialGeneration = resolveGeneration();
-  const nextRunCreatedAt = initialGeneration.nextRunCreatedAt;
+  const findNextRunCreatedAt = () =>
+    findNextSubagentRunCreatedAt(params.getRunsForChildSession(entry.childSessionKey), entry);
+  const nextRunCreatedAt = findNextRunCreatedAt();
   const hasStableTaskCancellation = killReconciliation.taskCancellationAccepted === true;
   const killedAt = killReconciliation.killedAt;
   const isCurrentKill = () =>
@@ -302,7 +294,7 @@ export async function reconcileProvisionalSubagentKill(params: {
     return false;
   }
 
-  if (resolveGeneration().nextRunCreatedAt !== undefined) {
+  if (findNextRunCreatedAt() !== undefined) {
     await params.retireSupersededRun(runId, entry);
     return true;
   }
@@ -314,6 +306,5 @@ export async function reconcileProvisionalSubagentKill(params: {
   entry.killReconciliation = undefined;
   entry.cleanupHandled = false;
   entry.cleanupCompletedAt = undefined;
-  params.startSubagentAnnounceCleanupFlow(runId, entry);
-  return true;
+  return !params.startSubagentAnnounceCleanupFlow(runId, entry);
 }

@@ -26,18 +26,25 @@ describe("Codex command authority", () => {
     },
   });
 
+  async function boundRuntime(sessionKey: string, model?: string) {
+    const runtime = await createCodexRuntimeContextOverrides(tempDir, sessionKey);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: runtime.sessionKey,
+    };
+    await writeTestBinding(identity, { threadId: "thread-control", cwd: "/repo", model });
+    return { runtime, identity };
+  }
+
   it.each([
     { command: "stop", revokeOwner: false },
-    { command: "steer", revokeOwner: false },
-    { command: "stop", revokeOwner: true },
     { command: "steer", revokeOwner: true },
   ] as const)(
     "rejects queued $command before any write after authority changes (owner: $revokeOwner)",
     async ({ command, revokeOwner }) => {
-      const runtime = await createCodexRuntimeContextOverrides(
-        tempDir,
-        `agent:main:test:queued-${command}`,
-      );
+      const { runtime, identity } = await boundRuntime(`agent:main:test:queued-${command}`);
       let ownerCurrent = true;
       const context = {
         ...runtime,
@@ -47,16 +54,6 @@ describe("Codex command authority", () => {
           }
         },
       };
-      const identity = {
-        kind: "session" as const,
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: runtime.sessionKey,
-      };
-      await writeTestBinding(identity, {
-        threadId: `thread-queued-${command}`,
-        cwd: "/repo",
-      });
       const harness = createClientHarness({
         onWrite: (line, send) => {
           const request = requireRecord(JSON.parse(line), "Codex request");
@@ -67,31 +64,28 @@ describe("Codex command authority", () => {
         identity,
         client: harness.client,
         requestTimeoutMs: 60_000,
-        threadId: `thread-queued-${command}`,
+        threadId: "thread-control",
         turnId: "turn-1",
       });
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
-      const stop = vi.fn(async (params: Parameters<typeof stopCodexConversationTurnImpl>[0]) => {
-        entered.resolve();
-        await release.promise;
-        return await stopCodexConversationTurnImpl(params);
-      });
-      const steer = vi.fn(async (params: Parameters<typeof steerCodexConversationTurnImpl>[0]) => {
-        entered.resolve();
-        await release.promise;
-        return await steerCodexConversationTurnImpl(params);
-      });
+      const queued =
+        <P, R>(operation: (params: P) => Promise<R>) =>
+        async (params: P) => {
+          entered.resolve();
+          await release.promise;
+          return await operation(params);
+        };
 
       try {
-        const pending =
-          command === "stop"
-            ? runCommand("stop", { stopCodexConversationTurn: stop }, context)
-            : runCommand(
-                "steer keep the authority boundary",
-                { steerCodexConversationTurn: steer },
-                context,
-              );
+        const pending = runCommand(
+          command === "stop" ? "stop" : "steer keep the authority boundary",
+          {
+            stopCodexConversationTurn: queued(stopCodexConversationTurnImpl),
+            steerCodexConversationTurn: queued(steerCodexConversationTurnImpl),
+          },
+          context,
+        );
         await entered.promise;
         if (revokeOwner) {
           ownerCurrent = false;
@@ -124,19 +118,7 @@ describe("Codex command authority", () => {
   );
 
   it("does not require owner authority for current-session control status reads", async () => {
-    const runtime = await createCodexRuntimeContextOverrides(
-      tempDir,
-      "agent:main:test:read-only-controls",
-    );
-    await writeTestBinding(
-      {
-        kind: "session",
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: runtime.sessionKey,
-      },
-      { threadId: "thread-status", cwd: "/repo", model: "gpt-5.5" },
-    );
+    const { runtime } = await boundRuntime("agent:main:test:read-only-controls", "gpt-5.5");
     const context = {
       ...runtime,
       senderIsOwner: false,

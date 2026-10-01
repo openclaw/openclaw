@@ -3,12 +3,12 @@ import {
   type createManagedHandoffLeaseDatabase,
 } from "./update-managed-service-handoff-database.js";
 import type {
+  BorrowedLegacyHandoffParent,
   LeaseAcquisition,
   ManagedHandoffLease,
   ManagedHandoffLeaseStoreOptions,
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
-import type { BorrowedLegacyHandoffParent } from "./update-managed-service-handoff-legacy-parent.js";
 import type { ManagedHandoffOriginalAdmission } from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";

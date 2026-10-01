@@ -1,15 +1,17 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty as normalizePolicyChannelId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAgentWorkspaceEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
 import { getPolicyPath, scopedPolicyValue } from "../policy-value.js";
 import {
+  POLICY_RULE_METADATA,
   SANDBOX_CONTAINER_POLICY_RULES,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
 } from "./metadata.js";
-import { POLICY_RULES } from "./policy-constants.js";
-import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { policyShapeFinding } from "./shape-helpers.js";
 import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
 import { ocPathSegment } from "./utils.js";
@@ -59,6 +61,10 @@ export function scopedAgentIdMatches(
   );
 }
 
+function hasPolicyPaths(value: unknown, paths: readonly string[]): boolean {
+  return paths.some((path) => getPolicyPath(value, path.split(".")) !== undefined);
+}
+
 function policyOrScopeHasRules(
   policy: unknown,
   section: string,
@@ -85,24 +91,15 @@ function execApprovalsPolicyHasRules(value: unknown): boolean {
 }
 
 export function policyHasSecretRules(policy: unknown): boolean {
-  if (!isRecord(policy) || !isRecord(policy.secrets)) {
-    return false;
-  }
-  return (
-    policy.secrets.requireManagedProviders !== undefined ||
-    policy.secrets.denySources !== undefined ||
-    policy.secrets.allowInsecureProviders !== undefined
-  );
+  return hasPolicyPaths(policy, [
+    "secrets.requireManagedProviders",
+    "secrets.denySources",
+    "secrets.allowInsecureProviders",
+  ]);
 }
 
 export function policyHasAuthProfileRules(policy: unknown): boolean {
-  return (
-    isRecord(policy) &&
-    isRecord(policy.auth) &&
-    isRecord(policy.auth.profiles) &&
-    (policy.auth.profiles.requireMetadata !== undefined ||
-      policy.auth.profiles.allowModes !== undefined)
-  );
+  return hasPolicyPaths(policy, ["auth.profiles.requireMetadata", "auth.profiles.allowModes"]);
 }
 
 export function policyHasIngressRules(policy: unknown): boolean {
@@ -114,38 +111,26 @@ export function policyHasRoutingRules(policy: unknown): boolean {
 }
 
 function ingressPolicyHasRules(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const ingress = value;
-  return (
-    (isRecord(ingress.session) && ingress.session.requireDmScope !== undefined) ||
-    (isRecord(ingress.channels) &&
-      (ingress.channels.allowDmPolicies !== undefined ||
-        ingress.channels.denyOpenGroups !== undefined ||
-        ingress.channels.requireMentionInGroups !== undefined))
-  );
+  return hasPolicyPaths(value, [
+    "session.requireDmScope",
+    "channels.allowDmPolicies",
+    "channels.denyOpenGroups",
+    "channels.requireMentionInGroups",
+  ]);
 }
 
 export function policyHasGatewayRules(policy: unknown): boolean {
-  if (!isRecord(policy) || !isRecord(policy.gateway)) {
-    return false;
-  }
-  const gateway = policy.gateway;
-  return (
-    (isRecord(gateway.exposure) &&
-      (gateway.exposure.allowNonLoopbackBind !== undefined ||
-        gateway.exposure.allowTailscaleFunnel !== undefined)) ||
-    (isRecord(gateway.auth) &&
-      (gateway.auth.requireAuth !== undefined ||
-        gateway.auth.requireExplicitRateLimit !== undefined)) ||
-    (isRecord(gateway.controlUi) && gateway.controlUi.allowInsecure !== undefined) ||
-    (isRecord(gateway.remote) && gateway.remote.allow !== undefined) ||
-    (isRecord(gateway.http) &&
-      (gateway.http.denyEndpoints !== undefined ||
-        gateway.http.requireUrlAllowlists !== undefined)) ||
-    (isRecord(gateway.nodes) && gateway.nodes.denyCommands !== undefined)
-  );
+  return hasPolicyPaths(policy, [
+    "gateway.exposure.allowNonLoopbackBind",
+    "gateway.exposure.allowTailscaleFunnel",
+    "gateway.auth.requireAuth",
+    "gateway.auth.requireExplicitRateLimit",
+    "gateway.controlUi.allowInsecure",
+    "gateway.remote.allow",
+    "gateway.http.denyEndpoints",
+    "gateway.http.requireUrlAllowlists",
+    "gateway.nodes.denyCommands",
+  ]);
 }
 
 export function policyHasAgentWorkspaceRules(policy: unknown): boolean {
@@ -186,19 +171,12 @@ export function policyHasDataHandlingRules(policy: unknown): boolean {
 }
 
 export function dataHandlingPolicyHasRules(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const dataHandling = value;
-  return (
-    (isRecord(dataHandling.sensitiveLogging) &&
-      dataHandling.sensitiveLogging.requireRedaction !== undefined) ||
-    (isRecord(dataHandling.telemetry) && dataHandling.telemetry.denyContentCapture !== undefined) ||
-    (isRecord(dataHandling.retention) &&
-      dataHandling.retention.requireSessionMaintenance !== undefined) ||
-    (isRecord(dataHandling.memory) &&
-      dataHandling.memory.denySessionTranscriptIndexing !== undefined)
-  );
+  return hasPolicyPaths(value, [
+    "sensitiveLogging.requireRedaction",
+    "telemetry.denyContentCapture",
+    "retention.requireSessionMaintenance",
+    "memory.denySessionTranscriptIndexing",
+  ]);
 }
 
 export function policyHasToolPostureRules(policy: unknown): boolean {
@@ -210,21 +188,16 @@ function workspacePolicyHasRules(value: unknown): boolean {
 }
 
 function toolPosturePolicyHasRules(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const tools = value;
-  return (
-    (isRecord(tools.profiles) && tools.profiles.allow !== undefined) ||
-    (isRecord(tools.fs) && tools.fs.requireWorkspaceOnly !== undefined) ||
-    (isRecord(tools.exec) &&
-      (tools.exec.allowSecurity !== undefined ||
-        tools.exec.requireAsk !== undefined ||
-        tools.exec.allowHosts !== undefined)) ||
-    (isRecord(tools.elevated) && tools.elevated.allow !== undefined) ||
-    (isRecord(tools.alsoAllow) && tools.alsoAllow.expected !== undefined) ||
-    tools.denyTools !== undefined
-  );
+  return hasPolicyPaths(value, [
+    "profiles.allow",
+    "fs.requireWorkspaceOnly",
+    "exec.allowSecurity",
+    "exec.requireAsk",
+    "exec.allowHosts",
+    "elevated.allow",
+    "alsoAllow.expected",
+    "denyTools",
+  ]);
 }
 
 type AgentScopedPolicyTarget = {
@@ -391,7 +364,7 @@ function scopedPolicyFields(
   selector: PolicyScopeSelectorKind,
 ): readonly ScopedPolicyField[] {
   const prefix = `scopes/${ocPathSegment(scopeName)}`;
-  return POLICY_RULES.filter((rule) => rule.scopeSelectors?.includes(selector) === true)
+  return POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes(selector) === true)
     .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({

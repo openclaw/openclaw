@@ -1,5 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
@@ -32,14 +35,6 @@ export type SubsystemLogger = {
   raw: (message: string) => void;
   child: (name: string) => SubsystemLogger;
 };
-
-function normalizeSubsystemLabel(subsystem?: string | null): string {
-  if (typeof subsystem !== "string") {
-    return "unknown";
-  }
-  const normalized = subsystem.trim();
-  return normalized.length > 0 ? normalized : "unknown";
-}
 
 type ChalkInstance = InstanceType<typeof Chalk>;
 
@@ -104,7 +99,7 @@ const SUBSYSTEM_COLORS = ["cyan", "green", "yellow", "blue", "magenta", "red"] a
 const SUBSYSTEM_COLOR_OVERRIDES = new Map<string, (typeof SUBSYSTEM_COLORS)[number]>([
   ["gmail-watcher", "blue"],
 ]);
-const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
+const SUBSYSTEM_PREFIXES_TO_DROP = new Set(["gateway", "channels", "providers"]);
 const SUBSYSTEM_MAX_SEGMENTS = 2;
 const CHANNEL_SUBSYSTEM_PREFIXES = new Set([
   "clickclack",
@@ -135,14 +130,6 @@ const CHANNEL_SUBSYSTEM_PREFIXES = new Set([
   "zalouser",
 ]);
 
-function isChannelSubsystemPrefix(value: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (!normalized) {
-    return false;
-  }
-  return CHANNEL_SUBSYSTEM_PREFIXES.has(normalized);
-}
-
 function pickSubsystemColor(subsystem: string): (typeof SUBSYSTEM_COLORS)[number] {
   const override = SUBSYSTEM_COLOR_OVERRIDES.get(subsystem);
   if (override) {
@@ -159,21 +146,14 @@ function pickSubsystemColor(subsystem: string): (typeof SUBSYSTEM_COLORS)[number
 function formatSubsystemForConsole(subsystem: string): string {
   const parts = subsystem.split("/").filter(Boolean);
   const original = parts.join("/") || subsystem;
-  while (parts.length > 0) {
-    const first = parts.at(0);
-    if (
-      first === undefined ||
-      !SUBSYSTEM_PREFIXES_TO_DROP.includes(first as (typeof SUBSYSTEM_PREFIXES_TO_DROP)[number])
-    ) {
-      break;
-    }
+  while (parts[0] !== undefined && SUBSYSTEM_PREFIXES_TO_DROP.has(parts[0])) {
     parts.shift();
   }
   const first = parts.at(0);
   if (first === undefined) {
     return original;
   }
-  if (isChannelSubsystemPrefix(first)) {
+  if (CHANNEL_SUBSYSTEM_PREFIXES.has(normalizeLowercaseStringOrEmpty(first))) {
     return first;
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
@@ -391,7 +371,7 @@ function logToFile(
 }
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
-  const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
+  const resolvedSubsystem = normalizeOptionalString(subsystem) ?? "unknown";
   // Namespace membership is fixed; verbosity and sink settings remain per-message.
   const suppressProbeMessages =
     resolvedSubsystem === "agent/embedded" ||
@@ -480,7 +460,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     );
   };
 
-  const logger: SubsystemLogger = {
+  return {
     subsystem: resolvedSubsystem,
     isEnabled(level, target = "any") {
       const isConsoleEnabled =
@@ -548,7 +528,6 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       return createSubsystemLogger(`${resolvedSubsystem}/${name}`);
     },
   };
-  return logger;
 }
 
 export function runtimeForLogger(
@@ -557,20 +536,10 @@ export function runtimeForLogger(
 ): OutputRuntimeEnv {
   return {
     log(...args) {
-      logger.info(
-        args
-          .map((arg) => formatRuntimeArg(arg))
-          .join(" ")
-          .trim(),
-      );
+      logger.info(args.map(formatRuntimeArg).join(" ").trim());
     },
     error(...args) {
-      logger.error(
-        args
-          .map((arg) => formatRuntimeArg(arg))
-          .join(" ")
-          .trim(),
-      );
+      logger.error(args.map(formatRuntimeArg).join(" ").trim());
     },
     writeStdout(value) {
       logger.info(value);

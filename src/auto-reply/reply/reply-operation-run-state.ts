@@ -52,6 +52,11 @@ export type ReplyOperationRunState = {
   messagingToolSentTargets?: MessagingToolSend[];
   backgroundWorkStarted?: boolean;
   preRunRejection?: ReplyPreRunRejectionCode;
+  /**
+   * Armed by the admitted interactive run owner. Dispatch consumes it once when a stale
+   * watchdog drops the turn before output; true means the session lane will answer instead.
+   */
+  continueStalledTurn?: () => boolean;
 };
 
 // Carries this invocation's admission decision through reply option spreads so

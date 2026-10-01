@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
+import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
+import {
+  inspectManagedGatewayServiceBeforeUpdate,
+  resolveManagedServicePackageUpdatePlan,
+} from "./update-command-service-plan.js";
 
 const service = vi.hoisted(() => ({
   admit: vi.fn(),
@@ -21,6 +25,9 @@ vi.mock("../../daemon/service.js", async (original) => ({
 vi.mock("../../infra/gateway-supervision.js", () => ({
   assertGatewayServiceMutationAllowed: service.admit,
 }));
+vi.mock("../../daemon/runtime-paths.js", () => ({
+  resolvePinnedDaemonRuntimePath: vi.fn(async (value) => value),
+}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -28,6 +35,7 @@ afterEach(() => {
   service.admit.mockReset();
   service.readCommand.mockReset();
   service.readDefinitionMutationCapability.mockReset();
+  vi.mocked(resolvePinnedDaemonRuntimePath).mockClear();
 });
 
 async function fixture({ systemd = false } = {}) {
@@ -115,6 +123,30 @@ describe("managed service root planning", () => {
     });
     expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
   });
+  it("updates an owned split-root Bun service in place with its verified executable", async () => {
+    const f = await fixture({ systemd: true });
+    const bun = path.join(path.dirname(f.nodeRunner), "bun");
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    const command = {
+      programArguments: [bun, path.join(f.serviceRoot, "dist", "index.js"), "gateway"],
+      environment: { OPENCLAW_SQLITE_LIBRARY: "/fixture/sqlite.dylib" },
+    };
+    service.readCommand.mockResolvedValue({
+      ...command,
+      managedDefinition: command,
+      managedOverrides: {},
+    });
+    expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
+      rootRedirect: { root: f.serviceRoot, previousRoot: f.invokingRoot },
+      nodeRunner: bun,
+      serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
+    });
+    expect(resolvePinnedDaemonRuntimePath).toHaveBeenCalledWith(
+      bun,
+      "bun",
+      expect.objectContaining(command.environment),
+    );
+  });
   it("keeps same-root Windows updates in place", async () => {
     const f = await fixture();
     vi.stubGlobal("process", { ...process, platform: "win32" });
@@ -125,4 +157,54 @@ describe("managed service root planning", () => {
     });
     expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
   });
+  it.each(["node", "bun"])(
+    "refuses app-owned %s services before split-root redirection or runtime probing",
+    async (runtime) => {
+      const f = await fixture({ systemd: true });
+      vi.stubGlobal("process", { ...process, platform: "linux" });
+      const command = {
+        programArguments: [
+          path.join(path.dirname(f.nodeRunner), runtime),
+          path.join(f.serviceRoot, "dist", "index.js"),
+          "gateway",
+        ],
+      };
+      service.readCommand.mockResolvedValue({
+        ...command,
+        managedDefinition: command,
+        managedOverrides: {},
+      });
+      await fs.writeFile(
+        path.join(f.serviceRoot, "openclaw-install-owner.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        }),
+      );
+
+      await expect(
+        resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot }),
+      ).rejects.toThrow("Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.");
+      await expect(
+        inspectManagedGatewayServiceBeforeUpdate({
+          root: f.invokingRoot,
+          allowInstallRootChange: true,
+          state: {
+            command,
+            installed: true,
+            running: true,
+            env: {},
+            loadState: { status: "loaded" },
+            runtime: { status: "running", systemd: { managerUid: process.getuid?.() ?? 501 } },
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: "GatewayServiceUpdateOwnershipError",
+        failureFacts: [expect.objectContaining({ code: "service-mutation-refused" })],
+      });
+      expect(resolvePinnedDaemonRuntimePath).not.toHaveBeenCalled();
+    },
+  );
 });

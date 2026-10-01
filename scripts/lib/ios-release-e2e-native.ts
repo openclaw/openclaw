@@ -22,6 +22,7 @@ import {
   type Operation,
   type TrialDependencies,
 } from "../ios-release-e2e.js";
+import { prepareIOSReleaseGateway } from "./ios-release-gateway.js";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
 
 const DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
@@ -38,6 +39,8 @@ export async function createNativeDependencies(options: {
   signal: AbortSignal;
   proof: Record<string, unknown>;
   buildDir?: string;
+  gatewaySelectionDir?: string;
+  buildOnly?: boolean;
   gatewayOnly?: boolean;
   onProgress?: () => Promise<void>;
 }): Promise<{
@@ -246,14 +249,78 @@ export async function createNativeDependencies(options: {
     await rm(root, { recursive: true, force: true });
   };
   try {
-    const buildStarted = performance.now();
-    await command(
-      "gateway-build",
-      process.execPath,
-      ["--import", "./scripts/tsx.mjs", "scripts/build-all.mts", "qaRuntime"],
-      { timeoutMs: 1_200_000 },
-    );
-    options.proof.gatewayBuildMs = performance.now() - buildStarted;
+    const { createOpenClawTestInstance } =
+      await import("../../test/helpers/openclaw-test-instance.js");
+    const { callGateway } = await import("../../src/gateway/call.js");
+    let gateway: Awaited<ReturnType<typeof prepareIOSReleaseGateway>> | undefined;
+    if (!options.buildOnly) {
+      const installStarted = performance.now();
+      gateway = await phase("gateway-install", async () => {
+        if (!options.gatewaySelectionDir) {
+          throw new OperationError("gateway-install", "not-found");
+        }
+        try {
+          return await prepareIOSReleaseGateway({
+            selectionDir: options.gatewaySelectionDir,
+            installDir: path.join(root, "gateway"),
+            targetSha: options.targetSha,
+            signal: options.signal,
+          });
+        } catch (error) {
+          if (hasUnjoinedWork(error)) {
+            preserveResources();
+          }
+          throw operationError("gateway-install", error);
+        }
+      });
+      options.proof.gateway = gateway.identity;
+      options.proof.gatewayInstallMs = performance.now() - installStarted;
+      const installedGateway = gateway;
+      await phase("gateway-preflight", async () => {
+        let preflight: OpenClawTestInstance | undefined;
+        let failure: OperationError | undefined;
+        try {
+          preflight = await createOpenClawTestInstance({
+            name: "ios-release-e2e-preflight",
+            cwd: installedGateway.cwd,
+            entrypoint: installedGateway.entrypoint,
+            config: { gateway: { controlUi: { enabled: false } } },
+            env: gatewayEnv,
+            signal: options.signal,
+          });
+          await preflight.startGateway();
+          await callGateway({
+            config: {},
+            configPath: preflight.configPath,
+            url: preflight.url,
+            token: preflight.gatewayToken,
+            ignoreEnvUrlOverride: true,
+            deviceIdentity: null,
+            sharedStateMode: "read-only",
+            method: "device.pair.setupStatus",
+            params: { setupId: randomUUID() },
+            // Pairing methods are intentionally unadvertised; prove setupStatus by calling it.
+            requiredMethods: ["chat.send", "chat.history"],
+            timeoutMs: 30_000,
+            signal: options.signal,
+          });
+        } catch (error) {
+          if (hasUnjoinedWork(error)) {
+            preserveResources();
+          }
+          failure = operationError("gateway-preflight", error);
+        }
+        try {
+          await preflight?.cleanup();
+        } catch {
+          preserveResources();
+          failure = new OperationError("cleanup", "cleanup-unconfirmed");
+        }
+        if (failure) {
+          throw failure;
+        }
+      });
+    }
     const nativeStarted = performance.now();
     const buildArgs = [
       "-project",
@@ -323,9 +390,6 @@ export async function createNativeDependencies(options: {
       options.proof.nativeBuildReused = build.reused;
       options.proof.nativeBuildMs = performance.now() - nativeStarted;
     }
-    const { createOpenClawTestInstance } =
-      await import("../../test/helpers/openclaw-test-instance.js");
-    const { callGateway } = await import("../../src/gateway/call.js");
     return {
       assertCurrentSource,
       cleanup,
@@ -337,6 +401,10 @@ export async function createNativeDependencies(options: {
         },
         measure: Boolean(binary),
         async create(arm, index) {
+          if (!gateway) {
+            throw new OperationError("gateway-install", "not-found");
+          }
+          const installedGateway = gateway;
           currentTrial = index;
           const fixtureEvidence: Record<string, unknown> = { trial: index };
           const fixtures = (options.proof.fixtures ??= []) as Record<string, unknown>[];
@@ -492,7 +560,8 @@ export async function createNativeDependencies(options: {
               try {
                 instance = await createOpenClawTestInstance({
                   name: `ios-release-e2e-${index}`,
-                  cwd,
+                  cwd: installedGateway.cwd,
+                  entrypoint: installedGateway.entrypoint,
                   config,
                   env: gatewayEnv,
                 });

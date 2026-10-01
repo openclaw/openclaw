@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -28,6 +29,7 @@ describe("unpublished state database acquisition", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       vi.restoreAllMocks();
+      syncBuiltinESMExports();
       openClawStateDatabaseCache.closeOpenClawStateDatabaseForTest();
       for (const db of databases) {
         if (db.isOpen) {
@@ -94,7 +96,8 @@ describe("unpublished state database acquisition", () => {
         { value: "committed" },
       ]);
       expect(reopened.db.isOpen).toBe(true);
-      expect(maintenanceTimerCount()).toBe(1);
+      // One maintenance owner arms the periodic pass and the checkpoint-only tick.
+      expect(maintenanceTimerCount()).toBe(2);
     } finally {
       reopened.walMaintenance.close();
       closeTrackedStateDatabase(reopened.db);
@@ -209,6 +212,58 @@ describe("unpublished state database acquisition", () => {
       }
     }
   });
+
+  it.each([false, true])(
+    "keeps the same database after schema writes with platform file timestamps (existing schema: %s)",
+    (existingSchema) => {
+      const { params } = acquisitionFixture();
+      const stat = fs.statSync;
+      let ctimeAdvanceNs = 0n;
+      vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+        const result = stat(...args);
+        if (
+          process.platform === "linux" &&
+          result &&
+          args[0] === params.pathname &&
+          "ctimeNs" in result
+        ) {
+          const ctimeNs = result.ctimeNs + ctimeAdvanceNs;
+          Object.defineProperties(result, {
+            ctimeNs: { value: ctimeNs },
+            birthtimeNs: { value: ctimeNs },
+          });
+        }
+        return result;
+      });
+      syncBuiltinESMExports();
+      const before = fs.statSync(params.pathname, { bigint: true });
+      const acquired = openUnpublishedStateDatabase({
+        ...params,
+        existingSchema,
+        ensureSchema(db) {
+          db.exec("CREATE INDEX idx_payload ON payload(value)");
+          // Model coarse-clock old Linux hosts without depending on a timer tick.
+          ctimeAdvanceNs += 1n;
+        },
+      });
+      try {
+        const after = fs.statSync(params.pathname, { bigint: true });
+        expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
+        if (process.platform === "linux") {
+          expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
+        }
+        expect(acquired.db.prepare("PRAGMA index_info(idx_payload)").all()).toEqual([
+          { seqno: 0, cid: 0, name: "value" },
+        ]);
+        expect(acquired.db.prepare("SELECT value FROM payload").all()).toEqual([
+          { value: "committed" },
+        ]);
+      } finally {
+        acquired.walMaintenance.close();
+        closeTrackedStateDatabase(acquired.db);
+      }
+    },
+  );
 
   it("does not recreate a removed parent during existing database hardening", () => {
     const { params, openNative } = acquisitionFixture();

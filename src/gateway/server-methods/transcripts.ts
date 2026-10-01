@@ -116,6 +116,7 @@ export const transcriptsHandlers: GatewayRequestHandlers = {
       assertCurrent();
       if (!entry.hasSummary && entry.utteranceCount > 0) {
         await ensureTranscriptSummary({
+          stateDir: resolveStateDir(),
           store,
           session: entry.session,
           config: resolveTranscriptsConfig(cfg.transcripts),

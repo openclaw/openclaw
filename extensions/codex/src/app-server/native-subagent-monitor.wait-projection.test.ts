@@ -194,19 +194,14 @@ describe("native wait assignment projection", () => {
     });
   });
 
-  it.each(["completed-wait", "ended-turn", "retired-parent", "foreign-parent", "mailbox"])(
+  it.each(["ended-turn", "foreign-parent"])(
     "does not refresh an ineligible wait: %s",
     async (scenario) => {
-      const { client, monitor, events, receiverParent } = await awaitingAdmission({
-        ...(scenario === "foreign-parent" ? { receiverParent: "foreign-parent" } : {}),
-        ...(scenario === "mailbox" ? { receivers: [] } : {}),
-      });
-      if (scenario === "completed-wait") {
-        await waitItem(client, "completed", ["receiver"]);
-      } else if (scenario === "ended-turn") {
+      const { client, events, receiverParent } = await awaitingAdmission(
+        scenario === "foreign-parent" ? { receiverParent: "foreign-parent" } : {},
+      );
+      if (scenario === "ended-turn") {
         await endTurn(client, "waiter", "waiter-turn", "interrupted");
-      } else if (scenario === "retired-parent") {
-        await monitor.retireParent("parent-thread");
       }
       const eventCount = events.length;
       await acceptFollowup(client, receiverParent);

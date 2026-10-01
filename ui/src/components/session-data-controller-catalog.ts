@@ -3,11 +3,14 @@ import type { ReactiveControllerHost } from "lit";
 import type {
   SessionCatalog,
   SessionsCatalogArchiveParams,
+  SessionsCatalogImportParams,
+  SessionsCatalogImportResult,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
   buildCatalogSessionKey,
   type CatalogSessionContinuedDetail,
@@ -518,7 +521,7 @@ function isCurrentSessionCatalogRequest(
 
 export async function archiveSessionCatalog(
   owner: SessionCatalogDataOwner & {
-    readonly pendingCatalogArchives: Set<string>;
+    pendingCatalogArchives: ReadonlySet<string>;
     isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean;
     invalidateSessionCatalogs(): void;
   },
@@ -527,7 +530,7 @@ export async function archiveSessionCatalog(
 ): Promise<void> {
   const generation = scope.catalogGeneration;
   const key = buildCatalogSessionKey(params);
-  owner.pendingCatalogArchives.add(key);
+  owner.pendingCatalogArchives = new Set([...owner.pendingCatalogArchives, key]);
   owner.requestSessionDataUpdate();
   try {
     await scope.client.request("sessions.catalog.archive", params);
@@ -538,8 +541,42 @@ export async function archiveSessionCatalog(
     }
   } finally {
     if (generation === owner.sessionScopeGeneration) {
-      owner.pendingCatalogArchives.delete(key);
+      owner.pendingCatalogArchives = new Set(
+        [...owner.pendingCatalogArchives].filter((entry) => entry !== key),
+      );
       owner.requestSessionDataUpdate();
     }
   }
+}
+
+export async function importSessionCatalog(
+  owner: SessionCatalogDataOwner & {
+    isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean;
+    refreshSidebarSessions(agentId?: string): Promise<void>;
+  },
+  scope: SidebarCatalogSessionMutationScope,
+  params: SessionsCatalogImportParams,
+): Promise<SessionsCatalogImportResult | null> {
+  const isCurrent = () =>
+    scope.catalogGeneration === owner.sessionScopeGeneration &&
+    owner.isSessionMutationScopeCurrent(scope);
+  if (!isCurrent()) {
+    return null;
+  }
+  const access = readSessionMethodScopeAccess(scope.gateway.snapshot.hello?.auth, {
+    method: "sessions.catalog.import",
+    requiredScope: "operator.write",
+  });
+  if (!access.allowed) {
+    throw new Error(access.reason);
+  }
+  const result = await scope.client.request<SessionsCatalogImportResult>(
+    "sessions.catalog.import",
+    params,
+  );
+  if (!isCurrent()) {
+    return null;
+  }
+  void owner.refreshSidebarSessions(params.agentId);
+  return result;
 }

@@ -365,6 +365,41 @@ describe("local-check-runtime", () => {
     expect(args.filter((arg) => arg.startsWith("--threads"))).toEqual(["--threads=3"]);
   });
 
+  it.each([
+    { name: "ancestor ceiling", total: 64, capacity: 7, throttled: true },
+    { name: "unresolved capacity", total: 64, capacity: null, throttled: true },
+    { name: "physical-only caller", total: 64, capacity: undefined, throttled: false },
+    { name: "roomy capacity", total: 64, capacity: 48, throttled: false },
+    { name: "smaller physical host", total: 16, capacity: 64, throttled: true },
+  ])("sizes compiler workers from $name instead of remaining memory", (row) => {
+    for (const ci of [undefined, "true"]) {
+      const host = {
+        logicalCpuCount: 16,
+        totalMemoryBytes: row.total * GIB,
+        memoryCapacityBytes: row.capacity == null ? row.capacity : row.capacity * GIB,
+        memoryLimitBytes: GIB,
+      };
+      const inputEnv = makeEnv({
+        CI: ci,
+        OPENCLAW_LOCAL_CHECK: ci ? "0" : "1",
+        GOMAXPROCS: undefined,
+        GOGC: undefined,
+        GOMEMLIMIT: undefined,
+      });
+      const tsgo = applyLocalTsgoPolicy(["--noEmit"], inputEnv, host);
+      const oxlint = applyLocalOxlintPolicy([], inputEnv, host);
+      for (const [result, flag, throttled] of [
+        [tsgo, "--singleThreaded", row.throttled],
+        // Local Oxlint remains throttled by default, including on roomy machines.
+        [oxlint, "--threads=1", ci ? row.throttled : true],
+      ] as const) {
+        expect(result.args.includes(flag)).toBe(throttled);
+        expect(result.env.GOMEMLIMIT).toBe(throttled ? "3GiB" : undefined);
+        expect(result.env.GOMAXPROCS).toBe(throttled ? "2" : undefined);
+      }
+    }
+  });
+
   it.each(["config/tsconfig/oxlint.core.json", "extensions/tsconfig.json"])(
     "uses the measured serial shard budget for %s on admitted Linux CI hosts",
     (config) => {
@@ -486,6 +521,8 @@ describe("local-check-runtime", () => {
     "keeps prep and oxlint resource policies separate with $name",
     ({ goEnv, prepGoEnv, lintGoEnv }) => {
       const cwd = createTempDir("openclaw-oxlint-go-limit-");
+      // Keep artifact ownership inside this fixture when its temp directory has a checkout ancestor.
+      fs.mkdirSync(path.join(cwd, ".git"));
       const binDir = path.join(cwd, "node_modules", ".bin");
       const scriptsDir = path.join(cwd, "scripts");
       const capturePath = path.join(cwd, "children.jsonl");

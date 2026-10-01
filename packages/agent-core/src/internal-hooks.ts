@@ -18,9 +18,13 @@ const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>(
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
 export type InternalToolBatchLifecycle = {
-  /** Commit admitted calls whose tool implementations are about to start. May throw before launch. */
+  /**
+   * Commit admitted calls in assistant order as they launch: prepared calls just
+   * before their implementations start, argument-validation rejections when the
+   * launch reaches them. May throw before launch.
+   */
   commitReadyCalls: (calls: readonly InternalReadyToolCall[]) => void;
-  /** Release admission state for admitted prepared calls that will not launch. */
+  /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
   releaseSkippedCalls: (toolCallIds: readonly string[]) => void;
 };
 
@@ -195,7 +199,10 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
   return target;
 }
 
-/** Call only after raw outcome recording: feedback must not change no-progress hashes. */
+/**
+ * Feedback must not change no-progress hashes: call only after raw outcome
+ * recording, or for rejected calls whose validation result admission captured.
+ */
 export function appendToolLoopWarning<T extends AgentToolResult<unknown>>(
   result: T,
   warning: ToolLoopWarning,

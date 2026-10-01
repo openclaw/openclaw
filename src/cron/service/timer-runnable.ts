@@ -62,12 +62,11 @@ export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): bool
 }
 
 export function isRunnableJob(params: {
-  state: CronServiceState;
   job: CronJob;
   nowMs: number;
-  skipJobIds?: ReadonlySet<string>;
   skipAtIfAlreadyRan?: boolean;
   allowCronMissedRunByLastRun?: boolean;
+  activeInProcess?: boolean;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
@@ -76,10 +75,7 @@ export function isRunnableJob(params: {
   if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
     return false;
   }
-  if (params.skipJobIds?.has(job.id)) {
-    return false;
-  }
-  if (hasActiveCronRun(job)) {
+  if (hasActiveCronRun(job, params.activeInProcess)) {
     return false;
   }
   const next = job.state.nextRunAtMs;
@@ -163,26 +159,6 @@ function isErrorBackoffPending(
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs;
 }
 
-export function collectRunnableJobs(
-  state: CronServiceState,
-  nowMs: number,
-  opts?: {
-    skipJobIds?: ReadonlySet<string>;
-    skipAtIfAlreadyRan?: boolean;
-    allowCronMissedRunByLastRun?: boolean;
-  },
-): CronJob[] {
-  if (!state.store) {
-    return [];
-  }
-  return state.store.jobs.filter((job) =>
-    isRunnableJob({
-      state,
-      job,
-      nowMs,
-      skipJobIds: opts?.skipJobIds,
-      skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
-      allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
-    }),
-  );
+export function collectRunnableJobs(state: CronServiceState, nowMs: number): CronJob[] {
+  return state.store?.jobs.filter((job) => isRunnableJob({ job, nowMs })) ?? [];
 }

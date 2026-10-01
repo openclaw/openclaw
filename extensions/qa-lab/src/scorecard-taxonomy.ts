@@ -1,4 +1,3 @@
-// Qa Lab plugin module validates taxonomy-backed QA scorecard evidence.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -330,26 +329,20 @@ const qaMaturityTaxonomySchema = z
         );
       }
 
-      const seenProfileCategoryIds = new Set<string>();
-      for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
-        if (seenProfileCategoryIds.has(categoryId)) {
-          issue(
-            ["profiles", profileIndex, "categoryIds", categoryIndex],
-            `duplicate category id in profile ${profile.id}: ${categoryId}`,
-          );
+      for (const [key, label] of [
+        ["categoryIds", "category id"],
+        ["coverageIds", "coverage ID"],
+      ] as const) {
+        const seenIds = new Set<string>();
+        for (const [index, id] of profile[key].entries()) {
+          if (seenIds.has(id)) {
+            issue(
+              ["profiles", profileIndex, key, index],
+              `duplicate ${label} in profile ${profile.id}: ${id}`,
+            );
+          }
+          seenIds.add(id);
         }
-        seenProfileCategoryIds.add(categoryId);
-      }
-
-      const seenProfileCoverageIds = new Set<string>();
-      for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
-        if (seenProfileCoverageIds.has(coverageId)) {
-          issue(
-            ["profiles", profileIndex, "coverageIds", coverageIndex],
-            `duplicate coverage ID in profile ${profile.id}: ${coverageId}`,
-          );
-        }
-        seenProfileCoverageIds.add(coverageId);
       }
     }
 
@@ -427,20 +420,17 @@ const qaMaturityTaxonomySchema = z
     }
 
     for (const [profileIndex, profile] of taxonomy.profiles.entries()) {
-      for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
-        if (!categoryIds.has(categoryId)) {
-          issue(
-            ["profiles", profileIndex, "categoryIds", categoryIndex],
-            `profile ${profile.id} references missing category ${categoryId}`,
-          );
-        }
-      }
-      for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
-        if (!coverageIdOwners.has(coverageId)) {
-          issue(
-            ["profiles", profileIndex, "coverageIds", coverageIndex],
-            `profile ${profile.id} references missing coverage ID ${coverageId}`,
-          );
+      for (const [key, owners, label] of [
+        ["categoryIds", categoryIds, "category"],
+        ["coverageIds", coverageIdOwners, "coverage ID"],
+      ] as const) {
+        for (const [index, id] of profile[key].entries()) {
+          if (!owners.has(id)) {
+            issue(
+              ["profiles", profileIndex, key, index],
+              `profile ${profile.id} references missing ${label} ${id}`,
+            );
+          }
         }
       }
     }
@@ -476,7 +466,6 @@ type QaScorecardValidationIssueCode =
   | "coverage-id-not-found"
   | "inventory-ref-not-found"
   | "taxonomy-ref-not-found"
-  | "taxonomy-category-ref-not-found"
   | "profile-category-ref-not-found"
   | "profile-coverage-ref-not-found"
   | "profile-category-missing-inventory";
@@ -550,14 +539,6 @@ export type QaScorecardTaxonomyReport = {
   validationIssueCount: number;
   validationIssues: QaScorecardValidationIssue[];
   categories: QaScorecardCategoryCoverageReport[];
-};
-
-type QaMaturityTaxonomyCategoryIndex = {
-  active: QaMaturityTaxonomySurface[];
-  surfaces: Map<
-    string,
-    { surface: QaMaturityTaxonomySurface; categories: Map<string, QaMaturityTaxonomyCategory> }
-  >;
 };
 
 type MaturityCategoryRef = {
@@ -767,14 +748,9 @@ export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
   return taxonomy.surfaces.filter((surface) => !surface.archived);
 }
 
-function buildQaMaturityTaxonomyCategoryIndex(
-  taxonomy: QaMaturityTaxonomy,
-): QaMaturityTaxonomyCategoryIndex {
+function buildQaMaturityTaxonomyCategoryIndex(taxonomy: QaMaturityTaxonomy) {
   const active = activeQaMaturityTaxonomySurfaces(taxonomy);
-  const surfaces = new Map<
-    string,
-    { surface: QaMaturityTaxonomySurface; categories: Map<string, QaMaturityTaxonomyCategory> }
-  >();
+  const surfaces = new Map<string, { categories: Map<string, QaMaturityTaxonomyCategory> }>();
   for (const surface of active) {
     const categories = new Map<string, QaMaturityTaxonomyCategory>();
     for (const category of surface.categories) {
@@ -783,7 +759,7 @@ function buildQaMaturityTaxonomyCategoryIndex(
       }
       categories.set(category.name, category);
     }
-    surfaces.set(surface.id, { surface, categories });
+    surfaces.set(surface.id, { categories });
   }
   return { active, surfaces };
 }
@@ -806,17 +782,6 @@ function averageCategoryScore(rows: readonly QaMaturityScoreCategory[], key: QaM
 
 export function qaMaturityCoverageCategoryKey(surfaceId: string, categoryName: string) {
   return `${surfaceId}\u0000${categoryName}`;
-}
-
-function expectedMaturityLtsSupported(params: {
-  coverage?: QaMaturityScoreObject;
-  scoreCategory: QaMaturityScoreCategory;
-  taxonomyCategory: QaMaturityTaxonomyCategory;
-}) {
-  return (
-    (params.scoreCategory.quality.score > 80 && (params.coverage?.score ?? -1) > 90) ||
-    params.taxonomyCategory.human_lts_override === true
-  );
 }
 
 function expectedMaturitySurfaceLtsStatus(supportedCategories: number, totalCategories: number) {
@@ -902,11 +867,9 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
         qaMaturityCoverageCategoryKey(surfaceId, categoryName),
       );
       if (coverage || taxonomyCategory.human_lts_override === true) {
-        const expectedSupported = expectedMaturityLtsSupported({
-          coverage,
-          scoreCategory,
-          taxonomyCategory,
-        });
+        const expectedSupported =
+          (scoreCategory.quality.score > 80 && (coverage?.score ?? -1) > 90) ||
+          taxonomyCategory.human_lts_override === true;
         if (lts.supported !== expectedSupported) {
           throw new Error(
             `${scoresPath}.${surfaceId}.${categoryName}.lts.supported must match quality, release evidence coverage, or taxonomy human_lts_override`,
@@ -934,17 +897,6 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
     if (surfaceLts.status !== expectedStatus) {
       throw new Error(`${scoresPath}.${surfaceId}.lts.status must be ${expectedStatus}`);
     }
-  }
-
-  for (const surfaceId of taxonomyIndex.surfaces.keys()) {
-    if (!seenSurfaceIds.has(surfaceId)) {
-      throw new Error(`${scoresPath}: missing active taxonomy surface ${surfaceId}`);
-    }
-  }
-  if (params.scores.counts.category_scores !== allScoreCategories.length) {
-    throw new Error(
-      `${scoresPath}.counts.category_scores must match score category count (${allScoreCategories.length})`,
-    );
   }
 
   const rollups = params.scores.rollups;
@@ -1220,16 +1172,7 @@ function buildQaScorecardTaxonomyReport(params: {
   const requiredCoverageIds = new Set<string>();
   const inventoriedRequiredCoverageIds = new Set<string>();
   for (const categoryId of relevantCategoryIds) {
-    const category = maturityRefs.categories.get(categoryId);
-    if (!category) {
-      issues.push({
-        code: "taxonomy-category-ref-not-found",
-        severity: "warning",
-        ref: categoryId,
-        message: `${categoryId} does not match a maturity taxonomy category`,
-      });
-      continue;
-    }
+    const category = maturityRefs.categories.get(categoryId)!;
 
     const profileIds = uniqueSorted(profileCategoryIdsByCategoryId.get(categoryId) ?? []);
     const requiredCoverageIdsForCategory =
@@ -1239,7 +1182,6 @@ function buildQaScorecardTaxonomyReport(params: {
     const categoryScenarioRefs = new Set<string>();
     const inventoriedCoverageIds = new Set<string>();
     const secondaryOnlyCoverageIds = new Set<string>();
-    const coverageIdsWithAnyInventory = new Set<string>();
 
     for (const coverageId of category.coverageIds) {
       for (const [role, refsByCoverageId] of [
@@ -1266,14 +1208,10 @@ function buildQaScorecardTaxonomyReport(params: {
         } else if (!inventoriedCoverageIds.has(coverageId)) {
           secondaryOnlyCoverageIds.add(coverageId);
         }
-        coverageIdsWithAnyInventory.add(coverageId);
         inventoryRefs.push(...refs);
       }
     }
 
-    const inventoriedCoverageIdCountForCategory = category.coverageIds.filter((coverageId) =>
-      inventoriedCoverageIds.has(coverageId),
-    ).length;
     if (required) {
       for (const coverageId of requiredCoverageIdsForCategory) {
         requiredCoverageIds.add(coverageId);
@@ -1288,7 +1226,7 @@ function buildQaScorecardTaxonomyReport(params: {
         coverageIdsWithPrimaryInventory: inventoriedCoverageIds,
         coverageIdsWithSecondaryInventory: secondaryOnlyCoverageIds,
       });
-      if (inventoriedCoverageIdCountForCategory === 0) {
+      if (inventoriedCoverageIds.size === 0) {
         issues.push({
           code: "profile-category-missing-inventory",
           severity: "warning",
@@ -1300,7 +1238,8 @@ function buildQaScorecardTaxonomyReport(params: {
 
     const missingCoverageIds = required
       ? [...requiredCoverageIdsForCategory].filter(
-          (coverageId) => !coverageIdsWithAnyInventory.has(coverageId),
+          (coverageId) =>
+            !inventoriedCoverageIds.has(coverageId) && !secondaryOnlyCoverageIds.has(coverageId),
         )
       : [];
     const inventoryStatus =

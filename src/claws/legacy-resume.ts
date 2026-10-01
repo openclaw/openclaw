@@ -1,3 +1,4 @@
+import { toAgentEntriesRecord } from "../agents/agent-scope.js";
 import type { AgentConfig, OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { PersistedClawInstall } from "./provenance.js";
@@ -29,15 +30,12 @@ export function replaceLegacyCommittedAgent(params: {
     ...params.config,
     agents: {
       ...params.config.agents,
-      entries: Object.fromEntries(
-        params.agents.map((agent) => {
-          const replacement =
-            normalizeAgentId(agent.id) === params.normalizedAgentId
-              ? params.plan.agent.config
-              : agent;
-          const { id, ...entry } = replacement;
-          return [id, entry];
-        }),
+      entries: toAgentEntriesRecord(
+        params.agents.map((agent) =>
+          normalizeAgentId(agent.id) === params.normalizedAgentId
+            ? params.plan.agent.config
+            : agent,
+        ),
       ),
     },
   };

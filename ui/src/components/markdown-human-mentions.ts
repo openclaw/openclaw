@@ -1,9 +1,9 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MarkdownIt, Token } from "markdown-it";
 import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { readHumanMentions } from "../lib/chat/human-mentions.ts";
 import type { MarkdownHumanMentionToken, MarkdownRenderEnv } from "./markdown-render-options.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 /** Protect selected labels before Markdown/line-ending normalization changes source offsets. */
 export function prepareMarkdownHumanMentions(
@@ -162,7 +162,7 @@ export function installMarkdownHumanMentions(parser: MarkdownIt): void {
     const token = tokens[index];
     const profileId = token?.attrGet("profile-id");
     return token && typeof profileId === "string" && profileId
-      ? `<openclaw-person-reference profile-id="${escapeMarkdownHtml(profileId)}" label="${escapeMarkdownHtml(token.content)}">${escapeMarkdownHtml(token.content)}</openclaw-person-reference>`
+      ? `<openclaw-person-reference profile-id="${escapeHtml(profileId)}" label="${escapeHtml(token.content)}">${escapeHtml(token.content)}</openclaw-person-reference>`
       : "";
   };
 }

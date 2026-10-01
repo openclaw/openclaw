@@ -56,10 +56,10 @@ Gateway's Control UI presentation.
 
 The full native chat window is a split view:
 
-- **Agents and threads sidebar**: named agents appear above the searchable thread list, with their configured emoji, resolved text avatar, or name initial, a quiet selection highlight, and activity and unread summaries from loaded sessions. Selecting an agent opens its primary conversation and names the thread section for that agent; switching back restores that conversation's text draft. Pinned threads, gateway-backed groups, and recent threads keep their existing sections. Thread rows show timestamps; the view options below control message previews and background sessions. Spawned child sessions nest beneath their parent inside each section; collapsed parents summarize running, failed, and unread descendants. Context menus support session info, rename, pin, fork, read/unread, archive/restore, copy session key, and delete. **New Thread** (Shift-Cmd-N) creates immediately for the selected agent via `sessions.create`; its adjacent options popover starts with the selected agent and offers **Separate working copy** to create a managed Git worktree with an optional base branch or commit.
+- **Agents and threads sidebar**: named agents appear above the searchable thread list, with their configured emoji, resolved text avatar, or name initial, a quiet selection highlight, and activity and unread summaries from loaded sessions. Selecting an agent opens its primary conversation and names the thread section for that agent; switching back restores that conversation's text draft. Pinned threads, gateway-backed groups, and recent threads keep their existing sections. The view options below control message previews and background sessions. Spawned child sessions nest beneath their parent inside each section; collapsed parents summarize running, failed, and unread descendants. Context menus support session info, rename, pin, fork, read/unread, archive/restore, copy session key, and delete. **New Thread** (Shift-Cmd-N) creates immediately for the selected agent via `sessions.create`; its adjacent options popover starts with the selected agent and offers **Separate working copy** to create a managed Git worktree with an optional base branch or commit.
 - **Window toolbar**: a plain conversation title and active agent, a labeled working, queued, or attention state when known, Find in Conversation, and a session actions menu. Pending questions and current model authentication failures also surface attention; answered or expired questions do not. The menu can rename or fork the current session and update its pin, read, or archive state. **Threads…** (Shift-Cmd-S) opens the Active/Archived manager for gateway search, group management, session inspection, rename, pin, archive, and restore. Select mode applies pin, unpin, archive, or delete to several active sessions while keeping individual failures visible. Separate menu checkmarks show or hide assistant reasoning and tool activity; both are on by default and remembered across launches.
 - **Transcript and composer**: a centered reading column keeps messages and the composer aligned in wide windows. Assistant messages render as plain text without repeated avatars, user messages as muted accent bubbles. Dark mode uses softer gray text on charcoal while retaining enhanced text contrast; Increase Contrast raises text contrast further. The rounded composer names the selected agent, starts at a compact single-line height, grows with multiline drafts, and keeps attachment, model, voice, and send controls aligned beneath the text. The **+** menu contains attachments, branches, and tool-call verbosity. Choose **+ → Attach…**, drop files onto the composer, or paste files copied in Finder to stage attachments. The picker includes images, video, audio, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents. File chips show the filename and size and can be removed before sending. The context ring shows token usage and session cost and offers **Compact Thread**. The model menu groups models by provider, keeps pinned and recent models at the top, and lets you pin or unpin the selected model. **Model sign-in** lives in this menu and remains available when no models are listed. When the selected model cannot send because its credentials are missing or invalid, an inline notice beside the composer offers **Model sign-in** and **Retry**. Temporary cooldowns do not show this authentication notice. **Effort** contains thinking and Fast response settings. Controls adapt to narrow windows while keeping voice and send actions visible. Return sends; Shift-Return inserts a newline. Copy, Reply, Listen, and a message actions menu appear beneath messages on hover or keyboard focus; right-click actions remain available. Tool activity uses compact cards with explicit working, finished, failed, or no-result labels; expand a card to read its result or diff. Inspect native subagent runs from the parent conversation with `/subagents list`, `/subagents info <id|#>`, and `/subagents log <id|#>`. Pending agent questions render as native cards with single- or multi-select options, free-text **Other** answers, expiry countdowns, and shared terminal state. Empty chats offer desktop starter prompts. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy its visible Markdown without hidden reasoning. Truncated assistant messages also offer **Open Full Message**, which loads a selectable Markdown reader. Use **Listen** for gateway TTS with a local speech fallback.
-- **Command Palette**: press Cmd-K or choose **Navigate → Command Palette…** in a full native chat window. The palette opens with its search field focused, followed by agents, threads in sidebar order, and existing window actions: New Thread, Threads…, Find in Conversation, and Export Transcript…. Typing immediately filters loaded titles, agent names, and available cached previews, then searches the selected agent’s older active threads through the same Gateway search as **Threads…**. Exact matches rank ahead of prefixes and substrings. Thread rows use the sidebar’s timestamps and secondary text: current activity or attention first, then available cached previews. Agent names appear only for threads belonging to a different agent. Up/Down selects a result, Return or a click opens it, and Escape closes the palette and returns focus to the composer. The command uses only the key native chat window and its Gateway; it is disabled when another surface is key. Web navigation is unchanged.
+- **Command Palette**: press Cmd-K or choose **Navigate → Command Palette…** in a full native chat window. The palette opens with its search field focused, followed by agents, threads in sidebar order, and existing window actions: New Thread, Threads…, Find in Conversation, and Export Transcript…. Typing immediately filters loaded titles, agent names, and available cached previews, then searches the selected agent’s older active threads through the same Gateway search as **Threads…**. Exact matches rank ahead of prefixes and substrings. Palette thread rows show timestamps and secondary text: current activity or attention first, then available cached previews. Agent names appear only for threads belonging to a different agent. Up/Down selects a result, Return or a click opens it, and Escape closes the palette and returns focus to the composer. The command uses only the key native chat window and its Gateway; it is disabled when another surface is key. Web navigation is unchanged.
 
 - **Find in Conversation**: press Cmd-F to search user and assistant text in the loaded conversation. Return or Cmd-G moves to the next matching message; Shift-Cmd-G moves backward. The selected message is outlined and revealed without incoming replies pulling you away. Escape closes Find. Search does not fetch older history or search hidden reasoning and tool payloads.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
@@ -114,18 +114,45 @@ Open **View options** at the right of the native sidebar's **Threads** heading.
 creation date follow dated threads. Choose **Last updated** to sort by recent
 activity instead. Pinned threads keep their pin order.
 
+Rows place unread, running, queued, and attention indicators before the title.
+Linked channel names stay visible when previews are off.
+Child rows show runtime when available. Session icons render supported named
+glyphs as native symbols and display emoji; custom SVG icons use the default
+session glyph. Badges identify sharing drafts, incognito sessions, forks,
+archived sessions, and cloud placement, including disk pressure and workspace
+conflicts. Hover a row or give it keyboard focus to reveal **Pin**/**Unpin** and
+**Archive**/**Restore** actions.
+
 **Show message preview**, **Show automation sessions**, and **Show system sessions**
 are off by default. Automation sessions are cron conversations; system sessions
 are identified from their recorded creation source. Human-created and named
 internal conversations remain visible. The selected conversation stays visible
-even when its automation or system category is hidden. Turning previews off hides
-ambient message and activity text while keeping attention, unread failures, and
-queued status visible. These choices are saved locally for the app profile.
+even when its automation or system category is hidden. These choices are saved
+locally for the app profile.
+
+Message previews prefer the Gateway's latest message preview, using the native
+transcript cache only when the row has no server preview. Turning previews off
+hides ambient message and activity text while preserving pending approval
+subtitles and critical observer status, such as stuck or waiting for user input.
+Questions and errors use leading indicators without adding a subtitle.
 
 Select an agent to open its primary conversation. That conversation is omitted
 from the thread list when its agent entry is available, and its loaded children
 remain reachable. If the agent catalog is unavailable, the primary thread remains
 in the list for recovery.
+
+## Online people
+
+The native sidebar's **Online** section includes your own identity and distinguishes
+active, idle, and unobserved activity. Collapse it to a compact facepile. Open and
+running session counts come from the Gateway across agents, independently of the
+loaded thread list; unavailable counts stay unknown and offer retry after a failure.
+
+Hover or focus a person to inspect reported connections, interaction times, and
+visible session links. Recent links stay in place while the card is open and
+disappear if they become ineligible. **View Activity** opens that person's Activity
+page in the Dashboard for the same Gateway. Thread rows show other viewers,
+combining duplicate connections and excluding your own identity.
 
 ## Pending questions and approvals
 

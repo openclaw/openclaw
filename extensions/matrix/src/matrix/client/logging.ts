@@ -2,7 +2,7 @@ import {
   logger as matrixJsSdkRootLogger,
   type Logger as MatrixJsSdkLogger,
 } from "matrix-js-sdk/lib/logger.js";
-import { ConsoleLogger, LogService, setMatrixConsoleLogging } from "../sdk/logger.js";
+import { ConsoleLogger, LogService } from "../sdk/logger.js";
 
 let matrixSdkLoggingConfigured = false;
 let matrixSdkLogMode: "default" | "quiet" = "default";
@@ -44,10 +44,6 @@ export function setMatrixSdkLogMode(mode: "default" | "quiet"): void {
     return;
   }
   applyMatrixSdkLogger();
-}
-
-export function setMatrixSdkConsoleLogging(enabled: boolean): void {
-  setMatrixConsoleLogging(enabled);
 }
 
 function applyMatrixSdkLogger(): void {

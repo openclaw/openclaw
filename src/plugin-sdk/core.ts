@@ -7,6 +7,7 @@ import {
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
+import { createTextPairingAdapter } from "../channels/plugins/pairing-adapters.js";
 import {
   createScopedAccountReplyToModeResolver,
   createTopLevelChannelReplyToModeResolver,
@@ -680,17 +681,7 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
 function resolveChatChannelPairing(
   pairing: ChannelPairingAdapter | ChatChannelPairingOptions,
 ): ChannelPairingAdapter {
-  if (!("text" in pairing)) {
-    return pairing;
-  }
-  const text = pairing.text;
-  return {
-    idLabel: text.idLabel,
-    normalizeAllowEntry: text.normalizeAllowEntry,
-    notifyApproval: async (ctx) => {
-      await text.notify({ ...ctx, message: text.message });
-    },
-  };
+  return "text" in pairing ? createTextPairingAdapter(pairing.text) : pairing;
 }
 
 function resolveChatChannelThreading<TResolvedAccount>(
@@ -700,15 +691,12 @@ function resolveChatChannelThreading<TResolvedAccount>(
     return threading;
   }
 
-  let resolveReplyToMode: ChannelThreadingAdapter["resolveReplyToMode"];
-  if ("topLevelReplyToMode" in threading) {
-    resolveReplyToMode = createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode);
-  } else {
-    resolveReplyToMode = createScopedAccountReplyToModeResolver<TResolvedAccount>(
-      threading.scopedAccountReplyToMode,
-    );
-  }
-
+  const resolveReplyToMode =
+    "topLevelReplyToMode" in threading
+      ? createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode)
+      : createScopedAccountReplyToModeResolver<TResolvedAccount>(
+          threading.scopedAccountReplyToMode,
+        );
   return {
     ...threading,
     resolveReplyToMode,

@@ -1,4 +1,3 @@
-// Gateway connection detail builder for CLI/user-facing target diagnostics.
 import { createHash } from "node:crypto";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

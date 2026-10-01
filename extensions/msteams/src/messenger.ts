@@ -26,7 +26,13 @@ import {
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
-import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
+import {
+  extractFilename,
+  extractMessageId,
+  getMimeType,
+  isLocalPath,
+  MSTEAMS_MAX_MEDIA_BYTES,
+} from "./media-helpers.js";
 import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
@@ -39,18 +45,6 @@ import {
   withMSTeamsConnectorHandoff,
   type MSTeamsSendHandoff,
 } from "./send-handoff.js";
-
-/**
- * MSTeams-specific media size limit (100MB).
- * Higher than the default to support Teams file-consent and SharePoint uploads.
- */
-const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
-
-/**
- * Threshold for large files that require FileConsentCard flow in personal chats.
- * Files >= 4MB use consent flow; smaller images can use inline base64.
- */
-const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 type MSTeamsConversationReference = {
   activityId?: string;
@@ -269,7 +263,6 @@ async function buildActivity(
       contentType = media.contentType ?? contentType;
       fileName = media.fileName ?? fileName;
 
-      // Determine conversation type and file type
       // Teams only accepts base64 data URLs for images
       const conversationType = normalizeOptionalLowercaseString(
         conversationRef.conversation?.conversationType,
@@ -282,10 +275,8 @@ async function buildActivity(
           conversationType,
           contentType,
           bufferSize: media.buffer.length,
-          thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
         })
       ) {
-        // Large file or non-image in personal chat: use FileConsentCard flow
         const conversationId = conversationRef.conversation?.id ?? "unknown";
         assertMSTeamsSendHandoff(options);
         const { activity: consentActivity, uploadId } = prepareFileConsentActivity({
@@ -297,7 +288,6 @@ async function buildActivity(
         // Tag the activity so the caller can store the activity ID after sending
         consentActivity["_pendingUploadId"] = uploadId;
 
-        // Return the consent activity (caller sends it)
         return consentActivity;
       }
 
@@ -328,9 +318,7 @@ async function buildActivity(
           tokenProvider,
         });
 
-        // Build native Teams file card attachment
-        const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
-        activity.attachments = [fileCardAttachment];
+        activity.attachments = [buildTeamsFileInfoCard(driveItem)];
 
         return activity;
       }
@@ -356,7 +344,6 @@ export async function sendMSTeamsMessages(
   params: {
     replyStyle: MSTeamsReplyStyle;
     app: MSTeamsApp;
-    appId: string;
     conversationRef: StoredConversationReference;
     context?: { sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown> };
     messages: MSTeamsRenderedMessage[];
@@ -474,18 +461,6 @@ export async function sendMSTeamsMessages(
     return messageId;
   };
 
-  const sendMessageBatchInContext = async (
-    sendFn: (activity: MSTeamsActivityLike) => Promise<unknown>,
-    batch: MSTeamsRenderedMessage[],
-    startIndex: number,
-  ): Promise<string[]> => {
-    const messageIds: string[] = [];
-    for (const [idx, message] of batch.entries()) {
-      messageIds.push(await sendMessageInContext(sendFn, message, startIndex + idx));
-    }
-    return messageIds;
-  };
-
   const sendProactively = async (
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
@@ -511,7 +486,11 @@ export async function sendMSTeamsMessages(
         threadActivityId: isChannel ? threadActivityId : undefined,
         serviceUrlBoundary: params.serviceUrlBoundary,
       });
-    return await sendMessageBatchInContext(sendFn, batch, startIndex);
+    const messageIds: string[] = [];
+    for (const [idx, message] of batch.entries()) {
+      messageIds.push(await sendMessageInContext(sendFn, message, startIndex + idx));
+    }
+    return messageIds;
   };
 
   // Resolve the thread root message ID for channel thread routing.
@@ -551,11 +530,6 @@ export async function sendMSTeamsMessages(
     return messageIds;
   }
 
-  // replyStyle === "top-level" — explicit "post at the top of the channel"
-  // intent. Do NOT add the thread suffix even when the stored ref has a
-  // threadId; threading on a top-level send would defeat the operator's
-  // explicit choice. Threaded sends route through the `replyStyle === "thread"`
-  // branch above (which already passes resolvedThreadId on the proactive
-  // fallback when the live turn context is revoked, preserving #55198).
+  // Top-level replies deliberately omit the stored thread root.
   return await sendProactively(messages, 0);
 }

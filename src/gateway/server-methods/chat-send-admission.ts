@@ -195,6 +195,7 @@ export async function admitChatSend(
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
   let initialSessionEntry: SessionEntry | undefined;
+  let admittedSessionEntry: SessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
   let assertInitialSkillSelection: (() => void) | undefined;
   let messageInjectionTarget: ReplyMessageInjectionTarget | undefined;
@@ -249,6 +250,7 @@ export async function admitChatSend(
     }
     const latestSession = loadCurrentChatSendSession(session);
     const latestEntry = latestSession.entry;
+    admittedSessionEntry = latestEntry;
     const requestConflict = resolveChatSendRequestConflict({
       ...params,
       session: { ...session, entry: latestEntry },
@@ -278,7 +280,9 @@ export async function admitChatSend(
         ? replyRunRegistry.resolveCurrentInterruptTarget(activeRunScopeKey)
         : undefined;
     if (p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId);
+      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId, {
+        allowEmptyAncestor: true,
+      });
     }
     // Admission can queue behind reset. Never route a request captured
     // against the old session into the replacement transcript. Check the expected
@@ -376,6 +380,7 @@ export async function admitChatSend(
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [sessionKey, backingSessionId],
+      storeWriterIdentities: [sessionKey, session.sessionTarget.storeKey],
       assertAllowed: () => {
         params.assertCurrent?.();
         assertSessionTargetCurrent();
@@ -675,6 +680,7 @@ export async function admitChatSend(
       sessionBinding,
       onSessionPrepared,
       initialSessionEntry,
+      admittedSessionEntry,
       chatSendTraceAttributes,
       assertInitialSkillSelection,
       assertSessionTargetCurrent,

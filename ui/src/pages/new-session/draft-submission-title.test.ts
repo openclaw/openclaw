@@ -188,7 +188,6 @@ describe("prepared title creation handoff", () => {
       requestedAgentId: "main",
       catalogId,
       catalogLabel: catalogId,
-      model: "",
       startTerminal: true,
     });
     flow.setMessage("inspect this native-only workspace");
@@ -201,6 +200,8 @@ describe("prepared title creation handoff", () => {
 
   it("uses a ready title at creation without changing an explicit worktree name", async () => {
     const { flow, context, place, titles } = createDraftTitleFixture();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(place.worktreeAvailable()).toBe(true);
     place.selectWorktree(true);
     place.setWorktreeName("my-explicit-branch");
     flow.setMessage("repair the sidebar naming");

@@ -8,11 +8,17 @@ const closing = new Set<Promise<void>>();
 
 /** Owns delayed hook-relay cleanup across runtime scheduling and test teardown. */
 export const nativeHookRelayUnregisterQueue = {
-  add(entry: PendingUnregister): void {
+  schedule(relay: { unregister(): void; drain(): Promise<void> }, delayMs: number): void {
+    const unregister = () => {
+      if (!pending.delete(entry)) {
+        return;
+      }
+      relay.unregister();
+      nativeHookRelayUnregisterQueue.track(relay.drain());
+    };
+    const entry = { timeout: setTimeout(unregister, delayMs), unregister };
     pending.add(entry);
-  },
-  delete(entry: PendingUnregister): boolean {
-    return pending.delete(entry);
+    entry.timeout.unref();
   },
   track(operation: Promise<void>): void {
     closing.add(operation);
@@ -22,11 +28,7 @@ export const nativeHookRelayUnregisterQueue = {
     );
   },
   async flush(): Promise<void> {
-    while (pending.size > 0) {
-      const entry = pending.values().next().value;
-      if (!entry) {
-        break;
-      }
+    for (const entry of pending) {
       clearTimeout(entry.timeout);
       entry.unregister();
     }

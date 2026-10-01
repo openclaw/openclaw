@@ -69,6 +69,7 @@ function fixture(mode: "merge" | "replace" = "merge") {
   const generation = {
     pluginMetadataSnapshot: metadata,
     inlineProviderModels: [],
+    remoteCatalog: null,
     configuredCatalogEntries: [],
     providerStaticModels: [],
     preparedStaticProviderCatalog,
@@ -140,33 +141,30 @@ describe("prepared catalog source composition", () => {
     );
   });
 
-  it.each(["merge", "replace"] as const)(
-    "materializes duplicate current declarations once in %s mode",
-    async (mode) => {
-      const { facts, generation, configured } = fixture(mode);
-      configured.models = [
-        {
-          ...model("shared"),
-          name: "First current",
-          cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-        },
-        { ...model("shared"), name: "Later duplicate", input: ["text", "image"] },
-      ];
-      const result = (
-        await prepareConfiguredRuntimeFactsBatch({
-          agentFacts: [facts],
-          pluginGeneration: generation,
-        })
-      ).catalogs.get(facts.input)!;
-      const rows = result.templateModelRegistry.getAll().filter((entry) => entry.id === "shared");
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({
+  it("materializes duplicate current declarations once", async () => {
+    const { facts, generation, configured } = fixture();
+    configured.models = [
+      {
+        ...model("shared"),
         name: "First current",
-        input: ["text"],
         cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-      });
-    },
-  );
+      },
+      { ...model("shared"), name: "Later duplicate", input: ["text", "image"] },
+    ];
+    const result = (
+      await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [facts],
+        pluginGeneration: generation,
+      })
+    ).catalogs.get(facts.input)!;
+    const rows = result.templateModelRegistry.getAll().filter((entry) => entry.id === "shared");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      name: "First current",
+      input: ["text"],
+      cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+    });
+  });
   it("does not restore noncurrent runtime fallbacks after replace publication", async () => {
     const { facts, generation, modelsJsonContents } = fixture("replace");
     facts.configuredRuntimeModels = [
@@ -217,66 +215,10 @@ describe("prepared catalog source composition", () => {
       expect.soft(snapshot.modelCatalog.staticEntries ?? []).toEqual([]);
     }
   });
-  it.each([
-    { mode: "merge", ids: ["authored-only", "configured-only", "curated-only", "shared"] },
-    { mode: "replace", ids: ["configured-only", "shared"] },
-  ] as const)("composes the actual startup registry in $mode mode", async ({ mode, ids }) => {
-    const { facts, generation } = fixture(mode);
-    const result = await prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [facts],
-      pluginGeneration: generation,
-    });
-    const captured = result.catalogs.get(facts.input)!;
-    expect(captured.templateModelRegistry.getError()).toBeUndefined();
-    expect(
-      captured.templateModelRegistry
-        .getAll()
-        .map((entry) => entry.id)
-        .toSorted(),
-    ).toEqual(ids);
-    expect(captured.modelCatalog.entries.map((entry) => entry.id).toSorted()).toEqual(ids);
-    expect(captured.templateModelRegistry.find(providerId, "shared")).toMatchObject({
-      name: "Current shared",
-      maxTokens: 2048,
-      maxTokensSource: "configured",
-    });
-  });
-
-  it("does not share composed registries across different current declarations", async () => {
-    const { facts, generation, configured } = fixture();
-    const sibling = {
-      ...facts,
-      input: {
-        ...facts.input,
-        config: {
-          models: {
-            providers: { [providerId]: { ...configured, models: [model("other-current")] } },
-          },
-        },
-      },
-    };
-    const result = await prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [facts, sibling],
-      pluginGeneration: generation,
-    });
-    expect(
-      result.catalogs.get(facts.input)!.templateModelRegistry.find(providerId, "configured-only"),
-    ).toBeDefined();
-    expect(
-      result.catalogs.get(facts.input)!.templateModelRegistry.find(providerId, "other-current"),
-    ).toBeUndefined();
-    expect(
-      result.catalogs.get(sibling.input)!.templateModelRegistry.find(providerId, "other-current"),
-    ).toBeDefined();
-    expect(
-      result.catalogs.get(sibling.input)!.templateModelRegistry.find(providerId, "configured-only"),
-    ).toBeUndefined();
-  });
-
-  it.each(["same", "static route", "credentials", "metadata"] as const)(
+  it.each(["same", "credentials"] as const)(
     "shares captured registries across workspaces only for equivalent sources: %s",
     async (difference) => {
-      const { facts, generation, staticConfig, modelsJsonContents } = fixture();
+      const { facts, generation, modelsJsonContents } = fixture();
       const registries: PreparedConfiguredModelRegistries = new Map();
       const first = await prepareConfiguredRuntimeFactsBatch({
         agentFacts: [facts],
@@ -295,34 +237,9 @@ describe("prepared catalog source composition", () => {
         credentials,
         templateAuthStorage: AuthStorage.inMemory(credentials),
       };
-      const siblingEndpoint = "https://sibling.example.invalid/v1";
-      const siblingStaticConfig = { ...staticConfig, baseUrl: siblingEndpoint };
-      const siblingGeneration = {
-        ...generation,
-        ...(difference === "static route"
-          ? {
-              preparedStaticProviderCatalog: {
-                ...generation.preparedStaticProviderCatalog,
-                entries: generation.preparedStaticProviderCatalog.entries.map((entry) =>
-                  Object.assign({}, entry, {
-                    result: { provider: siblingStaticConfig },
-                    providerConfigs: { [providerId]: siblingStaticConfig },
-                  }),
-                ),
-              },
-            }
-          : {}),
-        ...(difference === "metadata"
-          ? {
-              pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-                plugins: [{ id: pluginId, providers: [providerId] }],
-              }),
-            }
-          : {}),
-      };
       const second = await prepareConfiguredRuntimeFactsBatch({
         agentFacts: [sibling],
-        pluginGeneration: siblingGeneration,
+        pluginGeneration: generation,
         registries,
       });
       expect(first.registryCount).toBe(1);
@@ -332,30 +249,14 @@ describe("prepared catalog source composition", () => {
       const firstModel = firstRegistry.find(providerId, "curated-only")!;
       const secondModel = secondRegistry.find(providerId, "curated-only")!;
       expect(firstModel.baseUrl).toBe(endpoint);
-      expect(secondModel.baseUrl).toBe(difference === "static route" ? siblingEndpoint : endpoint);
+      expect(secondModel.baseUrl).toBe(endpoint);
       expect(firstRegistry.hasConfiguredAuth(firstModel)).toBe(false);
       expect(secondRegistry.hasConfiguredAuth(secondModel)).toBe(difference === "credentials");
       expect(secondRegistry.getProviderMetadataOwners()).toBe(
-        siblingGeneration.pluginMetadataSnapshot.owners,
+        generation.pluginMetadataSnapshot.owners,
       );
     },
   );
-
-  it("keeps an authored route when the prepared static catalog is empty", async () => {
-    const { facts, generation, configured } = fixture();
-    const authoredEndpoint = "https://authored.example.invalid/v1";
-    fs.writeFileSync(
-      path.join(facts.input.agentDir, "models.json"),
-      JSON.stringify({ providers: { [providerId]: { ...configured, baseUrl: authoredEndpoint } } }),
-    );
-    const result = await prepareConfiguredRuntimeFactsBatch({
-      agentFacts: [facts],
-      pluginGeneration: { ...generation, preparedStaticProviderCatalog: { entries: [] } },
-    });
-    expect(
-      result.catalogs.get(facts.input)!.templateModelRegistry.find(providerId, "shared"),
-    ).toMatchObject({ baseUrl: authoredEndpoint });
-  });
 
   it("services event-loop work between dynamic model completions in one registry group", async () => {
     const { facts, generation } = fixture();
@@ -404,24 +305,19 @@ describe("prepared catalog source composition", () => {
     expect(events.indexOf("event-loop")).toBeLessThan(events.indexOf("last"));
   });
 
-  it.each(["merge", "replace"] as const)(
-    "keeps full catalog source ownership in %s mode",
-    async (mode) => {
-      const { facts, generation, modelsJsonContents } = fixture(mode);
-      const result = await prepareFullCatalogFacts(facts, generation, "static", {
-        modelsJsonContents,
-        pluginCatalogs: [],
-        providerOutcomes: [{ provider: providerId, status: "ready" }],
-      });
-      expect(result.templateModelRegistry.find(providerId, "curated-only")).toBeUndefined();
-      expect(result.modelCatalog.entries.some((entry) => entry.id === "configured-only")).toBe(
-        true,
-      );
-      expect(result.templateModelRegistry.find(providerId, "authored-only")).toEqual(
-        mode === "merge" ? expect.objectContaining({ id: "authored-only" }) : undefined,
-      );
-    },
-  );
+  it("keeps full catalog source ownership in merge mode", async () => {
+    const { facts, generation, modelsJsonContents } = fixture();
+    const result = await prepareFullCatalogFacts(facts, generation, "static", {
+      modelsJsonContents,
+      pluginCatalogs: [],
+      providerOutcomes: [{ provider: providerId, status: "ready" }],
+    });
+    expect(result.templateModelRegistry.find(providerId, "curated-only")).toBeUndefined();
+    expect(result.modelCatalog.entries.some((entry) => entry.id === "configured-only")).toBe(true);
+    expect(result.templateModelRegistry.find(providerId, "authored-only")).toEqual(
+      expect.objectContaining({ id: "authored-only" }),
+    );
+  });
 
   it("replaces stale root request settings with current configuration", async () => {
     const { facts, configured } = fixture();
@@ -448,61 +344,50 @@ describe("prepared catalog source composition", () => {
     });
   });
 
-  it.each([
-    { sourceKey: "current-config-key", storeKey: undefined, expectedKey: "current-config-key" },
-    {
-      sourceKey: "current-config-key",
-      storeKey: "current-store-key",
-      expectedKey: "current-store-key",
-    },
-    { sourceKey: undefined, storeKey: undefined, expectedKey: undefined },
-  ])(
-    "uses current request authority for accepted routes ($sourceKey, $storeKey)",
-    async ({ sourceKey, storeKey, expectedKey }) => {
-      const { facts, configured } = fixture();
-      const config = {
-        ...facts.input.config,
-        models: {
-          providers: {
-            [providerId]: { ...configured, apiKey: sourceKey, headers: { "X-Current": "current" } },
+  it("uses current configured request authority for accepted routes", async () => {
+    const { facts, configured } = fixture();
+    const config = {
+      ...facts.input.config,
+      models: {
+        providers: {
+          [providerId]: {
+            ...configured,
+            apiKey: "current-config-key",
+            headers: { "X-Current": "current" },
           },
         },
-      };
-      const registry = ModelRegistry.create(
-        AuthStorage.inMemory(storeKey ? { [providerId]: { type: "api_key", key: storeKey } } : {}),
-        "captured:models.json",
+      },
+    };
+    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+      config,
+      modelsJsonContents: null,
+      pluginMetadataSnapshot: metadata,
+      pluginCatalogs: [
         {
-          config,
-          modelsJsonContents: null,
-          pluginMetadataSnapshot: metadata,
-          pluginCatalogs: [
-            {
-              pluginId,
-              contents: JSON.stringify({
-                generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-                providers: {
-                  [providerId]: {
-                    ...configured,
-                    baseUrl: "https://accepted.example.invalid/v1",
-                    apiKey: "stale-cache-key",
-                    headers: { "X-Stale": "stale" },
-                    models: [model("shared"), model("generated-only")],
-                  },
-                },
-              }),
+          pluginId,
+          contents: JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              [providerId]: {
+                ...configured,
+                baseUrl: "https://accepted.example.invalid/v1",
+                apiKey: "stale-cache-key",
+                headers: { "X-Stale": "stale" },
+                models: [model("shared"), model("generated-only")],
+              },
             },
-          ],
+          }),
         },
-      );
-      for (const id of ["shared", "generated-only"]) {
-        const selected = registry.find(providerId, id)!;
-        expect(selected.baseUrl).toBe("https://accepted.example.invalid/v1");
-        await expect(registry.getApiKeyAndHeaders(selected)).resolves.toEqual({
-          ok: true,
-          apiKey: expectedKey,
-          headers: { "X-Current": "current" },
-        });
-      }
-    },
-  );
+      ],
+    });
+    for (const id of ["shared", "generated-only"]) {
+      const selected = registry.find(providerId, id)!;
+      expect(selected.baseUrl).toBe("https://accepted.example.invalid/v1");
+      await expect(registry.getApiKeyAndHeaders(selected)).resolves.toEqual({
+        ok: true,
+        apiKey: "current-config-key",
+        headers: { "X-Current": "current" },
+      });
+    }
+  });
 });

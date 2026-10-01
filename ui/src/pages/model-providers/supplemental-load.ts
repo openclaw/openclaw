@@ -1,9 +1,13 @@
 import { initialState, Task } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  requestProviderUsage,
+  type ProviderUsageRequestResult,
+} from "../../lib/provider-usage-request.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
-import { loadModelProviderCost, loadModelProviderUsage, type ModelProvidersData } from "./load.ts";
+import { loadModelProviderCost, type ModelProvidersData } from "./load.ts";
 
 type SupplementalOptions = {
   isCoreLoading: () => boolean;
@@ -23,7 +27,7 @@ export class ModelProviderSupplementalLoader {
   private readonly pending = new Set<SupplementalKind>();
   private readonly usageTask: Task<
     [GatewayBrowserClient | null, number],
-    SupplementalTaskValue<Awaited<ReturnType<typeof loadModelProviderUsage>>>
+    SupplementalTaskValue<ProviderUsageRequestResult>
   >;
   private readonly costTask: Task<
     [GatewayBrowserClient | null, number],
@@ -37,7 +41,7 @@ export class ModelProviderSupplementalLoader {
     this.usageTask = this.createTask(
       host,
       "usage",
-      loadModelProviderUsage,
+      (client, signal) => requestProviderUsage(client, { signal }),
       (providerUsage) => ({ providerUsage }),
       (providerUsage, epoch) =>
         this.options.refreshPolicy.markProviderUsage(providerUsage, Date.now(), epoch),

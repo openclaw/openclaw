@@ -22,7 +22,7 @@ import type {
   StopReason,
   ToolCall,
 } from "../../llm/types.js";
-import { EventStream } from "../../llm/utils/event-stream.js";
+import { AssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 
 const PROXY_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
@@ -33,23 +33,6 @@ const PROXY_SSE_READ_IDLE_TIMEOUT_MS = 120_000;
 type StreamingToolCall = ToolCall & {
   partialJson: string;
 };
-
-class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-  constructor() {
-    super(
-      (event) => event.type === "done" || event.type === "error",
-      (event) => {
-        if (event.type === "done") {
-          return event.message;
-        }
-        if (event.type === "error") {
-          return event.error;
-        }
-        throw new Error("Unexpected event type");
-      },
-    );
-  }
-}
 
 /**
  * Proxy event types - server sends these with partial field stripped to reduce bandwidth.
@@ -138,11 +121,7 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
 
 function sanitizeProxyModel(model: Model): Model {
   const { headers: _headers, ...safeModel } = model;
-  return safeModel as Model;
-}
-
-function resolveProxyReadIdleTimeoutMs(timeoutMs: ProxyStreamOptions["timeoutMs"]): number {
-  return resolvePositiveTimerTimeoutMs(timeoutMs, PROXY_SSE_READ_IDLE_TIMEOUT_MS);
+  return safeModel;
 }
 
 type ProxyRequestAbort = {
@@ -249,8 +228,8 @@ export function streamProxy(
   model: Model,
   context: Context,
   options: ProxyStreamOptions,
-): ProxyMessageEventStream {
-  const stream = new ProxyMessageEventStream();
+): AssistantMessageEventStream {
+  const stream = new AssistantMessageEventStream();
 
   void (async () => {
     const partial: AssistantMessage = {
@@ -268,7 +247,10 @@ export function streamProxy(
     let readerReachedEof = false;
     let cancellation: Promise<void> | undefined;
     let cleanupReason: unknown;
-    const readIdleTimeoutMs = resolveProxyReadIdleTimeoutMs(options.timeoutMs);
+    const readIdleTimeoutMs = resolvePositiveTimerTimeoutMs(
+      options.timeoutMs,
+      PROXY_SSE_READ_IDLE_TIMEOUT_MS,
+    );
     const cancelReader = (reason?: unknown) =>
       reader ? (cancellation ??= reader.cancel(reason).catch(() => undefined)) : Promise.resolve();
     const abortHandler = () => void cancelReader("Request aborted by user");

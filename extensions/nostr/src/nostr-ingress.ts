@@ -1,4 +1,3 @@
-// Nostr plugin module owns durable relay-event admission and replay draining.
 import type { Event } from "nostr-tools";
 import {
   createChannelIngressError,

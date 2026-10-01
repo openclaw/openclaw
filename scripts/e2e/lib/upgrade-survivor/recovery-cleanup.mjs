@@ -8,12 +8,15 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
 import {
+  readJson as readRecoveryJson,
+  writeJson as writeRecoveryJson,
+} from "../fixtures/common.mjs";
+import {
   assertRecoveryApplied,
   assertRecoveryHistory,
   assertRecoveryInventory,
   assertRecoveryOriginals,
   assertRecoverySnapshot,
-  readRecoveryJson,
   readRecoveryMoves,
   recoveryEvent,
   recoveryFileIdentity,
@@ -22,7 +25,6 @@ import {
   recoveryVolumeSpec,
   recoveryWalIndexPaths,
   seedRecoveryFixture,
-  writeRecoveryJson,
   writeRecoveryTranscript,
 } from "./recovery-cleanup-fixture.mjs";
 

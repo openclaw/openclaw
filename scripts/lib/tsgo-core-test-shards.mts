@@ -110,6 +110,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.services-cron.json",
   },
   {
+    name: "ui-app",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-app.json",
+  },
+  {
     name: "ui-components",
     group: "ui",
     config: "test/tsconfig/tsconfig.core.test.ui-components.json",
@@ -198,19 +203,23 @@ export function resolveChangedCiTsgoInputs(
 export function selectChangedCiTsgoGraphs(
   paths: readonly string[],
   graphs: readonly { config: string; files: readonly string[] }[],
+  options: { scope?: "all" | "noncore" } = {},
 ): readonly { name: string; config: string }[] | undefined {
   const compilerPaths = resolveChangedCiTsgoInputs(paths);
+  const candidates = options.scope === "noncore" ? TSGO_CI_ADDITIONAL_GRAPHS : TSGO_CI_GRAPHS;
   if (
     !compilerPaths ||
-    graphs.length !== TSGO_CI_GRAPHS.length ||
-    TSGO_CI_GRAPHS.some(
+    (options.scope === "noncore" &&
+      !compilerPaths.every((file) => file.startsWith("extensions/"))) ||
+    graphs.length !== candidates.length ||
+    candidates.some(
       (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
     ) ||
     compilerPaths.some((file) => !graphs.some((graph) => graph.files.includes(file)))
   ) {
     return undefined;
   }
-  return TSGO_CI_GRAPHS.filter((expected) =>
+  return candidates.filter((expected) =>
     graphs.some(
       (graph) =>
         graph.config === expected.config &&

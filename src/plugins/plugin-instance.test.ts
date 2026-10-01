@@ -19,6 +19,7 @@ import {
 } from "./plugin-instance-error.js";
 import { runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { adoptPluginRegistryRecords } from "./registry-lifecycle.js";
 import {
@@ -875,7 +876,9 @@ describe("managed plugin instances", () => {
     withPluginRuntimeGatewayRequestScope(caller, () =>
       withPluginRuntimeGenerationScope(
         {
-          metadataSnapshot: { index: {}, configFingerprint: "test", owners: {} } as never,
+          metadataSnapshot: createPluginMetadataSnapshotFixture({
+            plugins: [{ id: record.id, origin: record.origin, source: record.source }],
+          }),
           pluginRegistry: first,
         },
         () => {

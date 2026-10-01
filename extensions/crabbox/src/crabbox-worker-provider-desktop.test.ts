@@ -2,9 +2,9 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
-  commandResult,
   createWarmProvider,
   LEASE_ID,
   OPERATION_ID,

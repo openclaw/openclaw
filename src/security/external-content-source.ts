@@ -1,4 +1,3 @@
-// Normalizes source identifiers for externally supplied content.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Hook session sources that carry untrusted external content into agent prompts. */
@@ -15,7 +14,7 @@ export function resolveHookExternalContentSource(
   if (normalized.startsWith("hook:gmail:")) {
     return "gmail";
   }
-  if (normalized.startsWith("hook:webhook:") || normalized.startsWith("hook:")) {
+  if (normalized.startsWith("hook:")) {
     return "webhook";
   }
   return undefined;

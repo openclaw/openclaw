@@ -21,64 +21,50 @@ describe("Skill Workshop proposal draft preparation", () => {
     });
 
     expect(prepared).toMatchObject({
-      ok: true,
-      value: {
-        description: "Check a release",
-        goal: "Preserve release quality.",
-        evidence: "Existing operator checklist.",
-        scan: { state: "clean", critical: 0 },
-        supportFiles: [
-          expect.objectContaining({
-            path: "references/checklist.md",
-            content: "Verify artifacts.\n",
-          }),
-        ],
-      },
-    });
-    if (!prepared.ok) {
-      throw prepared.error.cause;
-    }
-    expect(prepared.value.content).toContain('name: "release-check"');
-    expect(prepared.value.content).toContain('date: "2026-07-29T00:00:00.000Z"');
-    expect(prepared.value.draftHash).toMatch(/^[a-f0-9]{64}$/);
-  });
-
-  it("returns the existing validation messages without persisting partial output", () => {
-    const oversized = prepareSkillProposalDraft({
-      name: "release-check",
       description: "Check a release",
-      skillDescription: "Check a release",
-      content: "x".repeat(5),
-      date: "2026-07-29T00:00:00.000Z",
-      maxSkillBytes: 4,
-    });
-    expect(oversized).toMatchObject({
-      ok: false,
-      error: {
-        message: "Skill proposal content is too large (5 bytes, max 4).",
-      },
-    });
-
-    const secret = prepareSkillProposalDraft({
-      name: "release-check",
-      description: "Check a release",
-      skillDescription: "Check a release",
-      content: "# Release Check\n",
-      date: "2026-07-29T00:00:00.000Z",
-      maxSkillBytes: 1024,
-      secretScanMetadata: [
-        {
-          file: "skill-name",
-          content: "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
-        },
+      goal: "Preserve release quality.",
+      evidence: "Existing operator checklist.",
+      scan: { state: "clean", critical: 0 },
+      supportFiles: [
+        expect.objectContaining({
+          path: "references/checklist.md",
+          content: "Verify artifacts.\n",
+        }),
       ],
     });
-    expect(secret).toMatchObject({
-      ok: false,
-      error: {
-        message: expect.stringContaining("recognized literal credential in skill-name"),
-      },
-    });
+    expect(prepared.content).toContain('name: "release-check"');
+    expect(prepared.content).toContain('date: "2026-07-29T00:00:00.000Z"');
+    expect(prepared.draftHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("preserves validation messages without persisting partial output", () => {
+    expect(() =>
+      prepareSkillProposalDraft({
+        name: "release-check",
+        description: "Check a release",
+        skillDescription: "Check a release",
+        content: "x".repeat(5),
+        date: "2026-07-29T00:00:00.000Z",
+        maxSkillBytes: 4,
+      }),
+    ).toThrow("Skill proposal content is too large (5 bytes, max 4).");
+
+    expect(() =>
+      prepareSkillProposalDraft({
+        name: "release-check",
+        description: "Check a release",
+        skillDescription: "Check a release",
+        content: "# Release Check\n",
+        date: "2026-07-29T00:00:00.000Z",
+        maxSkillBytes: 1024,
+        secretScanMetadata: [
+          {
+            file: "skill-name",
+            content: "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+          },
+        ],
+      }),
+    ).toThrow("recognized literal credential in skill-name");
   });
 
   it("separates the bounded listing label from the rendered skill description", () => {
@@ -94,15 +80,11 @@ describe("Skill Workshop proposal draft preparation", () => {
     });
 
     expect(prepared).toMatchObject({
-      ok: true,
-      value: { description: "Short listing label" },
+      description: "Short listing label",
     });
-    if (!prepared.ok) {
-      throw prepared.error.cause;
-    }
-    expect(prepared.value.content).toContain(richDescription);
-    expect(prepared.value.content).not.toContain("Short listing label");
-    expect(stripProposalFrontmatterForSkill(prepared.value.content)).toContain(richDescription);
+    expect(prepared.content).toContain(richDescription);
+    expect(prepared.content).not.toContain("Short listing label");
+    expect(stripProposalFrontmatterForSkill(prepared.content)).toContain(richDescription);
   });
 
   it("preserves version and UTF-8 description behavior", () => {

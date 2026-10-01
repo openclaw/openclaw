@@ -27,6 +27,7 @@ import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { markLegacyMigrationSourceRemoved } from "../../../infra/state-migrations.receipts.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
+import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import {
   createRetiredModelRefRepairResolver,
@@ -96,10 +97,6 @@ export type LegacyCronRepairResult = {
   codexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
 };
 
-function pluralize(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 function formatRunLogMigrationNote(importedFiles: number): string {
   return importedFiles > 0
     ? ` Imported ${pluralize(importedFiles, "legacy cron run log")} into SQLite.`
@@ -149,7 +146,7 @@ export async function loadLegacyCronRepairState(params: {
   }
   let persistedQuarantine: CronQuarantinedJob[];
   try {
-    persistedQuarantine = loadCronQuarantinedJobs(storePath, params.env);
+    persistedQuarantine = await loadCronQuarantinedJobs(storePath, params.env);
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);
     persistedQuarantine = [];
@@ -378,6 +375,11 @@ export async function applyLegacyCronStoreRepair(params: {
             assertCronJobsStoreUnchanged(db, state.storePath, state.jobsFingerprint);
           }
         };
+        const saveOptions = {
+          ...(quarantine ? { quarantine } : {}),
+          ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
+          preserveRuntimeState: true,
+        };
         if (migrationSource && !state.legacyMigrationAlreadyImported) {
           await assertLegacyCronMigrationSourceCurrent(migrationSource);
           await saveCronJobsStoreWithMetadata(
@@ -387,22 +389,16 @@ export async function applyLegacyCronStoreRepair(params: {
               assertSnapshotCurrent(db);
               return acquireLegacyCronMigrationReceipt(db, migrationSource);
             },
-            {
-              ...(quarantine ? { quarantine } : {}),
-              ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
-              preserveRuntimeState: true,
-            },
+            saveOptions,
           );
         } else {
           await saveCronJobsStore(state.storePath, store, {
-            ...(quarantine ? { quarantine } : {}),
-            ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
-            preserveRuntimeState: true,
+            ...saveOptions,
             transactionHooks: { beforeWrite: assertSnapshotCurrent },
           });
         }
       } else if (quarantine) {
-        saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
+        await saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }
     } catch (err) {
       rethrowSqliteSchemaVersionError(err);

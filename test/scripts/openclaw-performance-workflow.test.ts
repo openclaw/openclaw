@@ -325,9 +325,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "ec90fe4dd443859a248df82206ad2f1f363930ba";
-    const legacyKovaRef = "ec90fe4dd443859a248df82206ad2f1f363930ba";
-    const trustedLiveKovaRef = "ec90fe4dd443859a248df82206ad2f1f363930ba";
+    const canonicalKovaRef = "4b8b1681446b868a44193ed6e97253a6c8bcbbbf";
+    const legacyKovaRef = "d69b2209905195bea06980721a92ad8b70808c5d";
+    const trustedLiveKovaRef = "4b8b1681446b868a44193ed6e97253a6c8bcbbbf";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -514,8 +514,11 @@ describe("OpenClaw performance workflow", () => {
         return;
       }
       expect(result.status, result.stderr + result.stdout).toBe(0);
-      const expectedRef =
-        fixture.expectedRef ?? fixture.kovaRef ?? readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
+      const defaultRef =
+        fixture.expectedContract === "legacy-list"
+          ? readWorkflow().env?.KOVA_LEGACY_LIST_CONFIG_REF
+          : readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
+      const expectedRef = fixture.expectedRef ?? fixture.kovaRef ?? defaultRef;
       expect(outputs).toEqual({
         checkout_ref: sha,
         tested_ref: "fixture-target",
@@ -537,7 +540,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "ec90fe4dd443859a248df82206ad2f1f363930ba",
+        kova_ref: "4b8b1681446b868a44193ed6e97253a6c8bcbbbf",
         kova_config_contract: "canonical",
       });
     });

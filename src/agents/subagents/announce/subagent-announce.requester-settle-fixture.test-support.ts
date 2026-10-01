@@ -1,9 +1,6 @@
 import { beforeEach, vi } from "vitest";
-import type {
-  countActiveDescendantRuns,
-  hasDescendantRunAwaitingSettle,
-} from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 import {
   REQUESTER,
@@ -15,19 +12,30 @@ import {
   deliverSpy,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; lastTo?: string }>;
+let sessionStore: Record<
+  string,
+  { sessionId?: string; lifecycleRevision?: string; lastChannel?: string; lastTo?: string }
+>;
 
-const { registryRuntimeMock, findTranscriptEventMock } = vi.hoisted(() => ({
+const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi.hoisted(() => ({
+  readDescendantFacts: vi.fn<
+    (
+      params: Parameters<typeof createRequesterDescendantReader>[0],
+    ) => ReturnType<ReturnType<typeof createRequesterDescendantReader>>
+  >(async () => ({ unsettled: false, active: 0 })),
   findTranscriptEventMock: vi.fn<
     typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent
   >(async () => undefined),
   registryRuntimeMock: {
-    getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
-    countActiveDescendantRuns: vi.fn<typeof countActiveDescendantRuns>(() => 0),
+    getLatestLiveSubagentRunByChildSessionKey: vi.fn<
+      (
+        sessionKey: string,
+        matches?: (entry: SubagentRunRecord) => boolean,
+      ) => SubagentRunRecord | undefined
+    >(() => undefined),
     countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),
-    hasDescendantRunAwaitingSettle: vi.fn<typeof hasDescendantRunAwaitingSettle>(() => false),
     listSubagentRunsForRequester: vi.fn((_requesterSessionKey: string): unknown[] => []),
     getLatestSubagentRunByChildSessionKey: vi.fn(
       (
@@ -39,6 +47,11 @@ const { registryRuntimeMock, findTranscriptEventMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
+vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
+  createRequesterDescendantReader:
+    (params: Parameters<typeof createRequesterDescendantReader>[0]) => () =>
+      readDescendantFacts(params),
+}));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: findTranscriptEventMock,
@@ -88,6 +101,7 @@ function wakeParams(
 ) {
   return {
     requesterSessionKey: REQUESTER,
+    isSourceCurrent: () => true,
     settledEntry:
       listedRequesterRuns().find((entry) => entry.runId === "run-b") ??
       makeSettledChild({ runId: "run-b" }),
@@ -103,10 +117,12 @@ beforeEach(() => {
   transitionBatchSpy.mockClear();
   completeBatchSpy.mockClear();
   sessionStore = { [REQUESTER]: { sessionId: "sess-main" } };
-  registryRuntimeMock.countActiveDescendantRuns.mockReset().mockReturnValue(0);
-  registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReset().mockReturnValue(false);
+  readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
   registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
   registryRuntimeMock.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
+  registryRuntimeMock.getLatestLiveSubagentRunByChildSessionKey
+    .mockReset()
+    .mockReturnValue(undefined);
 });
 
 function setSessionStore(store: typeof sessionStore): void {
@@ -115,6 +131,7 @@ function setSessionStore(store: typeof sessionStore): void {
 
 export {
   sessionStore,
+  readDescendantFacts,
   setSessionStore,
   registryRuntimeMock,
   findTranscriptEventMock,

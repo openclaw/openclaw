@@ -289,6 +289,9 @@ The Markdown style uses `**bold**` and `~~strikethrough~~`; italic and inline
 code keep `_italic_` and backtick markers in both styles. Select the style at
 the channel boundary instead of rewriting marker text after sanitization.
 
+Comparison prose such as `🙂<limit and wait>5s` remains literal text, including
+when the left operand is a Unicode symbol or letter.
+
 ## Delivery Evidence
 
 A `MessageReceipt` records the result returned by a channel adapter. Concrete

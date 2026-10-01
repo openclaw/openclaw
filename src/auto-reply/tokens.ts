@@ -1,4 +1,3 @@
-/** Silent-reply and heartbeat tokens plus helpers for suppressing token-only model output. */
 import { escapeRegExp } from "../shared/regexp.js";
 
 /** Token that marks a heartbeat response as an acknowledgement with no user notification. */
@@ -66,9 +65,7 @@ export function isSilentReplyText(
   );
 }
 
-type SilentReplyActionEnvelope = { action?: unknown };
-
-function isSilentReplyJsonStringText(
+function isSilentReplyJsonText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
@@ -76,30 +73,20 @@ function isSilentReplyJsonStringText(
     return false;
   }
   const trimmed = text.trim();
-  if (!trimmed.startsWith('"') || !trimmed.endsWith('"') || !trimmed.includes(token)) {
+  if (
+    !trimmed.includes(token) ||
+    !(
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("{") && trimmed.endsWith("}"))
+    )
+  ) {
     return false;
   }
   try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return typeof parsed === "string" && parsed.trim() === token;
-  } catch {
-    return false;
-  }
-}
-
-function isSilentReplyEnvelopeText(
-  text: string | undefined,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
-  if (!trimmed || !trimmed.startsWith("{") || !trimmed.endsWith("}") || !trimmed.includes(token)) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as SilentReplyActionEnvelope;
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed === "string") {
+      return parsed.trim() === token;
+    }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return false;
     }
@@ -107,6 +94,7 @@ function isSilentReplyEnvelopeText(
     return (
       keys.length === 1 &&
       keys[0] === "action" &&
+      "action" in parsed &&
       typeof parsed.action === "string" &&
       parsed.action.trim() === token
     );
@@ -198,20 +186,18 @@ function isReasoningPrefixedSilentReplyText(
     );
   }
 
-  if (openReasoningPrefixRe.test(trimmed)) {
-    const withoutOpenReasoningPrefix = trimmed.replace(openReasoningPrefixRe, "");
-    return (
-      isSilentReplyText(withoutOpenReasoningPrefix, token) ||
-      hasPlainReasoningFinalSilentToken(withoutOpenReasoningPrefix, token)
-    );
-  }
-  if (!plainReasoningPrefixRe.test(trimmed)) {
+  const reasoningPrefix = openReasoningPrefixRe.test(trimmed)
+    ? openReasoningPrefixRe
+    : plainReasoningPrefixRe.test(trimmed)
+      ? plainReasoningPrefixRe
+      : undefined;
+  if (!reasoningPrefix) {
     return false;
   }
-  const withoutPlainReasoningPrefix = trimmed.replace(plainReasoningPrefixRe, "");
+  const withoutReasoningPrefix = trimmed.replace(reasoningPrefix, "");
   return (
-    isSilentReplyText(withoutPlainReasoningPrefix, token) ||
-    hasPlainReasoningFinalSilentToken(withoutPlainReasoningPrefix, token)
+    isSilentReplyText(withoutReasoningPrefix, token) ||
+    hasPlainReasoningFinalSilentToken(withoutReasoningPrefix, token)
   );
 }
 
@@ -222,8 +208,7 @@ export function isSilentReplyPayloadText(
 ): boolean {
   return (
     isSilentReplyText(text, token) ||
-    isSilentReplyJsonStringText(text, token) ||
-    isSilentReplyEnvelopeText(text, token) ||
+    isSilentReplyJsonText(text, token) ||
     isReasoningPrefixedSilentReplyText(text, token)
   );
 }
@@ -301,20 +286,11 @@ export function isSilentReplyPrefixText(
   const normalized = trimmed.toUpperCase();
   // Guard against suppressing natural-language "No..." text while still
   // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== normalized) {
+  if (trimmed !== normalized || normalized.length < 2 || !tokenUpper.startsWith(normalized)) {
     return false;
-  }
-  if (normalized.length < 2) {
-    return false;
-  }
-  if (!tokenUpper.startsWith(normalized)) {
-    return false;
-  }
-  if (normalized.includes("_")) {
-    return true;
   }
   // Full-token match is safe for any token.
-  if (normalized === tokenUpper) {
+  if (normalized.includes("_") || normalized === tokenUpper) {
     return true;
   }
   // For custom tokens containing non-letter characters (digits, hyphens),

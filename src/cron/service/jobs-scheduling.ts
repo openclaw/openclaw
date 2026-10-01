@@ -13,7 +13,6 @@ import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.typ
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
-import { normalizePayloadToSystemText } from "./normalize.js";
 import {
   computeOneShotNextRunAtMs,
   clearInvalidForcePreservedNextRun,
@@ -91,10 +90,7 @@ export function errorBackoffMs(
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
 ): number {
   const idx = Math.min(consecutiveErrors - 1, scheduleMs.length - 1);
-  return (
-    expectDefined(scheduleMs[Math.max(0, idx)], "schedule ms entry at math.max(0, idx)") ??
-    DEFAULT_ERROR_BACKOFF_SCHEDULE_MS[0]
-  );
+  return expectDefined(scheduleMs[Math.max(0, idx)], "schedule ms entry at math.max(0, idx)");
 }
 
 /** Returns the earliest retry timestamp after a failed cron run and its runtime duration. */
@@ -727,11 +723,11 @@ export function nextWakeAtMs(state: CronServiceState) {
 }
 
 /** Applies one canonical server-authored authority envelope to a tool-bearing job. */
-export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">) {
+export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">, activeInProcess?: boolean) {
   return (
     typeof job.state.queuedAtMs === "number" ||
     typeof job.state.runningAtMs === "number" ||
-    isCronJobActive(job.id)
+    (activeInProcess ?? isCronJobActive(job.id))
   );
 }
 
@@ -752,13 +748,4 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
     hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
     nowMs >= job.state.nextRunAtMs
   );
-}
-
-/** Returns main-session queue text for system-event jobs, or undefined when empty/unsupported. */
-export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
-  if (job.payload.kind !== "systemEvent") {
-    return undefined;
-  }
-  const text = normalizePayloadToSystemText(job.payload);
-  return text.trim() ? text : undefined;
 }

@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import * as sqlite from "../../infra/kysely-sync.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
@@ -25,12 +24,11 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
-  runOpenClawStateWriteTransaction,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const delivery = vi.hoisted(() => ({
@@ -194,7 +192,7 @@ it.each(["automatic", "doctor-preparation", "doctor"] as const)(
   },
 );
 
-it("shares committed inventory and native pairing publications across database aliases", async () => {
+it("shares committed inventory and pairing publications across database aliases", async () => {
   const directory = tempDirs.make("worker-inventory-alias-");
   const stateDir = path.join(directory, "original");
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
@@ -221,20 +219,13 @@ it("shares committed inventory and native pairing publications across database a
     to: "provisioning",
   });
   const enrollment = await store.ensureNodeEnrollment(intent.environmentId);
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const { environmentId, ...patch } = bindCloudWorkerSetupCompletion({
-        db,
-        completion: {
-          setupId: enrollment.nodeSetupId!,
-          deviceId: "alias-device",
-          completedAtMs: 2_000,
-        },
-      });
-      publishWorkerEnvironmentNativeMutation(db, environmentId, patch);
-    },
-    { database: aliasDatabase },
-  );
+  await completeWorkerNodeSetupForTest({
+    baseDir: aliasDir,
+    store: alias,
+    setupId: enrollment.nodeSetupId!,
+    deviceId: "alias-device",
+    completedAtMs: 2_000,
+  });
   expect(alias.get(intent.environmentId)).toEqual(store.get(intent.environmentId));
   expect(store.get(intent.environmentId)?.nodeDeviceId).toBe("alias-device");
   await alias.close();
