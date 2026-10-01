@@ -159,6 +159,46 @@ async function stageResult(stagedResultRef: string, base: ReturnType<typeof mani
   });
 }
 
+async function applyRecoveryResult(
+  request: WorkerWorkspaceReconcileRequest,
+  base: ReturnType<typeof manifest>,
+) {
+  if (request.source.kind !== "local" || !request.source.stagedResult) {
+    throw new Error("Expected staged local recovery");
+  }
+  await stageResult(request.source.stagedResult.ref, base);
+  await request.source.stagedResult.record(request.source.stagedResult.ref);
+  await applyStagedWorkerWorkspaceResult({
+    root: boundary.worktreePath,
+    stagedResultRef: request.source.stagedResult.ref,
+    expectedBaseManifestRef: base.ref,
+    journal: request.source.journal,
+  });
+}
+
+function readRef(ref: string) {
+  return runCommandWithTimeout(["git", "-C", boundary.worktreePath, "show-ref", "--verify", ref], {
+    timeoutMs: 10_000,
+  });
+}
+
+async function readCustomEvents(
+  scope: Parameters<typeof loadTranscriptEvents>[0],
+  customType: string,
+) {
+  return (await loadTranscriptEvents(scope)).filter(
+    (event) => isRecord(event) && event.customType === customType,
+  );
+}
+
+function replaceRecoveryClaim(claimId: string) {
+  support.testState.stateDb.db
+    .prepare(
+      "UPDATE worker_session_placements SET turn_claim_id = ?, turn_claim_run_id = ? WHERE session_id = ? AND turn_claim_id = ?",
+    )
+    .run("replacement-claim", "replacement-run", REQUEST.sessionId, claimId);
+}
+
 async function withRecovery(
   options: { archived?: boolean },
   verify: (fixture: Awaited<ReturnType<typeof createRecoveryFixture>>) => Promise<void>,
@@ -338,13 +378,7 @@ describe("registered worker workspace recovery target binding", () => {
 
       await runtime.dispatchService.reconcile("startup");
 
-      const afterA = await loadTranscriptEvents(a);
-      expect(
-        afterA.filter(
-          (event) =>
-            isRecord(event) && event.customType === WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-        ),
-      ).toHaveLength(1);
+      expect(await readCustomEvents(a, WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE)).toHaveLength(1);
       expect(await loadTranscriptEvents(b)).toEqual(beforeB);
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
@@ -359,12 +393,7 @@ describe("registered worker workspace recovery target binding", () => {
       await runtime.dispatchService.reconcile("startup");
 
       expect(loadSessionEntryReadOnly(a)?.archivedAt).toBe(100);
-      expect(
-        (await loadTranscriptEvents(a)).filter(
-          (event) =>
-            isRecord(event) && event.customType === WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-        ),
-      ).toHaveLength(1);
+      expect(await readCustomEvents(a, WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE)).toHaveLength(1);
       expect(await loadTranscriptEvents(b)).toEqual(beforeB);
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", turnClaim: null });
@@ -457,10 +486,7 @@ describe("registered worker workspace recovery target binding", () => {
           await runtime.dispatchService.reconcile("startup");
 
           expect(
-            (await loadTranscriptEvents(a)).filter(
-              (event) =>
-                isRecord(event) && event.customType === WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-            ),
+            await readCustomEvents(a, WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE),
           ).toHaveLength(1);
           const pending = placements.listPendingWorkspaceResults();
           if (changed === "guarded") {
@@ -486,17 +512,7 @@ describe("registered worker workspace recovery target binding", () => {
         const queued = createDeferredCore();
         let blocker: Promise<void> | undefined;
         onReconcile.mockImplementation(async (request) => {
-          if (request.source.kind !== "local" || !request.source.stagedResult) {
-            throw new Error("Expected staged local recovery");
-          }
-          await stageResult(request.source.stagedResult.ref, base);
-          await request.source.stagedResult.record(request.source.stagedResult.ref);
-          await applyStagedWorkerWorkspaceResult({
-            root: boundary.worktreePath,
-            stagedResultRef: request.source.stagedResult.ref,
-            expectedBaseManifestRef: base.ref,
-            journal: request.source.journal,
-          });
+          await applyRecoveryResult(request, base);
           blocker = runExclusiveSqliteSessionWrite(
             { agentId: REQUEST.agentId, path: a.storePath },
             async () => {
@@ -526,34 +542,15 @@ describe("registered worker workspace recovery target binding", () => {
           const journal = await placements.loadWorkspaceReconciliation(owner);
           expect(journal?.appliedManifestRef).toBeDefined();
           // Model another durable owner taking over while this process waits on its writer.
-          support.testState.stateDb.db
-            .prepare(
-              "UPDATE worker_session_placements SET turn_claim_id = ?, turn_claim_run_id = ? WHERE session_id = ? AND turn_claim_id = ?",
-            )
-            .run("replacement-claim", "replacement-run", REQUEST.sessionId, claim.claimId);
+          replaceRecoveryClaim(claim.claimId);
           expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
           release.resolve();
           await recovering;
 
-          expect(
-            (await loadTranscriptEvents(a)).filter(
-              (event) =>
-                isRecord(event) && event.customType === WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
-            ),
-          ).toEqual([]);
+          expect(await readCustomEvents(a, WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE)).toEqual([]);
           expect(placements.listPendingWorkspaceResults()).toEqual(pending);
           expect(await placements.loadWorkspaceReconciliation(owner)).toEqual(journal);
-          const ref = await runCommandWithTimeout(
-            [
-              "git",
-              "-C",
-              boundary.worktreePath,
-              "show-ref",
-              "--verify",
-              pending[0]!.stagedResultRef!,
-            ],
-            { timeoutMs: 10_000 },
-          );
+          const ref = await readRef(pending[0]!.stagedResultRef!);
           expect(ref.code).toBe(0);
           expect(await fs.readFile(path.join(boundary.worktreePath, "result.txt"), "utf8")).toBe(
             "recoverable worker output\n",
@@ -575,12 +572,7 @@ describe("registered worker workspace recovery target binding", () => {
       async ({ a, runtime, placements, claim, onReconcile, base, destroy }) => {
         const priorRef = "refs/openclaw/worker-results/previous-0";
         await stageResult(priorRef, base);
-        const readRef = () =>
-          runCommandWithTimeout(
-            ["git", "-C", boundary.worktreePath, "show-ref", "--verify", priorRef],
-            { timeoutMs: 10_000 },
-          );
-        const beforeRef = await readRef();
+        const beforeRef = await readRef(priorRef);
         expect(beforeRef.code).toBe(0);
         const beforeTranscript = await loadTranscriptEvents(a);
         const held = createDeferredCore();
@@ -607,16 +599,12 @@ describe("registered worker workspace recovery target binding", () => {
           const pending = placements.listPendingWorkspaceResults();
           expect(pending).toHaveLength(1);
           expect(pending[0]!.workspaceAcceptedAtMs).not.toBeNull();
-          support.testState.stateDb.db
-            .prepare(
-              "UPDATE worker_session_placements SET turn_claim_id = ?, turn_claim_run_id = ? WHERE session_id = ? AND turn_claim_id = ?",
-            )
-            .run("replacement-claim", "replacement-run", REQUEST.sessionId, claim.claimId);
+          replaceRecoveryClaim(claim.claimId);
           expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
           release.resolve();
           await recovering;
 
-          const afterRef = await readRef();
+          const afterRef = await readRef(priorRef);
           expect(afterRef.code).toBe(0);
           expect(afterRef.stdout).toBe(beforeRef.stdout);
           expect(await loadTranscriptEvents(a)).toEqual(beforeTranscript);
@@ -641,17 +629,7 @@ describe("registered worker workspace recovery target binding", () => {
         const retired = `${a.storePath}.retired`;
         let sourceMoved = false;
         onReconcile.mockImplementation(async (request) => {
-          if (request.source.kind !== "local" || !request.source.stagedResult) {
-            throw new Error("Expected staged local recovery");
-          }
-          await stageResult(request.source.stagedResult.ref, base);
-          await request.source.stagedResult.record(request.source.stagedResult.ref);
-          await applyStagedWorkerWorkspaceResult({
-            root: boundary.worktreePath,
-            stagedResultRef: request.source.stagedResult.ref,
-            expectedBaseManifestRef: base.ref,
-            journal: request.source.journal,
-          });
+          await applyRecoveryResult(request, base);
           await fs.rename(a.storePath, retired);
           sourceMoved = true;
           setRuntimeConfigSnapshot(configB, configB);
@@ -670,17 +648,7 @@ describe("registered worker workspace recovery target binding", () => {
           expect(
             (await placements.loadWorkspaceReconciliation(owners[0]!))?.appliedManifestRef,
           ).toBeDefined();
-          const ref = await runCommandWithTimeout(
-            [
-              "git",
-              "-C",
-              boundary.worktreePath,
-              "show-ref",
-              "--verify",
-              pending[0]!.stagedResultRef!,
-            ],
-            { timeoutMs: 10_000 },
-          );
+          const ref = await readRef(pending[0]!.stagedResultRef!);
           expect(ref.code).toBe(0);
           expect(destroy).not.toHaveBeenCalled();
         } finally {

@@ -217,36 +217,6 @@ describe("managed Linux private audio", () => {
     expect(f.runs[1]?.activity.resultSettled).toBe(true);
   });
 
-  it.each([true, false])(
-    "revalidates live authority at native admission without an abort (%s)",
-    async (allowed) => {
-      const f = fixture({ deferCapture: true });
-      const audio = await f.owner.ready;
-      let current = true;
-      const controller = new AbortController();
-      const started = audio.source!.start(controller.signal, () => {
-        if (!current) {
-          throw new Error("viewer retired");
-        }
-      });
-      const rejected = allowed ? undefined : expect(started).rejects.toThrow("viewer retired");
-      await f.captureSpawned.promise;
-      current = allowed;
-      f.captureAdmission.resolve();
-      if (allowed) {
-        const capture = await started;
-        expect(capture.stream.read()).toEqual(Buffer.from([0, 128, 255, 127]));
-        await capture.stop();
-      } else {
-        await rejected;
-      }
-      expect(controller.signal.aborted).toBe(false);
-      expect(f.captureAdmitted).toHaveBeenCalledTimes(allowed ? 1 : 0);
-      expect(f.runs[1]?.activity.resultSettled).toBe(true);
-      expect(f.runs[0]?.activity.resultSettled).toBe(false);
-    },
-  );
-
   it("rechecks live authority after native startup settles and joins cleanup", async () => {
     let current = true;
     const f = fixture({

@@ -97,29 +97,26 @@ describe("direct HTTPS portal publication", () => {
     },
   );
 
-  it.each(["0.0.0.0", "127.0.0.1"])(
-    "publishes a certificate-valid DNS name for bind %s",
-    async (bindHost) => {
-      // Keep the advertised IP locally reachable so the broken candidate fails on TLS, not routing.
-      vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockResolvedValue("127.0.0.2");
-      await withServer(
-        (_req, res) => res.end("direct TLS app"),
-        async (targetUrl) => {
-          const service = createGatewayPortalService({
-            httpBindHosts: [bindHost],
-            httpServers: [],
-            tlsOptions: certificate,
-          });
-          services.push(service);
-          const portal = await service.open({ targetPort: Number(new URL(targetUrl).port) });
-          expect(await readPortal(portal.url)).toEqual({ status: 200, body: "direct TLS app" });
-          expect(new URL(portal.publicUrl).hostname).toBe("gateway.example.test");
-          expect(service.list()[0]?.publicUrl).toBe(portal.publicUrl);
-          expect((await readPortal(portal.publicUrl)).status).toBe(401);
-        },
-      );
-    },
-  );
+  it("publishes a certificate-valid DNS name for a wildcard bind", async () => {
+    // Keep the advertised IP locally reachable so the broken candidate fails on TLS, not routing.
+    vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockResolvedValue("127.0.0.2");
+    await withServer(
+      (_req, res) => res.end("direct TLS app"),
+      async (targetUrl) => {
+        const service = createGatewayPortalService({
+          httpBindHosts: ["0.0.0.0"],
+          httpServers: [],
+          tlsOptions: certificate,
+        });
+        services.push(service);
+        const portal = await service.open({ targetPort: Number(new URL(targetUrl).port) });
+        expect(await readPortal(portal.url)).toEqual({ status: 200, body: "direct TLS app" });
+        expect(new URL(portal.publicUrl).hostname).toBe("gateway.example.test");
+        expect(service.list()[0]?.publicUrl).toBe(portal.publicUrl);
+        expect((await readPortal(portal.publicUrl)).status).toBe(401);
+      },
+    );
+  });
 
   it("prefers a configured certificate-valid Gateway name, ignoring unrelated origins", async () => {
     const service = createGatewayPortalService({

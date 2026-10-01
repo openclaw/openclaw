@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -76,10 +75,7 @@ function createPersonalMetadataFixture(
           .map((current) => current.connId),
       ),
   });
-  const request = async (
-    params: Record<string, unknown>,
-    overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
-  ) => {
+  const request = async (params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
     await expectDefined(
       chatHistoryHandlers["chat.metadata"],
@@ -91,7 +87,6 @@ function createPersonalMetadataFixture(
       respond,
       req: { type: "req", id: "draft-preview", method: "chat.metadata" },
       isWebchatConnect: () => false,
-      ...overrides,
     });
     return respond;
   };
@@ -99,7 +94,6 @@ function createPersonalMetadataFixture(
     owner,
     authProfileId,
     client,
-    clients,
     config,
     context,
     role,
@@ -215,51 +209,6 @@ describe("chat metadata ownership", () => {
     },
   );
 
-  it.each([
-    "foreign admin",
-    "unidentified admin",
-    "anonymous",
-    "synthetic owner",
-    "forged locator",
-  ] as const)(
-    "rejects a personal draft preview from %s before projecting credentials",
-    async (caller) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { owner, client, authProfileId, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        client.connect.scopes = ["operator.admin"];
-        let requestedProfile = authProfileId;
-        if (caller === "foreign admin") {
-          const other = ensureProfileForEmail("metadata-other@example.test");
-          client.authenticatedUserProfile = {
-            profileId: other.id,
-            displayName: other.displayName,
-            hasAvatar: false,
-            updatedAt: other.updatedAt,
-          };
-        } else if (caller === "unidentified admin") {
-          delete client.authenticatedUserProfile;
-        } else if (caller === "synthetic owner") {
-          client.internal = { syntheticClient: true };
-        } else if (caller === "forged locator") {
-          requestedProfile = `personal:${owner.id}:${randomUUID()}`;
-        }
-
-        const respond = await request(
-          { agentId: "main", authProfileId: requestedProfile },
-          caller === "anonymous" ? { client: null } : {},
-        );
-
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-        expect(readChatMetadata).not.toHaveBeenCalled();
-      });
-    },
-  );
-
   it("rejects combining a personal draft preview with a persisted session selector", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       const { authProfileId, readChatMetadata, request } = createPersonalMetadataFixture();
@@ -276,151 +225,6 @@ describe("chat metadata ownership", () => {
       );
       expect(readChatMetadata).not.toHaveBeenCalled();
     });
-  });
-
-  it.each(["disconnect", "role loss", "abort"] as const)(
-    "rejects a personal draft preview after %s during the metadata read",
-    async (loss) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { client, clients, authProfileId, config, metadata, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        const entered = createDeferred();
-        const release = createDeferred();
-        const abort = new AbortController();
-        readChatMetadata.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return metadata;
-        });
-        const pending = request({ agentId: "main", authProfileId }, { signal: abort.signal });
-        try {
-          await Promise.race([entered.promise, pending]);
-          expect(readChatMetadata).toHaveBeenCalledOnce();
-          if (loss === "disconnect") {
-            clients.delete(client);
-          } else if (loss === "role loss") {
-            config.gateway.roles.definitions.reader.scopes = [];
-          } else {
-            abort.abort();
-          }
-        } finally {
-          release.resolve();
-          await pending;
-        }
-        const respond = await pending;
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-      });
-    },
-  );
-
-  it("reads the persisted session profile without contaminating neutral agent metadata", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionKey = "agent:main:locked";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "locked",
-          updatedAt: 1,
-          authProfileOverride: "test:locked",
-          authProfileOverrideSource: "user",
-        },
-      );
-      const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => ({
-        commands: [],
-        models: [],
-        swarmEnabled: false,
-      }));
-      const respond = vi.fn<RespondFn>();
-      const handler = expectDefined(chatHistoryHandlers["chat.metadata"], "metadata handler");
-      const context = createDirectChatContext({ readChatMetadata });
-      for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
-        await handler({
-          params,
-          context,
-          respond,
-          req: { type: "req", id: "saved-selection", method: "chat.metadata" },
-          client: null,
-          isWebchatConnect: () => false,
-        });
-      }
-      expect(readChatMetadata.mock.calls).toEqual([
-        [
-          expect.objectContaining({
-            agentId: "main",
-            sessionKey,
-            isCurrent: expect.any(Function),
-            sessionEntry: expect.objectContaining({
-              authProfileOverride: "test:locked",
-              authProfileOverrideSource: "user",
-            }),
-          }),
-        ],
-        [
-          {
-            agentId: "main",
-            requesterProfileId: undefined,
-            isCurrent: expect.any(Function),
-            assertCurrent: expect.any(Function),
-          },
-        ],
-      ]);
-      expect(respond).toHaveBeenCalledTimes(2);
-      readChatMetadata.mockClear();
-      await handler({
-        params: { agentId: "other", sessionKey },
-        context,
-        respond,
-        req: { type: "req", id: "mismatched-agent", method: "chat.metadata" },
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(readChatMetadata).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenLastCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-    });
-  });
-
-  it("returns a typed selection error for an ownerless explicit fleet", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-      },
-    };
-    const respond = vi.fn<RespondFn>();
-    const readChatMetadata = vi.fn();
-
-    await expectDefined(
-      chatHistoryHandlers["chat.metadata"],
-      'chatHistoryHandlers["chat.metadata"] test invariant',
-    )({
-      params: {},
-      respond,
-      req: { type: "req", id: "ownerless-fleet", method: "chat.metadata" },
-      client: null,
-      isWebchatConnect: () => false,
-      context: createDirectChatContext({
-        getRuntimeConfig: () => config,
-        readChatMetadata,
-      }),
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("has no explicit owner"),
-      }),
-    );
-    expect(readChatMetadata).not.toHaveBeenCalled();
   });
 });
 

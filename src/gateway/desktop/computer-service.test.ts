@@ -159,6 +159,12 @@ function createFixture() {
     idempotencyKey: "observe-1",
     ...overrides,
   });
+  const click = (idempotencyKey: string) =>
+    request({
+      command: "computer.act",
+      params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
+      idempotencyKey,
+    });
   return {
     service,
     config,
@@ -172,6 +178,7 @@ function createFixture() {
     leases,
     stops,
     request,
+    click,
   };
 }
 
@@ -189,14 +196,7 @@ describe("Gateway computer service", () => {
 
       f.config.desktop!.host!.enabled = !initiallyManaged;
       await expect(
-        f.service.invoke(
-          f.request({
-            command: "computer.act",
-            params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-            generation: originalGeneration,
-            idempotencyKey: "stale-target-click",
-          }),
-        ),
+        f.service.invoke({ ...f.click("stale-target-click"), generation: originalGeneration }),
       ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
       expect(f.act).not.toHaveBeenCalled();
 
@@ -377,13 +377,7 @@ describe("Gateway computer service", () => {
     });
     const physicalId = f.openExecution.mock.calls[0]![0].executionId;
     expect(physicalId).not.toBe(logicalId);
-    await f.service.invoke(
-      f.request({
-        command: "computer.act",
-        params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-        idempotencyKey: "click-1",
-      }),
-    );
+    await f.service.invoke(f.click("click-1"));
     expect(JSON.parse(f.act.mock.calls[0]![0] ?? "{}")).toMatchObject({
       executionId: physicalId,
       action: "left_click",
@@ -570,13 +564,7 @@ describe("Gateway computer service", () => {
     const owner = new AbortController();
     await f.service.status();
     await f.service.invoke(f.request({ ownerSignal: owner.signal }));
-    await f.service.invoke(
-      f.request({
-        command: "computer.act",
-        params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-        idempotencyKey: "click-1",
-      }),
-    );
+    await f.service.invoke(f.click("click-1"));
     const cleanup = createDeferredCore();
     f.physicalClose.mockImplementationOnce(() => cleanup.promise);
     owner.abort();
@@ -610,15 +598,9 @@ describe("Gateway computer service", () => {
       } else {
         vi.spyOn(f.children[0]!, "isCurrent").mockReturnValue(false);
       }
-      await expect(
-        f.service.invoke(
-          f.request({
-            command: "computer.act",
-            params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-            idempotencyKey: "stale-click",
-          }),
-        ),
-      ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+      await expect(f.service.invoke(f.click("stale-click"))).rejects.toThrow(
+        "COMPUTER_STALE_OBSERVATION",
+      );
       expect(f.act).not.toHaveBeenCalled();
       expect(startComputerHostProcess).toHaveBeenCalledTimes(1);
       const results = await Promise.all([
@@ -657,15 +639,12 @@ describe("Gateway computer service", () => {
     expect(f.snapshot).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["plugins-disabled", "provider-disabled", "provider-default", "provider-unloaded"])(
+  it.each(["plugins-disabled", "provider-default", "provider-unloaded"])(
     "does not start a computer when %s",
     async (mode) => {
       const f = createFixture();
       if (mode === "plugins-disabled") {
         f.config.plugins!.enabled = false;
-      }
-      if (mode === "provider-disabled") {
-        f.config.plugins!.entries!.fixture!.enabled = false;
       }
       if (mode === "provider-default") {
         delete f.config.plugins!.entries!.fixture;

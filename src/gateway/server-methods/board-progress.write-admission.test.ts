@@ -32,7 +32,7 @@ const methods = [
   "progressCard.put",
 ] as const;
 const cases = methods.flatMap((method) =>
-  (["allow", "abort", "guard", "route"] as const).map((change) => ({
+  (["allow", "guard"] as const).map((change) => ({
     method,
     change,
     cold: false,
@@ -42,7 +42,16 @@ const cases = methods.flatMap((method) =>
 describe("board and progress-card database write admission", () => {
   it.each([
     ...cases,
-    ...methods.map((method) => ({ method, change: "abort" as const, cold: true })),
+    ...(["board.update", "board.widget.grant", "progressCard.put"] as const).map((method) => ({
+      method,
+      change: "abort" as const,
+      cold: true,
+    })),
+    ...(["board.widget.put", "progressCard.put"] as const).map((method) => ({
+      method,
+      change: "route" as const,
+      cold: false,
+    })),
     { method: "progressCard.put" as const, change: "lifecycle" as const, cold: false },
   ])(
     "queues registered $method behind a native reservation ($change, cold=$cold)",

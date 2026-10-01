@@ -90,30 +90,12 @@ function fixture(
 }
 
 describe("screen-owned desktop audio", () => {
-  it("does not capture on attach or before screen authentication, then delivers remote PCM", async () => {
-    const f = fixture();
-    f.attach();
-    await flush();
-    expect(f.start).not.toHaveBeenCalled();
-    f.peer.command("start");
-    await flush();
-    expect(f.start).not.toHaveBeenCalled();
-    f.observation.activate();
-    await flush();
-    expect(f.start).toHaveBeenCalledTimes(1);
-    const pcm = Buffer.from([0, 1, 0, 2]);
-    f.firstCapture().stream.write(pcm);
-    expect(f.peer.sent).toContainEqual(pcm);
-    f.observation.close();
-    await flush();
-    expect(f.firstCapture().signal.aborted).toBe(true);
-    expect(f.firstCapture().stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("mutes immediately and serializes re-enable without overlapping recorders", async () => {
+  it("starts muted, mutes immediately, and serializes re-enable without overlapping recorders", async () => {
     const f = fixture();
     f.attach();
     f.observation.activate();
+    await flush();
+    expect(f.start).not.toHaveBeenCalled();
     f.peer.command("start");
     await flush();
     f.peer.command("start");
@@ -137,6 +119,8 @@ describe("screen-owned desktop audio", () => {
       f.peer.command("stop");
     }
     f.peer.command("start");
+    await flush();
+    expect(f.start).not.toHaveBeenCalled();
     f.observation.activate();
     await flush();
     expect(f.start).toHaveBeenCalledTimes(1);

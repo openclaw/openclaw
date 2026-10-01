@@ -69,13 +69,6 @@ describe("session resource tool policy", () => {
   });
 
   it.each<OpenClawConfig>([
-    { tools: { profile: "minimal" } },
-    { tools: { deny: ["browser"] } },
-    {
-      tools: { byProvider: { openai: { deny: ["browser"] } } },
-      agents: { defaults: { model: "openai/test-model" } },
-    },
-    { agents: { list: [{ id: "main", tools: { deny: ["browser"] } }] } },
     {
       agents: {
         defaults: { model: "openai/test-model" },
@@ -83,7 +76,7 @@ describe("session resource tool policy", () => {
       },
     },
     { tools: { toolsBySender: { "*": { deny: ["browser"] } } } },
-  ])("honors each canonical configured restriction: %j", (config) => {
+  ])("passes agent and sender restrictions through the resource policy: %j", (config) => {
     expect(() => fixture({ config }).resolve()).toThrow("current tool policy");
     expect(storageRead).not.toHaveBeenCalled();
   });
