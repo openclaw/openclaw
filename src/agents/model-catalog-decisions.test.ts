@@ -245,7 +245,14 @@ describe("captured model decisions", () => {
     async (authenticated) => {
       const model = { provider: "github-copilot", id: "fixture-model", name: "Fixture model" };
       const owner = createModelCatalogDecisions({
-        cfg: { plugins: { entries: { copilot: { enabled: true } } } },
+        cfg: {
+          plugins: { entries: { copilot: { enabled: true } } },
+          agents: {
+            defaults: {
+              models: { "github-copilot/fixture-model": { agentRuntime: { id: "openclaw" } } },
+            },
+          },
+        },
         agentId: "main",
         agentDir: "/tmp/copilot-agent",
         workspaceDir: "/tmp/copilot-workspace",
