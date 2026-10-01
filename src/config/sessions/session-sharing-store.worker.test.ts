@@ -676,19 +676,11 @@ it.each(["membership", "category"] as const)(
         );
         await expect(run()).rejects.toBe(failure);
         expect(changes).toEqual([
-          expect.objectContaining(
-            mutation === "category"
-              ? {
-                  all: true,
-                  scope: { storePath: database.path },
-                  factsInvalidated: true,
-                }
-              : {
-                  sessionKey: scope.sessionKey,
-                  storePath: database.path,
-                  factsInvalidated: true,
-                },
-          ),
+          expect.objectContaining({
+            sessionKey: scope.sessionKey,
+            storePath: database.path,
+            factsInvalidated: true,
+          }),
         ]);
         if (mutation === "category") {
           expect(cachesAtInvalidation).toEqual([undefined]);

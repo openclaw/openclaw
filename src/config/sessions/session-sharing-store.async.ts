@@ -6,6 +6,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
+import type { SessionRowChange } from "../../sessions/session-row-changes.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   withOpenClawAgentDatabaseAsync,
@@ -46,7 +47,7 @@ export async function runSessionCollaborationWrite<
   prepare?: (
     operation: Pick<SqliteWorkerStore<SessionSharingWorkerOperations>, "execute">,
     scope: SessionAccessScope,
-  ) => Promise<void>,
+  ) => Promise<void | readonly string[]>,
 ): Promise<T> {
   const resolved = resolveSqliteScope(scope);
   const resolvedOptions = toDatabaseOptions(resolved);
@@ -109,10 +110,12 @@ export async function runSessionCollaborationWrite<
             let mutationDispatched = false;
             let resultReceived = false;
             let published = false;
+            let affectedSessionKeys: readonly string[] | undefined;
             try {
               return await worker.run(async (operation) => {
                 if (prepare) {
-                  await prepare(operation, commandScope);
+                  const prepared = await prepare(operation, commandScope);
+                  affectedSessionKeys = Array.isArray(prepared) ? prepared : undefined;
                 }
                 assertQueuedCurrent();
                 mutationDispatched = capturedCommand.type !== "category.prepare";
@@ -136,16 +139,32 @@ export async function runSessionCollaborationWrite<
                 // projection's existing read worker reconciles the committed store, without replay.
                 if (capturedCommand.type === "category.apply") {
                   discardCommittedSessionEntryCache(database.db);
+                  // The committed transaction could only change the prepared category rows, so
+                  // fencing the whole store would reject unrelated sessions' in-flight reads.
+                  // An empty plan wrote nothing; unknown keys keep the conservative store fence.
+                  sessionChanges.emitBatch(
+                    affectedSessionKeys && affectedSessionKeys.length > 0
+                      ? affectedSessionKeys.map(
+                          (sessionKey) =>
+                            ({
+                              ...location,
+                              sessionKey,
+                              factsInvalidated: true,
+                            }) satisfies SessionRowChange,
+                        )
+                      : affectedSessionKeys
+                        ? []
+                        : [
+                            {
+                              all: true,
+                              scope: { storePath: location.storePath },
+                              factsInvalidated: true,
+                            },
+                          ],
+                  );
+                } else {
+                  sessionChanges.emit({ ...location, factsInvalidated: true });
                 }
-                sessionChanges.emit(
-                  capturedCommand.type === "category.apply"
-                    ? {
-                        all: true,
-                        scope: { storePath: location.storePath },
-                        factsInvalidated: true,
-                      }
-                    : { ...location, factsInvalidated: true },
-                );
               }
               throw error;
             } finally {

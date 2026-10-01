@@ -16,6 +16,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -29,8 +30,10 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
 import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -721,6 +724,124 @@ it("refreshes prepared ACP metadata on publication and fences replacement lifecy
       await projection.ensureMaterialized();
       expect(projection.snapshot({ agentId: "main", key }).row?.runtimeSelectionLocked).toBe(false);
     } finally {
+      projection.dispose();
+      releaseForeground();
+    }
+  });
+});
+
+it("keeps an unrelated pending reply when an uncertain category write fences only its prepared sessions", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const unrelated = {
+      agentId: "main",
+      sessionKey: "agent:main:category-fence-unrelated",
+    };
+    const target = { agentId: "main", sessionKey: "agent:main:category-fence-uncertain" };
+    const targetQuery = { agentId: target.agentId, key: target.sessionKey };
+    replaceSessionEntrySync(unrelated, {
+      sessionId: "category-fence-unrelated",
+      updatedAt: 1,
+      category: "Alpha",
+    });
+    replaceSessionEntrySync(target, {
+      sessionId: "category-fence-uncertain",
+      updatedAt: 1,
+      category: "Work",
+    });
+
+    const releaseForeground = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg: { agents: { list: [{ id: "main", default: true }] } },
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let reading: Promise<unknown> | undefined;
+    let heldFirstReply = false;
+    const reads: string[][] = [];
+    try {
+      await projection.ensureMaterialized();
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (databases, consume) =>
+          readDatabases(databases, (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                async readRowFacts(input) {
+                  reads.push([...input.sessionKeys]);
+                  const reply = await owner.readRowFacts(input);
+                  if (!heldFirstReply) {
+                    heldFirstReply = true;
+                    entered.resolve();
+                    await release.promise;
+                  }
+                  return reply;
+                },
+              })),
+            ),
+          ),
+      );
+      // Invalidate the unrelated row and hold its exact preparation reply.
+      sessionChanges.emit({ agentId: unrelated.agentId, sessionKey: unrelated.sessionKey });
+      reading = projection.ensureMaterialized();
+      await entered.promise;
+
+      // Commit the target's category change through the real worker, then lose the reply.
+      const failure = new SqliteWorkerError("category reply lost after commit", "outcome-unknown");
+      const original = agentWorkers.openOpenClawAgentSqliteWorkerStore;
+      const open = vi
+        .spyOn(agentWorkers, "openOpenClawAgentSqliteWorkerStore")
+        .mockImplementation(async (...args) => {
+          const worker = await original(...args);
+          return {
+            ...worker,
+            run(consume, assertCurrent) {
+              return worker.run(
+                (operation) =>
+                  consume({
+                    async execute(command, options) {
+                      const result = await operation.execute(command, options);
+                      if (command.type === "category.apply") {
+                        throw failure;
+                      }
+                      return result;
+                    },
+                  }),
+                assertCurrent,
+              );
+            },
+          };
+        });
+      await expect(
+        updateSessionGroupCategoriesInWorker({
+          scope: { agentId: target.agentId, sessionKey: target.sessionKey },
+          from: "Work",
+        }),
+      ).rejects.toBe(failure);
+      open.mockRestore();
+
+      // The unrelated pending reply survives the fenced category write; the target
+      // reconciles to its committed category through a fresh read instead.
+      release.resolve();
+      await reading;
+      // A store-wide fence would have discarded the held reply and re-read the
+      // unrelated row on the next materialization; the narrowed fence must not.
+      await projection.ensureMaterialized();
+      expect(reads.flat().filter((key) => key === unrelated.sessionKey)).toHaveLength(1);
+      expect(
+        (
+          await withReadySessionRows(
+            projection,
+            () => [targetQuery],
+            (read) => read.describe(targetQuery)?.entry,
+          )
+        )?.category,
+      ).toBeUndefined();
+    } finally {
+      release.resolve();
+      if (reading) {
+        await Promise.allSettled([reading]);
+      }
       projection.dispose();
       releaseForeground();
     }

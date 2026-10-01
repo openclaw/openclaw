@@ -98,6 +98,8 @@ export function updateSessionGroupCategoriesInWorker(params: {
           superseded.add(change.sessionKey);
         }
       });
+      // The uncertain-outcome fence only needs the rows this transaction could change.
+      return keys;
     },
   ).finally(() => releasePublicationFence?.());
 }
