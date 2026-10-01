@@ -229,9 +229,10 @@ the added cost. Do not trim coverage, disable rules, or raise thresholds just
 to silence a warning.
 
 Correctness checks stay blocking, including types, semantic lint, blanket lint
-disables, assertion safety, missing or malformed evidence, failed commands,
-forbidden eager imports, and exactly-once ownership. Public SDK inventories and
-generated configuration-schema baselines remain contract guards. Runner matrix
+disables, assertion safety, the test timeout race ratchet, missing or malformed
+evidence, failed commands, forbidden eager imports, and exactly-once ownership.
+Public SDK inventories and generated configuration-schema baselines remain
+contract guards. Runner matrix
 caps protect shared runner-registration capacity and remain blocking. Explicit
 benchmark qualification verdicts retain their requested acceptance criteria.
 

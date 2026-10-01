@@ -3678,7 +3678,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__hint kbd {
   display: inline-block;
   padding: 1px 6px;
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-family: var(--mono);
   background: var(--panel-strong);
   border: 1px solid var(--border);

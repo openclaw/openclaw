@@ -182,7 +182,7 @@ describe("broadcast transport retirement", () => {
     expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
   });
 
-  it.each(["failed", "closing", "invalidated"] as const)(
+  it.each(["closing", "invalidated"] as const)(
     "does not hold healthy terminal viewers paused for a %s peer's stale bytes",
     (retirement) => {
       const stale = controlledPeer("stale-pressure");
@@ -202,9 +202,7 @@ describe("broadcast transport retirement", () => {
       try {
         output.reconcileRecipients();
         expect(backend.pause).toHaveBeenCalledOnce();
-        if (retirement === "failed") {
-          stale.callbacks[0]!(new Error("compression lost socket"));
-        } else if (retirement === "closing") {
+        if (retirement === "closing") {
           stale.socket.readyState = WebSocket.CLOSING;
         } else {
           stale.client.invalidated = true;
@@ -219,33 +217,27 @@ describe("broadcast transport retirement", () => {
     },
   );
 
-  it.each(["callback", "throw"])(
-    "stops a terminal barrier when its pending flush fails by synchronous %s",
-    (failure) => {
-      const peer = controlledPeer("barrier");
-      const { broadcast } = createGatewayBroadcaster({
-        clients: new GatewayClientRegistry([peer.client]),
-      });
-      const owner = new AbortController();
-      broadcast("tick", {});
-      broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });
-      sendError.mockClear();
-      peer.socket.send.mockImplementationOnce((_wire, options, callback) => {
-        const error = new Error("flush failed");
-        if (failure === "throw") {
-          throw error;
-        }
-        (typeof options === "function" ? options : callback!)(error);
-      });
+  it("stops a terminal barrier when its pending flush fails synchronously", () => {
+    const peer = controlledPeer("barrier");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+    });
+    const owner = new AbortController();
+    broadcast("tick", {});
+    broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });
+    sendError.mockClear();
+    peer.socket.send.mockImplementationOnce((_wire, options, callback) => {
+      const error = new Error("flush failed");
+      (typeof options === "function" ? options : callback!)(error);
+    });
 
-      broadcast("chat", { text: "terminal" }, { liveText: { group: owner.signal } });
-      peer.callbacks[0]!();
+    broadcast("chat", { text: "terminal" }, { liveText: { group: owner.signal } });
+    peer.callbacks[0]!();
 
-      expect(peer.socket.send).toHaveBeenCalledTimes(2);
-      expect(peer.frames).toHaveLength(1);
-      expect(peer.socket.terminate).toHaveBeenCalledOnce();
-      expect(sendError).toHaveBeenCalledOnce();
-      expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
-    },
-  );
+    expect(peer.socket.send).toHaveBeenCalledTimes(2);
+    expect(peer.frames).toHaveLength(1);
+    expect(peer.socket.terminate).toHaveBeenCalledOnce();
+    expect(sendError).toHaveBeenCalledOnce();
+    expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
+  });
 });

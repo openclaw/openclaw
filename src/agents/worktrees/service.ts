@@ -90,6 +90,7 @@ import {
   resetFailedWorktreeAdd,
   resolveRepository,
   resolveRepositoryFromRealPath,
+  resolveRepositoryIdentity,
   runSetupScript,
   validateName,
   withWorktreeSource,
@@ -744,13 +745,11 @@ export class ManagedWorktreeService {
     originUrl: string;
     fingerprint: string;
   }> {
-    const resolved = await resolveRepository(repoRoot);
-    return {
-      checkoutRoot: resolved.sourceRoot,
-      repoRoot: resolved.repoRoot,
-      originUrl: resolved.originUrl,
-      fingerprint: resolved.fingerprint,
-    };
+    return await resolveRepositoryIdentity(repoRoot);
+  }
+
+  async resolveRepositoryIdentities(roots: string[]) {
+    return await runGitReadOperation({ type: "repository.identities", input: { roots } });
   }
 
   /**

@@ -607,7 +607,6 @@ export function createHookRunner(
   };
 
   /**
-   * Run a hook that doesn't return a value (fire-and-forget style).
    * All handlers are executed in parallel for performance.
    */
   async function runVoidHook<K extends PluginHookName>(
@@ -679,7 +678,6 @@ export function createHookRunner(
       runVoidHook(hookName, deepFreezeHookValue(structuredClone(event)), ctx);
 
   /**
-   * Run a hook that can return a modifying result.
    * Handlers are executed sequentially in priority order, and results are merged.
    */
   async function runModifyingHook<K extends PluginHookName, TResult>(
@@ -1225,7 +1223,6 @@ export function createHookRunner(
   }
 
   return {
-    // Agent hooks
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
       mergeResults: mergeBeforeModelResolve,
     }),
@@ -1244,9 +1241,7 @@ export function createHookRunner(
     runBeforeCompaction: bindVoidHook("before_compaction"),
     runAfterCompaction: bindVoidHook("after_compaction"),
     runBeforeReset: bindVoidHook("before_reset"),
-    // Lifecycle gate hooks
     runBeforeAgentRun,
-    // Message hooks
     runInboundClaim: bindClaimingHook("inbound_claim"),
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
@@ -1295,13 +1290,10 @@ export function createHookRunner(
       return content !== original ? { ...result, content } : result;
     },
     runMessageSent: bindVoidHook("message_sent"),
-    // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
     runToolResultPersist,
-    // Message write hooks
     runBeforeMessageWrite,
-    // Session hooks
     runSessionStart: bindVoidHook("session_start"),
     runSessionEnd: (event: HookEvent<"session_end">, ctx: HookContext<"session_end">) =>
       runVoidHook("session_end", event, ctx, {}, undefined, (hook, context) =>
@@ -1318,7 +1310,6 @@ export function createHookRunner(
     runSubagentSpawned: bindVoidHook("subagent_spawned"),
     runSubagentProgress: bindVoidHook("subagent_progress"),
     runSubagentEnded: bindVoidHook("subagent_ended"),
-    // Gateway hooks
     runGatewayStart: bindVoidHook("gateway_start"),
     runGatewayStop: bindVoidHook("gateway_stop"),
     runHeartbeatPromptContribution: bindModifyingHook("heartbeat_prompt_contribution", {
@@ -1326,11 +1317,9 @@ export function createHookRunner(
     }),
     runCronReconciled: bindVoidHook("cron_reconciled"),
     runCronChanged: bindVoidHook("cron_changed"),
-    // Skill hooks
     runSkillProposalEvaluate,
     runSkillProposalChanged: bindFrozenVoidHook("skill_proposal_changed"),
     runSkillChanged: bindFrozenVoidHook("skill_changed"),
-    // Install hooks
     runBeforeInstall: bindModifyingHook("before_install", {
       mergeResults: (acc, next) => {
         const findings = [...(acc?.findings ?? []), ...(next.findings ?? [])];
@@ -1344,7 +1333,6 @@ export function createHookRunner(
       terminalLabel: "block=true",
     }),
     runResolveExecEnv,
-    // Utility
     hasHooks,
     getHookCount,
   };

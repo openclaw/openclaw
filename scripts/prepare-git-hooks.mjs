@@ -54,5 +54,9 @@ export function configurePrepareGitHooks(params = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  if (existsSync(join(DEFAULT_PACKAGE_ROOT, "src/state/openclaw-state-schema.sql"))) {
+    const { ensureKyselyTypes } = await import("./generate-kysely-types.mts");
+    await ensureKyselyTypes(DEFAULT_PACKAGE_ROOT);
+  }
   configurePrepareGitHooks();
 }

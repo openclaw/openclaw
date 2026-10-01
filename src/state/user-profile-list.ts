@@ -607,8 +607,14 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
 export async function prepareUserProfileIdentity(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
+  emailTargets?: readonly string[],
 ): Promise<PreparedUserProfileIdentity> {
-  return bindPreparedUserProfileIdentity(profileId, await acquireUserProfileCatalog(options));
+  const capturedEmails = emailTargets?.slice();
+  return bindPreparedUserProfileIdentity(
+    profileId,
+    await acquireUserProfileCatalog(options),
+    capturedEmails,
+  );
 }
 
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */

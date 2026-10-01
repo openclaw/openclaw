@@ -20,6 +20,7 @@ export function createCodexTestBindingStateStore(
     comparison: JSON.stringify([key, values.get(key)]),
   });
   return {
+    asyncReads: { lookup: async (key) => values.get(key) },
     withCurrent({ assertCurrent }) {
       assertCurrent();
       return {

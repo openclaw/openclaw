@@ -4,10 +4,13 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   loadAgentHarnessMcpConfig,
-  resolveConfiguredMcpTransport,
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord, normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export async function buildAgentsApiMcpTools(
   params: Pick<AgentHarnessAttemptParamsV2, "workspaceDir" | "config" | "toolOverrides">,
@@ -26,7 +29,7 @@ export async function buildAgentsApiMcpTools(
   return Object.entries(loaded.config.mcpServers)
     .toSorted(([left], [right]) => left.localeCompare(right))
     .flatMap(([name, server]) => {
-      const transport = resolveConfiguredMcpTransport(server) || "sse";
+      const transport = normalizeLowercaseStringOrEmpty(server.transport) || "sse";
       // Command-bearing definitions belong to the deferred executor stdio path.
       if (server.command || transport === "stdio") {
         return skipUnsupportedServer(name, "stdio forwarding is not supported");

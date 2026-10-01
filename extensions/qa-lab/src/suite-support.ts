@@ -72,7 +72,9 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     controlUiEnabled: params.input?.controlUiEnabled ?? scenarioRequiresControlUi(params.scenario),
     transportReadyTimeoutMs: params.input?.transportReadyTimeoutMs,
     workerStartStaggerMs: params.input?.workerStartStaggerMs,
-    forcedRuntime: params.input?.forcedRuntime,
+    forcedRuntime:
+      params.input?.forcedRuntime ??
+      (params.scenario.execution.kind === "flow" ? params.scenario.execution.runtime : undefined),
     roundTripProbe:
       params.input?.roundTripProbe?.scenarioId === params.scenario.id
         ? params.input.roundTripProbe

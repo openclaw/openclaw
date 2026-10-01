@@ -222,7 +222,12 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
     if (rawValue.length === 0) {
       continue;
     }
-    args[name] = decodeDeepSeekDsmlText(rawValue);
+    Object.defineProperty(args, name, {
+      value: decodeDeepSeekDsmlText(rawValue),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   if (Object.keys(args).length > 0) {
     return args;

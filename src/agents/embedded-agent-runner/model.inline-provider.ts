@@ -132,7 +132,6 @@ export function resolveProviderModelInput(params: {
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
 
-/** Builds runtime model records from inline provider config. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
   options: { providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps } = {},

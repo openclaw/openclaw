@@ -197,8 +197,9 @@ overrides.
 
 Discovery reuses its existing fetched rows and cache. Usage display makes no
 price requests, and a running Gateway does not immediately adopt every upstream
-price change. Hosted catalog updates activate at the existing restart boundary;
-see [Hosted model catalog](/concepts/models#hosted-catalog-updates).
+price change. Hosted catalog rows and prices activate together after the
+Gateway prepares a replacement generation, without restarting; see
+[Hosted model catalog](/concepts/models#hosted-catalog-updates).
 Make sizing-only edits in your source configuration without copying generated
 model rows back into it: replacing an entire model array from a runtime snapshot
 can persist inherited costs as explicit overrides. Historical recorded costs are preserved; current pricing fills only missing costs or unknown-price zero placeholders. See [Token use and costs](/reference/token-use).

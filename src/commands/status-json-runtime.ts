@@ -11,7 +11,6 @@ import {
 import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import type { StatusJsonScanResult } from "./status.scan-result.ts";
 
-/** Builds the status JSON object from a completed scan plus optional runtime/deep probes. */
 export async function resolveStatusJsonOutput(params: {
   scan: StatusJsonScanResult;
   opts: StatusGatewayProbeBudget & {

@@ -96,10 +96,8 @@ export class TwilioProvider implements VoiceCallProvider {
   /** Current public webhook URL (set when tunnel starts or from config) */
   private currentPublicUrl: string | null = null;
 
-  /** Optional telephony TTS provider for streaming TTS */
   private ttsProvider: TelephonyTtsProvider | null = null;
 
-  /** Optional media stream handler for sending audio */
   private mediaStreamHandler: MediaStreamHandler | null = null;
   private playbackMarkSequence = 0;
 
@@ -377,13 +375,11 @@ export class TwilioProvider implements VoiceCallProvider {
       };
     }
 
-    // Handle DTMF
     const digits = params.get("Digits");
     if (digits) {
       return { ...baseEvent, type: "call.dtmf", digits };
     }
 
-    // Handle call status changes
     const callStatus = normalizeProviderStatus(params.get("CallStatus"));
     if (callStatus === "initiated") {
       return { ...baseEvent, type: "call.initiated" };
@@ -482,14 +478,11 @@ export class TwilioProvider implements VoiceCallProvider {
       return null;
     }
 
-    // Extract just the origin (host) from the public URL, ignoring any path
     const url = new URL(this.currentPublicUrl);
     const origin = url.origin;
 
-    // Convert https:// to wss:// for WebSocket
     const wsOrigin = origin.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 
-    // Append the stream path
     const path = this.options.streamPath.startsWith("/")
       ? this.options.streamPath
       : `/${this.options.streamPath}`;
@@ -820,10 +813,6 @@ export class TwilioProvider implements VoiceCallProvider {
     );
   }
 }
-
-// -----------------------------------------------------------------------------
-// Twilio-specific types
-// -----------------------------------------------------------------------------
 
 interface TwilioCallResponse {
   sid: string;

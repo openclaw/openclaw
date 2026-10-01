@@ -179,6 +179,7 @@ export function createFixture(groups: readonly string[], root: string) {
   fs.mkdirSync(path.join(root, "scripts/lib"));
   for (const script of [
     "build-all.mts",
+    "generate-kysely-types.mts",
     "tsdown-build.mts",
     "pnpm-runner.mts",
     "windows-cmd-helpers.mjs",
