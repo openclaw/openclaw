@@ -23,11 +23,6 @@ export function isOfficialGoogleAiStudioBaseUrl(baseUrl?: string | null): boolea
   );
 }
 
-function stripUrlUserInfo(url: URL): void {
-  url.username = "";
-  url.password = "";
-}
-
 const GOOGLE_VERTEX_HOST = "aiplatform.googleapis.com";
 const GOOGLE_VERTEX_REGION_HOST_SUFFIX = "-aiplatform.googleapis.com";
 const GOOGLE_VERTEX_MULTI_REGION_HOSTS = new Set([
@@ -61,7 +56,8 @@ export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
   }
   url.hash = "";
   url.search = "";
-  stripUrlUserInfo(url);
+  url.username = "";
+  url.password = "";
   if (isGoogleGenerativeAiUrl(url)) {
     const normalizedPath = trimTrailingSlashes(url.pathname || "");
     url.pathname = normalizedPath || "/v1beta";
@@ -82,7 +78,6 @@ export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | u
   const normalized = normalizeGoogleApiBaseUrl(raw);
   const url = URL.parse(normalized);
   if (url) {
-    stripUrlUserInfo(url);
     if (isGoogleGenerativeAiUrl(url)) {
       url.pathname = trimTrailingSlashes(url.pathname || "").replace(/\/openai$/i, "") || "/v1beta";
       return trimTrailingSlashes(url.toString());

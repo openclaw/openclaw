@@ -84,7 +84,6 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
         ...discoveredProfileIds.filter((profileId) => profileId !== params.userPinnedAuthProfileId),
       ]
     : discoveredProfileIds;
-  let sawCompatibleOrderedProfile = false;
   let selectedProviderId: string | undefined;
   let compatibleProfileCount = 0;
   for (const profileId of profileIds) {
@@ -96,9 +95,8 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
       continue;
     }
     compatibleProfileCount += 1;
-    if (!sawCompatibleOrderedProfile) {
+    if (compatibleProfileCount === 1) {
       selectedProviderId = resolved.externalCliProviderId;
-      sawCompatibleOrderedProfile = true;
     }
     if (resolved.externalCliProviderId) {
       providerIds.push(resolved.externalCliProviderId);

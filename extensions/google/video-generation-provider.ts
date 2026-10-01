@@ -147,25 +147,14 @@ function resolveGoogleGeneratedVideoDownloadUrl(params: {
   if (!trimmed) {
     return undefined;
   }
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    return undefined;
-  }
-  if (url.protocol !== "https:") {
+  const url = URL.parse(trimmed);
+  if (url?.protocol !== "https:") {
     return undefined;
   }
   const allowedOrigins = new Set(["https://generativelanguage.googleapis.com"]);
-  if (params.configuredBaseUrl) {
-    try {
-      const configuredOrigin = new URL(params.configuredBaseUrl).origin;
-      if (configuredOrigin.startsWith("https://")) {
-        allowedOrigins.add(configuredOrigin);
-      }
-    } catch {
-      // Ignore invalid configured origins; the request base URL is already normalized.
-    }
+  const configuredOrigin = URL.parse(params.configuredBaseUrl ?? "")?.origin;
+  if (configuredOrigin?.startsWith("https://")) {
+    allowedOrigins.add(configuredOrigin);
   }
   if (!allowedOrigins.has(url.origin)) {
     return undefined;
