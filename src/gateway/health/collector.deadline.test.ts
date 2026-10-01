@@ -3,6 +3,7 @@ import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { createSessionStoreSummaryReaderStub } from "../../config/sessions/session-store-summary.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -72,13 +73,13 @@ describe("gateway health collection deadline", () => {
     vi.doMock("../../config/config.js", () => ({
       getRuntimeConfig: () => testConfig,
     }));
-    // Store paths reach real SQLite target resolution, which inspects the agent
-    // database beside them; a shared /tmp path would read machine-wide state.
     vi.doMock("../../config/sessions/paths.js", () => ({
       resolveSessionStorePathCore: () => sessionStorePath,
     }));
-    vi.doMock("../../config/sessions/session-accessor.js", () => ({
-      readSessionStoreSummaryReadOnly,
+    vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
+      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(
+        readSessionStoreSummaryReadOnly,
+      ),
     }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,

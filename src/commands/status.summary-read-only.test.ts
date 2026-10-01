@@ -9,13 +9,14 @@ import { collectStatusLocalSnapshot } from "../commands/status.agent-local.js";
 import { createStatusCommandOverviewRowsParams } from "../commands/status.test-support.ts";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   replaceSessionEntry,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -139,7 +140,7 @@ describe("getStatusSummary read-only session access", () => {
           (agentId) => resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
         );
         const uniquePaths = [...new Set(expectedPaths)];
-        const readSummary = vi.spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly");
+        const { calls: readSummary, restore: restoreSummary } = spyOnSessionStoreSummaries();
         const now = vi.spyOn(Date, "now").mockReturnValue(100);
         try {
           const summary = await getStatusSummary({ includeChannelSummary: false, config });
@@ -176,7 +177,7 @@ describe("getStatusSummary read-only session access", () => {
           expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
           expect(uniquePaths.every((databasePath) => fs.existsSync(databasePath))).toBe(true);
         } finally {
-          readSummary.mockRestore();
+          restoreSummary();
           now.mockRestore();
         }
       } finally {
@@ -231,7 +232,7 @@ describe("getStatusSummary read-only session access", () => {
           },
         );
       }
-      const readSummary = vi.spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly");
+      const { calls: readSummary, restore: restoreSummary } = spyOnSessionStoreSummaries();
       try {
         const { scanStatus } = await import("../commands/status.scan.js");
         const timeline = state.path("status-timeline.jsonl");
@@ -259,7 +260,7 @@ describe("getStatusSummary read-only session access", () => {
           expect(timings).toContain(`"stage":"${stage}"`);
         }
       } finally {
-        readSummary.mockRestore();
+        restoreSummary();
       }
     });
   });
@@ -365,7 +366,7 @@ describe("getStatusSummary read-only session access", () => {
         }
         closeOpenClawAgentDatabasesForTest();
 
-        const stored = sessionAccessor.readSessionStoreSummaryReadOnly(
+        const stored = readSessionStoreSummaryReadOnly(
           { agentId: "main", storePath },
           { agentIds: ["main", "ops"], recentLimit: 10 },
         );
@@ -391,7 +392,7 @@ describe("getStatusSummary read-only session access", () => {
     },
   );
 
-  it("bounds session payload hydration to the recent status window", async () => {
+  it("keeps session payload hydration off the status caller", async () => {
     await withOpenClawTestState({ prefix: "openclaw-status-recent-window-" }, async (state) => {
       const config = {
         agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
@@ -420,7 +421,7 @@ describe("getStatusSummary read-only session access", () => {
       try {
         const summary = await getStatusSummary({ config, includeChannelSummary: false });
 
-        expect(parsedSessionPayloads()).toHaveLength(10);
+        expect(parsedSessionPayloads()).toHaveLength(0);
         expect(summary.sessions.count).toBe(24);
         expect(summary.sessions.byAgent[0]?.count).toBe(24);
         expect(summary.sessions.recent.map(({ key }) => key)).toEqual(

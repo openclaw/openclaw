@@ -1,13 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configRuntime from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { spyOnSessionStoreSummaries } from "../../config/sessions/session-store-summary.test-support.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveOpenClawAgentSqlitePath,
@@ -62,7 +67,7 @@ describe("health session store paths", () => {
   });
 
   it.each(["agent", "shared"] as const)(
-    "counts and orders bounded %s session projections without cloning full entries",
+    "counts and orders bounded %s summaries without main-thread SQLite",
     async (layout) => {
       const stateDir = tempDirs.make("openclaw-health-session-projection-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -95,8 +100,7 @@ describe("health session store paths", () => {
         sessionKey: "agent:main:session-70",
         storePath,
       });
-      const clone = vi.spyOn(globalThis, "structuredClone");
-      const parse = vi.spyOn(JSON, "parse");
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const cfg: OpenClawConfig = {
         agents: {
           ownership: "explicit",
@@ -107,14 +111,7 @@ describe("health session store paths", () => {
 
       const agents = await buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(cfg));
 
-      expect(clone).not.toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: expect.stringMatching(/^session-/) }),
-      );
-      expect(
-        parse.mock.calls.filter(
-          ([value]) => typeof value === "string" && /session-(main|other)-(10|20)"/u.test(value),
-        ),
-      ).toHaveLength(0);
+      expect(prepare).not.toHaveBeenCalled();
       expect(agents.map((agent) => agent.agentId)).toEqual(agentIds);
       for (const agent of agents) {
         expect(agent.sessions).toMatchObject({
@@ -190,7 +187,7 @@ describe("health session store paths", () => {
         agents: { ownership: "explicit", entries: { helper: {}, third: {} } },
         session: { store: storeTemplate },
       });
-      const reads = vi.spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly");
+      const { calls: reads } = spyOnSessionStoreSummaries();
       const collect = () => collectGatewayHealthSnapshot({ audience: "admin", probe: false });
       const summary = await collect();
       expect(summary.agents.map((agent) => [agent.agentId, agent.sessions.count])).toEqual([
@@ -200,18 +197,81 @@ describe("health session store paths", () => {
       expect(summary.sessions).toEqual(summary.agents[0]?.sessions);
       expect(reads).toHaveBeenCalledTimes(layout === "shared" ? 1 : 2);
 
-      reads.mockClear().mockImplementationOnce(() => {
-        throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
-      });
+      reads
+        .mockClear()
+        .mockRejectedValueOnce(
+          Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }),
+        );
       expect((await collect()).agents.map((agent) => agent.sessions.count)).toEqual([0, 0]);
       expect(reads).toHaveBeenCalledTimes(layout === "shared" ? 1 : 2);
       expect((await collect()).agents.map((agent) => agent.sessions.count)).toEqual([1, 0]);
 
       const fatal = new Error("invalid session state");
-      reads.mockImplementationOnce(() => {
-        throw fatal;
-      });
+      reads.mockRejectedValueOnce(fatal);
       await expect(collect()).rejects.toBe(fatal);
+    },
+  );
+
+  it.each(["admission-refused", "owner-closed"] as const)(
+    "does not publish a delayed worker summary after %s",
+    async (change) => {
+      const stateDir = tempDirs.make("openclaw-health-delayed-summary-");
+      const storePath = resolveSessionStorePathCore(undefined, {
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "main", storePath, sessionKey: "agent:main:delayed" },
+        { sessionId: "delayed-session", updatedAt: 1 },
+      );
+      const replied = createDeferred();
+      const release = createDeferred();
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      const held = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+        const result = await run(...args);
+        if (
+          result.ok &&
+          typeof result.value !== "boolean" &&
+          !Array.isArray(result.value) &&
+          result.value.kind === "session-store-summary"
+        ) {
+          expect(result.value.summary.count).toBe(1);
+          replied.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+      const pending = summarizeStore(storePath, "main");
+      try {
+        await awaitGateBeforeSettlement(replied.promise, pending, "Summary bypassed its worker");
+        if (change === "admission-refused") {
+          recordAgentDatabaseAdmissions(
+            [
+              {
+                agentId: "main",
+                paths: [storePath],
+                code: "agent-database-inspection-pending",
+                reason: "fixture admission changed",
+                repairHint: "finish fixture inspection",
+              },
+            ],
+            { source: "startup" },
+          );
+        } else {
+          closeOpenClawAgentDatabasesForTest();
+        }
+        release.resolve();
+        if (change === "admission-refused") {
+          await expect(pending).resolves.toMatchObject({ count: 0, recent: [] });
+        } else {
+          await expect(pending).rejects.toThrow(/revoked|no longer current/);
+        }
+      } finally {
+        release.resolve();
+        await pending.catch(() => {});
+        held.mockRestore();
+        recordAgentDatabaseAdmissions([], { source: "startup" });
+      }
     },
   );
 });

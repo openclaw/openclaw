@@ -312,6 +312,12 @@ export function createSessionHistoryWorkerReaders(
           return value.entries;
         },
       ),
+    readStoreSummary: reader(
+      "session-store-summary",
+      "a store summary",
+      (input) => ({ kind: "session-store-summary", ...input }),
+      (value) => value.summary,
+    ),
     readIdentityEvidence: reader(
       "session-identity-evidence",
       "identity evidence",

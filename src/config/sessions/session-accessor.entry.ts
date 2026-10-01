@@ -84,7 +84,6 @@ export {
   upsertSessionEntryCore,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.sqlite-entry.js";
-export { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 
 export { resolveSessionEntryFromStore, resolveSessionEntrySelection };
 

@@ -120,6 +120,7 @@ const reviewed = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-accessor.sqlite-summary.ts", // Only session-transcript.worker.ts dispatches the summary kernel at runtime.
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/channels/message/ingress-queue-health.kernel.ts",

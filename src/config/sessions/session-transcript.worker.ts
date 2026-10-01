@@ -367,6 +367,21 @@ serveOwnedWorkerTasks(
           ),
         };
       }
+      if (request.kind === "session-store-summary") {
+        const { readSessionStoreSummaryReadOnly } =
+          await import("./session-accessor.sqlite-summary.js");
+        return {
+          kind: "session-store-summary" as const,
+          summary: readSessionStoreSummaryReadOnly(
+            {
+              agentId: request.database.agentId,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+            request,
+          ),
+        };
+      }
       if (request.kind === "usage-cache") {
         const { readSessionCostUsageCache } =
           await import("../../infra/session-cost-usage-cache-read.js");
