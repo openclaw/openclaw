@@ -214,6 +214,13 @@ recording itself from interrupting the copy; integrity and replacement checks
 remain enabled. The installed updater must contain this fix. A new candidate
 cannot change an older driver's initial snapshot behavior.
 
+An initial progress receipt refusal stops validation before state copying or child
+startup. If saving a completed check fails, the updater preserves the reporting
+error; that check keeps its successful result and is not reported again. The
+updater still settles owned child processes and temporary-copy cleanup.
+Progress errors while a stage is active retain that stage's existing failure and
+cleanup handling.
+
 After the canary passes, the updater records temporary-copy cleanup and previous-Gateway
 readiness verification as active steps. `openclaw update status`, including `--json`,
 shows the recorded operation, wait reason, start time, and budget. Readiness observations
