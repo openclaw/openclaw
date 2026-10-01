@@ -46,6 +46,7 @@ import {
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
+import { createTypingHandoff } from "./reply-dispatcher-typing-handoff.js";
 import {
   mapReplyDispatchCounts,
   type ReplyDispatchBeforeDeliver,
@@ -688,11 +689,11 @@ export function createReplyDispatcherWithTyping(
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
-  let typingHandedOff = false;
+  const handoff = createTypingHandoff(resolvedOnIdle, resolvedOnCleanup);
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: async () => {
-      if (!typingHandedOff) {
+      if (!handoff.deferIdle()) {
         typingController?.markDispatchIdle();
         const idle = resolvedOnIdle?.();
         if (idle) {
@@ -707,23 +708,21 @@ export function createReplyDispatcherWithTyping(
     dispatcher,
     replyOptions: {
       onReplyStart: resolvedOnReplyStart,
-      onTypingCleanup: resolvedOnCleanup,
+      onTypingCleanup: handoff.onCleanup,
       onTypingController: (typing) => {
         typingController = typing;
       },
-      onTypingHandoff: () => {
-        typingHandedOff = true;
-      },
+      onTypingHandoff: handoff.onHandoff,
     },
     markDispatchIdle: () => {
-      if (typingHandedOff) {
+      if (handoff.deferIdle()) {
         return;
       }
       typingController?.markDispatchIdle();
       resolvedOnIdle?.();
     },
     markRunComplete: () => {
-      if (!typingHandedOff) {
+      if (!handoff.isHandedOff()) {
         typingController?.markRunComplete();
       }
     },

@@ -276,6 +276,35 @@ describe("typing controller", () => {
     expect(start).toHaveBeenCalledTimes(30);
   });
 
+  it("runs the channel idle callback once when a handed-off queued follow-up settles", async () => {
+    const events: string[] = [];
+    const lifecycle = createReplyDispatcherWithTyping({
+      deliver: async () => undefined,
+      onReplyStart: () => undefined,
+      onIdle: () => {
+        events.push("idle");
+      },
+      onCleanup: () => {
+        events.push("cleanup");
+      },
+    });
+    const typing = createTypingController({
+      onReplyStart: lifecycle.replyOptions.onReplyStart,
+      onCleanup: lifecycle.replyOptions.onTypingCleanup,
+    });
+    lifecycle.replyOptions.onTypingController?.(typing);
+    await typing.startTypingLoop();
+    lifecycle.replyOptions.onTypingHandoff?.();
+    lifecycle.dispatcher.markComplete();
+    await lifecycle.dispatcher.waitForIdle();
+    lifecycle.markRunComplete();
+    lifecycle.markDispatchIdle();
+    expect(events).toEqual([]);
+
+    typing.cleanup();
+    expect(events).toEqual(["cleanup", "idle"]);
+  });
+
   it("sends the first typing signal without periodic keepalive refreshes", async () => {
     vi.useFakeTimers();
     const { typing, onReplyStart } = createTestTypingController(false);
