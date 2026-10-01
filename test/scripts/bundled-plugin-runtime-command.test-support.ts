@@ -46,7 +46,7 @@ export function childClosed(child: ChildProcess): Promise<void> {
   });
 }
 
-export async function fixtureReadyBeforeSettlement(
+async function fixtureReadyBeforeSettlement(
   filePath: string,
   operation: PromiseLike<unknown>,
   signal: AbortSignal,
