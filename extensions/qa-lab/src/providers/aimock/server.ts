@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import * as AIMock from "@copilotkit/aimock";
 import {
   type Journal,
   LLMock,
@@ -30,9 +31,27 @@ type AimockToolFacts = Pick<
   AimockRequestFacts,
   "plannedToolName" | "plannedToolCallId" | "toolOutputCallId"
 >;
+type AimockJournalAdd = (
+  entry: Omit<JournalEntry, "id" | "timestamp">,
+  matchedFixture?: Fixture,
+) => JournalEntry;
+type AimockNamespaceWithChatCompletionBodyGuard = typeof AIMock & {
+  isChatCompletionBody?: (body: JournalEntry["body"]) => boolean;
+};
 type AimockRequestObservation =
   | { kind: "retained-body"; tools: AimockToolFacts }
   | { kind: "projected"; projection: AimockRequestProjection };
+
+// SAFETY: AIMock 1.42 declarations omit this 1.43 export; runtime probing keeps the bridge compatible.
+const upstreamIsChatCompletionBody = (AIMock as AimockNamespaceWithChatCompletionBodyGuard)
+  .isChatCompletionBody;
+
+function isChatCompletionBody(body: JournalEntry["body"]): body is ChatCompletionRequest {
+  return (
+    upstreamIsChatCompletionBody?.(body) ??
+    (Array.isArray(body?.messages) && typeof body.model === "string")
+  );
+}
 
 function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
@@ -188,12 +207,15 @@ function createDebugMount(): Mountable {
         throw new Error("AIMock debug request cursor journal changed unexpectedly");
       }
       journal = nextJournal;
-      const addJournalEntry = journal.add.bind(journal);
+      const addJournalEntry: AimockJournalAdd = journal.add.bind(journal);
       // AIMock evicts its request journal FIFO. Assign cursors at insertion time
       // so the debug boundary remains monotonic after retained entries rotate.
-      journal.add = (entry) => {
+      journal.add = (entry, matchedFixture?: Fixture) => {
+        const recorded = addJournalEntry(entry, matchedFixture);
+        if (!isChatCompletionBody(entry.body)) {
+          return recorded;
+        }
         const tools = extractToolFacts(entry);
-        const recorded = addJournalEntry(entry);
         // Upstream keeps <=64 KiB bodies intact; only discarded bodies need an
         // extra bounded projection. Weak entry ownership follows eviction/reset.
         observations.set(
@@ -237,14 +259,16 @@ function createDebugMount(): Mountable {
       if (pathname !== "/last-request" && pathname !== "/requests") {
         return false;
       }
-      let selected = entries.map((entry, index) => {
-        const cursor = requestCursors.get(entry.id);
-        const observation = observations.get(entry);
-        if (cursor === undefined || observation === undefined) {
-          throw new Error(`AIMock debug request observation missing for ${entry.id}`);
-        }
-        return { cursor, entry, observation, index };
-      });
+      let selected = entries
+        .filter((entry) => observations.has(entry))
+        .map((entry, index) => {
+          const cursor = requestCursors.get(entry.id);
+          const observation = observations.get(entry);
+          if (cursor === undefined || observation === undefined) {
+            throw new Error(`AIMock debug request observation missing for ${entry.id}`);
+          }
+          return { cursor, entry, observation, index };
+        });
       // Pair against retained tool facts before selecting a window: a result
       // inside the window may belong to a plan before its cursor.
       const plannedToolCallIds = resolvePlannedToolCallIds(

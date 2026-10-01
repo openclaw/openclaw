@@ -84,8 +84,8 @@ const replaceSessionEntryMock = vi.fn();
 export const patchSessionEntryMock = vi.fn();
 export const resolveCronSessionMock = vi.fn();
 export const logWarnMock = vi.fn();
-export const countActiveDescendantRunsMock = vi.fn();
-export const listDescendantRunsForRequesterMock = vi.fn();
+export const readDescendantExecutionStateMock =
+  vi.fn<typeof import("./run-subagent-registry.runtime.js").readDescendantExecutionState>();
 export const pickLastNonEmptyTextFromPayloadsMock = vi.fn();
 export const resolveCronPayloadOutcomeMock = vi.fn();
 export const resolveCronDeliveryPlanMock = vi.fn();
@@ -289,8 +289,6 @@ vi.mock("./run-execution.runtime.js", () => ({
   LiveSessionModelSwitchError,
   isCliProvider: isCliProviderMock,
   runEmbeddedAgent: runEmbeddedAgentMock,
-  countActiveDescendantRuns: countActiveDescendantRunsMock,
-  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
   normalizeVerboseLevel: normalizeVerboseLevelMock,
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
@@ -333,8 +331,7 @@ vi.mock("./run-embedded.runtime.js", () => ({
 }));
 
 vi.mock("./run-subagent-registry.runtime.js", () => ({
-  countActiveDescendantRuns: countActiveDescendantRunsMock,
-  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
+  readDescendantExecutionState: readDescendantExecutionStateMock,
 }));
 
 vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
@@ -610,10 +607,10 @@ function resetRunExecutionMocks(): void {
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
   getCliSessionBindingMock.mockReturnValue(undefined);
-  countActiveDescendantRunsMock.mockReset();
-  countActiveDescendantRunsMock.mockReturnValue(0);
-  listDescendantRunsForRequesterMock.mockReset();
-  listDescendantRunsForRequesterMock.mockReturnValue([]);
+  readDescendantExecutionStateMock.mockReset().mockResolvedValue({
+    hasFreshDescendants: false,
+    hasActiveDescendants: false,
+  });
 }
 
 function resetRunOutcomeMocks(): void {

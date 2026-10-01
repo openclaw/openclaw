@@ -499,16 +499,21 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, scenario());
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        // A mouse click parks a hover pointer where the sliding drawer's header
+        // buttons pass; their tooltips then consume the card's Escape.
         await page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
-          .click();
+          .tap();
         const person = page.getByRole("link", { name: "Activity for Alice" });
         await page.keyboard.press("Tab");
         await person.focus();
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await card.waitFor({ state: "visible" });
         await page.keyboard.press("Tab");
+        await expect
+          .poll(() => card.evaluate((element) => element.contains(document.activeElement)))
+          .toBe(true);
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
         expect(await person.isVisible()).toBe(true);
@@ -592,7 +597,7 @@ suite.define(() => {
             animations: "disabled",
           });
         }
-        expect(await page.locator(".sidebar-online__person").count()).toBe(2);
+        expect(await page.locator(".sidebar-online__person").count()).toBe(3);
         const rawButton = page.getByRole("button", {
           name: "Details for Unqualified sender",
           exact: true,
@@ -703,7 +708,7 @@ suite.define(() => {
               exact: true,
             })
             .waitFor({ state: "visible" });
-          expect(await page.locator(".sidebar-online__person").count()).toBe(1);
+          expect(await page.locator(".sidebar-online__person").count()).toBe(2);
           await expect
             .poll(() =>
               page.locator(".chat-pane__presence [data-viewer-id]").getAttribute("aria-label"),

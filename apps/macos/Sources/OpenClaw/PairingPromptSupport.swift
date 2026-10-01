@@ -139,8 +139,7 @@ enum PairingPromptSupport {
     /// Human-readable subject for pairing notifications: display name when
     /// present, otherwise the raw node/device id.
     static func subjectLabel(displayName: String?, fallback: String) -> String {
-        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name?.isEmpty == false ? name! : fallback
+        displayName?.nonEmpty ?? fallback
     }
 
     /// Decisions resolve the card optimistically before the RPC returns; when

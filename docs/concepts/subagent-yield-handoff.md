@@ -35,6 +35,11 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 `agent-task-tracking.ts`. `adoptPausedSubagentRunForFollowUp` uses the existing
 registry replacement operation; it does not create a second delegated task.
 
+An explicit `waitFor: "message"` counts as continuation evidence after the
+registry accepts the wait. The attempt carries that fact into terminal reply
+presentation, so a registered message wait does not produce a missing-continuation
+warning. Refused or unregistered waits do not provide that evidence.
+
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,
 even while siblings are still running. Explicit yield assigns the frozen batch
@@ -138,6 +143,16 @@ otherwise be silent, the shared reply pipeline can send a waiting acknowledgment
 The native subagent registry retains the completion obligation and wakes the
 requester through its accepted completion path; progress text is not proof that
 a child finished or that its result was delivered.
+
+When settlement resumes a top-level parent with automatic channel delivery,
+OpenClaw keeps the channel's typing indicator active while that continuation
+executes. The indicator starts after execution begins, not while admission is
+queued, and stops when the call settles, is cancelled, or loses its owner.
+It respects `typingMode: "never"`, uses the `agents.defaults.typingIntervalSeconds`
+refresh cadence, and requires channel typing support. Private and nested
+continuations do not send activity to an external channel. This
+activity signal does not change the configured message queue mode or restore
+individual tool-progress messages.
 
 The former Tasks-backed detached presenter and its notification policies are no
 longer available. A yielded turn does not start a separate task or flow projection

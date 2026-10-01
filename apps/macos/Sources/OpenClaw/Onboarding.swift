@@ -123,7 +123,7 @@ enum OnboardingSystemAgentResumeStore {
             remoteTransport: state.remoteTransport,
             remoteURL: state.remoteUrl,
             remoteTarget: state.remoteTarget,
-            localStateDir: OpenClawConfigFile.stateDirURL(),
+            localStateDir: OpenClawPaths.stateDirURL,
             sshRemotePort: sshRemotePort)
     }
 
@@ -133,7 +133,7 @@ enum OnboardingSystemAgentResumeStore {
         remoteTransport: AppState.RemoteTransport,
         remoteURL: String,
         remoteTarget: String,
-        localStateDir: URL = OpenClawConfigFile.stateDirURL(),
+        localStateDir: URL = OpenClawPaths.stateDirURL,
         sshRemotePort: Int = 18789) -> String?
     {
         switch connectionMode {
@@ -708,7 +708,6 @@ struct OnboardingView: View {
     @State var showRemoteChoices = false
     @State var showBrowserGateway = false
     @State var showConnectionEditor = false
-    @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteProbeAttemptID: UUID?
     @State var remoteProbeTemporaryRestoreMode: AppState.ConnectionMode?

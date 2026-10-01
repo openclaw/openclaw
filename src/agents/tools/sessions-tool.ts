@@ -14,6 +14,7 @@ import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -22,6 +23,10 @@ import {
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
+import {
+  captureGatewayToolCallerAssertion,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   hasInProcessGatewayToolContext,
@@ -50,7 +55,11 @@ import {
   runSessionsToolPatchMany,
   sessionsToolResultFitsBudget,
 } from "./sessions-tool-patch.js";
-import { SessionControlToolSchema, resolveSessionsToolSchema } from "./sessions-tool-schema.js";
+import {
+  SessionControlToolSchema,
+  SessionOwnerToolSchema,
+  resolveSessionsToolSchema,
+} from "./sessions-tool-schema.js";
 
 const GROUP_NAME_MAX_LENGTH = 512;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
@@ -77,7 +86,8 @@ function withBoundedSessionsResolved(
 }
 
 type SessionsToolOptions = {
-  controlOnly?: boolean;
+  senderIsOwner?: boolean;
+  sessionControlAuthority?: AdmittedRunOperatorAuthority;
   stopAllowed?: boolean;
   agentSessionKey?: string;
   agentSessionId?: string;
@@ -217,6 +227,9 @@ async function resolvePatchTarget(
 }
 
 export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool {
+  // Absence is the existing senderless system surface, not an explicit non-owner.
+  const controlOnly = opts.senderIsOwner === false;
+  const assignmentOnly = controlOnly && !hasSessionControlAuthority(opts.sessionControlAuthority);
   const stopAllowed = opts.stopAllowed !== false;
   const gatewayRequest = opts.callGateway ?? callAgentToolGatewayRequest;
   const callGateway = <T = Record<string, unknown>>(
@@ -226,11 +239,15 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
   return {
     label: "Sessions",
     name: "sessions",
-    description: opts.controlOnly
-      ? `${stopAllowed ? "Archive, restore, or stop" : "Archive or restore"} sessions owned by or assigned to the requesting operator. Requires operator.write. Use patch with archived=true/false; self-archive waits until this run finishes. ${stopAllowed ? "Stop targets another session; runId optionally selects one active run. " : ""}No deletion, settings, ownership, batch, or global group changes.`
-      : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.`,
-    parameters: resolveSessionsToolSchema(opts.controlOnly === true, stopAllowed),
-    execute: async (_toolCallId, rawArgs, signal) => {
+    description: assignmentOnly
+      ? "Assign responsibility for a visible session to a human or agent with assign_owner, ownerType, and ownerId. Default target: current session. Does not change creator attribution or access."
+      : controlOnly
+        ? `Archive or restore sessions created by the requesting operator. Requires operator.write. Use patch with archived=true/false; self-archive waits until this run finishes. ${stopAllowed ? "Stop targets another session created by or assigned to the operator; runId optionally selects one active run. " : ""}assign_owner assigns responsibility for a visible session to a human or agent. No deletion, settings, batch, or global group changes.`
+        : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.`,
+    parameters: assignmentOnly
+      ? SessionOwnerToolSchema
+      : resolveSessionsToolSchema(controlOnly, stopAllowed),
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, rawArgs, signal) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       if (action === "stop" && !stopAllowed) {
@@ -238,7 +255,10 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           "Session Stop is unavailable to non-interactive collectors",
         );
       }
-      if (opts.controlOnly) {
+      if (assignmentOnly && action !== "assign_owner") {
+        throw new ToolAuthorizationError("Only assign_owner is available to non-owner callers");
+      }
+      if (controlOnly && action !== "assign_owner") {
         // Discovery is not a grant: retained tools cannot fall back to System
         // dispatch after their human caller or invocation has gone away.
         if (!hasSessionControlAuthority()) {
@@ -282,7 +302,8 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         return await stopSessionTool(
           {
             ...target,
-            restricted: opts.controlOnly === true,
+            operation: "stop",
+            restricted: controlOnly,
             expectedSessionId: readToolStringParam(params, "expectedSessionId"),
           },
           params,
@@ -380,9 +401,15 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         return jsonResult(await callGateway("sessions.groups.list", {}));
       }
       if (action === "assign_owner") {
+        // Responsibility assignment uses the live agent caller, not the assignee authority.
+        const assertCallerCurrent = captureGatewayToolCallerAssertion();
+        if (opts.senderIsOwner !== true && !assertCallerCurrent) {
+          throw new ToolAuthorizationError("Non-owner assignment requires an admitted agent turn");
+        }
+        assertCallerCurrent?.("sessions.assignOwner");
         const ownerType = readToolStringParam(params, "ownerType", { required: true });
         const ownerId = readToolStringParam(params, "ownerId", { required: true });
-        if ((ownerType !== "human" && ownerType !== "agent") || !ownerId) {
+        if (ownerType !== "human" && ownerType !== "agent") {
           throw new ToolInputError("assign_owner requires ownerType and ownerId");
         }
         const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
@@ -390,15 +417,15 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           readToolStringParam(params, "sessionKey"),
           gatewayRequest,
         );
-        const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
         const result = await gatewayRequest<SessionsAssignOwnerResult>({
           method: "sessions.assignOwner",
           params: {
             key,
-            ...agentScope,
+            ...(parseAgentSessionKey(key) ? {} : { agentId }),
             owner: { type: ownerType, id: ownerId },
           },
           agentToolCaller: { agentId: requesterAgentId, sessionKey: requesterSessionKey },
+          ...(assertCallerCurrent ? { assertDispatchCurrent: assertCallerCurrent } : {}),
         });
         return jsonResult({
           status: "updated",
@@ -410,7 +437,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           },
         });
       }
-      // Group catalog is global by contract. Owner-only tool gating protects mutations.
+      // Group catalog is global by contract. The action-level owner gate protects mutations.
       if (action === "group_set") {
         const names = readGroupNames(params.names);
         return jsonResult(await callGateway("sessions.groups.put", { names }));
@@ -480,12 +507,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         key,
         expectedSessionId,
         expectedLifecycleRevision: selectedLifecycleRevision,
+        operation: archived === true ? ("archive" as const) : ("restore" as const),
         restricted: true,
       });
       const callSessionPatch = (
         sessionPatch: typeof patch & { agentId?: string },
       ): Promise<SessionsPatchResult> =>
-        opts.controlOnly
+        controlOnly
           ? callSessionToolControl<SessionsPatchResult>(
               controlTarget(),
               { method: "sessions.patch", params: sessionPatch },
@@ -509,7 +537,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             released &&
             lifecycleIdentity
           ) {
-            if (opts.controlOnly) {
+            if (controlOnly) {
               const selected = await prepareSessionToolControlTarget(controlTarget());
               selectedLifecycleRevision = selected.lifecycleRevision;
               selected.release();
@@ -568,7 +596,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                   }
 
                   try {
-                    await (opts.controlOnly
+                    await (controlOnly
                       ? callSessionPatch(archivePatch)
                       : callGateway("sessions.patch", archivePatch));
                     return;
@@ -663,6 +691,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           includeResolved ? result.resolved : undefined,
         ),
       );
-    },
+    }),
   };
 }

@@ -33,9 +33,13 @@ function errorTree(error: unknown): unknown[] {
 async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
   vi.resetModules();
   const bodies = new Map<string, () => Promise<void>>();
+  const beforeHooks: Array<() => unknown> = [];
+  const afterHooks: Array<() => unknown> = [];
   const register = (name: string, body: () => Promise<void>) => bodies.set(name, body);
   const collectSuite = (_name: string, body: () => void) => body();
   vi.doMock("vitest", () => ({
+    afterEach: (hook: () => unknown) => afterHooks.push(hook),
+    beforeEach: (hook: () => unknown) => beforeHooks.push(hook),
     describe: Object.assign(collectSuite, { runIf: () => collectSuite }),
     it: Object.assign(register, { each: () => () => {}, runIf: () => register, skip: register }),
     expect,
@@ -49,7 +53,19 @@ async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
   const fixture = fixtures.find((entry) => entry.owner === owner)!;
   const body = bodies.get(fixture.name);
   expect(body, fixture.name).toBeTypeOf("function");
-  return body!;
+  // Run the fixture suite's own per-test hooks so its body sees the same environment.
+  return async () => {
+    for (const hook of beforeHooks) {
+      await hook();
+    }
+    try {
+      await body!();
+    } finally {
+      for (const hook of afterHooks) {
+        await hook();
+      }
+    }
+  };
 }
 
 // Execute the registered process fixtures, injecting OS faults at their real

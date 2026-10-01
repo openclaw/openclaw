@@ -102,10 +102,8 @@ async function invoke(
 ) {
   const { context, ...requestOptions } = options;
   let result: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
-  await expectDefined(
-    themeHandlers[method],
-    "theme handler",
-  )({
+  const handler = expectDefined(themeHandlers[method], "theme handler");
+  await handler({
     req: { type: "req", id: "theme-request", method, params },
     params,
     client: client(requesterProfileId),
@@ -211,8 +209,7 @@ describe("theme RPC", () => {
     };
     pluginThemes.push(entry);
     const { definition, ...descriptor } = entry;
-    const listed = await invoke("themes.list");
-    expect(listed).toMatchObject({
+    expect(await invoke("themes.list")).toMatchObject({
       ok: true,
       payload: {
         current: { id: "claw", mode: "system", scope: "profile", overrides: {} },

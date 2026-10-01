@@ -1,4 +1,3 @@
-// Talk provider types describe realtime voice provider configuration and APIs.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -311,49 +310,40 @@ export type RealtimeVoiceBrowserAudioContract = {
   outputSampleRateHz: number;
 };
 
-type RealtimeVoiceBrowserWebRtcSdpSession = {
+type RealtimeVoiceBrowserSessionBase = {
   provider: RealtimeVoiceProviderId;
-  transport: "webrtc";
-  clientSecret: string;
-  offerUrl?: string;
-  offerHeaders?: Record<string, string>;
-  offerResponseMaxBytes?: number;
   model?: string;
   voice?: string;
   expiresAt?: number;
 };
 
-type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
-  provider: RealtimeVoiceProviderId;
+type RealtimeVoiceBrowserWebRtcSdpSession = RealtimeVoiceBrowserSessionBase & {
+  transport: "webrtc";
+  clientSecret: string;
+  offerUrl?: string;
+  offerHeaders?: Record<string, string>;
+  offerResponseMaxBytes?: number;
+};
+
+type RealtimeVoiceBrowserJsonPcmWebSocketSession = RealtimeVoiceBrowserSessionBase & {
   transport: "provider-websocket";
   protocol: string;
   clientSecret: string;
   websocketUrl: string;
   audio: RealtimeVoiceBrowserAudioContract;
   initialMessage?: unknown;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
 };
 
-type RealtimeVoiceBrowserGatewayRelaySession = {
-  provider: RealtimeVoiceProviderId;
+type RealtimeVoiceBrowserGatewayRelaySession = RealtimeVoiceBrowserSessionBase & {
   transport: "gateway-relay";
   relaySessionId: string;
   audio: RealtimeVoiceBrowserAudioContract;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
 };
 
-type RealtimeVoiceBrowserManagedRoomSession = {
-  provider: RealtimeVoiceProviderId;
+type RealtimeVoiceBrowserManagedRoomSession = RealtimeVoiceBrowserSessionBase & {
   transport: "managed-room";
   roomUrl: string;
   token?: string;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
 };
 
 export type RealtimeVoiceBrowserSession =

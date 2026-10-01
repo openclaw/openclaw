@@ -87,6 +87,7 @@ export function runCiManifestFixture(options: {
   missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
   uiReleaseTier?: boolean;
+  uiE2eSelectorSource?: string;
   uiRealGatewayShards?: boolean;
   remoteTagRefs?: Record<string, string>;
   scopeEnv?: Record<string, string>;
@@ -254,9 +255,12 @@ export function runCiManifestFixture(options: {
         path.join(scriptsDir, "ci-node-test-plan.mts"),
         `\nexport const createUiTestShardGroups = (options) => ({
           ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", includePatterns: ${JSON.stringify(uiTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
-          e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", includePatterns: ${JSON.stringify(e2eTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
+          e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", includePatterns: options.uiE2eFiles ? [...options.uiE2eFiles, ...${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}] : ${JSON.stringify(e2eTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
         });\n`,
       );
+      if (options.uiE2eSelectorSource) {
+        appendFileSync(path.join(scriptsDir, "ci-node-test-plan.mts"), options.uiE2eSelectorSource);
+      }
       if (options.uiRealGatewayShards !== false) {
         appendFileSync(
           path.join(scriptsDir, "ci-node-test-plan.mts"),
@@ -390,6 +394,7 @@ export function runCiManifestFixture(options: {
             : {}),
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
+          "check:test-timeout-race-ratchet": "true",
         }
       : {};
     writeFileSync(
@@ -606,9 +611,15 @@ export function runCiManifestFixture(options: {
     for (const name of ["test-prerequisites.mjs", "test-prerequisites.json"]) {
       writeFileSync(path.join(trustedGitOwner, name), readFileSync(path.join(gitOwner, name)));
     }
+    const trustedScripts = path.join(root, ".ci-harness/scripts");
+    mkdirSync(trustedScripts, { recursive: true });
+    copyFileSync(
+      new URL("../../scripts/ci-build-manifest.mjs", import.meta.url),
+      path.join(trustedScripts, "ci-build-manifest.mjs"),
+    );
     const trustedReleasePolicy = path.join(root, ".ci-harness/scripts/lib");
     mkdirSync(trustedReleasePolicy, { recursive: true });
-    for (const name of ["release-context.mjs", "release-version.mjs"]) {
+    for (const name of ["release-context.mjs", "release-version.mjs", "ci-ios-smoke-plan.mjs"]) {
       writeFileSync(path.join(trustedReleasePolicy, name), readFileSync(`scripts/lib/${name}`));
     }
     copyFileSync(

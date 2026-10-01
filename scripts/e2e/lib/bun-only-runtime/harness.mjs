@@ -36,8 +36,6 @@ let bunVersion;
 /** @type {string | undefined} */
 let bunRevision;
 /** @type {string | undefined} */
-let installFallback;
-/** @type {string | undefined} */
 let fatalError;
 const runtimeDeadline = Date.now() + 7 * 60_000;
 let stopped = false;
@@ -295,40 +293,18 @@ try {
   });
   await step("install", 150000, async () => {
     const installBasePath = installPath();
-    let install = prepareInstall("bun-install-pure");
+    const install = prepareInstall("bun-install-pure");
     const result = await run(
       "install-pure",
       ["install", "-g", "--trust", tarball, "--no-progress"],
-      { ...env, PATH: `${installSentinelBin}:${installBasePath}`, BUN_INSTALL: install },
+      {
+        ...env,
+        PATH: `${installSentinelBin}:${installBasePath}`,
+        BUN_INSTALL: install,
+        OPENCLAW_PACKAGE_BUN_LAUNCHER: bun,
+      },
     );
-    if (result.exitCode !== 0) {
-      const blocker = blockers.find(
-        (item) => item.step === "install" && item.failure && result.output.includes(item.failure),
-      );
-      assert(blocker, `Unexpected Node-less installation failure: ${result.output.slice(-6000)}`);
-      installFallback = `install used the install-time Node fallback because of ${blocker.id}`;
-      console.log(installFallback);
-      const temporaryBin = fs.mkdtempSync(path.join(artifactDir, "install-node-"));
-      try {
-        fs.symlinkSync(
-          process.env.OPENCLAW_BUN_ONLY_SMOKE_INSTALL_NODE,
-          path.join(temporaryBin, "node"),
-        );
-        install = prepareInstall("bun-install-fallback");
-        const fallback = await run(
-          "install-fallback",
-          ["install", "-g", "--trust", tarball, "--no-progress"],
-          {
-            ...env,
-            PATH: `${installSentinelBin}:${temporaryBin}:${installBasePath}`,
-            BUN_INSTALL: install,
-          },
-        );
-        assert.equal(fallback.exitCode, 0, fallback.output.slice(-6000));
-      } finally {
-        fs.rmSync(temporaryBin, { recursive: true, force: true });
-      }
-    }
+    assert.equal(result.exitCode, 0, result.output.slice(-6000));
     entry = fs.realpathSync(path.join(install, "bin/openclaw"));
     env.BUN_INSTALL = install;
     assert(
@@ -531,15 +507,11 @@ try {
     bunVersion,
     bunRevision,
     entry,
-    installFallback,
     fatalError,
     attempts,
   };
   result.ok &&= !fatalError;
-  const markdown =
-    renderMarkdownReport(result) +
-    (installFallback ? `\n${installFallback}\n` : "") +
-    (fatalError ? `\nFailure: ${fatalError}\n` : "");
+  const markdown = renderMarkdownReport(result) + (fatalError ? `\nFailure: ${fatalError}\n` : "");
   fs.writeFileSync(path.join(artifactDir, "report.json"), JSON.stringify(result, null, 2) + "\n");
   fs.writeFileSync(path.join(artifactDir, "report.md"), markdown);
   if (process.env.GITHUB_STEP_SUMMARY) {

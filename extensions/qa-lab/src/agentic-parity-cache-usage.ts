@@ -1,5 +1,6 @@
+import type { RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityCacheMiss } from "./runtime-parity-cache-diagnostics.js";
-import type { RuntimeId, RuntimeParityUsage } from "./runtime-parity.js";
+import type { RuntimeParityUsage } from "./runtime-parity.js";
 
 export type QaRuntimeParityCacheUsage = {
   totalTokens: number;

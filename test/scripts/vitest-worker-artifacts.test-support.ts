@@ -12,6 +12,10 @@ import {
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 
@@ -240,6 +244,35 @@ export function writeFixture(directory: string, name: string, source: string) {
   return filename;
 }
 
+// Fixture records precede receipts and child completion; separate pipes can deliver them out of order.
+export function fixtureFileBeforeSettlement(
+  receipts: FixtureReceiptChannel,
+  filename: string,
+  completion: PromiseLike<unknown>,
+  expected?: string,
+): Promise<void> {
+  const matches = () => {
+    if (!fs.existsSync(filename)) {
+      return false;
+    }
+    const text = fs.readFileSync(filename, "utf8");
+    return text.length > 0 && (expected === undefined || text === expected);
+  };
+  const settled = Promise.resolve(completion).then(
+    () => {
+      if (!matches()) {
+        throw new Error(`Child exited before writing ${filename}`);
+      }
+    },
+    (error: unknown) => {
+      if (!matches()) {
+        throw new Error(`Child failed before writing ${filename}`, { cause: error });
+      }
+    },
+  );
+  return Promise.race([receipts.waitFor(filename, expected ?? "written"), settled]);
+}
+
 export function workerBorrowingProbe(directory: string) {
   const value = writeFixture(directory, "value.ts", 'export const value: string = "first";');
   const test = writeFixture(
@@ -281,12 +314,14 @@ export function workerProbe(
   directory: string,
   holdSecond = false,
   mode: "compiled" | "source" = "compiled",
+  receiptEndpoint?: string,
 ) {
   const value = writeFixture(directory, "value.ts", 'export const value: string = "first";');
   const test = writeFixture(
     directory,
     "child.test.ts",
     `
+    ${receiptEndpoint ? fixtureReceiptClientSource(receiptEndpoint) : ""}
     import * as cp from 'node:child_process';
     import fs from 'node:fs';
     import path from 'node:path';
@@ -369,6 +404,7 @@ export function workerProbe(
           expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
           fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, retentionUrl, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
+          ${receiptEndpoint ? `sendReceipt(${JSON.stringify(path.join(directory, "generations.jsonl"))}, 'written');` : ""}
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {
             const check = () => {if(fs.existsSync(release)){clearInterval(poll);resolve();}};

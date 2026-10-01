@@ -1,4 +1,3 @@
-// Defines sandbox execution configuration types.
 import type { z } from "zod";
 import type { AgentSandboxSchema } from "./zod-schema.agent-runtime.js";
 import type {

@@ -60,7 +60,6 @@ const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
-const clearSessionQueuesMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
@@ -152,7 +151,6 @@ vi.mock("./queue.js", () => {
     })),
     resolveFollowupAbortSignal: vi.fn(() => undefined),
     scheduleFollowupDrain: vi.fn(),
-    clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
   };
 });
@@ -249,8 +247,6 @@ function setupAgentRunnerMocks(): void {
     compacted: false,
     reason: "test-preflight-disabled",
   });
-  clearSessionQueuesMock.mockReset();
-  clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   vi.mocked(enqueueFollowupRun).mockReset();

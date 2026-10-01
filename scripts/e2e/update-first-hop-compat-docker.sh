@@ -21,7 +21,9 @@ IMAGE_NAME="$(
     OPENCLAW_UPDATE_FIRST_HOP_E2E_IMAGE
 )"
 SKIP_BUILD="${OPENCLAW_UPDATE_FIRST_HOP_E2E_SKIP_BUILD:-0}"
-DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT:-1200s}"
+# Run 36506342273 (hosted 4-vCPU): 1558s before the final candidate hop
+# + projected 560s hop + ~5s assertions ~= 2125s; x ~1.5 => 3200s per source.
+DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT:-3200s}"
 # Space- or comma-separated recorded release versions; empty runs every recorded source.
 SOURCE_VERSION_FILTER="${OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS:-}"
 ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-first-hop-compat${SOURCE_VERSION_FILTER:+-${SOURCE_VERSION_FILTER//[ ,]/-}}}"

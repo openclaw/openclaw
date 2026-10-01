@@ -1,4 +1,3 @@
-// QA Lab plugin module embeds profile scorecard context into QA evidence.
 import fs from "node:fs/promises";
 import { normalizeSortedUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaEvidenceContainment } from "./evidence-summary-schema.js";
@@ -23,13 +22,14 @@ type QaProfileScorecardFilters = {
 
 type EvidenceCoverageRole = QaEvidenceSummaryEntry["coverage"][number]["role"];
 
-function percent(part: number, total: number) {
-  return total === 0 ? 0 : Number(((part / total) * 100).toFixed(1));
-}
-
-function nullableFilter(value: string | undefined) {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
+function fulfillmentCounts(total: number, fulfilled: number, partial?: number) {
+  return {
+    total,
+    fulfilled,
+    ...(partial === undefined ? {} : { partial }),
+    missing: total - fulfilled - (partial ?? 0),
+    fulfillmentPercent: total === 0 ? 0 : Number(((fulfilled / total) * 100).toFixed(1)),
+  };
 }
 
 function coverageIdsForRole(
@@ -59,7 +59,6 @@ function featureCounts(
 ) {
   let fulfilled = 0;
   let partial = 0;
-  let missing = 0;
   for (const feature of features) {
     const coverageIds = normalizeSortedUniqueTrimmedStringList(feature.coverageIds);
     const fulfilledCoverageIds = coverageIds.filter((coverageId) =>
@@ -69,17 +68,9 @@ function featureCounts(
       fulfilled += 1;
     } else if (fulfilledCoverageIds > 0) {
       partial += 1;
-    } else {
-      missing += 1;
     }
   }
-  return {
-    total: features.length,
-    fulfilled,
-    partial,
-    missing,
-    fulfillmentPercent: percent(fulfilled, features.length),
-  };
+  return fulfillmentCounts(features.length, fulfilled, partial);
 }
 
 function buildQaProfileScorecardEvidence(params: {
@@ -124,7 +115,7 @@ function buildQaProfileScorecardEvidence(params: {
     const missingCoverageIds = coverageIds.filter(
       (coverageId) => !primaryCoverageIds.has(coverageId),
     );
-    const missingCoverageIdCount = coverageIds.length - fulfilledCoverageIdCount;
+    const counts = fulfillmentCounts(coverageIds.length, fulfilledCoverageIdCount);
     return {
       id: category.id,
       surfaceId: category.taxonomySurfaceId,
@@ -135,11 +126,11 @@ function buildQaProfileScorecardEvidence(params: {
       }),
       features: featureCounts(category.features, primaryCoverageIds),
       coverageIds: {
-        total: coverageIds.length,
-        fulfilled: fulfilledCoverageIdCount,
+        total: counts.total,
+        fulfilled: counts.fulfilled,
         secondaryOnly: secondaryOnlyCoverageIdCount,
-        missing: missingCoverageIdCount,
-        fulfillmentPercent: percent(fulfilledCoverageIdCount, coverageIds.length),
+        missing: counts.missing,
+        fulfillmentPercent: counts.fulfillmentPercent,
       },
       missingCoverageIds,
     };
@@ -151,39 +142,28 @@ function buildQaProfileScorecardEvidence(params: {
   const fulfilledCoverageIdCount = profileCoverageIds.filter((coverageId) =>
     primaryCoverageIds.has(coverageId),
   ).length;
-  const missingCoverageIdCount = coverageIdCount - fulfilledCoverageIdCount;
   const fulfilledCategoryCount = categoryReports.filter(
     (category) => category.status === "fulfilled",
   ).length;
   const partialCategoryCount = categoryReports.filter(
     (category) => category.status === "partial",
   ).length;
-  const missingCategoryCount = categoryReports.filter(
-    (category) => category.status === "missing",
-  ).length;
   const profileFeatures = params.categories.flatMap((category) => category.features);
   return {
     filters: {
-      surface: nullableFilter(params.filters.surface),
-      category: nullableFilter(params.filters.category),
+      surface: params.filters.surface?.trim() || null,
+      category: params.filters.category?.trim() || null,
     },
     run: {
       evidenceEntryCount: entries.length,
     },
-    categories: {
-      total: categoryReports.length,
-      fulfilled: fulfilledCategoryCount,
-      partial: partialCategoryCount,
-      missing: missingCategoryCount,
-      fulfillmentPercent: percent(fulfilledCategoryCount, categoryReports.length),
-    },
+    categories: fulfillmentCounts(
+      categoryReports.length,
+      fulfilledCategoryCount,
+      partialCategoryCount,
+    ),
     features: featureCounts(profileFeatures, primaryCoverageIds),
-    coverageIds: {
-      total: coverageIdCount,
-      fulfilled: fulfilledCoverageIdCount,
-      missing: missingCoverageIdCount,
-      fulfillmentPercent: percent(fulfilledCoverageIdCount, coverageIdCount),
-    },
+    coverageIds: fulfillmentCounts(coverageIdCount, fulfilledCoverageIdCount),
     categoryReports,
   };
 }

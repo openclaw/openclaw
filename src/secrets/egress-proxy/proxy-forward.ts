@@ -1,4 +1,5 @@
 import {
+  request as httpRequest,
   ServerResponse,
   type ClientRequest,
   type IncomingHttpHeaders,
@@ -107,7 +108,7 @@ export function handleUpgradeRequest(
   handler(request, response, { stream, stopBuffering });
 }
 
-/** Forwards one authorized HTTPS request, retaining ownership across a WebSocket upgrade. */
+/** Forwards one authorized request, retaining ownership across a WebSocket upgrade. */
 type ForwardRequest = {
   request: IncomingMessage;
   response: ServerResponse;
@@ -148,15 +149,16 @@ function sendSecretEgressRequest(
   }
   let refused = false;
   let upgraded = false;
+  const secure = target.protocol === "https:";
   const upstream = forward.ownResource(
-    httpsRequest(
+    (secure ? httpsRequest : httpRequest)(
       {
-        hostname: target.hostname,
-        port: target.port || 443,
+        hostname: secure ? target.hostname : host,
+        port: target.port || (secure ? 443 : 80),
         path: `${target.pathname}${target.search}`,
         method: forward.request.method,
         headers,
-        agent: forward.upstreamTlsAgent,
+        agent: secure ? forward.upstreamTlsAgent : false,
       },
       (upstreamResponse) => {
         forward.ownResource(upstreamResponse);

@@ -142,26 +142,14 @@ enum GatewaySettingsStore {
 
     static func currentInstanceID(defaults: UserDefaults = .standard) -> String {
         self.bootstrapPersistence()
-        if let value = defaults.string(forKey: self.instanceIdDefaultsKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !value.isEmpty
-        {
-            return value
-        }
-        return self.loadStableInstanceID() ?? ""
+        return self.normalizedCredential(defaults.string(forKey: self.instanceIdDefaultsKey))
+            ?? self.loadStableInstanceID() ?? ""
     }
 
     static func loadStableInstanceID() -> String? {
-        if let value = GenericPasswordKeychainStore.loadString(
+        self.normalizedCredential(GenericPasswordKeychainStore.loadString(
             service: self.nodeService,
-            account: self.instanceIdAccount)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !value.isEmpty
-        {
-            return value
-        }
-
-        return nil
+            account: self.instanceIdAccount))
     }
 
     static func saveStableInstanceID(_ instanceId: String) {
@@ -287,13 +275,9 @@ enum GatewaySettingsStore {
     /// Custom proxy headers are per-gateway credentials (Cloudflare Access-style service
     /// tokens). They live in the Keychain like the other gateway secrets and are read at
     /// connect time; never log their values.
-    static func loadGatewayCustomHeaders(gatewayStableID: String) -> [String: String] {
-        self.loadGatewayCustomHeaders(gatewayStableID: gatewayStableID, service: self.gatewayCustomHeadersService)
-    }
-
     static func loadGatewayCustomHeaders(
         gatewayStableID: String,
-        service: String) -> [String: String]
+        service: String = GatewaySettingsStore.gatewayCustomHeadersService) -> [String: String]
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return [:] }
@@ -316,18 +300,10 @@ enum GatewaySettingsStore {
     }
 
     @discardableResult
-    static func saveGatewayCustomHeaders(_ headers: [String: String], gatewayStableID: String) -> Bool {
-        self.saveGatewayCustomHeaders(
-            headers,
-            gatewayStableID: gatewayStableID,
-            service: self.gatewayCustomHeadersService)
-    }
-
-    @discardableResult
     static func saveGatewayCustomHeaders(
         _ headers: [String: String],
         gatewayStableID: String,
-        service: String) -> Bool
+        service: String = GatewaySettingsStore.gatewayCustomHeadersService) -> Bool
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
@@ -348,21 +324,11 @@ enum GatewaySettingsStore {
         return true
     }
 
-    /// Full onboarding reset is the explicit forget boundary for every gateway's proxy secrets.
     @discardableResult
-    static func clearGatewayCustomHeaders() -> Bool {
-        self.clearGatewayCustomHeaders(service: self.gatewayCustomHeadersService)
-    }
-
-    @discardableResult
-    static func clearGatewayCustomHeaders(gatewayStableID: String) -> Bool {
-        self.clearGatewayCustomHeaders(
-            gatewayStableID: gatewayStableID,
-            service: self.gatewayCustomHeadersService)
-    }
-
-    @discardableResult
-    static func clearGatewayCustomHeaders(gatewayStableID: String, service: String) -> Bool {
+    static func clearGatewayCustomHeaders(
+        gatewayStableID: String,
+        service: String = GatewaySettingsStore.gatewayCustomHeadersService) -> Bool
+    {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
         let account = self.customHeadersAccount(stableID: stableID)
@@ -381,8 +347,9 @@ enum GatewaySettingsStore {
         return canonicalCleared && legacyCleared
     }
 
+    /// Full onboarding reset is the explicit forget boundary for every gateway's proxy secrets.
     @discardableResult
-    static func clearGatewayCustomHeaders(service: String) -> Bool {
+    static func clearGatewayCustomHeaders(service: String = GatewaySettingsStore.gatewayCustomHeadersService) -> Bool {
         GenericPasswordKeychainStore.deleteAll(service: service)
     }
 
@@ -462,12 +429,9 @@ enum GatewaySettingsStore {
     static func loadTalkProviderApiKey(provider: String) -> String? {
         guard let providerId = self.normalizedTalkProviderID(provider) else { return nil }
         let account = self.talkProviderApiKeyAccount(providerId: providerId)
-        let value = GenericPasswordKeychainStore.loadString(
+        return self.normalizedCredential(GenericPasswordKeychainStore.loadString(
             service: self.talkService,
-            account: account)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false { return value }
-        return nil
+            account: account))
     }
 
     static func loadGatewayRegistry() -> GatewayRegistry {
@@ -531,11 +495,7 @@ enum GatewaySettingsStore {
     }
 
     static func activeGatewayEntry() -> GatewayRegistryEntry? {
-        let registry = self.loadGatewayRegistry()
-        guard let activeStableID = registry.activeStableID else { return nil }
-        return registry.entries.first {
-            GatewayStableIdentifier.matches($0.stableID, activeStableID)
-        }
+        self.loadGatewayRegistry().activeEntry
     }
 
     static func clearLegacyGatewaySelectors(stableID: String) {
@@ -604,32 +564,25 @@ enum GatewaySettingsStore {
     {
         guard let stableID = GatewayStableIdentifier.exact(entry.stableID) else { return nil }
         let name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalized = entry
+        normalized.stableID = stableID
         if entry.kind == .manual {
             let host = entry.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !host.isEmpty, let port = entry.port, (1...65535).contains(port) else { return nil }
-            let contextPath = GatewayConnectEndpoint(
+            normalized.name = name.isEmpty ? "\(host):\(port)" : name
+            normalized.host = host
+            normalized.contextPath = GatewayConnectEndpoint(
                 host: host,
                 port: port,
                 tls: entry.useTLS,
                 contextPath: entry.contextPath).contextPath
-            return GatewayRegistryEntry(
-                stableID: stableID,
-                kind: .manual,
-                name: name.isEmpty ? "\(host):\(port)" : name,
-                host: host,
-                port: port,
-                useTLS: entry.useTLS,
-                contextPath: contextPath,
-                lastConnectedAtMs: entry.lastConnectedAtMs)
+        } else {
+            normalized.name = name.isEmpty ? stableID : name
+            normalized.host = nil
+            normalized.port = nil
+            normalized.contextPath = nil
         }
-        return GatewayRegistryEntry(
-            stableID: stableID,
-            kind: .discovered,
-            name: name.isEmpty ? stableID : name,
-            host: nil,
-            port: nil,
-            useTLS: entry.useTLS,
-            lastConnectedAtMs: entry.lastConnectedAtMs)
+        return normalized
     }
 
     private static func migrateGatewayRegistryIfNeeded(defaults: UserDefaults = .standard) {
@@ -947,17 +900,14 @@ enum GatewaySettingsStore {
     private static func ensureStableInstanceID() {
         let defaults = UserDefaults.standard
 
-        if let existing = defaults.string(forKey: self.instanceIdDefaultsKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !existing.isEmpty
-        {
+        if let existing = self.normalizedCredential(defaults.string(forKey: self.instanceIdDefaultsKey)) {
             if self.loadStableInstanceID() == nil {
                 self.saveStableInstanceID(existing)
             }
             return
         }
 
-        if let stored = self.loadStableInstanceID(), !stored.isEmpty {
+        if let stored = self.loadStableInstanceID() {
             defaults.set(stored, forKey: self.instanceIdDefaultsKey)
             return
         }

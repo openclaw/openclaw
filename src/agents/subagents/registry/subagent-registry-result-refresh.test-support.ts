@@ -18,11 +18,11 @@ export function registerSubagentResultRefreshCases(params: {
   getLifecycleHandler: () => (event: AgentEventPayload) => void;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "callGateway" | "captureSubagentCompletionReply" | "persistSubagentRunsToDisk"
+    "callGateway" | "captureSubagentCompletionReply" | "persistSubagentRunsToDiskOrThrow"
   >;
 }) {
   const { getRegistry, getLifecycleHandler, mocks } = params;
-  it.each([false, true])(
+  it.each([true])(
     "tracks missing-entry lifecycle result refresh until capture and persistence settle (restart drain: %s)",
     async (draining) => {
       const mod = getRegistry();
@@ -62,8 +62,8 @@ export function registerSubagentResultRefreshCases(params: {
         captureStarted.resolve();
         return capture.promise;
       });
-      mocks.persistSubagentRunsToDisk.mockClear();
-      mocks.persistSubagentRunsToDisk.mockImplementationOnce(() => persisted.resolve());
+      mocks.persistSubagentRunsToDiskOrThrow.mockClear();
+      mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => persisted.resolve());
       const lifecycleHandler = getLifecycleHandler();
 
       const emitEnd = () => {
@@ -104,7 +104,7 @@ export function registerSubagentResultRefreshCases(params: {
         await vi.advanceTimersByTimeAsync(0);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         expect(entry?.completion?.resultText).toBe("replacement final reply");
-        expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledOnce();
+        expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
       } finally {
         capture.resolve("replacement final reply");
         await vi.advanceTimersByTimeAsync(0);

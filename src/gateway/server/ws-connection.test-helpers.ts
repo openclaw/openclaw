@@ -77,10 +77,16 @@ export function createGatewayWsTestSocket(
     },
     readyState: 1,
     bufferedAmount: 0,
-    send: vi.fn((data: string, cb?: (err?: Error) => void) => {
-      params.onSend?.(data);
-      cb?.();
-    }),
+    send: vi.fn(
+      (
+        data: string | Buffer,
+        options?: { binary: false } | ((err?: Error) => void),
+        cb?: (err?: Error) => void,
+      ) => {
+        params.onSend?.(String(data));
+        (typeof options === "function" ? options : cb)?.();
+      },
+    ),
     ...(params.ping ? { ping: vi.fn() } : {}),
     close: vi.fn((code?: number, reason?: string) => {
       if (params.closeEmits) {

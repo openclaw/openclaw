@@ -1,4 +1,3 @@
-/** CLI entrypoint for non-mutating Doctor lint health checks. */
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";

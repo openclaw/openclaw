@@ -24,7 +24,7 @@ import {
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
-import { resolveSessionDisplayModel } from "./sessions-display-model.js";
+import { resolveSessionDisplayModelRef } from "./sessions-display-model.js";
 import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
@@ -195,7 +195,7 @@ function renderStoreDryRunPlan(params: {
         action: formatCleanupActionCell(row.action, rich),
         key: formatSessionKeyCell(row.key, rich),
         age: formatSessionAgeCell(row.updatedAt, rich),
-        model: formatSessionModelCell(resolveSessionDisplayModel(params.cfg, row), rich),
+        model: formatSessionModelCell(resolveSessionDisplayModelRef(params.cfg, row).model, rich),
         flags: formatSessionFlagsCell(row, rich),
       })),
     }).trimEnd(),

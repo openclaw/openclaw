@@ -1,4 +1,3 @@
-// Xai plugin module implements responses tool shared behavior.
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import { truncateSanitizedExternalContent } from "openclaw/plugin-sdk/security-runtime";

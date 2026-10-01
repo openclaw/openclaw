@@ -1,4 +1,4 @@
-import { svg, type TemplateResult } from "lit";
+import { svg, type SVGTemplateResult, type TemplateResult } from "lit";
 import { LOBSTER_HAT_SPRITES } from "./lobster-hat-sprites.ts";
 import type {
   LobsterPetAccessory,
@@ -454,13 +454,20 @@ export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   `,
 };
 
-const CRAB_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+function passerSprite(content: SVGTemplateResult): SVGTemplateResult {
+  return svg`
+    <svg
+      class="lobster-pet__svg"
+      viewBox="0 0 120 105"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      ${content}
+    </svg>
+  `;
+}
+
+const CRAB_SPRITE = passerSprite(svg`
     <g stroke="#a63a2e" stroke-width="4" stroke-linecap="round" fill="none">
       <path d="M22 78 L8 88" />
       <path d="M28 88 L16 99" />
@@ -486,16 +493,9 @@ const CRAB_SPRITE = svg`
       fill="#d95f4b"
     />
     <path d="M48 82 Q60 90 72 82" stroke="#7e2a20" stroke-width="3" stroke-linecap="round" fill="none" />
-  </svg>
-`;
+`);
 
-const SNAIL_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+const SNAIL_SPRITE = passerSprite(svg`
     <path
       d="M14 96 Q32 84 58 88 L96 88 Q110 90 112 97 Q112 103 102 103 L24 103 Q14 103 14 96 Z"
       fill="#c9a06a"
@@ -516,16 +516,9 @@ const SNAIL_SPRITE = svg`
       stroke-linecap="round"
       fill="none"
     />
-  </svg>
-`;
+`);
 
-const DUCK_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+const DUCK_SPRITE = passerSprite(svg`
     <path d="M30 82 Q20 74 27 65 Q30 76 40 79 Z" fill="#f0b52e" />
     <ellipse cx="58" cy="85" rx="34" ry="17" fill="#ffd23e" />
     <circle cx="82" cy="50" r="18" fill="#ffd23e" />
@@ -533,16 +526,9 @@ const DUCK_SPRITE = svg`
     <circle cx="86" cy="44" r="3.6" fill="#0a1014" />
     <circle cx="87" cy="43" r="1.3" fill="#ffffff" />
     <path d="M44 82 Q58 72 72 82 Q58 93 44 82 Z" fill="#f0b52e" opacity="0.75" />
-  </svg>
-`;
+`);
 
-const JELLYFISH_SPRITE = svg`
-  <svg
-    class="lobster-pet__svg"
-    viewBox="0 0 120 105"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
+const JELLYFISH_SPRITE = passerSprite(svg`
     <g class="lob-jelly-tentacles" stroke="#9f7dfa" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8">
       <path d="M40 58 Q35 74 42 90" />
       <path d="M54 61 Q52 78 57 96" />
@@ -557,8 +543,7 @@ const JELLYFISH_SPRITE = svg`
     <ellipse cx="47" cy="37" rx="12" ry="6" fill="#ffffff" opacity="0.25" />
     <circle cx="52" cy="45" r="2.6" fill="#0a1014" />
     <circle cx="66" cy="45" r="2.6" fill="#0a1014" />
-  </svg>
-`;
+`);
 
 export const PASSER_SPRITES: Record<"crab" | "snail" | "duck" | "jellyfish", TemplateResult> = {
   crab: CRAB_SPRITE,

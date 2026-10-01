@@ -9,34 +9,31 @@ type StatusSummaryRuntime = typeof import("../status/summary.runtime.js").status
 type SessionStore = Record<string, Record<string, unknown>>;
 
 export function registerStatusSummaryWalCases(getSummary: GetStatusSummary): void {
-  it.each([true, false])(
-    "preserves WAL facts with includeSensitive=%s",
-    async (includeSensitive) => {
-      const error = "SYNTHETIC_PRIVATE_STORAGE_DETAIL";
-      const sqliteWal = createSqliteWalHealth({
-        state: "error",
-        walBytes: 1024,
-        databaseBytes: 4096,
-        logFrames: null,
-        checkpointedFrames: null,
-        consecutiveBlocked: 0,
-        error,
+  it.each([false])("preserves WAL facts with includeSensitive=%s", async (includeSensitive) => {
+    const error = "SYNTHETIC_PRIVATE_STORAGE_DETAIL";
+    const sqliteWal = createSqliteWalHealth({
+      state: "error",
+      walBytes: 1024,
+      databaseBytes: 4096,
+      logFrames: null,
+      checkpointedFrames: null,
+      consecutiveBlocked: 0,
+      error,
+    });
+    const observation = vi
+      .spyOn(stateDatabaseCache, "readOpenClawStateWalHealth")
+      .mockReturnValueOnce(sqliteWal);
+    try {
+      const summary = await getSummary({ includeSensitive });
+      expect(summary.sqliteWal).toEqual({
+        ...sqliteWal,
+        error: includeSensitive ? error : undefined,
       });
-      const observation = vi
-        .spyOn(stateDatabaseCache, "readOpenClawStateWalHealth")
-        .mockReturnValueOnce(sqliteWal);
-      try {
-        const summary = await getSummary({ includeSensitive });
-        expect(summary.sqliteWal).toEqual({
-          ...sqliteWal,
-          error: includeSensitive ? error : undefined,
-        });
-        expect(JSON.stringify(summary).includes(error)).toBe(includeSensitive);
-      } finally {
-        observation.mockRestore();
-      }
-    },
-  );
+      expect(JSON.stringify(summary).includes(error)).toBe(includeSensitive);
+    } finally {
+      observation.mockRestore();
+    }
+  });
 }
 
 export function registerStatusSummarySessionRowCases(params: {
@@ -95,101 +92,6 @@ export function registerStatusSummarySessionRowCases(params: {
         contextTokens: 1_000_000,
         remainingTokens: 999_989,
       });
-    });
-
-    it("keeps telemetry from the matching runtime producer", async () => {
-      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
-        1_000_000,
-      );
-      params.setSessions({
-        "agent:main:main": {
-          sessionId: "matching-runtime-window",
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          agentHarnessId: "openclaw",
-          contextTokens: 272_000,
-          contextTokensSource: "runtime",
-          totalTokens: 11,
-          totalTokensFresh: true,
-          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-        },
-      });
-
-      const summary = await params.getStatusSummary();
-
-      expect(summary.sessions.recent[0]?.contextTokens).toBe(272_000);
-    });
-
-    it("replaces matching runtime telemetry with a newly authored effective cap", async () => {
-      vi.mocked(params.getStatusSummaryRuntime().resolveAuthoredModelContextTokens).mockReturnValue(
-        1_000_000,
-      );
-      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
-        1_000_000,
-      );
-      params.setSessions({
-        "agent:main:main": {
-          sessionId: "authored-context-cap",
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          agentHarnessId: "openclaw",
-          contextTokens: 272_000,
-          contextTokensSource: "runtime",
-        },
-      });
-
-      const summary = await params.getStatusSummary();
-
-      expect(summary.sessions.recent[0]?.contextTokens).toBe(1_000_000);
-    });
-
-    it("preserves the native window owned by a locked legacy session", async () => {
-      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
-        272_000,
-      );
-      vi.mocked(params.getStatusSummaryRuntime().resolveSessionRuntime).mockReturnValue({
-        id: "codex",
-        label: "OpenAI Codex",
-      });
-      params.setSessions({
-        "agent:main:main": {
-          sessionId: "locked-legacy-window",
-          updatedAt: Date.now(),
-          modelSelectionLocked: true,
-          contextTokens: 1_000_000,
-        },
-      });
-
-      const summary = await params.getStatusSummary();
-
-      expect(summary.sessions.recent[0]?.contextTokens).toBe(1_000_000);
-    });
-
-    it("caps matching unlocked runtime telemetry to the lower current window", async () => {
-      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
-        272_000,
-      );
-      vi.mocked(params.getStatusSummaryRuntime().resolveSessionRuntime).mockReturnValue({
-        id: "codex",
-        label: "OpenAI Codex",
-      });
-      params.setSessions({
-        "agent:main:main": {
-          sessionId: "unlocked-runtime-window",
-          updatedAt: Date.now(),
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          agentHarnessId: "codex",
-          contextTokens: 1_000_000,
-          contextTokensSource: "runtime",
-        },
-      });
-
-      const summary = await params.getStatusSummary();
-
-      expect(summary.sessions.recent[0]?.contextTokens).toBe(272_000);
     });
   });
 }

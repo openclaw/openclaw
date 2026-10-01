@@ -661,7 +661,7 @@ describe("worker placement dispatch reclaim", () => {
     await placementStore.releaseTurn(claim);
 
     const basePack = Buffer.from("retirement workspace base pack");
-    placementStore.beginWorkspaceReconciliation(
+    await placementStore.beginWorkspaceReconciliation(
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,
@@ -698,7 +698,7 @@ describe("worker placement dispatch reclaim", () => {
       to: "reclaimed",
       expectedGeneration: reconciling.generation,
     });
-    expect(placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
     expect(placementStore.get(active.sessionId)?.workspaceResultConflict).toBeDefined();
 
     placementStore.retireSessionPlacement({
@@ -708,7 +708,7 @@ describe("worker placement dispatch reclaim", () => {
     });
 
     expect(placementStore.get(active.sessionId)).toBeUndefined();
-    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
     await placementStore.claimTurn({
       ...REQUEST,
       owner: { kind: "local" },
@@ -924,7 +924,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("keeps a changed result fenced when quiescence fails after apply", async () => {
-    const harness = createHarness(database, placementStore, { leaseFailureCount: 1 });
+    const harness = createHarness(database, placementStore, { leaseFailureCall: 2 });
     await harness.service.dispatch(REQUEST);
 
     await expect(
@@ -984,7 +984,9 @@ describe("worker placement dispatch reclaim", () => {
     };
     const harness = createHarness(database, placementStore, {
       priorWorkspaceResultConflict: priorConflict,
-      verifyFails: true,
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+      verifyFailureCall: 3,
     });
     await harness.service.dispatch(REQUEST);
 

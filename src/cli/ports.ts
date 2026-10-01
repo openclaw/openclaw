@@ -1,4 +1,3 @@
-// Port inspection and force-free helpers used by gateway run/install flows.
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import {
@@ -87,14 +86,8 @@ function isRecoverableLsofError(err: unknown): boolean {
 }
 
 function parseFuserPidList(output: string): number[] {
-  if (!output) {
-    return [];
-  }
   const values = new Set<number>();
   for (const token of output.split(/\s+/)) {
-    if (!token) {
-      continue;
-    }
     const pid = parseStrictPositiveInteger(token);
     if (pid !== undefined) {
       values.add(pid);
@@ -337,16 +330,19 @@ export async function forceFreePortAndWait(
   }
 
   let waitedMs = 0;
-  while (waitedMs < sigtermTimeoutMs) {
-    if (!(await checkBusy())) {
-      return { killed, waitedMs, escalatedToSigkill: false };
+  const waitUntilFree = async (deadlineMs: number): Promise<boolean> => {
+    while (waitedMs < deadlineMs) {
+      if (!(await checkBusy())) {
+        return true;
+      }
+      const sleepMs = Math.min(intervalMs, deadlineMs - waitedMs);
+      await sleep(sleepMs);
+      waitedMs += sleepMs;
     }
-    const sleepMs = Math.min(intervalMs, sigtermTimeoutMs - waitedMs);
-    await sleep(sleepMs);
-    waitedMs += sleepMs;
-  }
+    return !(await checkBusy());
+  };
 
-  if (!(await checkBusy())) {
+  if (await waitUntilFree(sigtermTimeoutMs)) {
     return { killed, waitedMs, escalatedToSigkill: false };
   }
 
@@ -357,16 +353,7 @@ export async function forceFreePortAndWait(
     killPids(port, remaining, "SIGKILL", opts.beforeSignal);
   }
 
-  while (waitedMs < timeoutMs) {
-    if (!(await checkBusy())) {
-      return { killed, waitedMs, escalatedToSigkill: true };
-    }
-    const sleepMs = Math.min(intervalMs, timeoutMs - waitedMs);
-    await sleep(sleepMs);
-    waitedMs += sleepMs;
-  }
-
-  if (!(await checkBusy())) {
+  if (await waitUntilFree(timeoutMs)) {
     return { killed, waitedMs, escalatedToSigkill: true };
   }
 

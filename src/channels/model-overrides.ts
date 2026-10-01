@@ -1,12 +1,8 @@
-/**
- * Channel-scoped model override resolver.
- *
- * Matches conversation ids, parent sessions, and wildcard config entries to model overrides.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ChannelModelByChannelConfig } from "../config/types.channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   parseRawSessionConversationRef,
@@ -33,8 +29,6 @@ type ChannelModelOverride = {
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
-
-type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 
 type ChannelModelOverrideParams = {
   cfg: OpenClawConfig;
@@ -86,11 +80,10 @@ function buildChannelCandidates(
     bundledFallback: parentOverrideFallbacks.length === 0,
   });
   const groupConversationKind =
-    normalizeChatType(params.groupChatType ?? undefined) === "channel"
+    normalizeChatType(params.groupChatType ?? undefined) === "channel" ||
+    sessionConversation?.kind === "channel"
       ? "channel"
-      : sessionConversation?.kind === "channel"
-        ? "channel"
-        : "group";
+      : "group";
   const groupConversation = resolveSessionConversation({
     channel: normalizedChannel ?? "",
     kind: groupConversationKind,
@@ -157,9 +150,7 @@ export function resolveChannelModelOverride(
   if (!channel) {
     return null;
   }
-  const modelByChannel = params.cfg.channels?.modelByChannel as
-    | ChannelModelByChannelConfig
-    | undefined;
+  const modelByChannel = params.cfg.channels?.modelByChannel;
   if (!modelByChannel) {
     return null;
   }

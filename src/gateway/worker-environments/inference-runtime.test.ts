@@ -1,10 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { validateWorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
+import * as authProfileUsage from "../../agents/auth-profiles/usage.js";
+import * as modelAuth from "../../agents/model-auth.js";
+import * as providerStreamRuntime from "../../agents/provider-stream.js";
+import { AuthStorage } from "../../agents/sessions/auth-storage.js";
+import { ModelRegistry } from "../../agents/sessions/model-registry.js";
+import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantMessage, StreamFn } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import type { ProviderWrapStreamFnContext } from "../../plugins/provider-transport.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
@@ -43,6 +51,113 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it("constructs only the embedded provider stream when preparing a worker turn", async () => {
+    const prepareModel = simpleCompletionRuntime.prepareSimpleCompletionModel;
+    const registerProviderStream = providerStreamRuntime.registerProviderStreamForModel;
+    const stream = vi.fn<StreamFn>(() => providerStream());
+    const createStreamFn = vi.fn(() => stream);
+    const wrapSimpleCompletionStreamFn = vi.fn(
+      ({ streamFn }: ProviderWrapStreamFnContext) => streamFn,
+    );
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push({
+      pluginId: "worker-provider",
+      source: "test",
+      provider: {
+        id: PROVIDER,
+        label: "Worker provider",
+        auth: [],
+        createStreamFn,
+        wrapSimpleCompletionStreamFn,
+      },
+    });
+    const runtime = setup({ sessionId: SESSION_ID, updatedAt: 1 }, { pluginRegistry });
+    const authStorage = AuthStorage.inMemory({});
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    vi.spyOn(authProfileStore, "ensureAuthProfileStore").mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:worker": { type: "api_key", provider: PROVIDER, key: AUTH_MARKER },
+      },
+    });
+    vi.spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks").mockResolvedValue(undefined);
+    vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
+      apiKey: AUTH_MARKER,
+      mode: "api-key",
+      source: "worker provider fixture",
+    });
+    runtime.prepareModel.mockImplementation((modelParams, assertCurrent) =>
+      prepareModel(
+        {
+          ...modelParams,
+          modelResolver: async (_provider, _modelId, _agentDir, cfg) => ({
+            model: {
+              ...logicalModel,
+              api: cfg?.models?.providers?.openai?.api ?? logicalModel.api,
+              baseUrl: cfg?.models?.providers?.openai?.baseUrl ?? logicalModel.baseUrl,
+            },
+            authStorage,
+            modelRegistry,
+          }),
+        },
+        assertCurrent,
+      ),
+    );
+    vi.mocked(providerStreamRuntime.registerProviderStreamForModel).mockImplementation(
+      registerProviderStream,
+    );
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+      message: { provider: PROVIDER, model: MODEL },
+    });
+    expect(createStreamFn).toHaveBeenCalledOnce();
+    expect(wrapSimpleCompletionStreamFn).not.toHaveBeenCalled();
+    expect(stream).toHaveBeenCalledOnce();
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({ apiKey: AUTH_MARKER });
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("reuses the Gateway's boundary cache key across calls and rotates it after a boundary", async () => {
+    const runtime = setup();
+    for (const boundaryCount of [0, 0, 2]) {
+      runtime.readPromptCacheContext.mockReturnValue({ boundaryCount });
+      const inferenceRequest = request();
+      Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
+      await expect(runtime.executor(params(inferenceRequest, vi.fn()))).resolves.toMatchObject({
+        type: "done",
+      });
+    }
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.promptCacheKey)).toEqual([
+      `${SESSION_ID}:0`,
+      `${SESSION_ID}:0`,
+      `${SESSION_ID}:2`,
+    ]);
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.sessionId)).toEqual([
+      SESSION_ID,
+      SESSION_ID,
+      SESSION_ID,
+    ]);
+  });
+
+  it("preserves an explicit Gateway cache key and refuses a missing prepared owner", async () => {
+    const runtime = setup();
+    runtime.readPromptCacheContext.mockReturnValue({
+      boundaryCount: 3,
+      promptCacheKey: " gateway-explicit-cache ",
+    });
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
+    expect(runtime.stream.mock.calls[0]?.[2]?.promptCacheKey).toBe("gateway-explicit-cache");
+    runtime.readPromptCacheContext.mockReturnValue(undefined);
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "error",
+      reason: "session-not-attached",
+    });
+    expect(runtime.stream).toHaveBeenCalledOnce();
+  });
+
   it("prepares an approved model available only from the bundled static catalog", async () => {
     const runtime = setup(sessionEntry, { catalogOnlyModel: true });
 
@@ -205,7 +320,9 @@ describe("worker inference provider runtime", () => {
       source: "user",
       routeRequirement: "subscription",
     });
-    await oauthRuntime.executor(params(request(), vi.fn()));
+    await expect(oauthRuntime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
     const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
     const apiKeyRuntime = setup();
@@ -226,25 +343,6 @@ describe("worker inference provider runtime", () => {
       auth: "api-key",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    });
-  });
-
-  it("prepares the selected model against its gateway-owned OAuth route", async () => {
-    const runtime = setup();
-    runtime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
-      source: "user",
-      routeRequirement: "subscription",
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
-
-    expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
-      auth: "oauth",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 
@@ -317,6 +415,7 @@ describe("worker inference provider runtime", () => {
       ...inferenceRequest.options,
       signal: expect.any(AbortSignal),
       sessionId: SESSION_ID,
+      promptCacheKey: `${SESSION_ID}:0`,
       apiKey: AUTH_MARKER,
     });
     expect(emitted.map((event) => event.type)).toEqual([
@@ -791,8 +890,12 @@ describe("worker inference provider runtime", () => {
     }
   });
 
-  it("projects worker options before applying provider stream policy", async () => {
+  it("projects worker options and isolates provider policy mutations", async () => {
     const runtime = setup();
+    runtime.applyStreamPolicy.mockImplementation((_agent, _cfg, _provider, _model, options) => {
+      Object.assign(options?.thinkingBudgets ?? {}, { low: 1 });
+      return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
+    });
     const inferenceRequest = request();
     Object.assign(inferenceRequest.options, {
       extra_body: { mode: "worker" },
@@ -807,8 +910,10 @@ describe("worker inference provider runtime", () => {
       temperature: 0.25,
       maxTokens: 256,
       reasoning: "low",
-      thinkingBudgets: { low: 96 },
+      thinkingBudgets: { low: 1 },
     });
+    expect(runtime.stream.mock.calls[0]?.[2]?.thinkingBudgets).toEqual({ low: 96 });
+    expect(inferenceRequest.options.thinkingBudgets).toEqual({ low: 96 });
   });
 
   it("preserves adaptive provider policy while lowering the core stream effort", async () => {

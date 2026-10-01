@@ -1,4 +1,3 @@
-// Normalizes abort command primitives before runtime cancellation.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
@@ -44,9 +43,7 @@ export function setAbortMemory(key: string, value: boolean): void {
     ABORT_MEMORY.delete(normalized);
     return;
   }
-  if (ABORT_MEMORY.has(normalized)) {
-    ABORT_MEMORY.delete(normalized);
-  }
+  ABORT_MEMORY.delete(normalized);
   ABORT_MEMORY.set(normalized, true);
   pruneMapToMaxSize(ABORT_MEMORY, ABORT_MEMORY_MAX);
 }

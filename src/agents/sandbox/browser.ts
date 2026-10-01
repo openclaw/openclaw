@@ -390,17 +390,20 @@ async function ensureSandboxBrowserContainer(
     }
   }
 
+  const registryEntry = {
+    containerName,
+    sessionKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
+    createdAtMs: now,
+    lastUsedAtMs: now,
+    image: browserImage,
+    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+  };
   if (params.withWorkspace) {
     // Reserve the mount before allocation; a bridge/port failure must not hide
     // an already-running writer from reconciliation or lifecycle cleanup.
     await updateBrowserRegistry({
-      containerName,
-      sessionKey: params.scopeKey,
-      workspaceDir: params.workspaceDir,
-      createdAtMs: now,
-      lastUsedAtMs: now,
-      image: browserImage,
-      configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+      ...registryEntry,
       cdpPort: 0,
     });
   }
@@ -564,13 +567,7 @@ async function ensureSandboxBrowserContainer(
   }
 
   await updateBrowserRegistry({
-    containerName,
-    workspaceDir: params.workspaceDir,
-    sessionKey: params.scopeKey,
-    createdAtMs: now,
-    lastUsedAtMs: now,
-    image: browserImage,
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    ...registryEntry,
     cdpPort: mappedCdp,
     noVncPort: mappedNoVnc ?? undefined,
   });

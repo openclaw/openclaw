@@ -17,6 +17,10 @@ import type {
   SessionLegacyArchiveRemovalResult,
 } from "../config/sessions/session-history-archive-pruning.types.js";
 import type { SessionPendingInputWithdrawal } from "../config/sessions/session-pending-input-withdrawal.worker.js";
+import type {
+  SessionReactionWrite,
+  SetSessionReactionParams,
+} from "../config/sessions/session-reaction-store.types.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import type {
@@ -98,6 +102,10 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;
     output: SessionEntry;
+  };
+  "session.reaction.set": {
+    input: { sessionKey: string; params: SetSessionReactionParams };
+    output: SessionReactionWrite;
   };
   "session.pendingInputs.withdraw": {
     input: SessionPendingInputWithdrawal;

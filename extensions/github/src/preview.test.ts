@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ControlUiGitHubError } from "./github-api.js";
+import { ControlUiGitHubError, formatControlUiGitHubPreviewError } from "./github-api.js";
 import {
   loadControlUiGitHubPreview as loadPluginPreview,
   parseControlUiGitHubPreviewTarget,
@@ -131,9 +131,103 @@ describe("loadControlUiGitHubPreview", () => {
     vi.stubEnv("GITHUB_TOKEN", "");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (vi.isFakeTimers()) {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each(["repository", "item", "body", "commits", "avatar", "co-author avatar"])(
+    "bounds slow %s reads with the preview deadline and reuses the settled cache",
+    async (stage) => {
+      vi.useFakeTimers();
+      // Native AbortSignal timers do not use Vitest's clock.
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+        return controller.signal;
+      });
+      const identity = managedIdentity(`deadline-${stage}`);
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const url = requestUrl(input);
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Expected cancellable GitHub transport");
+        }
+        const currentStage = url.endsWith("/repos/openclaw/openclaw")
+          ? "repository"
+          : url.includes("/commits")
+            ? "commits"
+            : url.includes("/u/20")
+              ? "co-author avatar"
+              : url.includes("avatars.")
+                ? "avatar"
+                : "item";
+        if (currentStage === stage || (stage === "body" && currentStage === "item")) {
+          if (stage === "body") {
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  signal.addEventListener("abort", () => controller.error(signal.reason), {
+                    once: true,
+                  });
+                },
+              }),
+            );
+          }
+          return new Promise<Response>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              {
+                once: true,
+              },
+            );
+          });
+        }
+        // Metadata/commits consume budget before a later slow request starts.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        if (currentStage === "repository") {
+          return publicRepository();
+        }
+        if (currentStage === "commits") {
+          return githubJson([
+            { commit: { message: "Co-authored-by: Ada <20+ada@users.noreply.github.com>" } },
+          ]);
+        }
+        return currentStage === "item" ? githubJson(previewPayload()) : pngResponse();
+      });
+      const target = previewTarget(930307, "pull");
+      const settled = vi.fn();
+      const load = () =>
+        loadControlUiGitHubPreview(target, identity, fetchMock).then(
+          (preview) => ({ preview }),
+          (error: unknown) => ({ error: formatControlUiGitHubPreviewError(error) }),
+        );
+      const pending = load().then(settled);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(settled).toHaveBeenCalledOnce();
+      if (["repository", "item", "body"].includes(stage)) {
+        expect(settled).toHaveBeenCalledWith({
+          error: expect.objectContaining({ retryable: true }),
+        });
+      } else {
+        expect(settled).toHaveBeenCalledWith({
+          preview: expect.objectContaining({ login: "steipete" }),
+        });
+      }
+      await pending;
+      const calls = fetchMock.mock.calls.length;
+      expect(await load()).toEqual(settled.mock.calls[0]?.[0]);
+      expect(fetchMock).toHaveBeenCalledTimes(calls);
+      expect(identity.revalidate).toHaveBeenCalled();
+    },
+  );
 
   it("keeps selected identity caches separate and revalidates cached delivery", async () => {
     const fixtureTarget = previewTarget(88122);

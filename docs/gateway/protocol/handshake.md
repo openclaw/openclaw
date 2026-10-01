@@ -128,6 +128,10 @@ Validating before send:
 `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `canvas`) to scoped hosted URLs; it may expire, so nodes call
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
+The Control UI uses `plugin.surface.refresh` only when the hello's granted scopes
+satisfy `operator.read` (including `operator.write` and `operator.admin`). A
+`FORBIDDEN` response stops automatic renewal retries for the current lease;
+reconnecting evaluates the new hello's grants.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
 The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
@@ -252,6 +256,12 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 
 - `tool-events`: accepts structured tool lifecycle events.
 - `inline-widgets`: can render hosted inline widget tool results.
+- `ultrafast`: accepts the explicit `"ultrafast"` fast-mode value in session metadata.
+  Without it, session responses and events present that value as Fast (`true`)
+  for released native decoders that only accept booleans and `"auto"`. This is a
+  per-connection presentation: stored selection and execution stay `"ultrafast"`.
+  Upgraded clients advertise this capability to retain the explicit selection;
+  remove the legacy projection only when those released clients are no longer supported.
 - `chat-only-assistant-text`: renders assistant text from `chat` and omits the
   redundant assistant-text `agent` stream. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
 

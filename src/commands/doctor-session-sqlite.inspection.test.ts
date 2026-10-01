@@ -9,12 +9,14 @@ import {
   readOnlySqliteValidationSnapshot,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { readAgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.read.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   readMigrationManifest,
@@ -309,6 +311,9 @@ describe("runDoctorSessionSqlite", () => {
     const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
     const stateDir = path.join(tempDir, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    // This migration fixture has known-empty deletion history, not orphaned retained SQLite.
+    openOpenClawStateDatabase({ env });
+    expect(readAgentDatabaseDeletionSnapshot(env)?.retainedDeletions).toEqual({ status: "empty" });
     const agentIds = ["dormant", "current"] as const;
     for (const agentId of agentIds) {
       const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");

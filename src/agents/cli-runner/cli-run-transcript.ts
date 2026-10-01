@@ -8,10 +8,10 @@ import {
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import type {
-  SessionEntryReadSource,
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import {
   captureOwnedTranscriptWriteAssertion,

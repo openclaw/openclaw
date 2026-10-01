@@ -24,7 +24,10 @@ import {
   finalizeAcceptedContextEngineTurn,
   type ContextEngineTurnAttemptFacts,
 } from "./context-engine-turn-attempt.js";
-import { enqueueContextEngineTurnIntent } from "./context-engine-turn-outbox.js";
+import {
+  enqueueContextEngineTurnCommit,
+  enqueueContextEngineTurnIntent,
+} from "./context-engine-turn-outbox.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -151,6 +154,68 @@ async function createAcceptedTurnFixture(params: {
 }
 
 describe("accepted context-engine turn finalization", () => {
+  it("commits the accepted session first and preserves bounded retries for other sessions", async () => {
+    const { database, facts } = await createAcceptedTurnFixture({
+      answer: "answer",
+      logicalTurnId: "accepted-after-orphans",
+      prefix: [],
+      sessionId: "accepted-after-orphans",
+    });
+    database.db
+      .prepare("DELETE FROM context_engine_turn_outbox WHERE advancement_key = ?")
+      .run(facts.boundary.admission.logicalTurnId);
+    const retrySessionId = "retry-ready";
+    enqueueContextEngineTurnCommit({
+      database,
+      engineId: "test",
+      payload: {
+        boundary: {
+          admission: {
+            ...facts.boundary.admission,
+            logicalTurnId: retrySessionId,
+            sessionId: retrySessionId,
+            sessionKey: `agent:main:${retrySessionId}`,
+          },
+          terminal: {
+            ...facts.boundary.terminal,
+            sessionId: retrySessionId,
+            sessionKey: `agent:main:${retrySessionId}`,
+          },
+        },
+        isHeartbeat: false,
+        messages: [],
+      },
+    });
+    for (let index = 0; index < 15; index += 1) {
+      const sessionId = `orphaned-admission-${index}`;
+      enqueueContextEngineTurnIntent({
+        admission: {
+          ...facts.boundary.admission,
+          logicalTurnId: sessionId,
+          sessionId,
+          sessionKey: `agent:main:${sessionId}`,
+        },
+        database,
+        engineId: "test",
+        isHeartbeat: false,
+      });
+    }
+    enqueueContextEngineTurnIntent({
+      admission: facts.boundary.admission,
+      database,
+      engineId: "test",
+      isHeartbeat: false,
+    });
+    const { commitTurn, lease } = createDurableLease();
+
+    await finalizeAcceptedContextEngineTurn({ facts, lease });
+
+    expect(commitTurn.mock.calls.map(([turn]) => turn.sessionId)).toEqual([
+      facts.sessionIdUsed,
+      retrySessionId,
+    ]);
+  });
+
   it.each([null, "missing", "metadata-0", "metadata-1", "terminal"])(
     "preserves the depth boundary for a broken ancestry ending at %s",
     async (parent) => {

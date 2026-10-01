@@ -1,5 +1,6 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { axValue, type RawAXNode } from "./cdp-ax.js";
+import type { RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
@@ -10,13 +11,6 @@ export type CdpRoleRef = {
   nth?: number;
   backendDOMNodeId?: number;
   frameId?: string;
-};
-
-/** Options for CDP role snapshot extraction and compaction. */
-export type CdpRoleSnapshotOptions = {
-  interactive?: boolean;
-  compact?: boolean;
-  maxDepth?: number;
 };
 
 export type CursorInteractiveInfo = {
@@ -125,7 +119,7 @@ export function buildRoleTree(
   return { tree, roots: roots.length ? roots : tree.length ? [0] : [] };
 }
 
-function shouldIncludeRoleNode(node: RoleTreeNode, options: CdpRoleSnapshotOptions): boolean {
+function shouldIncludeRoleNode(node: RoleTreeNode, options: RoleSnapshotOptions): boolean {
   if (node.transparent) {
     return false;
   }
@@ -177,7 +171,7 @@ export function renderRoleTree(
   tree: RoleTreeNode[],
   index: number,
   output: string[],
-  options: CdpRoleSnapshotOptions,
+  options: RoleSnapshotOptions,
   state: { truncated: boolean; recordIframePositions?: boolean; flattenInteractive?: boolean },
 ): void {
   const node = tree[index];

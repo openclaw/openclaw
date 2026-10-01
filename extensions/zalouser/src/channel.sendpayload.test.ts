@@ -5,11 +5,11 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 // Zalouser tests cover channel.sendpayload plugin behavior.
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./accounts.test-mocks.js";
 import "./zalo-js.test-mocks.js";
-import type { ReplyPayload } from "../runtime-api.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import * as sendModule from "./send.js";

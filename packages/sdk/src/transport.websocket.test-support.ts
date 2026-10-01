@@ -55,7 +55,6 @@ export async function createSdkWebSocketServer() {
     });
   });
   return {
-    server,
     url: `ws://127.0.0.1:${address.port}`,
     reply,
     setRequestHandler(handler?: typeof requestHandler) {

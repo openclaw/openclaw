@@ -161,9 +161,12 @@ export default definePluginEntry({
       deleteIf: (key, predicate) => openBindingStateStore().deleteIf!(key, predicate),
       entries: () => openBindingStateStore().entries(),
       lookup: (key) => openBindingStateStore().lookup(key),
-      get lookupMany() {
-        const store = openBindingStateStore();
-        return store.lookupMany?.bind(store);
+      asyncReads: {
+        lookup: (key) => openBindingMutationStore().lookup(key),
+        get lookupMany() {
+          const store = openBindingMutationStore();
+          return store.lookupMany?.bind(store);
+        },
       },
       registerIfAbsent: (key, value, options) =>
         openBindingStateStore().registerIfAbsent(key, value, options),
@@ -183,12 +186,10 @@ export default definePluginEntry({
         // rediscovered from provenance; very old markerless sessions may reappear after eviction.
         overflowPolicy: "evict-oldest",
       }));
-    const lazyManagedThreadStateStore: Pick<
-      PluginStateKeyedStore<StoredCodexManagedThread>,
-      "entries" | "lookup" | "registerIfAbsent"
+    const lazyManagedThreadStateStore: NonNullable<
+      Parameters<typeof createLazyCodexAppServerBindingStore>[1]
     > = {
       entries: () => openManagedThreadStateStore().entries(),
-      lookup: (key) => openManagedThreadStateStore().lookup(key),
       registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
     };
     const bindingStore = createLazyCodexAppServerBindingStore(

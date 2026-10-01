@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   enumerateConversationKeyForms,
   type IMessageApprovalConversationKey,
@@ -30,27 +31,24 @@ function beginIMessageApprovalControlBinding(params: {
   conversation: IMessageApprovalConversationKey;
 }): { close: () => void } {
   const keys = bindingKeys(params.accountId, params.conversation);
-  let resolveDone = () => {};
-  const window: BindingWindow = {
-    done: new Promise<void>((resolve) => {
-      resolveDone = resolve;
-    }),
-    close: () => {},
-  };
+  const { promise, resolve } = createDeferred<void>();
   let closed = false;
-  window.close = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    for (const key of keys) {
-      const windows = pendingByConversation.get(key);
-      windows?.delete(window);
-      if (windows?.size === 0) {
-        pendingByConversation.delete(key);
+  const window: BindingWindow = {
+    done: promise,
+    close: () => {
+      if (closed) {
+        return;
       }
-    }
-    resolveDone();
+      closed = true;
+      for (const key of keys) {
+        const windows = pendingByConversation.get(key);
+        windows?.delete(window);
+        if (windows?.size === 0) {
+          pendingByConversation.delete(key);
+        }
+      }
+      resolve();
+    },
   };
   for (const key of keys) {
     const windows = pendingByConversation.get(key) ?? new Set<BindingWindow>();

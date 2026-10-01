@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements doctor behavior.
 import os from "node:os";
 import path from "node:path";
 import type {

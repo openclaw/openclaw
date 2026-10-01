@@ -13,13 +13,16 @@ const suite = createChatFlowE2eSuite();
 const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR;
 type MotionArrival = { text: string; opacity: string; transform: string };
 type SendMotionFrame = { top: number; y: number | null; opacity: string | null; same: boolean };
-type SendMotionProbe = { frames: SendMotionFrame[]; jumps: number[]; stop: () => void };
+// `jump` is the offset change applied synchronously by the call; `remaining` is
+// the distance to the end when it was issued.
+type SendMotionScroll = { behavior?: ScrollBehavior; jump: number; remaining: number };
+type SendMotionProbe = { frames: SendMotionFrame[]; scrolls: SendMotionScroll[]; stop: () => void };
 
 async function observeSendMotion(page: Page, prompt: string) {
   await page.evaluate((text) => {
     const thread = document.querySelector<HTMLElement>(".chat-thread")!;
     const scrollTo = thread.scrollTo.bind(thread);
-    const probe: SendMotionProbe = { frames: [], jumps: [], stop: () => {} };
+    const probe: SendMotionProbe = { frames: [], scrolls: [], stop: () => {} };
     window.openclawSendMotion = probe;
     let firstBubble: HTMLElement | undefined;
     let frame = 0;
@@ -27,12 +30,17 @@ async function observeSendMotion(page: Page, prompt: string) {
     // exposes a competing instant command even if it happens between paints.
     thread.scrollTo = function (options?: ScrollToOptions | number, y?: number) {
       const before = this.scrollTop;
+      const remaining = this.scrollHeight - before - this.clientHeight;
       if (typeof options === "number") {
         scrollTo(options, y ?? 0);
       } else {
         scrollTo(options);
       }
-      probe.jumps.push(this.scrollTop - before);
+      probe.scrolls.push({
+        behavior: typeof options === "number" ? undefined : options?.behavior,
+        jump: this.scrollTop - before,
+        remaining,
+      });
     };
     const sample = () => {
       const bubble = [...thread.querySelectorAll<HTMLElement>(".chat-bubble")].find(
@@ -56,10 +64,15 @@ async function observeSendMotion(page: Page, prompt: string) {
 }
 
 async function finishSendMotion(page: Page, reducedMotion: string) {
-  const { frames, jumps } = await page.evaluate(() => {
+  const { frames, scrolls, endDistance } = await page.evaluate(() => {
     const probe = window.openclawSendMotion!;
     probe.stop();
-    return { frames: probe.frames, jumps: probe.jumps };
+    const thread = document.querySelector<HTMLElement>(".chat-thread")!;
+    return {
+      frames: probe.frames,
+      scrolls: probe.scrolls,
+      endDistance: thread.scrollHeight - thread.scrollTop - thread.clientHeight,
+    };
   });
   const visible = frames.slice(frames.findIndex((frame) => frame.y !== null));
   expect(visible.length).toBeGreaterThan(0);
@@ -68,8 +81,8 @@ async function finishSendMotion(page: Page, reducedMotion: string) {
   );
   if (reducedMotion !== "reduce") {
     expect(
-      jumps.every((delta) => Math.abs(delta) <= 1),
-      JSON.stringify(jumps),
+      scrolls.every((scroll) => Math.abs(scroll.jump) <= 1),
+      JSON.stringify(scrolls),
     ).toBe(true);
     expect(
       visible.every((frame, index) => {
@@ -78,7 +91,15 @@ async function finishSendMotion(page: Page, reducedMotion: string) {
       }),
       JSON.stringify(visible),
     ).toBe(true);
-    expect(new Set(visible.map((frame) => frame.top)).size).toBeGreaterThan(2);
+    // Counting sampled offsets measures the runner's frame rate: under load the
+    // browser finishes the time-based smooth scroll between two rAF samples.
+    // Assert the page's side instead: a smooth scroll that starts away from the
+    // end, with no instant command, carries the viewport to the end.
+    expect(
+      scrolls.some((scroll) => scroll.behavior === "smooth" && scroll.remaining > 8),
+      JSON.stringify(scrolls),
+    ).toBe(true);
+    expect(endDistance).toBeLessThanOrEqual(8);
   }
 }
 

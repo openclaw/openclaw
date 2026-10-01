@@ -1,6 +1,5 @@
-/** Exact-run final answer reads for subagent completion announcements. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
@@ -58,8 +57,13 @@ export async function readSubagentRunAnnounceResultUsing(
 ): Promise<PreparedAnnounceResult> {
   const isCurrent = captureAnnounceResultAuthority(child);
   const terminalReply = child.completion?.terminalReply;
-  if (terminalReply?.disposition !== "visible" || child.execution.outcome?.status !== "ok") {
-    return { text: resolveSubagentCompletionResultText(child), isCurrent };
+  const capturedResult = resolveSubagentCompletionResultText(child);
+  if (
+    !capturedResult ||
+    terminalReply?.disposition !== "visible" ||
+    child.execution.outcome?.status !== "ok"
+  ) {
+    return { text: capturedResult, isCurrent };
   }
   const runId = child.runId;
   const childSessionKey = child.childSessionKey;
@@ -125,12 +129,6 @@ function formatChildResultData(resultText?: string | null): string {
   );
 }
 
-function truncateChildCompletionField(value: string): string {
-  return value.length > MAX_CHILD_COMPLETION_FIELD_CHARS
-    ? `${truncateUtf16Safe(value, MAX_CHILD_COMPLETION_FIELD_CHARS - 1)}…`
-    : value;
-}
-
 type CompletionResultSource = Parameters<typeof resolveSubagentCompletionResultText>[0];
 type ChildCompletionExecution = CompletionResultSource["execution"] & {
   endedAt?: number;
@@ -150,14 +148,6 @@ export type ChildCompletionRow = {
   endedReason?: SubagentLifecycleEndedReason;
   completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
 };
-
-function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
-  return Boolean(
-    child.completion?.terminalReply ||
-    child.completion?.resultText?.trim() ||
-    child.completion?.fallbackResultText?.trim(),
-  );
-}
 
 export function buildChildCompletionFindings(
   children: Array<ChildCompletionRow>,
@@ -189,7 +179,10 @@ export function buildChildCompletionFindings(
     if (
       child.execution.outcome?.status === "ok" &&
       !resultText &&
-      hasCapturedChildCompletionReply(child)
+      child.completion?.terminalReply?.disposition !== "empty" &&
+      (child.completion?.terminalReply ||
+        child.completion?.resultText?.trim() ||
+        child.completion?.fallbackResultText?.trim())
     ) {
       continue;
     }
@@ -208,7 +201,7 @@ export function buildChildCompletionFindings(
           maxEscapedChars: MAX_CHILD_COMPLETION_FIELD_CHARS,
           truncationMarker: "…",
         }),
-        `status: ${truncateChildCompletionField(outcome)}`,
+        `status: ${truncateUtf16WithEllipsis(outcome, MAX_CHILD_COMPLETION_FIELD_CHARS)}`,
         formatChildResultData(resultText),
       ].join("\n"),
     );

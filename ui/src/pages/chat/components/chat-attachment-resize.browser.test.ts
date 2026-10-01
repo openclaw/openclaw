@@ -55,7 +55,11 @@ describe.runIf(browserMode)("oversized composer images", () => {
       const props: ChatAttachmentControlsProps = {
         attachments,
         getAttachments: () => attachments,
-        attachmentLimits: { maxBytes: 20 * 1024 * 1024, maxImageBytes: limit },
+        attachmentLimits: {
+          maxBytes: 20 * 1024 * 1024,
+          maxImageBytes: limit,
+          maxBatchBytes: 20 * 1024 * 1024,
+        },
         attachmentReads: reads,
         readSignal: signal,
         onAttachmentsChange: (next) => {

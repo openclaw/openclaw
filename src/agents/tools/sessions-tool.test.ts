@@ -184,7 +184,10 @@ describe("sessions tool", () => {
   });
 
   it("advertises the full model-visible sidebar presence contract", () => {
-    const tool = createSessionsTool({ agentSessionKey: "agent:main:main", callGateway: vi.fn() });
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      callGateway: vi.fn(),
+    });
     expect(tool.parameters).toMatchObject({
       type: "object",
       properties: {
@@ -242,51 +245,6 @@ describe("sessions tool", () => {
     expect(tool.parameters).not.toHaveProperty("properties.agentId");
     expect(tool.parameters).not.toHaveProperty("properties.fork");
     expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it("assigns a visible session owner and returns the projected identity", async () => {
-    const callGateway = vi.fn(async (request: { method: string }) => {
-      if (request.method !== "sessions.assignOwner") {
-        throw new Error(`unexpected method: ${request.method}`);
-      }
-      return {
-        ok: true,
-        key: "agent:main:main",
-        owner: {
-          actor: { type: "human", id: "profile-colin", label: "Colin" },
-          assignedBy: { type: "agent", id: "main" },
-          assignedAt: 10,
-        },
-      };
-    });
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
-      config: {},
-      callGateway: callGateway as never,
-    });
-
-    const result = await tool.execute("assign-colin", {
-      action: "assign_owner",
-      ownerType: "human",
-      ownerId: "profile-colin",
-    });
-
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "sessions.assignOwner",
-      params: {
-        key: "agent:main:main",
-        owner: { type: "human", id: "profile-colin" },
-      },
-      agentToolCaller: { agentId: "main", sessionKey: "agent:main:main" },
-    });
-    expect(result).toMatchObject({
-      content: [
-        {
-          type: "text",
-          text: expect.stringContaining('"label": "Colin"'),
-        },
-      ],
-    });
   });
 
   it("archives a visible target before write-scoped session deletion", async () => {

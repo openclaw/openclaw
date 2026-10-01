@@ -401,6 +401,10 @@ does not establish that the user violated a policy. OpenClaw preserves available
 provider findings and holds queued messages instead of retrying the conversation.
 Already-accepted results can still finish recording.
 
+Older saved errors that retain the policy code also display a safety precaution,
+even without the newer refusal diagnostics. Displaying that historical error does
+not create review findings or authorize continuation.
+
 In the Control UI, choose **Review findings**. When a supported Codex or ChatGPT
 Responses runtime supplies a continuation, the dialog shows its exact message
 before offering **Acknowledge findings and continue**. Confirmation applies only
@@ -408,6 +412,9 @@ to the displayed session and findings. It preserves the runtime, model, sandbox,
 and approval settings; a changed review requires another decision. The precaution
 clears only after the provider accepts the continuation. Previously queued
 messages remain held for individual review and retry.
+
+Continuation sends the acknowledged message exactly once as the next user turn.
+Runtime context stays separate, and existing transcript messages remain unchanged.
 
 Ordinary API-key Responses and incognito conversations do not offer continuation.
 Missing or incomplete findings also cannot authorize one. A stopped conversation

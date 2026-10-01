@@ -74,17 +74,11 @@ export async function applySkillProposalTransition(
     storeOptions(request.env, request.agentId, request.config),
   );
   const input = { ...request, env: store.env, eventActor: structuredClone(request.eventActor) };
-  const recoveryReadOptions = { config: input.config, store };
-  const lockedReadOptions = {
+  const initial = await dependencies.readRequiredProposal(input.proposalId, {
+    ...store,
     config: input.config,
-    reconcile: false,
-  };
-  const initial = await dependencies.readRequiredProposal(
-    input.proposalId,
-    input.env,
-    input.agentId,
-    recoveryReadOptions,
-  );
+    agentId: input.agentId,
+  });
   if (initial.record.status !== "pending") {
     throw new Error(
       `Only pending proposals can be applied. Current status: ${initial.record.status}.`,
@@ -115,9 +109,8 @@ export async function applySkillProposalTransition(
         async (lockedStore) => {
           const current = await dependencies.readRequiredProposal(
             input.proposalId,
-            input.env,
-            input.agentId,
-            { ...lockedReadOptions, store: lockedStore },
+            { ...lockedStore, config: input.config },
+            { reconcile: false },
           );
           if (
             current.record.status === "pending" &&
@@ -156,9 +149,8 @@ export async function applySkillProposalTransition(
     async (lockedStore) => {
       const read = await dependencies.readRequiredProposal(
         input.proposalId,
-        input.env,
-        input.agentId,
-        { ...lockedReadOptions, store: lockedStore },
+        { ...lockedStore, config: input.config },
+        { reconcile: false },
       );
       const { record, content } = read;
       if (record.status !== "pending") {

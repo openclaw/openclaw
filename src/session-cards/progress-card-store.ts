@@ -158,12 +158,7 @@ export function writeSessionProgressCard(
         if (input.expectedRevision !== undefined) {
           const currentRow = selectProgressCard(db, sessionKey);
           const current = currentRow ? rowToProgressCard(currentRow) : null;
-          if (
-            !currentRow ||
-            currentRow.revision !== input.expectedRevision ||
-            !current?.steps?.length ||
-            current.steps.some((step) => step.status !== "completed")
-          ) {
+          if (!currentRow || currentRow.revision !== input.expectedRevision || !current) {
             return { card: current };
           }
           previous = currentRow;

@@ -238,7 +238,7 @@ it("retires a repository-only target without falling back to its local workspace
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:main:repository-only";
     const repositories = getSessionRepositoryWorkspaceStore();
-    const repository = repositories.create({
+    const repository = await repositories.create({
       agentId: "main",
       sessionKey,
       url: "https://github.com/openclaw/openclaw",

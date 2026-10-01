@@ -752,25 +752,6 @@ describe("editMessageFeishu", () => {
     expect(mockClientUpdate).not.toHaveBeenCalled();
   });
 
-  it("patches interactive content for card edits", async () => {
-    mockClientPatch.mockResolvedValueOnce({ code: 0 });
-
-    const result = await editMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      messageId: "om_card",
-      card: { schema: "2.0" },
-    });
-
-    expect(mockClientPatch).toHaveBeenCalledWith({
-      path: { message_id: "om_card" },
-      data: {
-        content: JSON.stringify({ schema: "2.0" }),
-      },
-    });
-    expect(mockClientUpdate).not.toHaveBeenCalled();
-    expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
-  });
-
   it.each([
     { name: "rich-post", body: { text: "updated body" }, request: mockClientUpdate },
     { name: "interactive-card", body: { card: { schema: "2.0" } }, request: mockClientPatch },

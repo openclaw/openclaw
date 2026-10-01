@@ -203,7 +203,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
-  if (args.includes("scripts/run-node.mjs")) {
+  if (args.includes("scripts/prepare-vitest-runtime.mjs")) {
     return spawn(process.execPath, ["-e", ""], {
       ...options, env: { ...options.env, NODE_OPTIONS: "" },
     });
@@ -309,7 +309,7 @@ fs.existsSync = (entry) =>
     : existsSync(entry);
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
-  const kind = args.includes("scripts/run-node.mjs") ? "runtime"
+  const kind = args.includes("scripts/prepare-vitest-runtime.mjs") ? "runtime"
     : args.includes("scripts/tsdown-build.mts") ? "ai"
     : args.some(arg => arg === "vitest" || arg.endsWith("/vitest.mjs")) ? "reader" : null;
   return kind ? spawn(process.execPath, [${JSON.stringify(executable)}, kind,

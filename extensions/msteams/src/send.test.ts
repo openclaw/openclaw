@@ -59,7 +59,8 @@ vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
 }));
 
-vi.mock("./file-consent-helpers.js", () => ({
+vi.mock("./file-consent-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./file-consent-helpers.js")>()),
   requiresFileConsent: mockState.requiresFileConsent,
   prepareFileConsentActivity: mockState.prepareFileConsentActivity,
   prepareFileConsentActivityFs: mockState.prepareFileConsentActivityFs,
@@ -69,7 +70,8 @@ vi.mock("./pending-uploads-fs.js", () => ({
   setPendingUploadActivityIdFs: mockState.setPendingUploadActivityIdFs,
 }));
 
-vi.mock("./media-helpers.js", () => ({
+vi.mock("./media-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media-helpers.js")>()),
   extractFilename: mockState.extractFilename,
   extractMessageId: () => "message-1",
 }));

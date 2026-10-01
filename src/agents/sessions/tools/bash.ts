@@ -1,14 +1,9 @@
-/**
- * Built-in bash session tool.
- *
- * Executes local shell commands with streaming output accumulation and TUI renderers.
- */
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { formatDurationSeconds } from "../../../infra/format-time/format-duration.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { getBashShellEnv } from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { createLocalBashOperations, resolveBashTimeoutMs } from "./bash-local-exec.js";
@@ -35,16 +30,6 @@ export interface BashSpawnContext {
 }
 
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
-
-function resolveSpawnContext(
-  command: string,
-  cwd: string,
-  spawnHook?: BashSpawnHook,
-  shellPath?: string,
-): BashSpawnContext {
-  const baseContext: BashSpawnContext = { command, cwd, env: getBashShellEnv(shellPath) };
-  return spawnHook ? spawnHook(baseContext) : baseContext;
-}
 
 export interface BashToolOptions {
   /** Custom operations for command execution. Default: local shell */
@@ -91,10 +76,7 @@ function formatBashCall(args: { command?: string; timeout?: number } | undefined
 
 function rebuildBashResultRenderComponent(
   component: BashResultRenderComponent,
-  result: {
-    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-    details?: BashToolDetails;
-  },
+  result: AgentToolResult<BashToolDetails | undefined>,
   options: ToolRenderResultOptions,
   showImages: boolean,
   startedAt: number | undefined,
@@ -195,7 +177,12 @@ export function createBashToolDefinition(
     async execute(_toolCallId, { command, timeout }, signal, onUpdate, _ctx) {
       resolveBashTimeoutMs(timeout);
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);
+      const baseContext = {
+        command: resolvedCommand,
+        cwd,
+        env: getBashShellEnv(options?.shellPath),
+      };
+      const spawnContext = spawnHook ? spawnHook(baseContext) : baseContext;
       const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;

@@ -9,9 +9,7 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
-  cloneSessionEntry,
   formatLegacySqliteSessionMarkerForScope,
-  normalizeSqliteSessionKey,
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -19,6 +17,7 @@ import {
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import type { SessionActor } from "./session-entry-provenance.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
@@ -61,14 +60,8 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
   successorTarget: { canonicalKey: string; storeKeys: readonly string[] };
 }): Promise<RestartTombstoneRecoveryResult> {
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
-  const sourceTarget = normalizeLifecycleTarget({
-    ...params.sourceTarget,
-    storeKeys: [...params.sourceTarget.storeKeys],
-  });
-  const successorTarget = normalizeLifecycleTarget({
-    ...params.successorTarget,
-    storeKeys: [...params.successorTarget.storeKeys],
-  });
+  const sourceTarget = normalizeLifecycleTarget(params.sourceTarget);
+  const successorTarget = normalizeLifecycleTarget(params.successorTarget);
   let result: RestartTombstoneRecoveryResult = {
     status: "conflict",
     reason: "source-changed",
@@ -109,8 +102,8 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
             }
             result = {
               status: "existing",
-              sourceEntry: cloneSessionEntry(source),
-              successorEntry: cloneSessionEntry(linked),
+              sourceEntry: structuredClone(source),
+              successorEntry: structuredClone(linked),
               successorKey: recoveredSessionKey,
             };
             return undefined;
@@ -142,14 +135,14 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
           const parentSession = formatLegacySqliteSessionMarkerForScope({
             ...resolved,
             sessionId: source.sessionId,
-            sessionKey: normalizeSqliteSessionKey(sourceTarget.canonicalKey),
+            sessionKey: normalizeStoreSessionKey(sourceTarget.canonicalKey),
           });
           appendTranscriptEventsInTransaction(
             database,
             {
               ...resolved,
               sessionId: successorSessionId,
-              sessionKey: normalizeSqliteSessionKey(successorTarget.canonicalKey),
+              sessionKey: normalizeStoreSessionKey(successorTarget.canonicalKey),
             },
             [
               {
@@ -200,8 +193,8 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
           const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
           result = {
             status: "created",
-            sourceEntry: cloneSessionEntry(nextSource),
-            successorEntry: cloneSessionEntry(params.successorEntry),
+            sourceEntry: structuredClone(nextSource),
+            successorEntry: structuredClone(params.successorEntry),
             successorKey: successorTarget.canonicalKey,
           };
           return prepareSessionIdentityPublication(

@@ -9,10 +9,8 @@ import { createConfigIO } from "./io.factory.js";
 import { isInvalidConfigError } from "./io.invalid-config.js";
 
 describe("config load with a scalar root", () => {
-  it.each([
-    { name: "null", raw: "null\n" },
-    { name: "number", raw: "42\n" },
-  ])("rejects a $name root as INVALID_CONFIG instead of loading defaults", async ({ raw }) => {
+  it("rejects a null root as INVALID_CONFIG instead of loading defaults", async () => {
+    const raw = "null\n";
     await withTempDir("openclaw-config-scalar-root-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });

@@ -131,7 +131,7 @@ suite.define(() => {
         const hide = page.getByRole("menuitem", { name: "Hide from Involving me", exact: true });
         await expectBrowser(hide).toBeVisible();
         await captureUiProof(suite, page, "03-personal-hide-menu.png");
-        await gateway.setMethodResponse("sessions.list", list([home]));
+        await gateway.deferNext("sessions.setInvolvement");
         await hide.click();
         const request = await gateway.waitForRequest("sessions.setInvolvement");
         expect(request.params).toMatchObject({
@@ -139,12 +139,13 @@ suite.define(() => {
           expectedSessionId: mentioned.sessionId,
           hidden: true,
         });
+        const hiddenMentioned = { ...mentioned, hiddenFromInvolvingMe: true };
+        await gateway.setSessionsListResponse(list([home, hiddenMentioned]));
+        await gateway.setMethodResponse("sessions.list", list([home]));
+        await gateway.resolveDeferred("sessions.setInvolvement", { ok: true });
         await expectBrowser(target).toHaveCount(0);
 
-        await gateway.setMethodResponse(
-          "sessions.list",
-          list([home, { ...mentioned, hiddenFromInvolvingMe: true }]),
-        );
+        await gateway.setMethodResponse("sessions.list", list([home, hiddenMentioned]));
         await chooseFilter("all");
         await expectBrowser(target).toBeVisible();
         await target.hover();
@@ -152,14 +153,21 @@ suite.define(() => {
         const show = page.getByRole("menuitem", { name: "Show in Involving me", exact: true });
         await expectBrowser(show).toBeVisible();
         await captureUiProof(suite, page, "04-restore-from-all-owners.png");
-        await gateway.setMethodResponse("sessions.list", list([home, mentioned]));
+        await gateway.deferNext("sessions.setInvolvement");
         await show.click();
-        await gateway.waitForRequest("sessions.setInvolvement", { after: 1 });
-        expect((await gateway.getRequests("sessions.setInvolvement")).at(-1)?.params).toMatchObject(
-          { hidden: false },
-        );
+        const restoreRequest = await gateway.waitForRequest("sessions.setInvolvement", {
+          after: 1,
+        });
+        expect(restoreRequest.params).toMatchObject({
+          key: sessionKey,
+          expectedSessionId: mentioned.sessionId,
+          hidden: false,
+        });
+        await gateway.setSessionsListResponse(list([home, mentioned]));
+        await gateway.resolveDeferred("sessions.setInvolvement", { ok: true });
         await chooseFilter("involving-me");
         await expectBrowser(target).toBeVisible();
+        expect(await gateway.getRequests("sessions.setInvolvement")).toHaveLength(2);
         await page.reload();
         await waitForSessionRosterHydration(page);
         await expectBrowser(target).toBeVisible();

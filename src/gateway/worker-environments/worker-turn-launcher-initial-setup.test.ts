@@ -95,12 +95,14 @@ function readyEnvironment() {
       if (request.source.kind !== "local") {
         throw new Error("expected local workspace");
       }
-      request.source.journal.commit(MANIFEST_REF);
+      await request.source.journal.commit(MANIFEST_REF);
       return {
         manifestRef: MANIFEST_REF,
         changed: false,
         verifyStable: async () => {},
         verifyLocalStable: async () => {},
+        publishStagedResult: async () => {},
+        discardPreparedStagedResult: async () => {},
       };
     },
     syncWorkspace: vi.fn(),

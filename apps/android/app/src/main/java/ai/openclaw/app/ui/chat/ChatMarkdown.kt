@@ -337,7 +337,7 @@ private fun RenderMarkdownDisclosure(
   progressBars: Boolean,
 ) {
   var isExpanded by rememberSaveable { mutableStateOf(disclosure.isExpanded) }
-  val summarySource = chatMarkdownDisclosureSummarySource(disclosure.summary) { nativeString("Details") }
+  val summarySource = disclosure.summary ?: nativeString("Details")
   val summary =
     remember(summarySource, inlineStyles.linkColor) {
       buildChatInlineMarkdown(summarySource, linkColor = inlineStyles.linkColor)
@@ -742,11 +742,6 @@ internal sealed interface ChatMarkdownRenderBlock {
     val blocks: List<ChatMarkdownRenderBlock>,
   ) : ChatMarkdownRenderBlock
 }
-
-internal fun chatMarkdownDisclosureSummarySource(
-  authoredSummary: String?,
-  localizedDefault: () -> String,
-): String = authoredSummary ?: localizedDefault()
 
 internal fun parseChatMarkdownBlocks(text: String): List<ChatMarkdownRenderBlock> {
   val document = parseChatMarkdown(text)

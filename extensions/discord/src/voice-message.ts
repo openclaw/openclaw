@@ -127,7 +127,7 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
     const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
 
     const step = Math.max(1, Math.floor(samples.length / WAVEFORM_SAMPLES));
-    const waveform: number[] = [];
+    const waveform = Buffer.alloc(WAVEFORM_SAMPLES);
 
     for (let i = 0; i < WAVEFORM_SAMPLES && i * step < samples.length; i++) {
       let sum = 0;
@@ -139,14 +139,10 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
       const avg = count > 0 ? sum / count : 0;
       // Normalize to 0-255 (16-bit signed max is 32767)
       const normalized = Math.min(255, Math.round((avg / 32767) * 255));
-      waveform.push(normalized);
+      waveform[i] = normalized;
     }
 
-    while (waveform.length < WAVEFORM_SAMPLES) {
-      waveform.push(0);
-    }
-
-    return Buffer.from(waveform).toString("base64");
+    return waveform.toString("base64");
   } finally {
     await unlinkIfExists(tempPcm);
   }
@@ -413,19 +409,7 @@ export async function sendDiscordVoiceMessage(
   const flags = silent
     ? DISCORD_VOICE_MESSAGE_FLAG | SUPPRESS_NOTIFICATIONS_FLAG
     : DISCORD_VOICE_MESSAGE_FLAG;
-  const messagePayload: {
-    flags: number;
-    nonce: string;
-    enforce_nonce: true;
-    attachments: Array<{
-      id: string;
-      filename: string;
-      uploaded_filename: string;
-      duration_secs: number;
-      waveform: string;
-    }>;
-    message_reference?: { message_id: string; fail_if_not_exists: boolean };
-  } = {
+  const messagePayload = {
     flags,
     nonce: createDiscordMessageNonce(),
     enforce_nonce: true,
@@ -438,15 +422,8 @@ export async function sendDiscordVoiceMessage(
         waveform: metadata.waveform,
       },
     ],
+    ...(replyTo ? { message_reference: { message_id: replyTo, fail_if_not_exists: false } } : {}),
   };
-
-  // Note: Voice messages cannot have content, but can have message_reference for replies
-  if (replyTo) {
-    messagePayload.message_reference = {
-      message_id: replyTo,
-      fail_if_not_exists: false,
-    };
-  }
 
   let messageCreateMayHaveCommitted = false;
   try {

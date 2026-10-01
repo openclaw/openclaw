@@ -23,6 +23,20 @@ function createClientMock(): {
   };
 }
 
+type PublisherOptions = Parameters<typeof createClickClackActivityPublisher>[0];
+
+function createPublisher(
+  client: ActivityClient,
+  options: Partial<Omit<PublisherOptions, "client">> = {},
+) {
+  return createClickClackActivityPublisher({
+    client,
+    target: { channelId: "chn_1" },
+    turnId: "msg_turn",
+    ...options,
+  });
+}
+
 describe("createClickClackActivityPublisher", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -33,11 +47,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("coalesces cumulative commentary snapshots into one POST per segment", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-    });
+    const publisher = createPublisher(client);
 
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "Looking at" });
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "Looking at the repo" });
@@ -56,12 +66,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("PATCHes the commentary row when the snapshot grows after a debounce flush", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-      flushMs: 10,
-    });
+    const publisher = createPublisher(client, { flushMs: 10 });
 
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First" });
     await vi.advanceTimersByTimeAsync(20);
@@ -75,12 +80,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("keeps complete commentary during a partial successor and accepts shorter completion", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-      flushMs: 10,
-    });
+    const publisher = createPublisher(client, { flushMs: 10 });
 
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
     await vi.advanceTimersByTimeAsync(20);
@@ -105,10 +105,8 @@ describe("createClickClackActivityPublisher", () => {
 
   it("opens a new durable row for each commentary segment (item id)", async () => {
     const { client, createActivityMessage } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
+    const publisher = createPublisher(client, {
       target: { conversationId: "dcn_1" },
-      turnId: "msg_turn",
     });
 
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "before tool" });
@@ -124,11 +122,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("consumes canonical item ownership without rendering suppressed diagnostic siblings", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-    });
+    const publisher = createPublisher(client);
 
     // The runtime emits one opaque toolCallId across all frames of a call;
     // the lane prefix (tool:/command:) lives on itemId only.
@@ -189,11 +183,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("hides command metadata from item-only durable activity", async () => {
     const { client, createActivityMessage } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-    });
+    const publisher = createPublisher(client);
 
     publisher.onItemEvent({
       itemId: "tool:toolu_1",
@@ -213,11 +203,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("posts the upgraded body directly when frames land before the first POST runs", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-    });
+    const publisher = createPublisher(client);
 
     publisher.onItemEvent({ toolCallId: "toolu_1", kind: "tool", name: "read" });
     publisher.onItemEvent({
@@ -238,11 +224,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("renders non-tool item kinds as commentary rows and skips lifecycle lanes", async () => {
     const { client, createActivityMessage } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-    });
+    const publisher = createPublisher(client);
 
     publisher.onItemEvent({ itemId: "p1", kind: "plan", title: "Plan", summary: "step one" });
     publisher.onItemEvent({ itemId: "life1", kind: "lifecycle", progressText: "internal state" });
@@ -257,12 +239,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("normalizes reasoning-style progress lanes into durable commentary rows", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-      flushMs: 10,
-    });
+    const publisher = createPublisher(client, { flushMs: 10 });
 
     publisher.onItemEvent({ itemId: "empty1", kind: "thinking", progressText: " " });
     publisher.onItemEvent({
@@ -316,12 +293,7 @@ describe("createClickClackActivityPublisher", () => {
       throw new Error("boom");
     });
     const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
-    const publisher = createClickClackActivityPublisher({
-      client: { createActivityMessage, updateMessageBody } as ActivityClient,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-      onError,
-    });
+    const publisher = createPublisher({ createActivityMessage, updateMessageBody }, { onError });
 
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "streaming" });
     await expect(publisher.finalize()).resolves.toBeUndefined();
@@ -330,11 +302,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("stamps resolved provenance onto rows posted after setProvenance", async () => {
     const { client, createActivityMessage } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-    });
+    const publisher = createPublisher(client);
 
     publisher.setProvenance({ model: "anthropic/claude-opus-4-8", thinking: "low" });
     publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "working on it" });

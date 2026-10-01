@@ -166,28 +166,31 @@ import Testing
         defer { clearTLSFingerprint(stableID: stableID) }
         self.clearTLSFingerprint(stableID: stableID)
 
-        let defaults = UserDefaults.standard
-        defaults.set(true, forKey: "gateway.autoconnect")
-        defaults.set(false, forKey: "gateway.manual.enabled")
-        defaults.removeObject(forKey: "gateway.last.host")
-        defaults.removeObject(forKey: "gateway.last.port")
-        defaults.removeObject(forKey: "gateway.last.tls")
-        defaults.removeObject(forKey: "gateway.last.stableID")
-        defaults.removeObject(forKey: "gateway.last.kind")
-        defaults.removeObject(forKey: "gateway.preferredStableID")
-        defaults.set(stableID, forKey: "gateway.lastDiscoveredStableID")
+        withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": false,
+            "gateway.preferredStableID": nil,
+            "gateway.lastDiscoveredStableID": stableID,
+        ]) {
+            let defaults = UserDefaults.standard
+            defaults.removeObject(forKey: "gateway.last.host")
+            defaults.removeObject(forKey: "gateway.last.port")
+            defaults.removeObject(forKey: "gateway.last.tls")
+            defaults.removeObject(forKey: "gateway.last.stableID")
+            defaults.removeObject(forKey: "gateway.last.kind")
 
-        let gateway = self.makeDiscoveredGateway(
-            stableID: stableID,
-            lanHost: "test.local",
-            tailnetDns: nil,
-            gatewayPort: 18789,
-            fingerprint: nil)
-        let controller = self.makeController()
-        controller._test_setGateways([gateway])
-        controller._test_triggerAutoConnect()
+            let gateway = self.makeDiscoveredGateway(
+                stableID: stableID,
+                lanHost: "test.local",
+                tailnetDns: nil,
+                gatewayPort: 18789,
+                fingerprint: nil)
+            let controller = self.makeController()
+            controller._test_setGateways([gateway])
+            controller._test_triggerAutoConnect()
 
-        #expect(controller._test_didAutoConnect() == false)
+            #expect(controller._test_didAutoConnect() == false)
+        }
     }
 
     @Test @MainActor func `manual connections force TLS for non loopback hosts`() {

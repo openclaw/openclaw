@@ -118,10 +118,7 @@ export function setSecretsStoreEntry(
       kind: draft.kind,
       ...(draft.kind === "secret"
         ? {
-            allowedHosts: draft.allowedHosts
-              .split(/[\s,]+/u)
-              .map((host) => host.trim())
-              .filter(Boolean),
+            allowedHosts: draft.allowedHosts.split(/[\s,]+/u).filter(Boolean),
           }
         : {}),
     }),

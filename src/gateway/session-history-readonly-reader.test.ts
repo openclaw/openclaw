@@ -1,5 +1,6 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { isSessionNodePayloadSelect } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
   readLatestSessionTranscriptMessageEvent,
@@ -196,7 +197,8 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
           const statement = prepare(sql);
           if (
             selectedInTransaction === undefined &&
-            /^select \* from "session_nodes" where "session_key" = /i.test(sql)
+            isSessionNodePayloadSelect(sql) &&
+            / from "session_nodes" where "session_key" = /i.test(sql)
           ) {
             selectedInTransaction = connection.isTransaction;
             // Commit after admission but before the exact row read. The same snapshot

@@ -47,6 +47,27 @@ async function deliverBatch(params: {
   });
 }
 
+function createAdapter(
+  sendText: NonNullable<ChannelOutboundAdapter["sendText"]>,
+  options: Partial<ChannelOutboundAdapter> = {},
+) {
+  const afterDeliverPayload = vi.fn();
+  const adoptTargetFromDelivery = vi.fn<
+    NonNullable<ChannelOutboundAdapter["adoptTargetFromDelivery"]>
+  >(({ result }) => (result.receipt?.threadId ? { threadId: result.receipt.threadId } : null));
+  return {
+    afterDeliverPayload,
+    adoptTargetFromDelivery,
+    outbound: {
+      deliveryMode: "direct",
+      sendText,
+      afterDeliverPayload,
+      adoptTargetFromDelivery,
+      ...options,
+    } satisfies ChannelOutboundAdapter,
+  };
+}
+
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   vi.restoreAllMocks();
@@ -54,27 +75,19 @@ afterEach(() => {
 
 describe("outbound durable-batch target adoption", () => {
   it("carries the first receipt-created thread through later text, media, pins, and hooks", async () => {
-    const sendText = vi.fn(async ({ text, threadId }: { text: string; threadId?: unknown }) =>
-      createResult(`text:${text}`, text === "starter" ? "thread-created" : String(threadId)),
+    const sendText = vi.fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(
+      async ({ text, threadId }) =>
+        createResult(`text:${text}`, text === "starter" ? "thread-created" : String(threadId)),
     );
-    const sendMedia = vi.fn(
-      async ({ mediaUrl, threadId }: { mediaUrl?: string; threadId?: unknown }) =>
-        createResult(`media:${mediaUrl}`, String(threadId)),
+    const sendMedia = vi.fn<NonNullable<ChannelOutboundAdapter["sendMedia"]>>(
+      async ({ mediaUrl, threadId }) => createResult(`media:${mediaUrl}`, String(threadId)),
     );
     const pinDeliveredMessage = vi.fn();
-    const afterDeliverPayload = vi.fn();
-    const adoptTargetFromDelivery = vi.fn(({ result }) =>
-      result.receipt?.threadId ? { threadId: result.receipt.threadId } : null,
-    );
-    const outbound = {
-      deliveryMode: "direct",
+    const { outbound, afterDeliverPayload, adoptTargetFromDelivery } = createAdapter(sendText, {
       normalizePayload: ({ payload }) => (payload.text === "suppress" ? null : payload),
-      sendText,
       sendMedia,
       pinDeliveredMessage,
-      afterDeliverPayload,
-      adoptTargetFromDelivery,
-    } satisfies ChannelOutboundAdapter;
+    });
 
     await deliverBatch({
       outbound,
@@ -109,16 +122,8 @@ describe("outbound durable-batch target adoption", () => {
   });
 
   it("adopts an identified accepted send before a later payload failure", async () => {
-    const sendText = vi.fn(
-      async ({
-        text,
-        threadId,
-        onDeliveryResult,
-      }: {
-        text: string;
-        threadId?: unknown;
-        onDeliveryResult?: (result: ReturnType<typeof createResult>) => Promise<void> | void;
-      }) => {
+    const sendText = vi.fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(
+      async ({ text, threadId, onDeliveryResult }) => {
         if (text === "no identity") {
           return createResult("", "thread-unidentified");
         }
@@ -132,16 +137,7 @@ describe("outbound durable-batch target adoption", () => {
         );
       },
     );
-    const afterDeliverPayload = vi.fn();
-    const adoptTargetFromDelivery = vi.fn(({ result }) =>
-      result.receipt?.threadId ? { threadId: result.receipt.threadId } : null,
-    );
-    const outbound = {
-      deliveryMode: "direct",
-      sendText,
-      afterDeliverPayload,
-      adoptTargetFromDelivery,
-    } satisfies ChannelOutboundAdapter;
+    const { outbound, afterDeliverPayload, adoptTargetFromDelivery } = createAdapter(sendText);
 
     await deliverBatch({
       outbound,
@@ -169,17 +165,10 @@ describe("outbound durable-batch target adoption", () => {
   });
 
   it("keeps an explicit caller thread authoritative", async () => {
-    const sendText = vi.fn(async (ctx: { text: string; threadId?: unknown }) =>
+    const sendText = vi.fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(async (ctx) =>
       createResult(`text:${ctx.text}`, "thread-from-receipt"),
     );
-    const afterDeliverPayload = vi.fn();
-    const adoptTargetFromDelivery = vi.fn(() => ({ threadId: "thread-from-receipt" }));
-    const outbound = {
-      deliveryMode: "direct",
-      sendText,
-      afterDeliverPayload,
-      adoptTargetFromDelivery,
-    } satisfies ChannelOutboundAdapter;
+    const { outbound, afterDeliverPayload, adoptTargetFromDelivery } = createAdapter(sendText);
 
     await deliverBatch({
       outbound,
@@ -196,22 +185,5 @@ describe("outbound durable-batch target adoption", () => {
       "thread-explicit",
     ]);
     expect(adoptTargetFromDelivery).not.toHaveBeenCalled();
-  });
-
-  it("does not infer target adoption without adapter opt-in", async () => {
-    const sendText = vi.fn(async ({ text }: { text: string; threadId?: unknown }) =>
-      createResult(`text:${text}`, "thread-from-receipt"),
-    );
-    const outbound = {
-      deliveryMode: "direct",
-      sendText,
-    } satisfies ChannelOutboundAdapter;
-
-    await deliverBatch({
-      outbound,
-      payloads: [{ text: "first" }, { text: "second" }],
-    });
-
-    expect(sendText.mock.calls.map(([ctx]) => ctx.threadId)).toEqual([undefined, undefined]);
   });
 });

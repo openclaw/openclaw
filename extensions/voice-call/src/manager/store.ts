@@ -20,7 +20,6 @@ export const CALL_RECORD_EVENT_CHUNKS_NAMESPACE = "call-record-event-chunks";
 export const MAX_CALL_RECORD_EVENTS = 1000;
 /** Extra metadata entries retained so pruning can safely trim oldest rows. */
 export const CALL_RECORD_EVENT_META_MAX_ENTRIES = MAX_CALL_RECORD_EVENTS + 100;
-/** Maximum chunks allowed for one persisted call record event. */
 const MAX_CHUNKS_PER_CALL_RECORD_EVENT = 48;
 export const CALL_RECORD_CHUNK_MAX_ENTRIES =
   MAX_CALL_RECORD_EVENTS * MAX_CHUNKS_PER_CALL_RECORD_EVENT + MAX_CHUNKS_PER_CALL_RECORD_EVENT;
@@ -51,7 +50,6 @@ type PersistedCallRecord = {
   orderKey: string;
 };
 
-/** Pair of plugin state stores used for call record events. */
 type CallRecordStateStores = {
   events: PluginStateKeyedStore<CallRecordEventMeta>;
   chunks: PluginStateKeyedStore<CallRecordEventChunk>;
@@ -66,12 +64,10 @@ export function resolveVoiceCallLegacyCallLogPath(storePath: string): string {
   return path.join(storePath, "calls.jsonl");
 }
 
-/** Build env for plugin state stores rooted at the voice-call store path. */
 function resolvePluginStateEnv(storePath: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: storePath };
 }
 
-/** Open the plugin state stores when the runtime is available. */
 function createCallRecordStateStores(
   storePath: string,
   stateRuntime?: VoiceCallStateRuntime["state"],
@@ -130,7 +126,6 @@ function buildNewEventKey(order: { persistedAt: number; sequence: number }): str
   return `event:${order.persistedAt.toString(36)}:${String(order.sequence).padStart(6, "0")}:${randomUUID()}`;
 }
 
-/** Recover the sequence segment from newer event keys. */
 function parseEventKeySequence(key: string): number {
   const match = /^event:[^:]+:(\d+):/.exec(key);
   const sequence = match?.[1];
@@ -175,7 +170,6 @@ export function parseVoiceCallRecordLine(line: string, sequence = 0): PersistedC
   }
 }
 
-/** Count storage chunks needed for a call record. */
 function countCallRecordChunks(call: CallRecord): number {
   return Math.max(
     1,
@@ -310,7 +304,6 @@ function isValidCallRecordChunkCount(chunkCount: number): boolean {
   );
 }
 
-/** Read and reassemble one chunked call record event. */
 async function readCallRecordEvent(
   stores: CallRecordStateStores,
   eventKey: string,

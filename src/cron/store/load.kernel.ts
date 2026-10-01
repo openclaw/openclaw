@@ -3,6 +3,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   deleteCronJobRowInDatabase,
   fingerprintCronJobRows,
+  fingerprintCronRuntimeRows,
   loadedCronStoreFromRows,
   loadCronRows,
 } from "./row-codec.js";
@@ -65,7 +66,13 @@ export function loadCronStoreFromDatabase(
       });
     }
   }
-  return !writer ? loaded : { ...loaded, jobsFingerprint: fingerprintCronJobRows(rows) };
+  return !writer
+    ? loaded
+    : {
+        ...loaded,
+        jobsFingerprint: fingerprintCronJobRows(rows),
+        runtimeFingerprint: fingerprintCronRuntimeRows(rows),
+      };
 }
 
 function repairLoadedCronRuntimeAuthority(

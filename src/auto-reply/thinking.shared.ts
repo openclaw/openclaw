@@ -85,28 +85,13 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
     return "xhigh";
   }
   // `none` is a documented provider-native spelling for disabled reasoning; store canonical off.
-  if (["off", "none"].includes(key)) {
-    return "off";
-  }
-  if (["on", "enable", "enabled"].includes(key)) {
-    return "low";
-  }
-  if (["min", "minimal"].includes(key)) {
-    return "minimal";
-  }
-  if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
-    return "low";
-  }
-  if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
-    return "medium";
-  }
-  if (["high", "ultrathink", "thinkhardest", "highest"].includes(key)) {
-    return "high";
-  }
-  if (["think"].includes(key)) {
-    return "minimal";
-  }
-  return undefined;
+  return normalizeAliasedLevel<ThinkLevel>(key, [
+    ["off", "none"],
+    ["low", "on", "enable", "enabled", "thinkhard", "think-hard", "think_hard"],
+    ["minimal", "min", "think"],
+    ["medium", "mid", "med", "thinkharder", "think-harder", "harder"],
+    ["high", "ultrathink", "thinkhardest", "highest"],
+  ]);
 }
 
 /** Returns true for command values that clear an inherited session override. */

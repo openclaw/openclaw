@@ -397,6 +397,11 @@ create agent work workspace ~/path/to/work model openai/gpt-6-astra
 Agent creation may name only the current live-verified default model. Omit the
 model to inherit that route.
 
+Rescue approval preserves optional agent details such as
+`create agent work purpose "Write release notes" workspace ~/path/to/work`.
+For `set default model <provider/model> for agent work`, approval keeps the
+selected agent rather than applying the change to the global default.
+
 Remote rescue is an admin surface and must be treated like remote config repair, not normal chat.
 
 Security contract for remote rescue:

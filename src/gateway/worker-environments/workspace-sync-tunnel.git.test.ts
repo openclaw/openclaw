@@ -11,6 +11,8 @@ import {
   memoryWorkspaceJournal,
   startConnectedTunnel,
 } from "./tunnel.test-support.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 it("materializes a large dirty git workspace as a credential-free commit-capable clone", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-git-sync-"));
@@ -169,11 +171,18 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     const journal = memoryWorkspaceJournal((manifestRef) => {
       acceptedManifestRef = manifestRef;
     });
+    const quiescence = { assertActive: async () => {}, resume: async () => {} };
     const reconciled = await handle.reconcileWorkspace({
-      source: { kind: "local", path: localPath, journal },
+      source: {
+        kind: "local",
+        path: localPath,
+        journal,
+        stagedResult: { ref: workerWorkspaceResultRef("git-changed"), record: () => {} },
+      },
       remoteWorkspaceDir: result.remoteWorkspaceDir,
       baseManifestRef: result.manifestRef,
     });
+    await verifyReconciledWorkspaceFinal(reconciled, quiescence);
     expect(reconciled).toMatchObject({ changed: true });
     expect(checkedPartialManifest).toBe(true);
     for (const relative of ownership.unownedFiles) {
@@ -213,10 +222,16 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     ).rejects.toThrow();
     expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
     const unchanged = await handle.reconcileWorkspace({
-      source: { kind: "local", path: localPath, journal },
+      source: {
+        kind: "local",
+        path: localPath,
+        journal,
+        stagedResult: { ref: workerWorkspaceResultRef("git-unchanged"), record: () => {} },
+      },
       remoteWorkspaceDir: result.remoteWorkspaceDir,
       baseManifestRef: acceptedManifestRef,
     });
+    await verifyReconciledWorkspaceFinal(unchanged, quiescence);
     expect(unchanged).toMatchObject({ manifestRef: acceptedManifestRef, changed: false });
     await unchanged.verifyStable();
     await unchanged.verifyLocalStable();
@@ -251,7 +266,12 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
     // Neither outcome may satisfy regular-file manifest admission.
     await expect(
       handle.reconcileWorkspace({
-        source: { kind: "local", path: localPath, journal: memoryWorkspaceJournal() },
+        source: {
+          kind: "local",
+          path: localPath,
+          journal: memoryWorkspaceJournal(),
+          stagedResult: { ref: workerWorkspaceResultRef("git-invalid"), record: () => {} },
+        },
         remoteWorkspaceDir: result.remoteWorkspaceDir,
         baseManifestRef: result.manifestRef,
       }),

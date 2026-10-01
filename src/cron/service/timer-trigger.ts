@@ -1,5 +1,4 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { CronConfig } from "../../config/types.cron.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
@@ -143,7 +142,6 @@ export function resolveCronNextRunWithLowerBound(params: {
 }
 
 export function resolveTransientCronRetryDecision(params: {
-  cronConfig?: CronConfig;
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
   lastErrorReason?: CronJob["state"]["lastErrorReason"];
@@ -196,7 +194,6 @@ export function resolveTransientCronRetryDecision(params: {
 }
 
 export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
-  cronConfig?: CronConfig;
   consecutiveSkipped: number | undefined;
 }): DisabledHeartbeatOneShotRetryDecision {
   const consecutiveSkipped = params.consecutiveSkipped ?? 0;

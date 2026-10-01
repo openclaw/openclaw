@@ -57,7 +57,7 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
 <AccordionGroup>
   <Accordion title="Live stream preview (message edits)">
-    OpenClaw streams partial replies in real time in direct chats, groups, and topics: send a preview message, then `editMessageText` repeatedly, finalizing in place.
+    OpenClaw streams partial replies in real time in direct chats, groups, and topics: send a preview message, then `editMessageText` repeatedly, finalizing in place. Preview edits that carry writer authority, such as finalization, recheck the active writer before each queued Telegram request, so a replaced turn cannot send a stale edit from that path.
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `progress`); set `mode: "partial"` to stream answer text into the preview instead of a status draft
     - short initial answer previews are debounced, then materialized after a bounded delay if the run is still active

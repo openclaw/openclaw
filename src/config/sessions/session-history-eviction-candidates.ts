@@ -15,6 +15,7 @@ import {
 } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { isSessionEntryDiskBudgetEvictable } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -46,6 +47,7 @@ export function readDiskEvictableArchivedSessionBatch(params: {
       let query = db
         .selectFrom("session_nodes")
         .select(["archived_at", "current_session_id", "entry_json", "session_key", "updated_at"])
+        .select(sessionEntrySnapshotColumns)
         .where("archived_at", "is not", null)
         .orderBy("archived_at", "asc")
         .orderBy("session_key", "asc")

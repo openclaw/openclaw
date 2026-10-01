@@ -162,7 +162,7 @@ def extract_prebuilt_archive(tar, destination):
     tar.extractall(destination)
 
 
-def ensure_prebuilt_tdjson():
+def ensure_prebuilt_tdjson(*, download=True):
     entry = TDLIB_PREBUILT.get((platform.system().lower(), platform.machine().lower()))
     if not entry:
         return None
@@ -173,6 +173,8 @@ def ensure_prebuilt_tdjson():
     lib = cache_dir / "package" / libname
     if lib.exists():
         return lib
+    if not download:
+        return None
     url = (
         f"https://registry.npmjs.org/@prebuilt-tdlib/{package}"
         f"/-/{package}-{TDLIB_PACKAGE_VERSION}.tgz"

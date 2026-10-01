@@ -1,6 +1,6 @@
 // Channels page renders Nostr status.
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot, NostrStatus } from "../../api/types.ts";
+import type { ChannelAccountSnapshot, NostrProfile, NostrStatus } from "../../api/types.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -59,7 +59,7 @@ export function renderNostrCard(params: {
 
   const renderAccountRow = (account: ChannelAccountSnapshot) => {
     const publicKey = (account as { publicKey?: string }).publicKey;
-    const profile = (account as { profile?: { name?: string; displayName?: string } }).profile;
+    const profile = (account as { profile?: NostrProfile }).profile;
     const displayName = profile?.displayName ?? profile?.name ?? account.name ?? account.accountId;
 
     return renderChannelAccountRow({
@@ -88,19 +88,7 @@ export function renderNostrCard(params: {
     }
 
     const profile =
-      (
-        primaryAccount as
-          | {
-              profile?: {
-                name?: string;
-                displayName?: string;
-                about?: string;
-                picture?: string;
-                nip05?: string;
-              };
-            }
-          | undefined
-      )?.profile ?? nostr?.profile;
+      (primaryAccount as { profile?: NostrProfile } | undefined)?.profile ?? nostr?.profile;
     const { name, displayName, about, picture, nip05 } = profile ?? {};
     const hasAnyProfileData = name || displayName || about || picture || nip05;
 

@@ -8,6 +8,7 @@ import ai.openclaw.app.SessionCatalog
 import ai.openclaw.app.SessionCatalogEntry
 import ai.openclaw.app.SessionCatalogState
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.SessionSnooze
 import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.defaultSidebarVisiblePages
 import ai.openclaw.app.i18n.nativeString
@@ -197,10 +198,11 @@ internal data class SidebarSessionPresentation(
 internal fun sidebarRecentSessions(
   sessions: List<ChatSessionEntry>,
   currentSessionKey: String = "",
+  nowMs: Long = System.currentTimeMillis(),
 ): List<ChatSessionEntry> =
   sessions
     .asSequence()
-    .filter { isSessionVisibleInNavigation(it, currentSessionKey) }
+    .filter { isSessionVisibleInNavigation(it, currentSessionKey, nowMs) }
     .sortedWith(
       compareByDescending<ChatSessionEntry> { it.pinned == true }
         .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
@@ -213,8 +215,9 @@ internal fun sidebarSessionPresentation(
   expanded: Boolean,
   excludedSessionKeys: Set<String> = emptySet(),
   currentSessionKey: String = "",
+  nowMs: Long = System.currentTimeMillis(),
 ): SidebarSessionPresentation {
-  val activeSessions = sidebarRecentSessions(sessions, currentSessionKey)
+  val activeSessions = sidebarRecentSessions(sessions, currentSessionKey, nowMs)
   val pinned = activeSessions.filter { it.pinned == true }
   val recent =
     activeSessions.filter { session ->
@@ -254,7 +257,6 @@ internal data class SidebarCatalogWorkspace(
 
 internal data class SidebarCatalogHost(
   val stableId: String,
-  val catalogId: String,
   val label: String,
   val connected: Boolean,
   val errorText: String?,
@@ -290,10 +292,10 @@ internal fun sidebarCatalogSessionCreationEnabled(
   canMutateSessions: Boolean,
 ): Boolean = catalog.canCreateSession && canMutateSessions
 
-internal fun toggleSidebarCatalogExpansion(
-  expandedCatalogIds: List<String>,
-  catalogId: String,
-): List<String> = if (catalogId in expandedCatalogIds) expandedCatalogIds - catalogId else expandedCatalogIds + catalogId
+internal fun toggleSidebarExpansion(
+  ids: List<String>,
+  id: String,
+): List<String> = if (id in ids) ids - id else ids + id
 
 internal fun sidebarCatalogRefreshNeeded(
   catalogAgentId: String?,
@@ -347,7 +349,6 @@ internal fun sidebarCatalogHosts(catalogs: List<SessionCatalog>): List<SidebarCa
       }
       SidebarCatalogHost(
         stableId = listOf(catalog.id, host.hostId).joinToString("::"),
-        catalogId = catalog.id,
         label = host.label,
         connected = host.connected,
         errorText = host.errorText,
@@ -428,6 +429,7 @@ internal fun OpenClawSidebar(
   rowHostBand: IntRect? = null,
 ) {
   val palette = sidebarPalette(ClawTheme.colors)
+  var sessionNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
   val scope = rememberCoroutineScope()
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val scrollState = rememberScrollState()
@@ -488,6 +490,7 @@ internal fun OpenClawSidebar(
       expanded = sessionsExpanded,
       excludedSessionKeys = catalogSessionKeys,
       currentSessionKey = activeSessionKey,
+      nowMs = sessionNowMs,
     )
   val pinnedSessions = recentPresentation.pinned
   val recentSections = recentPresentation.recentSections
@@ -582,12 +585,21 @@ internal fun OpenClawSidebar(
       query = query,
       archived = false,
     )
+  val nextWakeMs =
+    listOfNotNull(
+      SessionSnooze.nextWakeMs(sessions, sessionNowMs),
+      SessionSnooze.nextWakeMs(searchState.entries, sessionNowMs),
+    ).minOrNull()
+  LaunchedEffect(nextWakeMs) {
+    nextWakeMs?.let { sessionNowMs = awaitSessionStatusExpiry(it) }
+  }
   val searchResults =
     resolveSessionBrowserEntries(
       entries = searchState.entries,
       currentSessionKey = activeSessionKey,
       filter = SessionFilter.Recent,
       recentFirst = true,
+      nowMs = sessionNowMs,
     )
 
   Column(
@@ -833,7 +845,7 @@ internal fun OpenClawSidebar(
                           null
                         },
                       onClick = {
-                        expandedCatalogIds = toggleSidebarCatalogExpansion(expandedCatalogIds, catalog.id)
+                        expandedCatalogIds = toggleSidebarExpansion(expandedCatalogIds, catalog.id)
                       },
                     )
                     if (section.expanded) {
@@ -848,20 +860,10 @@ internal fun OpenClawSidebar(
                         collapsedWorkspaceIds = collapsedCatalogWorkspaceIds.toSet(),
                         palette = palette,
                         onToggleHost = { stableId ->
-                          collapsedCatalogHostIds =
-                            if (stableId in collapsedCatalogHostIds) {
-                              collapsedCatalogHostIds - stableId
-                            } else {
-                              collapsedCatalogHostIds + stableId
-                            }
+                          collapsedCatalogHostIds = toggleSidebarExpansion(collapsedCatalogHostIds, stableId)
                         },
                         onToggleWorkspace = { stableId ->
-                          collapsedCatalogWorkspaceIds =
-                            if (stableId in collapsedCatalogWorkspaceIds) {
-                              collapsedCatalogWorkspaceIds - stableId
-                            } else {
-                              collapsedCatalogWorkspaceIds + stableId
-                            }
+                          collapsedCatalogWorkspaceIds = toggleSidebarExpansion(collapsedCatalogWorkspaceIds, stableId)
                         },
                         onSelectSession = onSelectCatalogSession,
                         onLoadMore = viewModel::loadMoreSessionCatalog,
@@ -879,7 +881,7 @@ internal fun OpenClawSidebar(
 
           SidebarCollapsibleHeader(
             label = nativeString("Recent"),
-            attention = if (recentExpanded) null else attentionFor(sidebarRecentSessions(sessions, activeSessionKey).filter { it.pinned != true && it.key !in catalogSessionKeys }.map { it.key }),
+            attention = if (recentExpanded) null else attentionFor(sidebarRecentSessions(sessions, activeSessionKey, sessionNowMs).filter { it.pinned != true && it.key !in catalogSessionKeys }.map { it.key }),
             expanded = recentExpanded,
             palette = palette,
             onClick = { recentExpanded = !recentExpanded },
@@ -1274,22 +1276,18 @@ private fun SidebarSessionCatalog(
           }
         }
       }
-      hosts
-        .filter(SidebarCatalogHost::canLoadMore)
-        .map(SidebarCatalogHost::catalogId)
-        .distinct()
-        .forEach { catalogId ->
-          if (catalogId in state.loadingMoreCatalogIds) {
-            SidebarCatalogStatus(nativeString("Loading more sessions"), palette, progress = true)
-          } else {
-            SidebarActionRow(
-              label = nativeString("Load more"),
-              icon = Icons.Default.KeyboardArrowDown,
-              palette = palette,
-              onClick = { onLoadMore(catalogId) },
-            )
-          }
+      if (hosts.any(SidebarCatalogHost::canLoadMore)) {
+        if (catalog.id in state.loadingMoreCatalogIds) {
+          SidebarCatalogStatus(nativeString("Loading more sessions"), palette, progress = true)
+        } else {
+          SidebarActionRow(
+            label = nativeString("Load more"),
+            icon = Icons.Default.KeyboardArrowDown,
+            palette = palette,
+            onClick = { onLoadMore(catalog.id) },
+          )
         }
+      }
     }
   }
 }

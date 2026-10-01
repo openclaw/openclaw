@@ -396,7 +396,6 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
       // Keep their lifecycle registry local while the monitor owns the durable claim.
       const wrappedLifecycle: FeishuIngressLifecycle = {
         ...lifecycle,
-        onAdopted: lifecycle.onAdopted,
         onAbandoned: async () => {
           await Promise.allSettled([...abandonHandlers].map(async (handler) => await handler()));
           await lifecycle.onAbandoned();

@@ -123,10 +123,6 @@ extension OpenClawChatViewModel {
 
     /// True while replacing this model could move an attachment across chats.
     public var isAttachmentOwnerPinned: Bool {
-        self.blocksAttachmentOwnerChange
-    }
-
-    var blocksAttachmentOwnerChange: Bool {
         attachmentOwnerIsActive() ||
             isSendingAttachmentDraft ||
             attachmentStagingCount > 0 ||
@@ -134,7 +130,7 @@ extension OpenClawChatViewModel {
     }
 
     func canCreateSessionForImmediateSwitch() -> Bool {
-        guard !self.blocksAttachmentOwnerChange else {
+        guard !self.isAttachmentOwnerPinned else {
             self.errorText = String(
                 localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
             return false

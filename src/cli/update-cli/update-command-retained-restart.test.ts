@@ -73,7 +73,7 @@ beforeEach(() => {
     unitName: "fixture-A.service",
     unitPath: path.join(a, "unit"),
   });
-  vi.spyOn(systemdScope, "assertNoSystemGatewayOwnership").mockResolvedValue();
+  vi.spyOn(systemdScope, "assertNoSystemGatewayOwnershipForActivation").mockResolvedValue();
   vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue();
 });
 afterEach(() => {

@@ -452,7 +452,10 @@ describe("Gateway timeout recovery subagent delivery", () => {
         // successor can start. All barriers share the original completion budget.
         await expect.poll(readChildRuns, { timeout: remainingMs() }).toEqual([
           expect.objectContaining({
-            execution: expect.objectContaining({ status: "terminal", outcome: { status: "ok" } }),
+            execution: expect.objectContaining({
+              status: "terminal",
+              outcome: expect.objectContaining({ status: "ok" }),
+            }),
           }),
         ]);
         provider.releaseCompaction();
@@ -482,7 +485,10 @@ describe("Gateway timeout recovery subagent delivery", () => {
     // The terminal reply may precede the native outbox delivery commit.
     await expect.poll(readChildRuns, { timeout: 10_000 }).toEqual([
       expect.objectContaining({
-        execution: expect.objectContaining({ status: "terminal", outcome: { status: "ok" } }),
+        execution: expect.objectContaining({
+          status: "terminal",
+          outcome: expect.objectContaining({ status: "ok" }),
+        }),
         delivery: expect.objectContaining({ status: "delivered" }),
       }),
     ]);

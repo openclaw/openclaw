@@ -143,13 +143,10 @@ function resolveRealtimeVoiceWakeNames(params: {
   const configuredAgentNames = [agent?.name, agent?.identity?.name]
     .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
     .filter((name): name is string => Boolean(name));
-  const productWakeNames = [normalizeSupportedRealtimeVoiceActivationName("OpenClaw")].filter(
-    (name): name is string => Boolean(name),
-  );
   const defaults =
     configuredAgentNames.length > 0
-      ? [...configuredAgentNames, ...productWakeNames]
-      : [normalizeSupportedRealtimeVoiceActivationName(params.agentId), ...productWakeNames].filter(
+      ? [...configuredAgentNames, "openclaw"]
+      : [normalizeSupportedRealtimeVoiceActivationName(params.agentId), "openclaw"].filter(
           (name): name is string => Boolean(name),
         );
   return sortRealtimeVoiceActivationNames(uniqueStrings(defaults));

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
@@ -12,7 +13,7 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
@@ -89,6 +90,16 @@ function runBenchmarkSample(entry: string, caseId: string, flags: string[] = [])
 
 function configFixture(id: string) {
   return testing.buildConfigFixture({ id, name: id, args: [], presets: [] });
+}
+
+// The synchronous driver cannot retain product-owned ChildProcess handles. Rescue
+// SIGKILL starts termination, so foreign-PID extinction still needs observation.
+async function waitForBenchmarkExit(pid: number, signal: AbortSignal) {
+  while (isProcessAlive(pid)) {
+    await delay(5, undefined, { signal }).catch((cause: unknown) => {
+      throw new Error(`process still alive: ${pid}`, { cause });
+    });
+  }
 }
 
 describe("bench-cli-startup", () => {
@@ -480,7 +491,7 @@ console.log("runtime ready");
 
   it.runIf(process.platform !== "win32")(
     "cleans timed-out benchmark process groups when the leader exits first",
-    async () => {
+    async ({ signal }) => {
       const tempDirs = createTempDirTracker();
       const tmpDir = tempDirs.make("openclaw-cli-startup-timeout-group-");
       const entryPath = join(tmpDir, "entry.mjs");
@@ -583,15 +594,18 @@ try {
       } finally {
         // The leader registers before spawning: failures before child readiness still
         // leave a known group to kill, including an unregistered descendant.
-        if (existsSync(leaderPidPath)) {
-          const leader = Number(readFileSync(leaderPidPath, "utf8"));
-          forceKillVitestProcessGroup({ pid: leader });
-          await waitForDead(leader, 8_000);
+        try {
+          if (existsSync(leaderPidPath)) {
+            const leader = Number(readFileSync(leaderPidPath, "utf8"));
+            forceKillVitestProcessGroup({ pid: leader });
+            await waitForBenchmarkExit(leader, signal);
+          }
+          if (existsSync(childPidPath)) {
+            await waitForBenchmarkExit(Number(readFileSync(childPidPath, "utf8")), signal);
+          }
+        } finally {
+          tempDirs.cleanup();
         }
-        if (existsSync(childPidPath)) {
-          await waitForDead(Number(readFileSync(childPidPath, "utf8")), 8_000);
-        }
-        tempDirs.cleanup();
       }
     },
   );

@@ -8,7 +8,7 @@ import {
   needsThinkHydration,
   normalizeThinkingCatalogProviders,
 } from "../../agents/thinking-runtime.js";
-import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
+import { normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
@@ -30,6 +30,8 @@ import {
   resolveSubagentModelConfigSelectionResult,
   type ResolvedPublishedModelCatalogOwner,
 } from "./run-model-selection.runtime.js";
+
+const CRON_THINKING_HYDRATION_WAIT_MS = 5_000;
 
 type CronSessionModelOverrides = {
   modelOverride?: string;
@@ -71,14 +73,6 @@ type ResolveCronModelSelectionResult =
       error: string;
     };
 
-function formatAllowedModelRefs(params: { cfg: OpenClawConfig; agentId?: string }): string {
-  const configured = resolveConfiguredModelPolicyAllow(params).refs;
-  if (configured && configured.length > 0) {
-    return configured.toSorted().join(", ");
-  }
-  return "(none configured)";
-}
-
 function formatCronPayloadModelRejection(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -90,7 +84,10 @@ function formatCronPayloadModelRejection(params: {
     const modelRef = error.slice("model not allowed:".length).trim();
     const policy = resolveConfiguredModelPolicyAllow(params);
     const policyPath = policy.configPath ?? "agents.defaults.modelPolicy.allow";
-    return `automation model override '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
+    const allowedModels = policy.refs.length
+      ? policy.refs.toSorted().join(", ")
+      : "(none configured)";
+    return `automation model override '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${allowedModels}]`;
   }
   return `automation model override '${modelOverride}' rejected: ${error}`;
 }
@@ -140,18 +137,33 @@ async function resolveCronThinkingCatalog(params: {
     return catalog;
   }
   // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
-  const refreshed = normalizeThinkingCatalogProviders(
-    await loadProviderScopedThinkingCatalog({
-      config: params.owner.config,
-      provider: params.provider,
-      model: params.model,
-      agentRuntime: params.agentRuntime,
-      agentId: params.owner.agentId,
-      agentDir: params.owner.agentDir,
-      workspaceDir: params.owner.workspaceDir,
-    }),
-  );
-  return findModelInCatalog(refreshed, params.provider, params.model) ? refreshed : catalog;
+  const hydration = loadProviderScopedThinkingCatalog({
+    config: params.owner.config,
+    provider: params.provider,
+    model: params.model,
+    agentRuntime: params.agentRuntime,
+    agentId: params.owner.agentId,
+    agentDir: params.owner.agentDir,
+    workspaceDir: params.owner.workspaceDir,
+  });
+  // Native discovery can queue behind catalog renewal for longer than the cron setup watchdog.
+  // Discovery keeps running under its owner; this turn uses the admitted catalog meanwhile.
+  hydration.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const refreshed = await Promise.race([
+      hydration.then(normalizeThinkingCatalogProviders),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), CRON_THINKING_HYDRATION_WAIT_MS);
+        timer.unref?.();
+      }),
+    ]);
+    return refreshed && findModelInCatalog(refreshed, params.provider, params.model)
+      ? refreshed
+      : catalog;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function resolveCronThinkingSelection(params: {
@@ -163,16 +175,7 @@ export async function resolveCronThinkingSelection(params: {
   jobThinking?: string;
   hookThinking?: string;
   sessionThinking?: string;
-}): Promise<{
-  catalog: ModelCatalogEntry[];
-  immutableThinkLevel: ThinkLevel | undefined;
-  loadThinkingCatalog: (
-    provider: string,
-    model: string,
-    agentRuntime: string,
-  ) => Promise<ModelCatalogEntry[]>;
-  requestedThinkLevel: ThinkLevel | undefined;
-}> {
+}) {
   const immutableThinkLevel =
     normalizeThinkLevel(params.jobThinking) ??
     normalizeThinkLevel(params.hookThinking) ??
@@ -192,7 +195,7 @@ export async function resolveCronThinkingSelection(params: {
   return {
     catalog,
     immutableThinkLevel,
-    loadThinkingCatalog: async (provider, model, agentRuntime) =>
+    loadThinkingCatalog: async (provider: string, model: string, agentRuntime: string) =>
       await resolveCronThinkingCatalog({ owner: params.owner, provider, model, agentRuntime }),
     requestedThinkLevel,
   };
@@ -241,37 +244,56 @@ export async function resolveCronModelSelection(
     agentId: ownerAgentId,
     manifestPlugins: owner.metadataSnapshot,
   };
-  let provider = resolvedDefault.provider;
-  let model = resolvedDefault.model;
-  let modelSource: CronModelSelectionSource = "default";
-  let configuredProfileId = splitTrailingAuthProfile(
-    resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model) ?? "",
-  ).profile;
-
-  const subagentModelConfigSelection = resolveSubagentModelConfigSelectionResult({
-    cfg: owner.config,
-    agentId: ownerAgentId,
-    agentConfigOverride: ownerAgentConfigOverride,
-  });
-  const subagentModelRaw = normalizeModelSelection(subagentModelConfigSelection?.raw);
-  const subagentModelSource: CronModelSelectionSource =
-    subagentModelConfigSelection?.source === "agent" ? "agent" : "subagent";
-  if (subagentModelRaw) {
-    // Subagent/agent model config is advisory here: invalid refs fall back to
-    // defaults so an agent config typo does not prevent unrelated cron runs.
-    const resolvedSubagent = resolveAllowedModelRefCore({
-      ...selectionParams,
-      raw: subagentModelRaw,
-    });
-    if (!("error" in resolvedSubagent)) {
-      provider = resolvedSubagent.ref.provider;
-      model = resolvedSubagent.ref.model;
-      modelSource = subagentModelSource;
-      configuredProfileId = splitTrailingAuthProfile(subagentModelRaw).profile;
+  const selection = (
+    ref: { provider: string; model: string },
+    modelSource: CronModelSelectionSource,
+    profileModel?: string,
+  ): Extract<ResolveCronModelSelectionResult, { ok: true }> => {
+    const configuredProfileId = splitTrailingAuthProfile(profileModel ?? "").profile;
+    return {
+      ok: true,
+      provider: ref.provider,
+      model: ref.model,
+      modelSource,
+      ...(configuredProfileId ? { configuredProfileId } : {}),
+      cfgWithAgentDefaults,
+      owner,
+    };
+  };
+  const override = (
+    raw: string | undefined,
+    source: "payload" | "session" | "agent" | "subagent",
+  ): ResolveCronModelSelectionResult | undefined => {
+    if (!raw) {
+      return undefined;
     }
+    const resolved = resolveAllowedModelRefCore({ ...selectionParams, raw });
+    if (!("error" in resolved)) {
+      return selection(resolved.ref, source, source === "session" ? undefined : raw);
+    }
+    // Payload overrides are explicit; invalid advisory config falls through.
+    return source === "payload"
+      ? {
+          ok: false,
+          error: formatCronPayloadModelRejection({
+            cfg: owner.config,
+            agentId: ownerAgentId,
+            modelOverride: raw,
+            error: resolved.error,
+          }),
+        }
+      : undefined;
+  };
+
+  const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
+  const payloadSelection = override(
+    typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined,
+    "payload",
+  );
+  if (payloadSelection) {
+    return payloadSelection;
   }
 
-  let hooksGmailModelApplied = false;
   const hooksGmailModelRef = params.isGmailHook
     ? resolveHooksGmailModel({
         cfg: owner.config,
@@ -279,77 +301,38 @@ export async function resolveCronModelSelection(
         manifestPlugins: owner.metadataSnapshot,
       })
     : null;
-  if (hooksGmailModelRef) {
-    // Gmail hook models are specialized defaults: apply them only when the
-    // configured ref is allowed, otherwise keep the broader cron default.
-    const status = getModelRefStatus({
-      ...selectionParams,
-      ref: hooksGmailModelRef,
-    });
-    if (status.allowed) {
-      provider = hooksGmailModelRef.provider;
-      model = hooksGmailModelRef.model;
-      hooksGmailModelApplied = true;
-      modelSource = "hook";
-      configuredProfileId = splitTrailingAuthProfile(
-        owner.config.hooks?.gmail?.model ?? "",
-      ).profile;
-    }
+  if (
+    hooksGmailModelRef &&
+    getModelRefStatus({ ...selectionParams, ref: hooksGmailModelRef }).allowed
+  ) {
+    return selection(hooksGmailModelRef, "hook", owner.config.hooks?.gmail?.model);
   }
 
-  const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
-  const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
-  if (modelOverride !== undefined && modelOverride.length > 0) {
-    // Payload model overrides are explicit cron config, so reject disallowed
-    // refs instead of silently falling back to defaults.
-    const resolvedOverride = resolveAllowedModelRefCore({
-      ...selectionParams,
-      raw: modelOverride,
-    });
-    if ("error" in resolvedOverride) {
-      return {
-        ok: false,
-        error: formatCronPayloadModelRejection({
-          cfg: owner.config,
-          agentId: ownerAgentId,
-          modelOverride,
-          error: resolvedOverride.error,
-        }),
-      };
-    }
-    provider = resolvedOverride.ref.provider;
-    model = resolvedOverride.ref.model;
-    modelSource = "payload";
-    configuredProfileId = splitTrailingAuthProfile(modelOverride).profile;
+  const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
+  const sessionSelection = override(
+    sessionModelOverride
+      ? `${params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider}/${sessionModelOverride}`
+      : undefined,
+    "session",
+  );
+  if (sessionSelection) {
+    return sessionSelection;
   }
 
-  if (!modelOverride && !hooksGmailModelApplied) {
-    const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
-    if (sessionModelOverride) {
-      // Stored session overrides are lowest precedence so explicit cron payload
-      // and hook-specific models can intentionally move a run away from history.
-      const sessionProviderOverride =
-        params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
-      const resolvedSessionOverride = resolveAllowedModelRefCore({
-        ...selectionParams,
-        raw: `${sessionProviderOverride}/${sessionModelOverride}`,
-      });
-      if (!("error" in resolvedSessionOverride)) {
-        provider = resolvedSessionOverride.ref.provider;
-        model = resolvedSessionOverride.ref.model;
-        modelSource = "session";
-        configuredProfileId = undefined;
-      }
-    }
-  }
-
-  return {
-    ok: true,
-    provider,
-    model,
-    modelSource,
-    ...(configuredProfileId ? { configuredProfileId } : {}),
-    cfgWithAgentDefaults,
-    owner,
-  };
+  const subagentSelection = resolveSubagentModelConfigSelectionResult({
+    cfg: owner.config,
+    agentId: ownerAgentId,
+    agentConfigOverride: ownerAgentConfigOverride,
+  });
+  return (
+    override(
+      normalizeModelSelection(subagentSelection?.raw),
+      subagentSelection?.source === "agent" ? "agent" : "subagent",
+    ) ??
+    selection(
+      resolvedDefault,
+      "default",
+      resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model),
+    )
+  );
 }

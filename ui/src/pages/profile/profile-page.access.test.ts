@@ -1,10 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { createConnectedContext, mountProfilePage } from "./profile-page.test-support.ts";
+import {
+  createConnectedContext,
+  modelAccountProfile,
+  mountProfilePage,
+} from "./profile-page.test-support.ts";
 
 beforeEach(async () => {
   await i18n.setLocale("en");
@@ -13,6 +18,30 @@ beforeEach(async () => {
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+it("replaces a retired profile read when the same ID gains profile qualification", async () => {
+  const harness = createConnectedContext(
+    vi.fn(async () => ({})) as GatewayBrowserClient["request"],
+    { id: modelAccountProfile.id },
+  );
+  harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
+  const retired = createDeferred<null>();
+  const load = vi.fn(harness.context.gateway.loadSelfProfile);
+  load.mockReturnValueOnce(retired.promise).mockResolvedValue(modelAccountProfile);
+  harness.context.gateway.loadSelfProfile = load;
+  const page = mountProfilePage(harness.context);
+  await page.updateComplete;
+  harness.context.gateway.updateSelfUser?.({
+    identity: { type: "profile", id: modelAccountProfile.id },
+  });
+  retired.resolve(null);
+  await retired.promise;
+  await page.updateComplete;
+  expect(load).toHaveBeenCalledTimes(2);
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+    modelAccountProfile.displayName,
+  );
 });
 
 it.each([

@@ -1,7 +1,6 @@
-import childProcess from "node:child_process";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
+import { NODE_WORKER_CAPACITY_MAX } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -86,20 +85,15 @@ describe("node worker supervisor initialization", () => {
   it("keeps construction and close inert without resolving process identity", async () => {
     const root = tempDirs.make("node-worker-inert-");
     const { bundleRoot, env } = writeNodeWorkerFixture(root);
-    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    const spawnSync = vi.spyOn(childProcess, "spawnSync");
-    const execFileSync = vi.spyOn(childProcess, "execFileSync");
-    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-    try {
-      const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-      await supervisor.close();
-      expect(spawnSync).not.toHaveBeenCalled();
-      expect(execFileSync).not.toHaveBeenCalled();
-    } finally {
-      if (originalPlatform) {
-        Object.defineProperty(process, "platform", originalPlatform);
-      }
-    }
+    const requireIdentity = vi
+      .spyOn(workerProcessIdentity, "requireNodeWorkerProcessIdentity")
+      .mockImplementation(() => {
+        throw new Error("unexpected process identity lookup");
+      });
+    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
+    expect(requireIdentity).not.toHaveBeenCalled();
+    await supervisor.close();
+    expect(requireIdentity).not.toHaveBeenCalled();
   });
 
   it("keeps the additive table absent until the first stateful operation", async () => {

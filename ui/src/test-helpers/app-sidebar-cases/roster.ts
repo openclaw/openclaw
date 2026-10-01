@@ -242,9 +242,7 @@ describe("AppSidebar agent roster", () => {
       if (!group) {
         throw new Error(`Missing session group for ${id}`);
       }
-      await vi.waitFor(() =>
-        expect(sessionKeys(group)).toEqual([`agent:${id}:pinned`, `agent:${id}:recent`]),
-      );
+      await vi.waitFor(() => expect(sessionKeys(group)).toEqual([`agent:${id}:recent`]));
       expect(group?.querySelector(`a[href="/new?agent=${id}"]`)).not.toBeNull();
       expect(group?.querySelector(".sidebar-agent-roster__row")?.getAttribute("href")).toBe(
         `/chat/${id}`,
@@ -558,7 +556,10 @@ describe("AppSidebar agent roster", () => {
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     expect(loadSettings().sidebarAgentsMode).toBe("roster");
     sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).not.toContain("agent:working:pinned"));
+    await vi.waitFor(() => expect(sessionKeys(sidebar)).not.toContain("agent:working:recent"));
+    expect(
+      sidebar.querySelector('.sidebar-nav [data-session-key="agent:working:pinned"]'),
+    ).not.toBeNull();
     expect(loadSettings().sidebarCollapsedAgentIds).toEqual(["working"]);
     provider.remove();
     const remounted = await mountRoster();
@@ -570,6 +571,9 @@ describe("AppSidebar agent roster", () => {
         ?.getAttribute("aria-expanded"),
     ).toBe("false");
     expect(sessionKeys(remounted.sidebar)).not.toContain("agent:working:recent");
+    expect(
+      remounted.sidebar.querySelector('.sidebar-nav [data-session-key="agent:working:pinned"]'),
+    ).not.toBeNull();
     expect(sessionKeys(remounted.sidebar)).toContain("agent:recent:recent");
     await toggleRoster(remounted.sidebar);
     await vi.waitFor(() =>
@@ -591,6 +595,7 @@ describe("AppSidebar agent roster", () => {
         "agent:working:pinned",
       ]),
     );
+    expect(sidebar.querySelector(".sidebar-session-empty-hint")).toBeNull();
     await selectFilter(sidebar, "status:archived");
     await vi.waitFor(() =>
       expect(sessionKeys(sidebar)).toEqual([

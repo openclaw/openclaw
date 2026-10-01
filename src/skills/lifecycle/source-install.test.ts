@@ -161,6 +161,81 @@ describe("installSkillFromSource", () => {
     });
   });
 
+  it("rejects an unfenced SKILL.md before copying it", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-unfenced-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "probe");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, "SKILL.md"),
+        "name: probe-x\nversion: 1.0.0\ndescription: probe\n\n---\n\nUse when testing.\n",
+      );
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+        slug: "probe-x",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("description is required"),
+      });
+      await expect(fs.access(path.join(workspaceDir, "skills", "probe-x"))).rejects.toThrow();
+    });
+  });
+
+  it("rejects an oversized root SKILL.md with the byte-limit error", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-oversize-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      await writeSkill(sourceDir, { name: "oversized-skill", description: "x".repeat(80) });
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+        config: { skills: { limits: { maxSkillFileBytes: 64 } } },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("File exceeds 64 bytes"),
+      });
+      expect(result.ok ? "" : result.error).not.toContain("invalid frontmatter");
+      await expect(
+        fs.access(path.join(workspaceDir, "skills", "oversized-skill")),
+      ).rejects.toThrow();
+    });
+  });
+
+  it("installs a valid SKILL.md that is hardlinked to another file", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-hardlink-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      await writeSkill(sourceDir, { name: "linked-skill" });
+      const sourceSkill = path.join(sourceDir, "SKILL.md");
+      const alias = path.join(root, "linked-alias.md");
+      await fs.link(sourceSkill, alias);
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        slug: "linked-skill",
+        source: "path",
+        targetDir: path.join(workspaceDir, "skills", "linked-skill"),
+      });
+      const installed = path.join(workspaceDir, "skills", "linked-skill", "SKILL.md");
+      const [installedStat, aliasStat] = await Promise.all([fs.lstat(installed), fs.lstat(alias)]);
+      expect(installedStat.nlink).toBe(1);
+      expect(installedStat.ino).not.toBe(aliasStat.ino);
+      await expect(fs.readFile(installed, "utf8")).resolves.toContain("linked-skill");
+    });
+  });
+
   it.each(["regular", "hardlink", "frontmatter"])(
     "resolves source-installed skill keys with %s metadata",
     async (kind) => {

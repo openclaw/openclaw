@@ -14,12 +14,12 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stableHash } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
   resolveRuntimeParityUsagePolicy,
   runRuntimeParityScenario,
-  type RuntimeId,
   type RuntimeParityCell,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
@@ -262,6 +262,17 @@ describe("runtime parity", () => {
           toolName: "image_generate",
           content: [{ type: "text", text: "Image generation started" }],
         },
+        {
+          role: "assistant",
+          content: [
+            "  plain  ",
+            { type: "output_text", content: "nested" },
+            { type: "message", content: "message" },
+            { type: "unknown", text: " priority ", content: "ignored" },
+            { type: "toolResult", content: "ignored tool result" },
+            { type: "Output_Text", content: "ignored normalized type" },
+          ],
+        },
       ],
     });
 
@@ -276,6 +287,7 @@ describe("runtime parity", () => {
     expect(cell.toolCalls).toHaveLength(1);
     expect(cell.toolCalls[0]).toMatchObject({ tool: "image_generate" });
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+    expect(cell.finalText).toBe("plain nested message priority");
   });
 
   it("captures native tool execution from the canonical SQLite trajectory", async () => {
@@ -667,8 +679,13 @@ describe("runtime parity", () => {
     });
 
     expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toHaveLength(1);
-    expect(cell.providerPlanToolCalls?.[0]?.errorClass).toBeUndefined();
+    expect(cell.providerPlanToolCalls).toEqual([
+      {
+        tool: "read_file",
+        argsHash: stableHash({ path: "README.md" }),
+        resultHash: stableHash({ ok: true }),
+      },
+    ]);
 
     const result = await runRuntimeParityScenario({
       scenarioId: "resolved-tool",

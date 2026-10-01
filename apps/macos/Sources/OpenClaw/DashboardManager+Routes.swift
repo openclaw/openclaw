@@ -149,18 +149,25 @@ extension DashboardManager {
         guard mode == .local,
               let endpoint = Self.immediateDashboardEndpoint(mode: mode),
               let url = try? GatewayEndpointStore.dashboardURL(
-                  for: endpoint.config,
-                  mode: mode,
-                  authToken: endpoint.config.token)
+                  for: (url: endpoint.config.url, token: nil, password: nil),
+                  mode: mode)
         else { return nil }
-        let config = endpoint.config
-        let auth = DashboardWindowAuth(
+        // Hidden preload may create a credential-free document. Visible fast
+        // presentation requires hasAcceptedNativeBinding; fresh presentation
+        // waits for native hello in dashboardConfiguration instead.
+        let auth = self.immediateResolvedDashboardAuth(url: url, endpoint: endpoint) ?? .nativeDevice(
             gatewayUrl: Self.websocketURLString(for: url),
-            token: config.token,
-            password: (config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty))
-        guard auth.hasCredential else { return nil }
+            token: endpoint.config.token,
+            password: endpoint.config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        guard auth.hasCredential || auth.hasAcceptedNativeBinding else { return nil }
         return (WindowConfiguration(
-            url: url, auth: auth, tlsParams: endpoint.tls?.params, mode: mode, displayName: "OpenClaw"), endpoint)
+            url: url,
+            auth: auth,
+            tlsParams: endpoint.tls?.params,
+            mode: mode,
+            displayName: "OpenClaw",
+            legacyNativeCredentials: self.currentNativeStartupCredentials,
+            nativeAuthProvider: self.nativeAuthProvider(target: .primary, endpoint: endpoint)), endpoint)
     }
 }
 

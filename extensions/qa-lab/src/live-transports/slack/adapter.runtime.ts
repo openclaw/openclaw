@@ -40,7 +40,6 @@ import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type FetchFunction = SlackQaFetchFunction;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const SLACK_POLL_INTERVAL_MS = 500;
@@ -67,9 +66,9 @@ async function waitForSlackPoll(delayMs: number, signal: AbortSignal) {
 }
 
 function withSlackLifecycleSignal(
-  fetchImpl: FetchFunction,
+  fetchImpl: SlackQaFetchFunction,
   lifecycleSignal: AbortSignal,
-): FetchFunction {
+): SlackQaFetchFunction {
   return async (url, init) =>
     await fetchImpl(url, {
       ...init,
@@ -214,15 +213,6 @@ export async function createSlackQaTransportAdapter(
   const activeThreadRoots = new Set<string>();
   let polling: Promise<void> | undefined;
   const e2eSessions: SlackChannelE2eSession[] = [];
-  let nativeWriteCursor = 0;
-  const readNativeWrites = async () =>
-    captureReader
-      ? readSlackQaNativeWrites({
-          afterRequestEventId: nativeWriteCursor,
-          sessionId: captureSessionId,
-          store: captureReader,
-        })
-      : [];
   const startPolling = () => {
     polling ??= (async () => {
       while (!pollingAbort.signal.aborted) {
@@ -304,7 +294,6 @@ export async function createSlackQaTransportAdapter(
             store: captureReader,
           })
         : [],
-    readNativeWrites,
     sutAppToken: runtimeEnv.sutAppToken,
     sutBotToken: runtimeEnv.sutBotToken,
     sutIdentity,
@@ -377,11 +366,10 @@ export async function createSlackQaTransportAdapter(
       if (options.agentE2e) {
         flowSignal = input.signal;
         assertNativeActive();
-        nativeWriteCursor = await getSlackQaNativeWriteCursor({
+        const flowWriteCursor = await getSlackQaNativeWriteCursor({
           sessionId: captureSessionId,
           store: captureReader,
         });
-        const flowWriteCursor = nativeWriteCursor;
         const readWrites = () =>
           readSlackQaNativeWrites({
             afterRequestEventId: flowWriteCursor,

@@ -149,7 +149,6 @@ export async function startVisitorGateway({
     autoEnabledReasons: {},
     workspaceDir: state.workspaceDir,
     env: state.env,
-    log: { ...context.logGateway, debug: vi.fn() },
     coreGatewayHandlers: handlers,
     baseMethods: Object.keys(handlers),
     pluginIds: ["visitor-access"],

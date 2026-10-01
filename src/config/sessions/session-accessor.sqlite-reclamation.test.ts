@@ -39,16 +39,17 @@ import {
 } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   createHistoryEvictionReclamationPlan,
   createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.sqlite-transcript-write.js";
+import type { SqliteWorkerWriteAdmission } from "./session-accessor.sqlite-worker-request.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
 const hooks = vi.hoisted(() => ({
@@ -91,6 +92,26 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
         options,
         claim,
         async (worker) => {
+          const observeAdmission =
+            <T>(withWriteAdmission: SqliteWorkerWriteAdmission<T>) =>
+            async (...args: Parameters<typeof withWriteAdmission>) => {
+              const [runAdmitted, ...admission] = args;
+              await hooks.beforeWriteAdmission?.();
+              return withWriteAdmission(
+                async (refusal) => {
+                  await hooks.afterWriteAdmission?.();
+                  return await runAdmitted(refusal);
+                },
+                ...admission,
+              );
+            };
+          const originalPrepare = worker.prepare.bind(worker);
+          const prepareSpy = vi.spyOn(worker, "prepare").mockImplementation((params) =>
+            originalPrepare({
+              ...params,
+              withWriteAdmission: observeAdmission(params.withWriteAdmission),
+            }),
+          );
           const originalRun = worker.run.bind(worker);
           const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
             const withWriteAdmission = params.withWriteAdmission;
@@ -98,17 +119,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
               ...params,
               ...(withWriteAdmission
                 ? {
-                    withWriteAdmission: async (...args: Parameters<typeof withWriteAdmission>) => {
-                      const [runAdmitted, ...admission] = args;
-                      await hooks.beforeWriteAdmission?.();
-                      return withWriteAdmission(
-                        async (refusal) => {
-                          await hooks.afterWriteAdmission?.();
-                          return await runAdmitted(refusal);
-                        },
-                        ...admission,
-                      );
-                    },
+                    withWriteAdmission: observeAdmission(withWriteAdmission),
                   }
                 : {}),
               onCommitRequest: () => {
@@ -121,6 +132,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
             return await run(worker);
           } finally {
             spy.mockRestore();
+            prepareSpy.mockRestore();
           }
         },
         assertRequestCurrent,
@@ -180,14 +192,14 @@ function createFixture(alias = false) {
 }
 
 function observeWorkers() {
-  const workers: Array<{ worker: Worker; id: number }> = [];
-  const exits: number[] = [];
+  const workers: Array<{ worker: Worker; id: number; exits: number[] }> = [];
   const observe = (worker: Worker) => {
-    workers.push({ worker, id: worker.threadId });
-    worker.once("exit", (code) => exits.push(code));
+    const observed: (typeof workers)[number] = { worker, id: worker.threadId, exits: [] };
+    workers.push(observed);
+    worker.once("exit", (code) => observed.exits.push(code));
   };
   process.on("worker", observe);
-  return { workers, exits, stopObserving: () => process.off("worker", observe) };
+  return { workers, stopObserving: () => process.off("worker", observe) };
 }
 
 async function readLogRecords(file: string) {
@@ -666,13 +678,18 @@ test("file warnings retain rejected native admission releases without attributin
   const file = path.join(tempDirs.make("openclaw-writer-log-"), "writer.log");
   const diagnostics: SqliteSessionReclamationDiagnostics = {};
   setLoggerOverride({ level: "info", file });
-  const { workers, exits, stopObserving } = observeWorkers();
+  const { workers: observedWorkers, stopObserving } = observeWorkers();
   let clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   let admissions = 0;
   let revoked = false;
   const failure = new Error("synthetic admission refusal");
   hooks.beforeWriteAdmission = async () => {
+    if (admissions === 0) {
+      // Revoke incoming warm proof at the actual cold prepare admission so native
+      // validation releases and reacquires its own writer before acceptance.
+      clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+    }
     if (admissions === 1) {
       revoked = true;
     }
@@ -711,7 +728,9 @@ test("file warnings retain rejected native admission releases without attributin
         assert.ok(isRecord(details));
         return details;
       });
+    const workers = observedWorkers.filter(({ id }) => id === diagnostics.workerThreadId);
     expect(workers).toHaveLength(1);
+    const exits = workers[0]?.exits;
     expect(workers[0]?.id).toBeGreaterThan(0);
     expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
     expect(exits).toEqual([]);
@@ -852,7 +871,8 @@ test.each([
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
-    const { workers, exits, stopObserving } = observeWorkers();
+    const diagnostics: SqliteSessionReclamationDiagnostics = { kind: "history-eviction" };
+    const { workers: observedWorkers, stopObserving } = observeWorkers();
     const failure = new Error("synthetic reclamation refusal", {
       cause: new Error("synthetic storage failure; Authorization: Bearer synthetic-private-token"),
     });
@@ -861,7 +881,13 @@ test.each([
     let otherWriterRan = false;
     hooks.failWorkerLog = failLog;
     hooks.beforeWriteAdmission = async () => {
-      if (++admissions !== 2) {
+      if (++admissions === 1) {
+        // Invalidate at native preparation's first admission, preserving the proof
+        // owner while requiring validation to release its preliminary writer.
+        clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+        return;
+      }
+      if (admissions !== 2) {
         return;
       }
       // The first admission has ended; the second has not entered the writer FIFO.
@@ -880,7 +906,7 @@ test.each([
       runSqliteSessionReclamation({
         forceInProcess: false,
         plan,
-        diagnostics: { kind: "history-eviction" },
+        diagnostics,
         assertCommitAllowed: () => {
           if (revoked) {
             throw failure;
@@ -902,7 +928,9 @@ test.each([
           record.message === "SQLite reclamation Worker failed",
       );
       expect(otherWriterRan).toBe(true);
+      const workers = observedWorkers.filter(({ id }) => id === diagnostics.workerThreadId);
       expect(workers).toHaveLength(1);
+      const exits = workers[0]?.exits;
       expect(workers[0]?.id).toBeGreaterThan(0);
       expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
       expect(exits).toEqual([]);

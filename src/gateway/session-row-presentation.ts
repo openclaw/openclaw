@@ -1,8 +1,10 @@
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { prepareSessionFastModePresentation } from "./session-fast-mode-presentation.js";
 import {
   projectSessionParticipant,
   projectSessionProfileInvolvement,
@@ -13,6 +15,7 @@ import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   authorizeIncognitoSessionTarget,
+  authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
@@ -45,7 +48,11 @@ type PublicationView = (context: SessionRowReadView["state"]["rowContext"]) => {
 };
 
 /** Sharing decisions remain recipient-local; only their identical presented results are reused. */
-export function prepareSessionRowPublication(projection: SessionRowProjection, now: number) {
+export function prepareSessionRowPublication(
+  projection: SessionRowProjection,
+  now: number,
+  read: SessionRowReadView = projection,
+) {
   let context: SessionRowReadView["state"]["rowContext"] | undefined;
   let revision: object | undefined;
   let rows: PublicationRows = new WeakMap();
@@ -63,7 +70,7 @@ export function prepareSessionRowPublication(projection: SessionRowProjection, n
   return (
     client: GatewayClient,
     projectRun: ReturnType<typeof createVisibleActiveSessionRunProjector>,
-  ) => prepareProjectedSessionPresentation(projection, client, now, projectRun, view);
+  ) => prepareProjectedSessionPresentation(read, client, now, projectRun, view);
 }
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
@@ -75,6 +82,7 @@ export function prepareProjectedSessionPresentation(
   publication?: PublicationView,
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
+  const presentFastMode = prepareSessionFastModePresentation(client);
   const models =
     client === undefined
       ? undefined
@@ -120,6 +128,15 @@ export function prepareProjectedSessionPresentation(
         }
       : {}),
     sharingRole: sharing.roleForTarget(value),
+    sendDisabledReason:
+      authorizeSessionAgentRun(
+        { cfg: policyConfig, client: client ?? null, target: value },
+        { policy: sharing.policy },
+      )?.message ??
+      sharing.authorizeTarget(value)?.message ??
+      (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
+        ? "send blocked by session policy"
+        : null),
   });
   const present = (
     captured: records.MaterializedRow,
@@ -173,6 +190,7 @@ export function prepareProjectedSessionPresentation(
     const signature =
       publicationRows &&
       JSON.stringify([
+        presentFastMode("ultrafast"),
         options.includeDerivedTitles,
         options.includeLastMessage,
         options.includeActivitySummary,
@@ -222,6 +240,8 @@ export function prepareProjectedSessionPresentation(
       excludedChildKeys,
       preparedFacts,
     });
+    row.fastMode = presentFastMode(row.fastMode);
+    row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
     if (swarm) {
       row.swarm = swarm;
     }

@@ -42,6 +42,7 @@ import {
 } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
+import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   captureOutboxPayloadOwner,
@@ -257,7 +258,7 @@ export function finishChatDeliveryAdmission(
   }
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
-    chatSendHoldReason(host, route) ||
+    chatSendHoldReason(host, route, false, current.agentId) ||
     (options?.routingSessionKey && !routeVisible(current.agentId)) ||
     (!sendsDuringActiveRun &&
       routeVisible(current.agentId) &&
@@ -297,6 +298,26 @@ export function finishScopedChatSending(host: ChatHost, scope: StoredChatOutboxS
   }
   host.chatSendingScopeKey = null;
   host.chatSending = false;
+}
+
+export function rejectOversizedQueuedChatDelivery(
+  host: ChatHost,
+  prepared: ChatQueueItem,
+  attachments: readonly ChatAttachment[],
+  sessionKey: string,
+  options: QueuedChatSendOptions | undefined,
+): boolean {
+  const error = attachmentBatchRejection(attachments, host.hello?.policy);
+  if (error === undefined) {
+    return false;
+  }
+  const storageMode = options?.storageMode ?? "durable";
+  const setState = deliveryStateWriter(host, storageMode, prepared.id);
+  if (!restoreRejectedChatDelivery(host, prepared, options)) {
+    setState("failed", error);
+  }
+  surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
+  return true;
 }
 
 /** Settle transport failures without turning an unconfirmed send into a fresh attempt. */

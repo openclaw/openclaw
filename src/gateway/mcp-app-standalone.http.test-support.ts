@@ -15,8 +15,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
-  completeDeferredSessionMcpRuntimeRetirement: mocks.completeRetirement,
   peekSessionMcpRuntime: mocks.peekSessionMcpRuntime,
+}));
+vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
+  completeDeferredSessionMcpRuntimeRetirement: mocks.completeRetirement,
 }));
 vi.mock("../agents/mcp-ui-resource.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/mcp-ui-resource.js")>()),

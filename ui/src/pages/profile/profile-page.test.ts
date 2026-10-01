@@ -219,51 +219,72 @@ it("shows the authenticated user in the profile hero when the default agent diff
   );
 });
 
-it("renders a write-access note without calling users.self for read-only viewers", async () => {
-  const request = vi.fn(async () => ({
-    personal: {
-      state: "disconnected",
-      generation: null,
-      account: null,
-      accessExpiresAtMs: null,
-      refreshState: "not_applicable",
-      pending: null,
-    },
-    system: {
-      source: "system-detected",
-      credentialKind: "native",
-      credentialState: "unavailable",
-      account: null,
-      gitAuthor: { name: null, email: null },
-      evidence: "none",
-      accessExpiresAtMs: null,
-      refreshState: "not_applicable",
-      oauthScopes: [],
-      repositoryGrants: "unknown",
-    },
-  }));
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: "profile-1",
-    email: "ada@example.test",
-    name: "Ada",
-  });
-  harness.context.gateway.snapshot.hello = {
-    type: "hello-ok",
-    protocol: 1,
-    auth: { role: "operator", scopes: ["operator.read"] },
-    features: { methods: ["users.self"] },
-  } as ApplicationGatewaySnapshot["hello"];
-  const page = mountProfilePage(harness.context);
+it.each(["operator.read", "operator.sessions.write"])(
+  "loads a read-only profile with %s without enabling mutations",
+  async (scope) => {
+    const request = vi.fn(async (method: string) =>
+      method === "users.self"
+        ? { profile: modelAccountProfile }
+        : {
+            personal: {
+              state: "disconnected",
+              generation: null,
+              account: null,
+              accessExpiresAtMs: null,
+              refreshState: "not_applicable",
+              pending: null,
+            },
+            system: {
+              source: "system-detected",
+              credentialKind: "native",
+              credentialState: "unavailable",
+              account: null,
+              gitAuthor: { name: null, email: null },
+              evidence: "none",
+              accessExpiresAtMs: null,
+              refreshState: "not_applicable",
+              oauthScopes: [],
+              repositoryGrants: "unknown",
+            },
+          },
+    );
+    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+      id: "profile-1",
+      email: "ada@example.test",
+      name: "Ada",
+    });
+    harness.context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: [scope] },
+      features: { methods: ["users.self"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const page = mountProfilePage(harness.context);
 
-  await page.updateComplete;
-  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
-  expect(page.textContent).toContain("Your current access does not allow profile editing.");
-  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
-    "operator.read",
-  );
-  expect(page.querySelector(".identity-name-control")).toBeNull();
-  expect(page.querySelector(".profile-refresh")).toBeNull();
-});
+    await page.updateComplete;
+    await waitForFast(() =>
+      expect(page.querySelector(".identity-name-control input")).not.toBeNull(),
+    );
+    expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(true);
+    expect(page.textContent).toContain("Your current access does not allow profile editing.");
+    expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+      scope,
+    );
+    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+      true,
+    );
+    expect(page.querySelector<HTMLButtonElement>(".identity-name-control button")?.disabled).toBe(
+      true,
+    );
+    expect(page.querySelector('input[type="file"]')).toBeNull();
+    expect(page.querySelector(".profile-refresh")).not.toBeNull();
+    expect(
+      request.mock.calls.some(
+        ([method]) => method.startsWith("users.set") || method === "users.prefs.set",
+      ),
+    ).toBe(false);
+  },
+);
 
 it("offers identity connection setup without profile RPCs or secret inputs for unidentified connections", async () => {
   const request = vi.fn();
@@ -289,7 +310,7 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
   ).not.toBeNull();
   expect(page.querySelector(".identity-name-control")).toBeNull();
   expect(page.querySelector('input[type="file"]')).toBeNull();
-  expect(page.querySelector(".profile-refresh")).toBeNull();
+  expect(page.querySelector(".profile-refresh")).not.toBeNull();
   expect(page.querySelector('.profile-auth-add-account, input[type="password"]')).toBeNull();
   expect(page.textContent).toContain("ws://test.invalid");
   expect(page.textContent).toContain("Personal");

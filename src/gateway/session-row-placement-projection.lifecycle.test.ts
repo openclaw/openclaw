@@ -8,7 +8,10 @@ import { buildSessionListRowMetadataContext } from "./session-utils-projection.j
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
 function placementReadView() {
-  const projection: SessionRowReadView & { isCurrent(): boolean } = {
+  const projection: SessionRowReadView & {
+    isCurrent(): boolean;
+    getPolicyConfig(): SessionRowReadView["state"]["policyConfig"];
+  } = {
     state: {
       cfg: {},
       policyConfig: {},
@@ -22,6 +25,7 @@ function placementReadView() {
       throw new Error("Placement lifecycle does not present session rows");
     },
     isCurrent: () => true,
+    getPolicyConfig: () => projection.state.policyConfig,
   };
   const query = (id: string): Lookup => ({ agentId: "main", key: id });
   const lookup = (target: Lookup) => {

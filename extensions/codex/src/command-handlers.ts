@@ -282,7 +282,7 @@ export async function handleCodexSubcommand(
     };
   }
   if (normalized === "model") {
-    return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest) };
+    return { text: await setConversationModel(deps, ctx, rest) };
   }
   if (normalized === "fast") {
     if (isMenuVerb(rest)) {

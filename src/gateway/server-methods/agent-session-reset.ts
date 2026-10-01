@@ -120,11 +120,7 @@ export async function resolveBareSessionResetResult(params: {
 }) {
   params.assertCurrent?.();
   if (params.request.deliver !== true) {
-    return buildBareSessionResetResult({
-      reason: params.reason,
-      sessionId: params.sessionId,
-      ackText: params.ackText,
-    });
+    return buildBareSessionResetResult(params);
   }
   const sendPolicy = resolveSendPolicy({
     cfg: params.cfg,
@@ -178,11 +174,7 @@ export async function resolveBareSessionResetResult(params: {
   const originMessageChannel = params.originMessageChannel ?? deliveryPlan.resolvedChannel;
   const { deliverAgentCommandResult } = await import("../../agents/command/delivery.runtime.js");
   params.assertCurrent?.();
-  const result = buildBareSessionResetResult({
-    reason: params.reason,
-    sessionId: params.sessionId,
-    ackText: params.ackText,
-  });
+  const result = buildBareSessionResetResult(params);
   return await deliverAgentCommandResult({
     cfg: params.cfg,
     deps: params.context.deps,

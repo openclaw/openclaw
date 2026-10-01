@@ -38,7 +38,12 @@ import {
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import {
+  ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
+  linkEmail,
+  setUserProfileRole,
+} from "../../state/user-profiles.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -58,10 +63,12 @@ const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("steering input custody", () => {
   it.each([
+    "shared-secret owner",
     "same grant",
     "changed grant",
     "revoked grant",
     "same permissions across profiles",
+    "no native admission across profiles",
     "different scopes across profiles",
     "same role permissions across profiles",
     "different role session caps across profiles",
@@ -71,7 +78,10 @@ describe("steering input custody", () => {
     "preserves authenticated chat.send steering authority across callers (%s)",
     async (scenario) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
-      const profile = ensureProfileForEmail("reconnect-steering@example.test");
+      const sharedSecretOwner = scenario === "shared-secret owner";
+      const profile = sharedSecretOwner
+        ? ensureGatewayOwnerProfile("Gateway Owner")
+        : ensureProfileForEmail("reconnect-steering@example.test");
       const acrossProfiles = scenario.endsWith("across profiles");
       const withRoles = scenario.includes("role");
       const incomingProfile = acrossProfiles
@@ -130,15 +140,17 @@ describe("steering input custody", () => {
         setUserProfileRole(incomingProfile.id, "participant");
       }
       const accepted =
+        sharedSecretOwner ||
         scenario === "same grant" ||
         scenario === "same permissions across profiles" ||
         scenario === "same role permissions across profiles";
-      const queued = scenario === "changed grant" || scenario.startsWith("different");
+      const queued = !accepted && scenario !== "revoked grant";
       const originalGrant = new AbortController();
       const incomingGrant = new AbortController();
       const client = (connId: string, controller: AbortController, grantId: string) => ({
         ...createOperatorWsClient({ connId, scopes: fixture.client.connect.scopes }),
-        authenticatedUserId: "reconnect-steering@example.test",
+        usesSharedGatewayAuth: sharedSecretOwner,
+        authenticatedUserId: sharedSecretOwner ? undefined : "reconnect-steering@example.test",
         authenticatedUserProfile: {
           profileId: profile.id,
           displayName: null,
@@ -147,13 +159,15 @@ describe("steering input custody", () => {
           updatedAt: profile.updatedAt,
         },
         connect: { ...fixture.client.connect, caps: ["ui-commands"] },
-        internal: {
-          operatorAccessAuthority: {
-            gatewayAccessGrant: { pluginId: "test-access-policy", grantId },
-            signal: controller.signal,
-            assertCurrent: () => controller.signal.throwIfAborted(),
-          },
-        },
+        internal: sharedSecretOwner
+          ? { authenticatedOperator: true as const, operatorRoleActor: { kind: "system" as const } }
+          : {
+              operatorAccessAuthority: {
+                gatewayAccessGrant: { pluginId: "test-access-policy", grantId },
+                signal: controller.signal,
+                assertCurrent: () => controller.signal.throwIfAborted(),
+              },
+            },
       });
       const originalClient = client("original-browser", originalGrant, "original-grant");
       const reconnectedClient = client(
@@ -161,6 +175,12 @@ describe("steering input custody", () => {
         incomingGrant,
         scenario === "changed grant" ? "replacement-grant" : "original-grant",
       );
+      if (sharedSecretOwner) {
+        prepareGatewayConnectOperatorAccess(originalClient);
+        prepareGatewayConnectOperatorAccess(reconnectedClient);
+        expect(originalClient.internal.operatorAccessAuthority).toBeUndefined();
+        expect(reconnectedClient.internal.operatorAccessAuthority).toBeUndefined();
+      }
       if (acrossProfiles) {
         reconnectedClient.authenticatedUserId = "other-steering@example.test";
         reconnectedClient.authenticatedUserProfile = {
@@ -256,6 +276,26 @@ describe("steering input custody", () => {
         };
         operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
         const fingerprint = operation.bindToolAuthorityRoute(run.run);
+        if (sharedSecretOwner) {
+          const incoming = await captureGatewayOperatorRunAuthority({
+            client: reconnectedClient,
+            context: fixture.context,
+          });
+          if (!incoming) {
+            throw new Error("Expected authenticated owner authority");
+          }
+          try {
+            expect(incoming.authority.source).not.toBe(captured.authority.source);
+            expect(
+              prepareReplyToolAuthority({
+                ...run,
+                operatorAuthority: incoming.authority,
+              }).fingerprint(run.run),
+            ).toBe(fingerprint);
+          } finally {
+            incoming.release();
+          }
+        }
         operation.setPhase("running");
         const sessionManager = SessionManager.open(
           fixture.scope,
@@ -325,6 +365,8 @@ describe("steering input custody", () => {
           kind: "embedded",
           runId: "original-backing-run",
           toolAuthorityFingerprint: fingerprint,
+          supportsCrossProfileSteering:
+            scenario !== "same grant" && scenario !== "no native admission across profiles",
           cancel: vi.fn(),
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
         });
@@ -415,6 +457,7 @@ describe("steering input custody", () => {
           expect(session.getSteeringMessages()).toEqual([]);
           expect(queueMessage).not.toHaveBeenCalled();
           if (queued) {
+            expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(profile.id);
             expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
             expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
               replyOptions: { messageInjectionDisposition: "rejected" },

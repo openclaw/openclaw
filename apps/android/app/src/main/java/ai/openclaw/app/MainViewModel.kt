@@ -10,6 +10,7 @@ import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatReactionSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -67,6 +68,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -518,7 +520,7 @@ class MainViewModel private constructor(
 
   val runtimeInitialized: StateFlow<Boolean> =
     runtimeRef
-      .flatMapLatest { runtime -> flowOf(runtime != null) }
+      .map { runtime -> runtime != null }
       .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
@@ -532,7 +534,6 @@ class MainViewModel private constructor(
   val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
-  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
@@ -623,7 +624,6 @@ class MainViewModel private constructor(
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = prefs.preventSleep
-  val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
@@ -687,6 +687,9 @@ class MainViewModel private constructor(
 
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chat.sessionOwnerAgentId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chat.messages }
+  internal val chatMessageReactions: StateFlow<Map<String, List<ChatReactionSummary>>> = runtimeState(initial = emptyMap()) { it.chat.messageReactions }
+  internal val chatCanReact: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.canReact }
+  internal val chatReactionViewerId: StateFlow<String?> = runtimeState(initial = null) { it.chat.reactionViewerId }
   val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
     runtimeState(initial = null) { it.chat.transcriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.historyLoading }
@@ -776,22 +779,6 @@ class MainViewModel private constructor(
 
   fun setPreventSleep(value: Boolean) {
     prefs.setPreventSleep(value)
-  }
-
-  fun setManualEnabled(value: Boolean) {
-    prefs.setManualEnabled(value)
-  }
-
-  fun setManualHost(value: String) {
-    prefs.setManualHost(value)
-  }
-
-  fun setManualPort(value: Int) {
-    prefs.setManualPort(value)
-  }
-
-  fun setManualTls(value: Boolean) {
-    prefs.setManualTls(value)
   }
 
   /** Auth replacement retires the old gateway identity, including every retained composer owner. */
@@ -986,14 +973,6 @@ class MainViewModel private constructor(
     start: String,
     end: String,
   ): Boolean = ensureRuntime().setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
-
-  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    ensureRuntime().setNotificationForwardingMaxEventsPerMinute(value)
-  }
-
-  fun setNotificationForwardingSessionKey(value: String?) {
-    ensureRuntime().setNotificationForwardingSessionKey(value)
-  }
 
   fun setVoiceScreenActive(active: Boolean) {
     ensureRuntime().setVoiceScreenActive(active)
@@ -1732,6 +1711,14 @@ class MainViewModel private constructor(
     ensureRuntime().chat.refresh()
   }
 
+  internal fun chatSetMessageReaction(
+    messageId: String,
+    emoji: String,
+    remove: Boolean,
+  ) {
+    runtimeRef.value?.chat?.setMessageReaction(messageId, emoji, remove)
+  }
+
   fun refreshChatSessions(
     limit: Int? = null,
     archived: Boolean = false,
@@ -1747,6 +1734,8 @@ class MainViewModel private constructor(
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    snoozedUntil: Long? = null,
+    clearSnooze: Boolean = false,
     color: String? = null,
     clearColor: Boolean = false,
     pinned: Boolean? = null,
@@ -1761,6 +1750,8 @@ class MainViewModel private constructor(
       clearLabel = clearLabel,
       category = category,
       clearCategory = clearCategory,
+      snoozedUntil = snoozedUntil,
+      clearSnooze = clearSnooze,
       color = color,
       clearColor = clearColor,
       pinned = pinned,

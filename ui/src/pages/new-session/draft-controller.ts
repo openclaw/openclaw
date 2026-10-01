@@ -241,9 +241,8 @@ export class NewSessionDraftController {
         () => this.read().context,
         () => this.protectPrivateDraftFromReload(),
       )
-      .watch(
+      .watchStore(
         () => this.read().context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.gateway.synchronize(gateway),
       )
       .effect(
@@ -275,7 +274,6 @@ export class NewSessionDraftController {
       this.gateway.client &&
       agents?.connected &&
       agents.client === this.gateway.client &&
-      !agents.agentsListCached &&
       this.place.agents().length > 0,
     );
   }

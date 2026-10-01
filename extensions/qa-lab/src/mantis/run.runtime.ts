@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { root } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyMantisLaneArtifact,
   createMantisRunStaging,
@@ -133,18 +133,6 @@ function formatMantisFailure(error: unknown): string {
   return lines.join("\n");
 }
 
-function createMantisFailureArtifactWriteError(params: {
-  artifactError: unknown;
-  error: unknown;
-  errorPath: string;
-}): AggregateError {
-  return new AggregateError(
-    [params.error, params.artifactError],
-    `Mantis run failed and could not safely write ${params.errorPath}: ${formatErrorMessage(params.error)}`,
-    { cause: params.artifactError },
-  );
-}
-
 async function throwMantisRunFailure(params: {
   error: unknown;
   outputDir: string;
@@ -154,11 +142,11 @@ async function throwMantisRunFailure(params: {
   try {
     await params.outputRoot.write("error.txt", `${formatMantisFailure(params.error)}\n`);
   } catch (artifactError) {
-    throw createMantisFailureArtifactWriteError({
-      artifactError,
-      error: params.error,
-      errorPath,
-    });
+    throw new AggregateError(
+      [params.error, artifactError],
+      `Mantis run failed and could not safely write ${errorPath}: ${formatErrorMessage(params.error)}`,
+      { cause: artifactError },
+    );
   }
   throw attachMantisFailureArtifact(params.error, errorPath);
 }
@@ -439,10 +427,8 @@ export async function runMantisBeforeAfter(
       skipBuild: opts.skipBuild ?? false,
       skipInstall: opts.skipInstall ?? false,
     };
-    const baselineResult = await runLane({
-      lane: "baseline",
+    const laneOptions = {
       outputDir,
-      ref: baseline,
       repoRoot,
       runId,
       runner,
@@ -452,21 +438,9 @@ export async function runMantisBeforeAfter(
       commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
-    });
-    const candidateResult = await runLane({
-      lane: "candidate",
-      outputDir,
-      ref: candidate,
-      repoRoot,
-      runId,
-      runner,
-      scenario,
-      signal: opts.signal,
-      stagingDir: staging.dir,
-      commandTimeouts,
-      worktreeRoot,
-      opts: commonOpts,
-    });
+    };
+    const baselineResult = await runLane({ ...laneOptions, lane: "baseline", ref: baseline });
+    const candidateResult = await runLane({ ...laneOptions, lane: "candidate", ref: candidate });
     const comparison = {
       baseline: {
         expected: scenarioConfig.baselineExpected,

@@ -99,7 +99,6 @@ export function startHeartbeatRunner(opts: {
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
-      reason,
       now,
       nextDueMs: options.authoritativeScheduledTick ? now : agent.cooldownUntilMs,
       lastRunStartedAtMs: agent.lastRunStartedAtMs,

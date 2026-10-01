@@ -1,7 +1,7 @@
 package ai.openclaw.app.wear
 
-import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.voice.RealtimeAgentCoordinator
 import ai.openclaw.app.voice.RealtimeAgentSession
 import ai.openclaw.app.voice.requestPhoneRealtimeSessionWithLanguageFallback
@@ -31,7 +31,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -109,7 +108,6 @@ internal class WearRealtimeTalkController(
   private val onSnapshot: (WearRealtimeTalkSnapshot) -> Unit = {},
   private val onForceCloseWatchChannel: (WearRealtimeAttemptOwner) -> Unit = {},
 ) {
-  private val json = Json { ignoreUnknownKeys = true }
   private val lifecycleMutex = Mutex()
   private val lifecycleStateLock = Any()
   private val lifecycleGeneration = AtomicLong()
@@ -209,9 +207,7 @@ internal class WearRealtimeTalkController(
           }
           return@withLock false
         }
-      val root =
-        runCatching { json.parseToJsonElement(payload).asObjectOrNull() }
-          .getOrNull()
+      val root = parseJsonParamsObject(payload)
       val createdSessionId =
         root
           ?.get("relaySessionId")
@@ -398,11 +394,7 @@ internal class WearRealtimeTalkController(
     event: String,
     payloadJson: String?,
   ) {
-    if (payloadJson.isNullOrBlank()) return
-    val obj =
-      runCatching { json.parseToJsonElement(payloadJson).asObjectOrNull() }
-        .getOrNull()
-        ?: return
+    val obj = parseJsonParamsObject(payloadJson) ?: return
     if (event == "chat") {
       handleChatEvent(obj)
       return
@@ -759,14 +751,12 @@ internal class WearRealtimeTalkController(
         while (SystemClock.elapsedRealtime() < playbackEndsAtMillis) {
           delay(20L)
         }
-        if (isCurrent(owner, activeSessionId)) {
-          updateActiveStateIfCurrent(
-            owner = owner,
-            sessionId = activeSessionId,
-            status = WearRealtimeTalkStatus.LISTENING,
-            statusText = "Listening",
-          )
-        }
+        updateActiveStateIfCurrent(
+          owner = owner,
+          sessionId = activeSessionId,
+          status = WearRealtimeTalkStatus.LISTENING,
+          statusText = "Listening",
+        )
       }
   }
 

@@ -49,10 +49,15 @@ function isBunWorkerRuntime(execPath: string): boolean {
   return execPath === process.execPath ? Boolean(process.versions.bun) : isBunRuntime(execPath);
 }
 
+/** Whether a source TypeScript module needs Node's tsx loader; Bun runs TypeScript natively. */
+export function runtimeNeedsTypeScriptLoader(modulePath: string, execPath = process.execPath) {
+  return /\.[cm]?ts$/.test(modulePath) && !isBunWorkerRuntime(execPath);
+}
+
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
   // Resolve the preload here: Node resolves bare imports from the child cwd.
-  return /\.[cm]?ts$/.test(entry) && !isBunWorkerRuntime(execPath)
+  return runtimeNeedsTypeScriptLoader(entry, execPath)
     ? ["--import", import.meta.resolve("tsx"), entry]
     : [entry];
 }
@@ -62,10 +67,7 @@ export function resolveRuntimeWorkerThreadExecArgv(
   url: URL,
   execPath = process.execPath,
 ): string[] {
-  if (url.protocol !== "file:") {
-    return [];
-  }
-  return /\.[cm]?ts$/.test(fileURLToPath(url)) && !isBunWorkerRuntime(execPath)
+  return url.protocol === "file:" && runtimeNeedsTypeScriptLoader(fileURLToPath(url), execPath)
     ? ["--import", import.meta.resolve("tsx/esm")]
     : [];
 }

@@ -123,7 +123,7 @@ enum QuickChatFocusedTextCollector {
             // repeated lines) is real document content and must be preserved.
             var ownTexts: [String] = []
             for rawCandidate in [next.node.stringValue(), next.node.computedName()] {
-                guard let candidate = Self.normalized(rawCandidate),
+                guard let candidate = rawCandidate?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
                       !next.parentTexts.contains(candidate),
                       !ownTexts.contains(candidate)
                 else { continue }
@@ -175,12 +175,6 @@ enum QuickChatFocusedTextCollector {
             wasTruncated: wasTruncated)
     }
 
-    private static func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     private static func appendingTruncationMarker(to text: String, maximumCharacters: Int) -> String {
         guard maximumCharacters > self.truncationMarker.count else {
             return String(self.truncationMarker.prefix(maximumCharacters))
@@ -218,7 +212,7 @@ enum QuickChatFocusedTextCaptureService {
 
         let hasPermission = await PermissionManager.grantedStatus([.accessibility])[.accessibility] == true
         guard !Task.isCancelled else { return .cancelled }
-        guard hasPermission else {
+        if !hasPermission {
             guard self.confirmAccessibilityRequest(appName: appName) else { return .cancelled }
             guard !Task.isCancelled else { return .cancelled }
             let result = await PermissionManager.ensure([.accessibility], interactive: true)
@@ -227,7 +221,6 @@ enum QuickChatFocusedTextCaptureService {
                 return .failed(String(
                     format: String(localized: "Accessibility access is required to attach text from %@."), appName))
             }
-            return await self.capture(application: application, appName: appName)
         }
         return await self.capture(application: application, appName: appName)
     }

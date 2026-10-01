@@ -300,7 +300,7 @@ struct MacNodeHostWorkerTests {
         #expect(await worker.invokedCommands() == [command])
     }
 
-    @Test(arguments: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue])
+    @Test(arguments: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue])
     func `selected CUA provider gives the command pair exclusively to the worker`(command: String) async {
         let worker = StubMacNodeHostWorker(commands: [command])
         let services = await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() }
@@ -333,7 +333,7 @@ struct MacNodeHostWorkerTests {
 
         let response = await runtime.handleInvoke(BridgeInvokeRequest(
             id: "cua-unavailable",
-            command: MacNodeScreenCommand.snapshot.rawValue))
+            command: OpenClawScreenCommand.snapshot.rawValue))
 
         #expect(!response.ok)
         #expect(response.error?.message == "UNAVAILABLE: selected CUA provider is not ready")
@@ -475,17 +475,17 @@ struct MacNodeHostWorkerTests {
         let manifest = MacNodeHostManifest(
             version: "test",
             caps: ["screen", "computer"],
-            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
             computerUse: descriptor,
             pathEnv: "/usr/bin:/bin")
 
         let peekaboo = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: .peekaboo))
-        #expect(!peekaboo.commands.contains(MacNodeScreenCommand.snapshot.rawValue))
+        #expect(!peekaboo.commands.contains(OpenClawScreenCommand.snapshot.rawValue))
         #expect(!peekaboo.commands.contains(OpenClawComputerCommand.act.rawValue))
         #expect(peekaboo.computerUse == nil)
         let peekabooDescriptor = try #require(MacNodeModeCoordinator.computerUseDescriptor(
             provider: .peekaboo,
-            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
             workerManifest: peekaboo))
         let peekabooJSON = try JSONEncoder().encode(peekabooDescriptor)
         let peekabooObject = try #require(
@@ -527,7 +527,7 @@ struct MacNodeHostWorkerTests {
         let manifest = MacNodeHostManifest(
             version: "test",
             caps: ["screen", "computer"],
-            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
             computerUse: cuaDescriptor,
             pathEnv: "/usr/bin:/bin")
         let workerManifest = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: provider))

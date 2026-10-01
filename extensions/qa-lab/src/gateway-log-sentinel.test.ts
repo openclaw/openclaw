@@ -12,6 +12,19 @@ describe("gateway log sentinels", () => {
   it.each([
     [{ content: [{ type: "toolResult", content: "codex output" }] }, "codex output"],
     [{ content: [{ type: "text", text: "standard output" }] }, "standard output"],
+    [
+      {
+        content: [
+          "  plain  ",
+          " ",
+          null,
+          { type: "ToOl_ReSuLt", content: " nested " },
+          { type: "OUTPUT_TEXT", content: "output" },
+          { type: "unknown", text: " priority ", content: "ignored" },
+        ],
+      },
+      "plain\nnested\noutput\npriority",
+    ],
   ])("extracts message text from tool result shapes", (message, expected) => {
     expect(extractGatewayMessageText(message)).toBe(expected);
   });

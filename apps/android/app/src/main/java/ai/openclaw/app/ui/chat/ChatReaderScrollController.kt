@@ -81,8 +81,6 @@ internal fun createChatReaderStateSaver(expectedSessionKey: String? = null) =
     },
   )
 
-internal val ChatReaderStateSaver = createChatReaderStateSaver()
-
 internal data class ChatReaderTransition(
   val state: ChatReaderState,
   val scrollIndex: Int? = null,

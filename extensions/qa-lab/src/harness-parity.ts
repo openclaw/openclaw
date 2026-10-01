@@ -4,8 +4,8 @@ import {
   normalizeTextForParity,
   stableHash,
 } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type {
-  RuntimeId,
   RuntimeParityCell,
   RuntimeParityDrift,
   RuntimeParityUsage,
@@ -193,7 +193,6 @@ export function buildHarnessParityCell(params: {
   return {
     ...params.cell,
     variant: params.variant,
-    ...(report ? { systemPromptReport: report } : {}),
     promptStats,
     systemPromptHash: stableHash({
       systemPrompt: report?.systemPrompt ?? null,

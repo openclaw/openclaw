@@ -10,7 +10,9 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.PermissionRequester
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.SessionCatalogState
 import ai.openclaw.app.bindNodeRuntimeTestFixture
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.drainWithMainLooper
@@ -18,6 +20,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.parseSessionCatalogs
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.chat.PendingAttachment
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -61,8 +64,10 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.filter
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -71,6 +76,8 @@ import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onChildren
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -98,6 +105,7 @@ import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
 import com.google.mlkit.common.sdkinternal.MlKitContext
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -179,6 +187,52 @@ class SidebarGatewayPickerTest {
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, animatorScale)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
     WindowInfoTracker.reset()
+  }
+
+  @Test
+  @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
+  fun catalogPlusCreatesIntegratedChatWithoutTerminalAction() {
+    model.enterScreenshotFixtureMode(AndroidScreenshotScene.CompletedWork)
+    val catalogs =
+      parseSessionCatalogs(
+        """{"catalogs":[{"id":"codex","label":"Codex","capabilities":{"createSession":{"model":"example/chat"},"startTerminal":true},"hosts":[]}]}""",
+        requestedAgentId = "main",
+      )
+    ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState").value =
+      SessionCatalogState(catalogs = catalogs, agentId = "main")
+    ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_sessionCatalogAvailable").value = true
+    val scopes = ReflectionHelpers.getField<MutableStateFlow<List<String>>>(runtime, "_operatorScopes")
+    scopes.value = listOf("operator.read", "operator.write", "operator.admin")
+    val requests = mutableListOf<Pair<String, String?>>()
+    val request = ReflectionHelpers.getField<suspend (String, String?) -> String>(runtime.chat, "requestGateway")
+    val captureLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
+      GatewaySession.RequestLease(endpointStableId = scope?.gatewayId.orEmpty()) { method, params, _, withEnqueue ->
+        withEnqueue {}
+        requests += method to params
+        if (method == "sessions.create") """{"key":"agent:main:dashboard:catalog-chat"}""" else request(method, params)
+      }
+    }
+    ReflectionHelpers.setField(runtime.chat, "captureRequestLease", captureLease)
+    showSidebarAndComposer(showShell = true)
+    composeRule.runOnIdle { runtime.chat.load("agent:main:dashboard:existing") }
+    drainWithMainLooper { withTimeout(5_000) { model.chatHistoryLoading.first { !it } } }
+    composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
+    capture("catalog-chat-sidebar")
+    val actions = composeRule.onNodeWithText("Codex").onChildren().filter(hasClickAction())
+    actions.assertCountEquals(1)
+    composeRule.runOnIdle {
+      scopes.value = listOf("operator.read", "operator.write")
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime.GatewayControlPage?>>(runtime, "_gatewayControlPage").value = null
+    }
+    actions.onFirst().assertIsEnabled().performClick()
+    drainWithMainLooper { withTimeout(5_000) { model.chatSessionKey.first { it == "agent:main:dashboard:catalog-chat" } } }
+    composeRule.runOnIdle {
+      assertEquals(listOf("sessions.create" to """{"agentId":"main","catalogId":"codex"}"""), requests.filter { it.first == "sessions.create" })
+      assertFalse(requests.any { it.first == "sessions.catalog.startTerminal" })
+    }
+    composeRule.onNodeWithText("Terminal").assertDoesNotExist()
+    composeRule.onNode(hasSetTextAction()).assertIsEnabled()
+    capture("catalog-chat-opened")
   }
 
   @Test

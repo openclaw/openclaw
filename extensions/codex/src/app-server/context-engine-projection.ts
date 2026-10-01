@@ -389,7 +389,7 @@ function normalizeProjectedContextRange(
   return { start, end };
 }
 
-function resolveProjectionPromptBudgetTokens(params: {
+export function resolveProjectionPromptBudgetTokens(params: {
   contextTokenBudget: number;
   reserveTokens?: number;
 }): number {
@@ -600,14 +600,14 @@ function renderToolCallPayload(record: Record<string, unknown>): Record<string, 
 }
 
 function renderToolResultPayload(record: Record<string, unknown>): Record<string, unknown> {
-  const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
-  for (const [key, value] of Object.entries(record)) {
-    if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
-      continue;
-    }
-    payload[key] = projectToolPayloadValue(value, "content", key);
-  }
-  return payload;
+  return {
+    ...pickToolPayloadMetadata(record),
+    ...Object.fromEntries(
+      Object.entries(record)
+        .filter(([key]) => !TOOL_PAYLOAD_METADATA_KEYS.has(key))
+        .map(([key, value]) => [key, projectToolPayloadValue(value, "content", key)]),
+    ),
+  };
 }
 
 const TOOL_PAYLOAD_METADATA_KEYS = new Set([
@@ -657,11 +657,12 @@ function projectToolPayloadValue(
     if (Array.isArray(value)) {
       return value.map((entry) => projectToolPayloadValue(entry, mode, key, seen));
     }
-    const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value)) {
-      out[childKey] = projectToolPayloadValue(child, mode, childKey, seen);
-    }
-    return out;
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, child]) => [
+        childKey,
+        projectToolPayloadValue(child, mode, childKey, seen),
+      ]),
+    );
   }
   return `[${typeof value}]`;
 }

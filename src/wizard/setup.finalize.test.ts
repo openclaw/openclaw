@@ -6,6 +6,8 @@ import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-mode
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
+import * as programArgs from "../daemon/program-args.js";
+import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -23,6 +25,11 @@ type DefaultModelCatalogFacts = ReturnType<
 
 const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+const runExec = vi.hoisted(() => vi.fn());
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec,
+}));
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
 const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
@@ -73,12 +80,15 @@ const loadModelCatalog = vi.hoisted(() =>
   vi.fn<(_params?: unknown) => Promise<unknown[]>>(async () => []),
 );
 const buildGatewayInstallPlan = vi.hoisted(() =>
-  vi.fn(async (_params?: { warn?: (message: string, title?: string) => void }) => ({
-    programArguments: [],
-    workingDirectory: "/tmp",
-    environment: {},
-    environmentValueSources: {},
-  })),
+  vi.fn<typeof import("../commands/daemon-install-helpers.js").buildGatewayInstallPlan>(
+    async () => ({
+      runtime: "node",
+      programArguments: [],
+      workingDirectory: "/tmp",
+      environment: {},
+      environmentValueSources: {},
+    }),
+  ),
 );
 const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceRestart = vi.hoisted(() =>
@@ -377,6 +387,7 @@ function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
+    runExec.mockReset();
     runTui.mockClear();
     setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset().mockReturnValue(setupCleanupExitTimer);
@@ -815,6 +826,7 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
     const runtime = createRuntime();
     buildGatewayInstallPlan.mockResolvedValueOnce({
+      runtime: "node",
       programArguments: [],
       workingDirectory: "/tmp",
       environment: {
@@ -856,6 +868,50 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
+  it("reports Bun for a Bun-only QuickStart install", async () => {
+    const { buildGatewayInstallPlan: realPlan } = await vi.importActual<
+      typeof import("../commands/daemon-install-helpers.js")
+    >("../commands/daemon-install-helpers.js");
+    const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    const discoverNode = vi
+      .spyOn(runtimePaths, "resolvePreferredNodePath")
+      .mockResolvedValue(undefined);
+    const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
+      status: "supported",
+      version: "1.4.2",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    });
+    const resolveArguments = vi
+      .spyOn(programArgs, "resolveGatewayProgramArguments")
+      .mockResolvedValue({ programArguments: [process.execPath, "/app/openclaw.mjs", "gateway"] });
+    buildGatewayInstallPlan.mockImplementationOnce(realPlan);
+    const prompter = buildWizardPrompter();
+    try {
+      const result = await ensureGatewayServiceForOnboarding(
+        createServiceSetupArgs({ flow: "quickstart", opts: { installDaemon: true }, prompter }),
+      );
+      expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+      expect(resolveArguments).toHaveBeenCalledWith(
+        expect.objectContaining({ runtime: "bun", runtimePath: process.execPath }),
+      );
+      expectNoteContains(prompter, "QuickStart uses Bun", "Gateway service runtime");
+      expectNoteNotContains(prompter, "QuickStart uses Node");
+      expect(gatewayServiceInstall).toHaveBeenCalledOnce();
+    } finally {
+      discoverNode.mockRestore();
+      probeBun.mockRestore();
+      resolveArguments.mockRestore();
+      if (bunVersion) {
+        Object.defineProperty(process.versions, "bun", bunVersion);
+      } else {
+        delete process.versions.bun;
+      }
+    }
+  });
+
   it("waits for gateway install warnings before installing the service", async () => {
     let acknowledgeWarning: (() => void) | undefined;
     const warningAcknowledged = new Promise<void>((resolve) => {
@@ -873,6 +929,7 @@ describe("finalizeSetupWizard", () => {
     buildGatewayInstallPlan.mockImplementationOnce(async (params) => {
       params?.warn?.("Gateway install warning", "Gateway service");
       return {
+        runtime: "node",
         programArguments: [],
         workingDirectory: "/tmp",
         environment: {},
@@ -1295,6 +1352,55 @@ describe("finalizeSetupWizard", () => {
         }),
       );
       expect(gatewayServiceUninstall).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { flow: "advanced", choice: "bun" },
+    { flow: "advanced", choice: "node" },
+    { flow: "quickstart", choice: "bun" },
+  ] as const)(
+    "reinstalls recorded Bun through $flow with choice=$choice",
+    async ({ flow, choice }) => {
+      const recordedPath = "/opt/recorded/bin/bun";
+      runExec.mockResolvedValue({
+        stdout: JSON.stringify({
+          bunVersion: "1.4.2",
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+        }),
+        stderr: "",
+      });
+      gatewayServiceIsLoaded.mockResolvedValue(true);
+      gatewayServiceReadCommand.mockResolvedValue({
+        programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
+      });
+      const prompter = buildWizardPrompter();
+      const selectRuntime = vi
+        .mocked(prompter.select)
+        .mockResolvedValueOnce("reinstall")
+        .mockResolvedValueOnce(choice);
+
+      const result = await ensureGatewayServiceForOnboarding(
+        createServiceSetupArgs({
+          flow,
+          opts: { installDaemon: true },
+          prompter,
+        }),
+      );
+
+      expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+      if (flow === "advanced") {
+        expect(selectRuntime).toHaveBeenCalledWith(
+          expect.objectContaining({ initialValue: "bun" }),
+        );
+      }
+      expect(selectRuntime).toHaveBeenCalledTimes(flow === "advanced" ? 2 : 1);
+      expect(requireMockArg(buildGatewayInstallPlan)).toMatchObject({
+        runtime: choice,
+        runtimePath: choice === "bun" ? recordedPath : undefined,
+        pinnedRuntimePath: undefined,
+      });
     },
   );
 

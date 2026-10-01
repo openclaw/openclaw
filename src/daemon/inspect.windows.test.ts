@@ -229,6 +229,114 @@ describe("findExtraGatewayServices (win32)", () => {
     },
   );
 
+  it.each(["missing action", "unreadable launcher", "disappeared launcher", "multiple actions"])(
+    "does not silently omit a selected custom task from complete inventory: %s",
+    async (fault) => {
+      const label = "\\Custom Assistant";
+      const selected = task(label, "C:\\custom\\assistant.cmd", "");
+      if (fault === "missing action") {
+        selected.actions = [];
+      } else if (fault === "multiple actions") {
+        selected.actions = [0, 1].map(
+          () => task(label, "C:\\OpenClaw\\openclaw.exe", "gateway run").actions[0]!,
+        );
+      }
+      listScheduledTasksMock.mockReturnValue([selected]);
+      readScheduledTaskCommandMock.mockImplementation(async () => {
+        if (fault === "unreadable launcher") {
+          throw new Error("Access denied");
+        }
+        return null;
+      });
+      const env = { ...nativeEnv, OPENCLAW_WINDOWS_TASK_NAME: label };
+      const result = await listManagedOpenClawGatewayServices(env, { requireComplete: true });
+      expect(result.services).toEqual([]);
+      expect(result.errors).toEqual([
+        { source: label, message: expect.stringContaining("could not be inspected") },
+      ]);
+      expect(renderGatewayServiceCleanupHints(result.services)).toEqual([]);
+    },
+  );
+
+  it.each([null, 0, 1, 2, 3, 4])(
+    "excludes unrelated unreadable tasks from complete inventory in native state %s",
+    async (state) => {
+      listScheduledTasksMock.mockReturnValue([
+        { ...task("\\Maintenance", "C:\\tools\\maintenance.cmd", ""), state },
+        { taskPath: "\\Native Maintenance", state, actions: [] },
+      ]);
+      readScheduledTaskCommandMock.mockRejectedValue(new Error("Access denied"));
+
+      await expect(
+        listManagedOpenClawGatewayServices(nativeEnv, { requireComplete: true }),
+      ).resolves.toEqual({ services: [], errors: [] });
+    },
+  );
+
+  it.each([null, 3])(
+    "keeps disappeared OpenClaw launchers incomplete in native state %s",
+    async (state) => {
+      const labels = ["\\OpenClaw Gateway (dev)", "\\Clawdbot Gateway", "\\Custom Service"];
+      listScheduledTasksMock.mockReturnValue(
+        labels.map((label) => ({ ...task(label, "C:\\OpenClaw\\gateway.cmd", ""), state })),
+      );
+      readScheduledTaskCommandMock.mockResolvedValue(null);
+
+      const result = await listManagedOpenClawGatewayServices(nativeEnv, { requireComplete: true });
+
+      expect(result.services).toEqual([]);
+      expect(result.errors).toEqual(
+        labels.map((source) => ({
+          source,
+          message: "Scheduled Task launcher could not be inspected.",
+        })),
+      );
+    },
+  );
+
+  it("refuses a mixed task whose later action runs the Gateway", async () => {
+    const label = "\\Mixed Assistant";
+    listScheduledTasksMock.mockReturnValue([
+      {
+        taskPath: label,
+        state: null,
+        actions: [
+          task(label, "C:\\clawdbot\\clawdbot.exe", "run").actions[0]!,
+          task(label, "C:\\OpenClaw\\openclaw.exe", "gateway run").actions[0]!,
+        ],
+      },
+    ]);
+
+    const result = await listManagedOpenClawGatewayServices(nativeEnv, { requireComplete: true });
+
+    expect(result.services).toEqual([]);
+    expect(result.errors).toEqual([
+      { source: label, message: expect.stringContaining("Multiple Scheduled Task actions") },
+    ]);
+  });
+
+  it.each([
+    ["direct", "C:\\custom\\assistant.bat", ""],
+    ["through cmd.exe", "C:\\Windows\\System32\\cmd.exe", "/c C:\\custom\\assistant.bat"],
+  ])(
+    "refuses an uninspectable selected bat launcher %s in complete inventory",
+    async (_mode, executable, args) => {
+      const label = "\\Custom Assistant";
+      listScheduledTasksMock.mockReturnValue([task(label, executable, args)]);
+      readScheduledTaskCommandMock.mockRejectedValue(new Error("Unsupported launcher"));
+
+      const result = await listManagedOpenClawGatewayServices(
+        { ...nativeEnv, OPENCLAW_WINDOWS_TASK_NAME: label },
+        { requireComplete: true },
+      );
+
+      expect(result.services).toEqual([]);
+      expect(result.errors).toEqual([
+        { source: label, message: "Scheduled Task launcher could not be inspected." },
+      ]);
+    },
+  );
+
   it("reports a recognizable launcher read failure without offering its deletion", async () => {
     listScheduledTasksMock.mockReturnValue([
       task("\\Custom Service", "C:\\fixtures\\service.cmd", ""),

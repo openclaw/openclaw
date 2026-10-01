@@ -37,7 +37,6 @@ import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-sch
 import * as workerOwner from "../../scripts/lib/vitest-worker-run.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
-import { getUnitFastIsolatedTestFiles } from "../vitest/vitest.unit-fast-paths.mjs";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -48,6 +47,9 @@ vi.mock("node:fs/promises", async (importOriginal) => ({
 
 const scratchDirs: string[] = [];
 const bunConfig = "test/vitest/vitest.unit-fast.config.ts";
+const unitConfig = "test/vitest/vitest.unit.config.ts";
+const unitSrcConfig = "test/vitest/vitest.unit-src.config.ts";
+const libraryTarget = "src/library.test.ts";
 const bunTarget = "packages/markdown-core/src/chunk-text.test.ts";
 const nodeTarget = "test/scripts/update-restart-module-outcome.test.ts";
 const agentsSupportConfig = "test/vitest/vitest.agents-support.config.ts";
@@ -607,13 +609,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const nodeFiles = [
         skippedOnBun,
         v8HeapTest,
+        "src/plugins/runtime.retention.test.ts",
         "src/agents/code-mode-node.test.ts",
         nodeHistoryBenchmark,
+      ];
+      const bunFiles = [
+        bunTarget,
+        missingDockerTest,
         nativeCompilerTest,
         compilerGraphTest,
         mixedCompilerTest,
-      ];
-      const bunFiles = [bunTarget, missingDockerTest];
+        "src/auto-reply/reply/get-reply.imports.test.ts",
+      ].toSorted();
       const includePatterns = [...bunFiles, ...nodeFiles];
       const shard = {
         configs: [bunConfig],
@@ -735,31 +742,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   });
 
   it.each(["bun-compatible", "dual"] as const)(
-    "keeps isolated Node-dependent coverage without losing other files under %s",
+    "admits the complete isolated inventory and its native compiler targets under %s",
     (policy) => {
       const config = "test/vitest/vitest.unit-fast-isolated.config.ts";
-      const nodeFiles = ["src/agents/code-mode.action-output.test.ts"];
-      const files = getUnitFastIsolatedTestFiles();
-      const selection = { configs: [config] };
-      const selected = resolveCiTestRuntimeSelections(selection, policy);
-      expect(selected).toEqual([
-        policy === "dual" ? { runtime: "node" } : { runtime: "node", includePatterns: nodeFiles },
-        { runtime: "bun", includePatterns: files.filter((file) => !nodeFiles.includes(file)) },
-      ]);
-      expect(new Set(selected.flatMap(({ includePatterns }) => includePatterns ?? files))).toEqual(
-        new Set(files),
-      );
-      expect(ciTestShardRequiresBun(selection, policy)).toBe(true);
-      for (const nodeFile of nodeFiles) {
-        expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
-          { runtime: "node" },
-        ]);
-        expect(
-          resolveCiTestRuntimeSelections(
-            { configs: [config], includePatterns: [nodeFile] },
-            policy,
-          ),
-        ).toEqual([{ runtime: "node" }]);
+      const compilerFile = "src/agents/code-mode.auto-results.test.ts";
+      for (const selection of [
+        { configs: [config] },
+        { targets: [compilerFile] },
+        { configs: [config], includePatterns: [compilerFile] },
+      ]) {
+        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual(
+          policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
+        );
+        expect(ciTestShardRequiresBun(selection, policy)).toBe(true);
       }
       const captureFile = "src/proxy-capture/proxy-server.test.ts";
       for (const captureSelection of [
@@ -773,6 +768,70 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       expect(resolveCiTestRuntimeSelections({ targets: ["src/version.test.ts"] }, policy)).toEqual(
         policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
       );
+    },
+  );
+
+  it.each([
+    {
+      policy: "bun-compatible",
+      config: unitConfig,
+      nodeFile: "packages/acp-core/src/error-format.test.ts",
+    },
+    { policy: "dual", config: unitConfig, nodeFile: "packages/acp-core/src/error-format.test.ts" },
+    { policy: "bun-compatible", config: unitSrcConfig, nodeFile: "src/audit/audit-config.test.ts" },
+    { policy: "dual", config: unitSrcConfig, nodeFile: "src/audit/audit-config.test.ts" },
+  ] as const)(
+    "admits library coverage while preserving $config siblings under $policy",
+    async ({ policy, config, nodeFile }) => {
+      const includePatterns = [libraryTarget, nodeFile];
+      const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
+      await expect(
+        runShardPlans(
+          [{ kind: "group", name: "unit", plan: { configs: [config], includePatterns } }],
+          {
+            env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+            scratchDir: makeScratchDir(),
+            runChild: async (_args, env) => {
+              seen.push({
+                runtime: env.OPENCLAW_VITEST_RUNTIME,
+                includes: JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
+              });
+              return 0;
+            },
+          },
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        { runtime: "node", includes: policy === "dual" ? includePatterns : [nodeFile] },
+        { runtime: "bun", includes: [libraryTarget] },
+      ]);
+      expect(new Set(seen.flatMap(({ includes }) => includes))).toEqual(new Set(includePatterns));
+      expect(resolveCiTestRuntimeSelections({ targets: [libraryTarget] }, policy)).toEqual(
+        policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
+      );
+      expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
+        { runtime: "node" },
+      ]);
+      const full = resolveCiTestRuntimeSelections({ configs: [config] }, policy);
+      expect(full).toEqual([
+        policy === "dual"
+          ? { runtime: "node" }
+          : { runtime: "node", includePatterns: expect.arrayContaining([nodeFile]) },
+        { runtime: "bun", includePatterns: [libraryTarget] },
+      ]);
+      if (policy === "bun-compatible") {
+        expect(full[0]?.includePatterns).not.toContain(libraryTarget);
+        expect(full[0]?.includePatterns).not.toContain(bunTarget);
+        if (config === unitSrcConfig) {
+          expect(full[0]?.includePatterns?.every((file) => file.startsWith("src/"))).toBe(true);
+          expect(
+            full[0]?.includePatterns?.some(
+              (file) => file.startsWith("src/acp/") || file.startsWith("src/security/"),
+            ),
+          ).toBe(false);
+        }
+      }
+      expect(ciTestShardRequiresBun({ configs: [config] }, policy)).toBe(true);
     },
   );
 
@@ -877,12 +936,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       { runtime: "node" },
     ]);
     expect(resolveCiTestRuntimeSelections(qualifiedShard, "dual")).toEqual([{ runtime: "node" }]);
-    for (const configs of [[gatewayClientConfig], [gatewayCoreConfig, gatewayClientConfig]]) {
-      const gatewaySelection = { configs, ...selection };
-      expect(resolveCiTestRuntimeSelections(gatewaySelection, "bun-compatible")).toEqual([
+    for (const configs of [
+      [gatewayClientConfig],
+      [gatewayCoreConfig, gatewayClientConfig],
+      [unitConfig],
+      [unitSrcConfig],
+      ["test/vitest/vitest.unit-fast-isolated.config.ts"],
+    ]) {
+      const configSelection = { configs, ...selection };
+      expect(resolveCiTestRuntimeSelections(configSelection, "bun-compatible")).toEqual([
         { runtime: "node" },
       ]);
-      expect(resolveCiTestRuntimeSelections(gatewaySelection, "dual")).toEqual([
+      expect(resolveCiTestRuntimeSelections(configSelection, "dual")).toEqual([
         { runtime: "node" },
       ]);
     }
@@ -1074,6 +1139,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       expected: true,
     },
     { shard: { targets: [bunTarget] }, expected: true },
+    { shard: { targets: [libraryTarget] }, expected: true },
     { shard: { targets: [nodeTarget] }, expected: false },
     { shard: { targets: ["test/scripts/ci-run-node-test-shard.test.ts"] }, expected: false },
     {

@@ -653,7 +653,7 @@ describe("conversation position rail", () => {
   it.each([
     { role: "user", senderName: undefined, label: "User message" },
     { role: "user", senderName: "Alice Example", label: "Alice Example" },
-    { role: "assistant", senderName: "Alice Example", label: "Assistant message" },
+    { role: "assistant", senderName: "Alice Example", label: "Molty" },
   ])(
     "renders safe Markdown and attribution in $role previews ($label)",
     ({ role, senderName, label }) => {
@@ -669,6 +669,9 @@ describe("conversation position rail", () => {
       Object.assign(messages[0]!["__openclaw"], { senderName });
       const props = threadProps("rail-markdown", "agent:main:markdown", messages);
       props.userName = "Local Viewer";
+      if (role === "assistant") {
+        props.assistantAvatar = "🦞";
+      }
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
@@ -686,8 +689,26 @@ describe("conversation position rail", () => {
         );
         const avatar = container.querySelector(".chat-position-rail__preview .chat-author-avatar");
         expect(avatar?.getAttribute("aria-label") ?? null).toBe(
-          role === "user" ? (senderName ?? null) : null,
+          role === "user" ? (senderName ?? null) : "Molty",
         );
+        if (role === "assistant") {
+          expect(avatar?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+            "🦞",
+          );
+          expect(
+            container.querySelector(".chat-position-rail__marker")?.getAttribute("aria-label"),
+          ).toContain("Molty");
+          props.assistantName = "Roboclaw";
+          rerender();
+          expect(container.querySelector(".chat-position-rail__preview-label")?.textContent).toBe(
+            "Roboclaw",
+          );
+          expect(
+            container
+              .querySelector(".chat-position-rail__preview .chat-author-avatar")
+              ?.getAttribute("aria-label"),
+          ).toBe("Roboclaw");
+        }
         expect(preview.querySelector("strong")?.textContent).toBe("Important");
         expect(preview.querySelector("em")?.textContent).toBe("detail");
         expect(preview.querySelector("code")?.textContent).toBe("code");

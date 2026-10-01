@@ -39,8 +39,6 @@ import {
 } from "./inference-upload.js";
 import type { CodexResponsesOAuth } from "./responses-oauth.js";
 
-export { CodexInferenceAuthorizationError } from "./inference-dispatch.js";
-
 const MAX_ERROR_BODY_BYTES = 1024 * 1024;
 const MAX_WEBSOCKETS = 64;
 // Preserve the former 64 WS + 16 HTTP envelope; uploads no longer own response slots.

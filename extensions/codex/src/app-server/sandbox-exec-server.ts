@@ -4,7 +4,6 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import type { IncomingMessage } from "node:http";
 import { isIP } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -318,16 +317,19 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   server.on("connection", (socket, request) => {
     // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
     socket.on("error", handleExecServerSocketError);
-    if (!isAuthorizedExecServerRequest(execServer, request)) {
+    const requestUrl = new URL(request.url ?? "", "ws://127.0.0.1");
+    if (
+      requestUrl.pathname !== execServer.authPath &&
+      ("node" in execServer || !execServer.processAuthorities?.has(requestUrl.pathname))
+    ) {
       socket.close(1008, "unauthorized");
       return;
     }
     if ("node" in execServer) {
-      handleNodeConnection(execServer, socket, request);
+      handleNodeConnection(execServer, socket, requestUrl);
       return;
     }
-    const requestPath = new URL(request.url ?? "", "ws://127.0.0.1").pathname;
-    handleConnection(execServer, socket, execServer.processAuthorities?.get(requestPath));
+    handleConnection(execServer, socket, execServer.processAuthorities?.get(requestUrl.pathname));
   });
   embeddedAgentLog.info("codex sandbox exec-server started", {
     environmentId,
@@ -360,17 +362,6 @@ async function releaseOpenClawExecServer(execServer: OpenClawLeasedExecServer): 
 function buildEnvironmentId(sandbox: SandboxContext): string {
   const hash = createHash("sha256").update(sandbox.runtimeId).digest("hex").slice(0, 16);
   return `openclaw-sandbox-${hash}`;
-}
-
-function isAuthorizedExecServerRequest(
-  execServer: OpenClawLeasedExecServer,
-  request: IncomingMessage,
-): boolean {
-  const url = new URL(request.url ?? "", "ws://127.0.0.1");
-  return (
-    url.pathname === execServer.authPath ||
-    (!("node" in execServer) && execServer.processAuthorities?.has(url.pathname) === true)
-  );
 }
 
 function readCodexPlacementNodeId(sandbox: SandboxContext): string | undefined {
@@ -421,9 +412,9 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
 function handleNodeConnection(
   execServer: OpenClawNodeExecServer,
   socket: WebSocket,
-  request: IncomingMessage,
+  requestUrl: URL,
 ): void {
-  const leaseId = new URL(request.url ?? "", "ws://127.0.0.1").searchParams.get("lease");
+  const leaseId = requestUrl.searchParams.get("lease");
   const lease = leaseId ? execServer.node.leases.get(leaseId) : undefined;
   if (!lease || lease.claimed || lease.closed) {
     socket.close(1008, "execution channel unavailable");

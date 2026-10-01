@@ -454,10 +454,10 @@ async function run() {
     const driverEnv = {
       PATH: process.env.PATH,
       HOME: privateRoot,
-      TELEGRAM_USER_DRIVER_TDLIB_PATH: ready.tdlib,
       TELEGRAM_PROOF_AUTHORITY_FILE: authorityFile,
       TELEGRAM_PROOF_PARENT_PID: String(process.pid),
       ...credential.driverEnv,
+      TELEGRAM_USER_DRIVER_TDLIB_PATH: ready.tdlib,
     };
     stage = "leased-identity-validation";
     const status = await execute(

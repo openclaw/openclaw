@@ -72,7 +72,9 @@ async function createUninstallSourceFixture(
   fs.writeFileSync(retainedFile, "owned plugin bytes");
   const config: OpenClawConfig = {
     plugins: {
-      entries: { [fixture.pluginId]: { enabled: true } },
+      entries: {
+        [fixture.pluginId]: { enabled: true, config: { retainedUntilRemoval: true } },
+      },
       load: { paths: [pluginRoot, ...(keepParentLoadPath ? [parentLoadPath] : [])] },
     },
   };
@@ -232,6 +234,10 @@ it.each(["root", "shared include"] as const)(
       for (const pathname of sources) {
         await expectConfigSourceLocked(pathname);
       }
+      expect((await readConfigFileSnapshot()).config.plugins?.entries?.[fixture.pluginId]).toEqual({
+        enabled: false,
+        config: { retainedUntilRemoval: true },
+      });
       // Cleanup owns source exclusion through deletion, not final config publication.
       // Probe real writer admission without racing the later optimistic reread.
       writer = withConfigWriteLock(
@@ -250,10 +256,9 @@ it.each(["root", "shared include"] as const)(
     await writer;
     await fixture.addLoadPath(otherPath);
     expect(fs.existsSync(fixture.pluginRoot)).toBe(false);
-    expect((await readConfigFileSnapshot()).config.plugins?.load?.paths).toEqual([
-      fixture.parentLoadPath,
-      otherPath,
-    ]);
+    const config = (await readConfigFileSnapshot()).config;
+    expect(config.plugins?.load?.paths).toEqual([fixture.parentLoadPath, otherPath]);
+    expect(config.plugins?.entries?.[fixture.pluginId]).toEqual({ enabled: false });
   },
 );
 

@@ -1,6 +1,7 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeIMessageMessageId } from "../message-guid.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   IMESSAGE_SENT_ECHOES_TTL_MS,
@@ -13,14 +14,6 @@ import {
 import { normalizeIMessageEchoText } from "./echo-text-corruption.js";
 
 type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry>;
-
-function normalizeMessageId(messageId: string | undefined): string | undefined {
-  const normalized = messageId?.trim();
-  if (!normalized || normalized === "ok" || normalized === "unknown") {
-    return undefined;
-  }
-  return normalized;
-}
 
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
@@ -110,7 +103,7 @@ export async function rememberPersistedIMessageEcho(params: {
 }): Promise<string | undefined> {
   const text = normalizeIMessageEchoText(params.text);
   const media = normalizeMedia(params.media);
-  const messageId = normalizeMessageId(params.messageId);
+  const messageId = normalizeIMessageMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
     scope: params.scope,
     timestamp: Date.now(),
@@ -149,7 +142,7 @@ export async function hasPersistedIMessageEcho(params: {
 }): Promise<boolean> {
   const text = normalizeIMessageEchoText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
-  const messageId = normalizeMessageId(params.messageId);
+  const messageId = normalizeIMessageMessageId(params.messageId);
   if (!text && !mediaKey && !messageId) {
     return false;
   }

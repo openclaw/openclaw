@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { acquireQaLease } from "./qa-credential-lease.mjs";
+import { createTelegramRuntimeEnvironment } from "./telegram-runtime.mjs";
 
 const TELEGRAM_TEST_CREDENTIAL_KIND = "telegram-test-userbot";
 
@@ -191,6 +192,7 @@ export function restoreTelegramTestCredential(payloadValue, stateRoot) {
     credentialsPath,
     userDriverDir,
     driverEnv: {
+      ...createTelegramRuntimeEnvironment(root),
       TELEGRAM_E2E_STATE_DIR: root,
       TELEGRAM_USER_DRIVER_STATE_DIR: userDriverDir,
       TELEGRAM_USER_DRIVER_SUT_ID: payload.sutBotId,

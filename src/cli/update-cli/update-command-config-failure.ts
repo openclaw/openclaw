@@ -1,3 +1,4 @@
+import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/shared/retired-config-formats.js";
 import { isConfigReadFailure } from "../../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
@@ -33,12 +34,18 @@ export function createUpdateConfigFailure(
     pathSegments,
     message: "Invalid configuration field",
   }));
+  const retired = findRetiredConfigUpgradeRequirement(
+    snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+  );
   const nextAction =
+    retired?.nextAction ??
     "Run `openclaw doctor --fix` to repair retired or unrecognized configuration fields, then correct any remaining errors before retrying.";
   return new UpdatePreMutationError(
     "invalid-config",
     [
-      `Update refused: configuration is invalid at ${snapshot.path}.`,
+      retired
+        ? "Update refused: configuration contains retired fields that current Doctor cannot migrate."
+        : `Update refused: configuration is invalid at ${snapshot.path}.`,
       ...formatConfigIssueLines(issues, "-", { normalizeRoot: true }),
       nextAction,
     ].join("\n"),

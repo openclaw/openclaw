@@ -1,6 +1,7 @@
 // Covers bundling rules encoded in the root tsdown config.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import type { TsdownPluginOption } from "tsdown";
@@ -13,6 +14,7 @@ import tsdownConfig, {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
 } from "../../tsdown.config.ts";
+import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 
 type TsdownConfigEntry = {
   deps?: {
@@ -358,6 +360,40 @@ describe("tsdown config", () => {
     const distGraph = requireUnifiedDistGraph();
 
     expect(entrySources(distGraph)["docker-healthcheck"]).toBe("src/docker-healthcheck.ts");
+  });
+
+  it("emits the dist modules referenced by every Docker client", () => {
+    const emittedPaths = new Set(
+      asConfigArray(tsdownConfig)
+        .filter((config) => !(typeof config.dts === "object" && config.dts.emitDtsOnly))
+        .flatMap((config) =>
+          entryKeys(config).map((entry) =>
+            path.resolve(
+              config.outDir ?? "dist",
+              `${entry}${config.outExtensions?.().js ?? ".js"}`,
+            ),
+          ),
+        ),
+    );
+    const clients = ["test/e2e", "scripts/e2e"].flatMap((root) => {
+      const clientRoot = new URL(`../../${root}/`, import.meta.url);
+      return readdirSync(clientRoot, { recursive: true, encoding: "utf8" })
+        .filter((file) => file.endsWith("-docker-client.ts"))
+        .map((file) => new URL(file, clientRoot));
+    });
+    expect(clients.length).toBeGreaterThan(0);
+    for (const clientUrl of clients) {
+      const runtimeSource = stripNodeTypeScriptTypes(readFileSync(clientUrl, "utf8"));
+      // Include literal paths assigned to variables used by dynamic imports, but not erased types.
+      for (const match of runtimeSource.matchAll(
+        /["'`]((?:\.{1,2}\/)+dist\/[^"'`\s]+\.[cm]?js)["'`]/gu,
+      )) {
+        const specifier = expectDefined(match[1], "Docker dist module path");
+        expect(emittedPaths, `${fileURLToPath(clientUrl)}: ${specifier}`).toContain(
+          fileURLToPath(new URL(specifier, clientUrl)),
+        );
+      }
+    }
   });
 
   it("keeps root-package-excluded external plugins out of the root dist graph", () => {

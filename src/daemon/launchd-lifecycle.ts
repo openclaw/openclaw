@@ -109,31 +109,22 @@ export async function repairLaunchAgentBootstrap(args: {
   await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
   await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  let repairStatus: "repaired" | "already-loaded" = "repaired";
-  if (boot.code !== 0) {
-    const detail = (boot.stderr || boot.stdout).trim();
-    if (isUnsupportedGuiDomain(detail)) {
-      return {
-        ok: false,
-        status: "gui-session-unavailable",
-        detail,
-        domain,
-      };
-    }
-    if (!isLaunchctlAlreadyLoaded(boot)) {
-      return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
-    }
-    repairStatus = "already-loaded";
+  if (boot.code === 0) {
+    return { ok: true, status: "repaired" };
   }
-  if (repairStatus === "repaired") {
-    return { ok: true, status: repairStatus };
+  const detail = (boot.stderr || boot.stdout).trim();
+  if (isUnsupportedGuiDomain(detail)) {
+    return { ok: false, status: "gui-session-unavailable", detail, domain };
+  }
+  if (!isLaunchctlAlreadyLoaded(boot)) {
+    return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
   }
 
   // Service is already bootstrapped. Only kickstart if it is not actively running —
   // kickstarting a healthy running service causes unnecessary session disconnects.
   const runtime = await readLaunchAgentRuntime(env);
   if (runtime.status === "running") {
-    return { ok: true, status: repairStatus };
+    return { ok: true, status: "already-loaded" };
   }
 
   const kick = await execLaunchctl(["kickstart", serviceTarget]);
@@ -144,7 +135,7 @@ export async function repairLaunchAgentBootstrap(args: {
       detail: (kick.stderr || kick.stdout).trim() || undefined,
     };
   }
-  return { ok: true, status: repairStatus };
+  return { ok: true, status: "already-loaded" };
 }
 type LaunchAgentRestoreResult = { loaded: true } | { loaded: false; detail: string };
 
@@ -179,14 +170,8 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   }
   try {
     await bootstrapLaunchAgentOrThrow({
-      domain: params.domain,
-      serviceTarget: params.serviceTarget,
-      plistPath: params.plistPath,
+      ...params,
       actionHint: "openclaw gateway start",
-      onMutation: params.onMutation,
-      assertCurrent: params.assertCurrent,
-      retryPendingTeardown: params.retryPendingTeardown,
-      preserveAutoStart: params.preserveAutoStart,
     });
     return { loaded: true };
   } catch (error) {
@@ -197,21 +182,6 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
     // KeepAlive has nothing to respawn. Report it instead of dropping it.
     return { loaded: false, detail: error instanceof Error ? error.message : String(error) };
   }
-}
-
-function formatLaunchAgentLeftUnloadedError(params: {
-  domain: string;
-  serviceTarget: string;
-  plistPath: string;
-  failure: string;
-  restoreDetail: string;
-}): string {
-  return [
-    params.failure,
-    `LaunchAgent ${params.serviceTarget} is not loaded and could not be restored: ${params.restoreDetail}`,
-    "The gateway is down and launchd has no job left to respawn it.",
-    `Fix: run \`openclaw gateway start\`, or \`launchctl bootstrap ${params.domain} ${params.plistPath}\`.`,
-  ].join("\n");
 }
 
 async function rethrowLaunchAgentActivationFailure(
@@ -226,7 +196,12 @@ async function rethrowLaunchAgentActivationFailure(
   throw new Error(
     restored.loaded
       ? `${failure}\nLaunchAgent ${params.serviceTarget} is loaded; launchd can retry its KeepAlive job. Run openclaw gateway status --deep to inspect startup.`
-      : formatLaunchAgentLeftUnloadedError({ ...params, failure, restoreDetail: restored.detail }),
+      : [
+          failure,
+          `LaunchAgent ${params.serviceTarget} is not loaded and could not be restored: ${restored.detail}`,
+          "The gateway is down and launchd has no job left to respawn it.",
+          `Fix: run \`openclaw gateway start\`, or \`launchctl bootstrap ${params.domain} ${params.plistPath}\`.`,
+        ].join("\n"),
     { cause: error },
   );
 }

@@ -1,8 +1,3 @@
-/**
- * Channel ingress sender gate helpers.
- *
- * Evaluates DM and group sender policies against normalized allowlists.
- */
 import {
   allowlistFailureReason,
   applyIdentifierAuthenticationPolicy,
@@ -46,9 +41,6 @@ function senderGate(params: {
   };
 }
 
-/**
- * Evaluates direct-message sender policy against DM and pairing-store allowlists.
- */
 export function senderGateForDirect(params: {
   state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
@@ -101,9 +93,6 @@ export function senderGateForDirect(params: {
   return decide(false, reasonCode);
 }
 
-/**
- * Evaluates group/channel sender policy after route sender allowlist overrides are applied.
- */
 export function senderGateForGroup(params: {
   state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
@@ -132,9 +121,6 @@ export function senderGateForGroup(params: {
   return decide(false, allowlistFailureReason(group) ?? "group_policy_not_allowlisted");
 }
 
-/**
- * Applies event auth mode to sender gates for non-message callbacks.
- */
 export function applyEventAuthModeToSenderGate(params: {
   state: NormalizedIngressState;
   senderGate: AccessGraphGate;

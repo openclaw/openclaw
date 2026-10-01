@@ -58,7 +58,7 @@ function createContext(params: {
 
 describe("new-session route catalog target", () => {
   it.each(["current", "failed"] as const)(
-    "does not resolve catalog routes from a warm roster after %s discovery",
+    "only resolves catalog routes after %s live discovery",
     async (outcome) => {
       const warm: NonNullable<ApplicationContext["agents"]["state"]["agentsList"]> = {
         defaultId: "old",
@@ -68,13 +68,11 @@ describe("new-session route catalog target", () => {
       };
       const { context, agentsState, ensureList, request } = createContext({
         assistantAgentId: "old",
-        agentsList: warm,
+        agentsList: null,
       });
-      Object.assign(agentsState, { agentsListCached: true });
       ensureList.mockImplementation(async () => {
         if (outcome === "current") {
           agentsState.agentsList = { ...warm, defaultId: "current", agents: [{ id: "current" }] };
-          Object.assign(agentsState, { agentsListCached: false });
         }
         return agentsState.agentsList;
       });
@@ -105,7 +103,6 @@ describe("new-session route catalog target", () => {
       agentId: "main",
       requestedAgentId: "main",
       requestedModel: "example/model-one",
-      model: "example/model-one",
       startTerminal: false,
       catalogId: "",
     });
@@ -124,7 +121,6 @@ describe("new-session route catalog target", () => {
       context,
       `?agent=main&model=${encodeURIComponent(model)}`,
     );
-    expect(data.model).toBe("");
     expect(data.requestedModel).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
   });
@@ -245,7 +241,12 @@ describe("new-session route catalog target", () => {
   it("reuses the current gateway client across route retries", async () => {
     const { client, context, request } = createContext({
       assistantAgentId: "roboclaw",
-      agentsList: null,
+      agentsList: {
+        defaultId: "roboclaw",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "roboclaw" }],
+      },
     });
 
     await loadNewSessionData(context, "?catalog=claude");

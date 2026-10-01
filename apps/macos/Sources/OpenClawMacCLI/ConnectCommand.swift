@@ -53,13 +53,8 @@ struct ConnectOptions {
             let arg = args[i]
             if let handler = flagHandlers[arg] {
                 handler(&opts)
-                i += 1
-                continue
-            }
-            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
+            } else if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                 handler(&opts, value)
-                i += 1
-                continue
             }
             i += 1
         }
@@ -200,15 +195,7 @@ func runConnect(_ args: [String], configURL: URL) async {
 
 private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(output),
-           let text = String(data: data, encoding: .utf8)
-        {
-            print(text)
-        } else {
-            print("{\"error\":\"failed to encode JSON\"}")
-        }
+        printCLIJSON(output, fallback: "{\"error\":\"failed to encode JSON\"}")
         return
     }
 
@@ -276,18 +263,6 @@ func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws 
             remote: config.remotePassword,
             inheritConfigCredentials: !hasExplicitURL),
         mode: resolvedMode)
-}
-
-private func resolvedCredential(
-    _ explicit: String?,
-    mode: String,
-    local: String?,
-    remote: String?,
-    inheritConfigCredentials: Bool = true) -> String?
-{
-    if let explicit, !explicit.isEmpty { return explicit }
-    guard inheritConfigCredentials else { return nil }
-    return mode == "remote" ? remote : local
 }
 
 func makeGatewayConnectOptions(

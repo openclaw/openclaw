@@ -7,8 +7,9 @@ import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { adoptUpdateRun, createUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -159,6 +160,7 @@ it.each(["healthy", "original-owner-replaced"] as const)(
           `${barrier}\nawait import(${JSON.stringify(worker.href)});`,
         );
         const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        adoptUpdateRun(run.runId, { env: state.env });
         const opts: UpdateCommandOptions = { run: { runId: run.runId, env: state.env } };
         const pending = withUpdateCommandExecutor(run.runId, async (executor) => {
           const fence = await executor.enter(root);
@@ -174,7 +176,7 @@ it.each(["healthy", "original-owner-replaced"] as const)(
             yes: true,
             json: true,
             workspaceSuggestions: false,
-            nodeRunner: process.execPath,
+            nodeRunner: resolveTestNodeExecPath(),
             timeoutMs: 45_000,
             assertCurrent: fence.assertCurrent,
           };

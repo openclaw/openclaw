@@ -4,11 +4,26 @@ export const SLACK_REPLY_BUTTON_ACTION_ID = "openclaw:reply_button";
 export const SLACK_REPLY_LINK_ACTION_ID = "openclaw:reply_link";
 export const SLACK_SESSION_LINK_ACTION_ID = "openclaw:session_link";
 export const SLACK_REPLY_SELECT_ACTION_ID = "openclaw:reply_select";
-export const SLACK_CALLBACK_BUTTON_ACTION_ID = "openclaw:callback_button";
-export const SLACK_CALLBACK_SELECT_ACTION_ID = "openclaw:callback_select";
-export const SLACK_APPROVAL_BUTTON_ACTION_ID = "openclaw:approval_button";
-export const SLACK_APPROVAL_SELECT_ACTION_ID = "openclaw:approval_select";
-export const SLACK_QUESTION_BUTTON_ACTION_ID = "openclaw:question_button";
+const SLACK_CALLBACK_BUTTON_ACTION_ID = "openclaw:callback_button";
+const SLACK_CALLBACK_SELECT_ACTION_ID = "openclaw:callback_select";
+const SLACK_APPROVAL_BUTTON_ACTION_ID = "openclaw:approval_button";
+const SLACK_APPROVAL_SELECT_ACTION_ID = "openclaw:approval_select";
+const SLACK_QUESTION_BUTTON_ACTION_ID = "openclaw:question_button";
+
+export const SLACK_BUTTON_ACTION_IDS = {
+  approval: SLACK_APPROVAL_BUTTON_ACTION_ID,
+  callback: SLACK_CALLBACK_BUTTON_ACTION_ID,
+  link: SLACK_REPLY_LINK_ACTION_ID,
+  question: SLACK_QUESTION_BUTTON_ACTION_ID,
+  reply: SLACK_REPLY_BUTTON_ACTION_ID,
+} as const;
+
+export const SLACK_SELECT_ACTION_IDS = {
+  approval: SLACK_APPROVAL_SELECT_ACTION_ID,
+  callback: SLACK_CALLBACK_SELECT_ACTION_ID,
+  reply: SLACK_REPLY_SELECT_ACTION_ID,
+} as const;
+
 // Keep accepted display blocks plugin-private; string-keyed receipts are serialized.
 export const SLACK_QUESTION_FINALIZATION_BLOCKS: unique symbol = Symbol(
   "slackQuestionFinalizationBlocks",

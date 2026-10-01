@@ -37,8 +37,18 @@ are copied when supported. Regular-file launchers still require matching modes
 and contents. If backup verification fails, the report names the differing
 fields and the retained failed copy for inspection before retrying.
 
+Package rollback checks file hashes, inode identity, permissions, ownership, and
+symlink targets. It ignores regular `node_modules/.package-lock.json` files,
+which npm documents as a disposable cache, and link counts and change times
+that can change without altering the retained bytes. Executable `.bin` entries
+remain part of verification. During the original update process, a mismatch
+records up to five differing relative paths and field names (including `sha256`
+for changed contents) in the failure facts and report. Recovery after a process
+restart retains the saved digest check but cannot reconstruct that entry list.
+
 This behavior belongs to the installed updater. An older updater, including
-2026.9.4, can refuse a macOS launcher backup before the target version runs.
+2026.9.4, can refuse package or launcher verification before the target version runs
+and cannot gain these diagnostics from the candidate.
 Use the installation's [manual package-manager update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 if that first update is blocked.
 
@@ -117,17 +127,27 @@ Confirm no update is in progress and inspect the corresponding update report and
 recovery state before manual cleanup.
 If the Gateway was confirmed stopped during capture, a failed candidate
 that was never allowed to start can restore those databases before package
-rollback when Doctor's recorded write fingerprints still match. A change between
-capture and Doctor admission, or after Doctor finishes, preserves the current
+rollback only when database write fingerprints remain unchanged through Doctor
+and restoration. Maintenance ownership cannot identify independent SQLite writers,
+so any change during Doctor, including Doctor's own writes or a newly created
+database, makes these snapshots available for manual recovery only. A change between
+capture and Doctor admission, during Doctor, or after Doctor finishes preserves the current
 databases and reports `state-migrated-no-rollback` with the snapshot location and
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
+On Windows, an eligible capture first runs the same native SQLite exclusion check
+used by rollback. This settles any retained WAL before recording write fingerprints,
+so later probe cleanup is not mistaken for another writer. If another connection
+prevents exclusion, snapshots remain available for manual recovery.
 Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.
 Migrated files are kept as
 `<database>.migrated-<runId>` for inspection, and the report names the snapshots
 and displaced files. See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
 for disk requirements and the lifecycle checks.
+
+Database restoration preserves current update history, including failure details
+recorded after capture. The retained original snapshots remain unchanged.
 
 This requires the repaired updater to drive the update; already-running older
 drivers cannot gain database rollback from the candidate. A candidate that
@@ -166,18 +186,22 @@ identity, plugins, channels, and `/readyz` again. Update verification does not u
 model inference: the managed service must be running and own its port, and the
 Gateway hello handshake must match the expected artifact.
 
-The new version’s Doctor migrations in the main config file do not block rollback, including on
+The new version’s Doctor migrations in the main config file and its `$include` files do not block rollback, including on
 a fresh install’s first update. The updater retains the config immediately before
 Doctor and verifies that Doctor consumed those captured bytes before making changes.
-It also checks the current file against the output hash reported by Doctor’s writer.
+It also checks each current file against the output hash reported by Doctor’s writer.
 Rollback restores the original bytes only while both hashes match. Restoration
-holds the normal config writer lock and rechecks the hash after acquiring it. Operator edits
+holds the normal config writer locks and rechecks the files after acquiring them. Operator edits
 made after activation block restoration, including edits before Doctor reads the
-config and between Doctor’s last write and the updater’s capture. Separate `$include` files must retain
-their pre-activation configuration content; they are not restored by the root-file
-snapshot. The existing intentional-recovery
+config and between Doctor’s last write and the updater’s capture. Changed include paths
+also block restoration. Older updater handoffs that retain only the root file still
+require includes to remain unchanged. The existing intentional-recovery
 allowance applies only to service commands, so the older-binary guard does not
 block recovery; it is never saved in config or the service environment.
+
+Missing or malformed includes do not prevent Doctor from running. When the updater
+cannot capture the complete include graph, it warns that automatic config rollback
+is unavailable and leaves any Doctor repairs in place if the update later fails.
 
 Successful recovery leaves the previous Gateway running and finishes the run as
 `rolled-back`, with `after.version` set to the previous version and downtime

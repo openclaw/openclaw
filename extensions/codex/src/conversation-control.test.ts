@@ -415,7 +415,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "gpt-5.4",
-        pluginConfig: { supervision: { enabled: true } },
       }),
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
@@ -467,7 +466,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "openai/gpt-5.5",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
@@ -491,7 +489,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "local-model-2",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to local-model-2.");
 
@@ -516,7 +513,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "openai/gpt-oss-20b",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to openai/gpt-oss-20b.");
 

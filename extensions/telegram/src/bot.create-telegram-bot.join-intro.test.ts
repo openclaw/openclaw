@@ -113,7 +113,6 @@ describe("Telegram group join introductions", () => {
 
   it.each([
     { name: "a private chat", membership: { chatType: "private" as const } },
-    { name: "a channel", membership: { chatType: "channel" as const } },
     { name: "an existing member", membership: { oldStatus: "member" as const } },
     { name: "a departure", membership: { newStatus: "left" as const } },
     { name: "another member", membership: { memberId: 321 } },

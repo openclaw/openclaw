@@ -9,24 +9,7 @@ export type ActivityWindow = { sinceMs: number; untilMs: number };
 export type ActivityEntry<T> = { key: string; value: T };
 
 /** Identity map entry supplied by the operator (config `people` or `peopleFile`) or derived from a GitHub team roster. */
-export type Person = {
-  /** GitHub logins; the first entry is the primary/display login. */
-  github: string[];
-  display?: string;
-  /** Public company/affiliation label. */
-  affiliation?: string;
-  roleGroup?: "core" | "volunteer" | "readonly" | (string & {});
-  roleLabel?: string;
-  /** Free-form access flags, e.g. ["security", "release", "moderation"]. */
-  access?: string[];
-  /** Ownership/steward areas. */
-  areas?: string[];
-  discordUserId?: string;
-  discordUsername?: string;
-  status?: "active" | "archived";
-  /** YYYY-MM-DD */
-  archivedAt?: string;
-};
+export type Person = NonNullable<TeamReportsConfig["people"]>[number];
 
 export type Roster = {
   /** Current (non-archived) members. */

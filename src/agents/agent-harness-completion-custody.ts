@@ -81,12 +81,14 @@ async function captureAgentHarnessCompletionCustodyOwner(
 ): Promise<AgentHarnessCompletionCustody | undefined> {
   const scope = assertAgentHarnessCompletionScope(scopeInput);
   const resolver = getGatewayContextResolver(scope);
+  const capture = () =>
+    captureOperatorToolGatewayContinuationContext({
+      sessionKey: scope.requesterSessionKey,
+      agentId: scope.requesterAgentId,
+    });
   const preparation = resolver
-    ? withPluginRuntimeGatewayContextResolver(
-        resolver,
-        captureOperatorToolGatewayContinuationContext,
-      )
-    : captureOperatorToolGatewayContinuationContext();
+    ? withPluginRuntimeGatewayContextResolver(resolver, capture)
+    : capture();
   if (!preparation) {
     return undefined;
   }

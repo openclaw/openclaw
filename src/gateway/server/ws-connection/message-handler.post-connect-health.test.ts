@@ -2303,12 +2303,17 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("binds handshake policy to the verified login rather than unrelated identity grants", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const preparationStarted = createDeferred();
+      const releasePreparation = createGatewayHarnessGate();
+      prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
+        preparationStarted.resolve();
+        await releasePreparation.promise;
+        return true;
+      });
       const harness = connectTrustedProxyUser("identity-policy", { id: "openclaw-control-ui" }, [
         "operator.read",
       ]);
-      await harness.whenAttached;
-      const client = harness.client as GatewayWsClient;
-      expect(client.authenticatedUserId).toBe("alice@example.com");
+      await preparationStarted.promise;
       const config = structuredClone(loadConfigMock());
       const next: OpenClawConfig = {
         ...config,
@@ -2319,6 +2324,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       };
       const scopes = next.gateway!.auth!.identityScopes!;
       scopes["other@example.test"] = ["operator.admin"];
+      useGatewayTestConfig(loadConfigMock, () => next as ReturnType<typeof loadConfigMock>);
+      releasePreparation.resolve();
+      await harness.whenAttached;
+      const client = harness.client as GatewayWsClient;
+      expect(client.authenticatedUserId).toBe("alice@example.com");
+      expect(client.connect.scopes).toEqual(["operator.read"]);
       disconnectDisallowedGatewayPolicyClients([client], next);
       expect(client.invalidated).not.toBe(true);
       const removed = structuredClone(next);

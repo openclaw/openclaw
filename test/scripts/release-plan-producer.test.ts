@@ -483,7 +483,6 @@ describe("release plan producer", () => {
   );
 
   it.each([
-    ["refs/heads/tideclaw/alpha/2026-09-13-1200Z", "2026.9.9-alpha.1"],
     ["refs/heads/release/2026.9.9", "2026.9.9"],
     ["refs/heads/extended-stable/2026.8.33", "2026.8.33"],
   ])(
@@ -568,7 +567,7 @@ describe("release plan producer", () => {
 
   it.each([
     ["refs/heads/topic/alpha", "workflow ref is not a trusted direct"],
-    ["refs/heads/tideclaw/alpha/not-a-date", "workflow ref is not a trusted direct"],
+    ["refs/heads/tideclaw/alpha/not-a-date", "Alpha releases are retired;"],
     [
       "refs/tags/tideclaw/alpha/2026-09-13-1200Z",
       "release tooling identity must be trusted main or an exact protected tag",
@@ -668,8 +667,8 @@ describe("release plan producer", () => {
     });
   });
 
-  it.each(["2026.9.9", "2026.9.9-beta.1"])(
-    "rejects non-alpha %s on Tideclaw inventory",
+  it.each(["2026.9.9", "2026.9.9-beta.1", "2026.9.9-alpha.1"])(
+    "rejects retired Tideclaw inventory for %s",
     (version) => {
       const { result } = runYamlPackageSubprocess({
         inventory: true,
@@ -677,7 +676,7 @@ describe("release plan producer", () => {
         toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-13-1200Z",
       });
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Tideclaw inventory requires an alpha candidate");
+      expect(result.stderr).toContain("Alpha releases are retired;");
     },
   );
 
@@ -692,8 +691,8 @@ describe("release plan producer", () => {
   it.each([
     [
       "ref",
-      'workflowRef: "tideclaw/alpha/2026-09-13-1201Z",',
-      'workflowFullRef: "refs/heads/tideclaw/alpha/2026-09-13-1201Z",',
+      'workflowRef: "release/2026.9.10",',
+      'workflowFullRef: "refs/heads/release/2026.9.10",',
       "prevalidated release tooling branch is missing or unreadable",
     ],
     [
@@ -707,8 +706,8 @@ describe("release plan producer", () => {
     (field, refLine, fullRefLine, message) => {
       const { result } = runYamlPackageSubprocess({
         inventory: true,
-        version: "2026.9.9-alpha.1",
-        toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-13-1200Z",
+        version: "2026.9.9",
+        toolingFullRef: "refs/heads/release/2026.9.9",
         mutateTooling: ({ root }) => {
           const path = join(root, "scripts/release-plan-producer-core.mts");
           const original = readFileSync(path, "utf8");

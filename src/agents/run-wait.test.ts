@@ -200,6 +200,84 @@ describe("readLatestAssistantReply", () => {
 
     expect(result).toBe("Hi there");
   });
+
+  it("reads the full message when history returns a display-capped preview", async () => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              ...textAssistant("Report head\n...(truncated)..."),
+              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
+            },
+          ],
+        };
+      }
+      return { ok: true, message: textAssistant("Report head and the full remainder.") };
+    });
+
+    const result = await readLatestAssistantReply({
+      sessionKey: "agent:main:child",
+      agentId: "main",
+    });
+
+    expect(result).toBe("Report head and the full remainder.");
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.message.get",
+      params: { sessionKey: "agent:main:child", agentId: "main", messageId: "msg-1" },
+    });
+  });
+
+  it("returns no reply when a capped preview's full message is unavailable", async () => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              ...textAssistant("Report head\n...(truncated)..."),
+              __openclaw: { id: "msg-1", truncated: true, reason: "oversized" },
+            },
+          ],
+        };
+      }
+      return { ok: false, unavailableReason: "oversized" };
+    });
+
+    await expect(readLatestAssistantReply({ sessionKey: "agent:main:child" })).resolves.toBe(
+      undefined,
+    );
+  });
+
+  it("returns no reply when the full-message lookup is rejected", async () => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              ...textAssistant("Report head\n...(truncated)..."),
+              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
+            },
+          ],
+        };
+      }
+      throw new Error("session changed while reading history; reload the conversation");
+    });
+
+    await expect(readLatestAssistantReply({ sessionKey: "agent:main:child" })).resolves.toBe(
+      undefined,
+    );
+  });
+
+  it("keeps a literal truncation marker the assistant wrote", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [textAssistant("The log ends with ...(truncated)... as expected.")],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+
+    expect(result).toBe("The log ends with ...(truncated)... as expected.");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("waitForAgentRun", () => {
@@ -610,7 +688,7 @@ describe("waitForAgentRunsToDrain", () => {
       try {
         const result = await waitForAgentRunsToDrain({
           timeoutMs: 200,
-          getPendingRunIds: () => activeRunIds,
+          getPendingRunIds: async () => activeRunIds,
         });
 
         expect(result.timedOut).toBe(false);
@@ -628,7 +706,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       deadlineAtMs,
-      getPendingRunIds: () => ["run-1"],
+      getPendingRunIds: async () => ["run-1"],
     });
 
     expect(result).toEqual({ timedOut: true, pendingRunIds: ["run-1"], deadlineAtMs });
@@ -653,7 +731,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
-      getPendingRunIds: () => activeRunIds,
+      getPendingRunIds: async () => activeRunIds,
     });
 
     expect(result.timedOut).toBe(false);
@@ -672,7 +750,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
-      getPendingRunIds: () => {
+      getPendingRunIds: async () => {
         const current = activeRunIds;
         activeRunIds = [];
         return current;
@@ -690,7 +768,7 @@ describe("waitForAgentRunsToDrain", () => {
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
       initialPendingRunIds: ["run-1"],
-      getPendingRunIds: () => {
+      getPendingRunIds: async () => {
         const current = activeRunIds;
         activeRunIds = [];
         return current;
@@ -713,7 +791,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         timeoutMs: Number.NaN,
-        getPendingRunIds: () => {
+        getPendingRunIds: async () => {
           const current = activeRunIds;
           activeRunIds = [];
           return current;
@@ -734,7 +812,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         timeoutMs: 1,
-        getPendingRunIds: () => ["run-1"],
+        getPendingRunIds: async () => ["run-1"],
       });
 
       expect(result).toEqual({
@@ -754,7 +832,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         deadlineAtMs: Number.POSITIVE_INFINITY,
-        getPendingRunIds: () => ["run-1"],
+        getPendingRunIds: async () => ["run-1"],
       });
 
       expect(result.timedOut).toBe(true);

@@ -1,3 +1,4 @@
+import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import type {
@@ -46,7 +47,7 @@ export function isRetiredSubagentSessionOwner(
 
 export function ownsSubagentSessionExecution(
   entry: SubagentRunRecord,
-  session: InternalSessionEntry,
+  session: Pick<SessionEntryCurrentFacts, "lifecycleRunId" | "subagentRecovery">,
 ): boolean {
   return (
     session.lifecycleRunId === entry.runId ||

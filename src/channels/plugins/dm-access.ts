@@ -1,27 +1,15 @@
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
-/**
- * Selects whether canonical DM fields live at the top level or under `dm`.
- */
 export type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
 
-/**
- * Supported direct-message policy values for channel account config.
- */
 export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
-/**
- * Normalized DM access view consumed by channel setup and reply gates.
- */
 export type ChannelDmAccess = {
   dmPolicy?: ChannelDmPolicy;
   allowFrom?: Array<string | number>;
 };
 
-/**
- * Mutable config record used while migrating channel account DM fields.
- */
 export type DmAccessRecord = Record<string, unknown>;
 
 type DmFieldKind = "policy" | "allowFrom";
@@ -33,17 +21,11 @@ type DmFieldPaths = {
   legacyPath: DmFieldPath;
 };
 
-/**
- * Result returned by compatibility helpers after optional DM config mutation.
- */
 export type CompatMutationResult = {
   entry: DmAccessRecord;
   changed: boolean;
 };
 
-/**
- * Narrows a raw string to a supported channel DM policy.
- */
 export function normalizeChannelDmPolicy(value: string | undefined): ChannelDmPolicy | undefined {
   return value === "pairing" || value === "allowlist" || value === "open" || value === "disabled"
     ? value
@@ -138,9 +120,6 @@ function readCanonicalOrLegacy(
   return readPath(entry, paths.canonicalPath) ?? readPath(entry, paths.legacyPath);
 }
 
-/**
- * Resolves the effective DM policy from account, parent account, and default policy.
- */
 export function resolveChannelDmPolicy(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -155,9 +134,6 @@ export function resolveChannelDmPolicy(params: {
   return typeof value === "string" ? normalizeChannelDmPolicy(value) : undefined;
 }
 
-/**
- * Resolves the effective DM allowlist from account or parent account config.
- */
 export function resolveChannelDmAllowFrom(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -170,9 +146,6 @@ export function resolveChannelDmAllowFrom(params: {
   return Array.isArray(value) ? (value as Array<string | number>) : undefined;
 }
 
-/**
- * Resolves policy and allowlist together for channel access checks.
- */
 export function resolveChannelDmAccess(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -185,9 +158,6 @@ export function resolveChannelDmAccess(params: {
   };
 }
 
-/**
- * Writes a canonical DM allowlist and removes the matching legacy alias.
- */
 export function setCanonicalDmAllowFrom(params: {
   entry: DmAccessRecord;
   mode: ChannelDmAllowFromMode;
@@ -206,9 +176,6 @@ export function setCanonicalDmAllowFrom(params: {
   params.changes?.push(`- ${formatPath(params.pathPrefix, paths.canonicalPath)}: ${params.reason}`);
 }
 
-/**
- * Migrates legacy `dm.*` aliases into the canonical DM access fields.
- */
 export function normalizeLegacyDmAliases(params: {
   entry: DmAccessRecord;
   pathPrefix: string;
@@ -268,9 +235,6 @@ function hasWildcard(list?: Array<string | number>) {
   return list?.some((value) => String(value).trim() === "*") ?? false;
 }
 
-/**
- * Ensures `dmPolicy="open"` has the wildcard allowlist required by access gates.
- */
 export function ensureOpenDmPolicyAllowFromWildcard(params: {
   entry: DmAccessRecord;
   mode: ChannelDmAllowFromMode;
