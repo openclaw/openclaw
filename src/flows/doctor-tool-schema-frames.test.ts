@@ -77,6 +77,46 @@ it("retains the selected alias's runtime metadata instead of normalizing it agai
   });
 });
 
+it("shares one plugin metadata scope across agent model preparation", async () => {
+  await withOpenClawTestState({}, async (state) => {
+    const runWithPluginMetadataSnapshot = vi.fn(async (_params, run) => await run());
+    resolveModelAsync.mockImplementation(async (provider: string, id: string) => ({
+      model: {
+        id,
+        name: id,
+        provider,
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:1/v1",
+        contextWindow: 32000,
+      },
+    }));
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "alpha" } },
+        entries: {
+          alpha: { workspace: state.path("alpha"), model: "fixture/alpha" },
+          beta: { workspace: state.path("beta"), model: "fixture/beta" },
+        },
+      },
+    };
+
+    const result = await prepareDoctorToolSchemaFrames(cfg, {
+      mode: "doctor",
+      env: state.env,
+      runWithPluginMetadataSnapshot,
+    });
+
+    expect(result.findings).toEqual([]);
+    expect(result.frames.map((frame) => frame.agentId)).toEqual(["alpha", "beta"]);
+    expect(runWithPluginMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(runWithPluginMetadataSnapshot).toHaveBeenCalledWith(
+      { config: cfg },
+      expect.any(Function),
+    );
+  });
+});
+
 it("records deferred model preparation and continues with a healthy agent", async () => {
   await withOpenClawTestState({}, async (state) => {
     resolveModelAsync.mockImplementation(
