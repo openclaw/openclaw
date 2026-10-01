@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { BotCommand } from "grammy/types";
+import { resolveSkillCommandInvocation } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getSessionBindingService,
@@ -46,6 +47,121 @@ import {
 const groupChat = { id: -42001, type: "supergroup", title: "Project", is_forum: true } as const;
 
 describe("registered native command routing through the message pipeline", () => {
+  it("routes /session_dashboard to the session dashboard command with its arguments", async () => {
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "allowlist",
+          allowFrom: [String(from.id)],
+          streaming: { mode: "off" },
+        },
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1001,
+      message: commandMessage("/session_dashboard release health"),
+    });
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTurn: { kind: "native", body: "/dashboard release health", authorized: true },
+    });
+  });
+
+  it("keeps a colliding skill callable through its advertised Telegram name", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-command-collision-"));
+    try {
+      for (const name of ["session-dashboard", "session-dashboard-2", "ordinary-skill"]) {
+        await writeSkill({ dir: path.join(workspace, "skills", name), name, description: name });
+      }
+      const cfg: OpenClawConfig = {
+        commands: { native: true, nativeSkills: true },
+        agents: {
+          entries: {
+            main: {
+              default: true,
+              workspace,
+              skills: ["session-dashboard", "session-dashboard-2", "ordinary-skill"],
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: [String(from.id)],
+            streaming: { mode: "off" },
+          },
+        },
+      };
+      harness.listSkillCommandsForAgents.mockImplementation(listSkillCommandsForAgents);
+      const skills = listSkillCommandsForAgents({ cfg, agentIds: ["main"] });
+      expect(skills.map(({ name }) => name)).toContain("session_dashboard");
+      const bot = await createBot(true, true, cfg);
+      await new Promise<void>((resolve, reject) => {
+        enqueueTelegramMenuSync({
+          ownerKey: resolveTelegramMenuRemoteOwner({ botId: bot.botInfo.id }).queueKey,
+          sync: async () => resolve(),
+          onError: reject,
+        });
+      });
+      const menu = apiCalls.mock.calls
+        .filter(([method]) => method === "setMyCommands")
+        .map(([, payload]) => payload as { commands: BotCommand[]; language_code?: string })
+        .find(({ language_code }) => !language_code)?.commands;
+      expect(menu?.filter(({ command }) => command === "session_dashboard")).toEqual([
+        { command: "session_dashboard", description: "Create or update this session's dashboard." },
+      ]);
+      expect(menu).toContainEqual({
+        command: "session_dashboard_3",
+        description: "session-dashboard",
+      });
+      for (const [index, text, body, skillName] of [
+        [
+          0,
+          "/session_dashboard_3 run report",
+          "/session_dashboard run report",
+          "session-dashboard",
+        ],
+        [
+          1,
+          "/session_dashboard_2 unchanged",
+          "/session_dashboard_2 unchanged",
+          "session-dashboard-2",
+        ],
+        [2, "/ordinary_skill unchanged", "/ordinary_skill unchanged", "ordinary-skill"],
+      ] as const) {
+        harness.replySpy.mockClear();
+        await bot.handleUpdate({ update_id: 1101 + index, message: commandMessage(text) });
+        expect(harness.replySpy).toHaveBeenCalledOnce();
+        expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+          CommandSource: "native",
+          CommandTurn: { kind: "native", body, authorized: true },
+        });
+        expect(
+          resolveSkillCommandInvocation({ commandBodyNormalized: body, skillCommands: skills }),
+        ).toMatchObject({ command: { skillName }, args: index === 0 ? "run report" : "unchanged" });
+      }
+      harness.replySpy.mockClear();
+      await bot.handleUpdate({
+        update_id: 1104,
+        message: commandMessage("/session_dashboard health"),
+      });
+      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+        CommandTurn: { kind: "native", body: "/dashboard health", authorized: true },
+      });
+      harness.replySpy.mockClear();
+      await bot.handleUpdate({ update_id: 1105, message: commandMessage("/side status") });
+      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+        // The existing core normalizer canonicalizes /side to /btw.
+        CommandTurn: { kind: "native", body: "/btw status", authorized: true },
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("authorizes paired DMs without marking the sender as an owner", async () => {
     await addChannelAllowFromStoreEntry({
       channel: "telegram",

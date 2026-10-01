@@ -32,6 +32,9 @@ export function createTelegramPluginBase(params: {
   return {
     ...createTelegramSetupPluginBase(params),
     commands: {
+      // The Telegram Mini App owns /dashboard; keep session dashboards distinct.
+      resolveNativeCommandName: ({ commandKey, defaultName }) =>
+        commandKey === "dashboard" ? "session_dashboard" : defaultName,
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: true,
       buildCommandsListChannelData: buildTelegramCommandsListChannelData,

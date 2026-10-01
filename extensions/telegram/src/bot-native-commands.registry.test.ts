@@ -3,10 +3,12 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import { findCommandByNativeName } from "openclaw/plugin-sdk/command-auth-native";
 // Telegram tests cover bot native commands.registry plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramPlugin } from "./channel.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
@@ -111,6 +113,100 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
   afterEach(() => {
     clearPluginCommands();
+  });
+
+  it("keeps the plugin dashboard callable beside the session dashboard native command", async () => {
+    const channel = activePluginRegistry.channels[0];
+    if (!channel) {
+      throw new Error("expected registered Telegram channel");
+    }
+    channel.plugin.commands = telegramPlugin.commands;
+    setActivePluginRegistry(activePluginRegistry);
+    const dashboardHandler = vi.fn(async () => ({ text: "plugin dashboard opened" }));
+    expect(
+      registerPluginCommand("telegram", {
+        name: "dashboard",
+        description: "Open the OpenClaw dashboard",
+        channels: ["telegram"],
+        requireAuth: true,
+        handler: dashboardHandler,
+      }),
+    ).toEqual({ ok: true });
+    const existingPluginHandler = vi.fn(async () => ({ text: "existing plugin opened" }));
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "session_dashboard_2",
+        description: "Existing plugin command",
+        channels: ["telegram"],
+        requireAuth: true,
+        handler: existingPluginHandler,
+      }),
+    ).toEqual({ ok: true });
+    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+    const error = vi.fn();
+    const params = createNativeCommandTestParams(
+      {},
+      {
+        runtime: {
+          error,
+          log: vi.fn(),
+          exit: () => {
+            throw new Error("unexpected runtime exit");
+          },
+        },
+        telegramCfg: {
+          customCommands: [{ command: "session_dashboard_3", description: "Existing custom menu" }],
+        },
+        allowFrom: ["200"],
+      },
+    );
+    vi.mocked(params.telegramDeps.listSkillCommandsForAgents).mockReturnValue([
+      { name: "session_dashboard", skillName: "session-dashboard", description: "Colliding skill" },
+    ]);
+    const { nativeCommandNames } = registerTelegramNativeCommands({ ...params, bot });
+    const registered = await waitForRegisteredCommands(setMyCommands);
+    expect(registered.filter(({ command }) => command === "dashboard")).toEqual([
+      { command: "dashboard", description: "Open the OpenClaw dashboard" },
+    ]);
+    expect(registered.filter(({ command }) => command === "session_dashboard")).toEqual([
+      { command: "session_dashboard", description: "Create or update this session's dashboard." },
+    ]);
+    expect(registered).toContainEqual({
+      command: "session_dashboard_2",
+      description: "Existing plugin command",
+    });
+    expect(registered).toContainEqual({
+      command: "session_dashboard_3",
+      description: "Existing custom menu",
+    });
+    expect(registered).toContainEqual({
+      command: "session_dashboard_4",
+      description: "Colliding skill",
+      isSkill: true,
+    });
+    expect(nativeCommandNames.get("session_dashboard_4")).toBe("session_dashboard");
+    expect(commandHandlers.has("session_dashboard")).toBe(true);
+    expect(findCommandByNativeName("session_dashboard", "telegram")?.key).toBe("dashboard");
+    expect(findCommandByNativeName("dashboard", "telegram")).toBeUndefined();
+    expect(findCommandByNativeName("dashboard")?.key).toBe("dashboard");
+    for (const provider of ["discord", "slack"]) {
+      expect(
+        findCommandByNativeName("dashboard", provider, { includeBundledChannelFallback: false })
+          ?.key,
+      ).toBe("dashboard");
+    }
+    expect(telegramPlugin.commands?.nativeCommandsAutoEnabled).toBe(true);
+    expect(telegramPlugin.commands?.nativeSkillsAutoEnabled).toBe(true);
+    expect(error).not.toHaveBeenCalled();
+    await requireCommandHandler(commandHandlers, "dashboard")(createPrivateCommandContext());
+    expect(dashboardHandler).toHaveBeenCalledOnce();
+    expectLastDeliveredReplyText("plugin dashboard opened");
+    await requireCommandHandler(
+      commandHandlers,
+      "session_dashboard_2",
+    )(createPrivateCommandContext());
+    expect(existingPluginHandler).toHaveBeenCalledOnce();
+    expectLastDeliveredReplyText("existing plugin opened");
   });
 
   it("normalizes composed menus without letting custom entries replace native or plugin owners", async () => {

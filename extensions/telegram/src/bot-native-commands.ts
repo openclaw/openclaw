@@ -77,24 +77,57 @@ export const registerTelegramNativeCommands = ({
     nativeEnabled && nativeSkillsEnabled && boundRoute
       ? telegramDeps.listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
       : [];
-  const pluginCommandRuntime = createPluginCommandRuntime();
-  const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
-  // Telegram is the channel here: resolve native names from the loaded registry
-  // only. The bundled fallback would jiti-load this whole plugin from source in
-  // dev/test checkouts (minutes of transpile) to call a hook Telegram never defines.
-  const nativeCommands = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, {
-        skillCommands,
-        provider: "telegram",
-        includeBundledChannelFallback: false,
-      })
-    : [];
+  const builtinCommands = listNativeCommandSpecsForConfig(cfg, {
+    provider: "telegram",
+    includeBundledChannelFallback: false,
+  });
   const reservedCommands = new Set(
     listNativeCommandSpecs({ provider: "telegram", includeBundledChannelFallback: false }).map(
       (command) => normalizeTelegramCommandName(command.name),
     ),
   );
-  for (const command of skillCommands) {
+  const pluginCommandRuntime = createPluginCommandRuntime();
+  const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
+  // Skill discovery reserves canonical names, so channel-renamed built-ins need
+  // distinct skill menu names mapped back to the unchanged discovery result.
+  // Generated names must also preserve existing plugin and custom menu owners.
+  const usedSkillNames = new Set([
+    ...reservedCommands,
+    ...skillCommands.map((command) => normalizeTelegramCommandName(command.name)),
+    ...pluginCommandSpecs.map((command) => normalizeTelegramCommandName(command.name)),
+    ...resolveTelegramCustomCommands({
+      commands: telegramCfg.customCommands,
+      reservedCommands,
+    }).commands.map((command) => command.command),
+  ]);
+  const skillNativeCommandNames = new Map<string, string>();
+  const telegramSkillCommands = skillCommands.map((command) => {
+    const name = normalizeTelegramCommandName(command.name);
+    if (!reservedCommands.has(name)) {
+      return command;
+    }
+    for (let index = 2; index <= usedSkillNames.size + 2; index += 1) {
+      const suffix = `_${index}`;
+      const candidate = `${name.slice(0, 32 - suffix.length)}${suffix}`;
+      if (!usedSkillNames.has(candidate)) {
+        usedSkillNames.add(candidate);
+        skillNativeCommandNames.set(candidate, command.name);
+        return Object.assign({}, command, { name: candidate });
+      }
+    }
+    throw new Error(`Cannot allocate a Telegram command name for skill "${command.skillName}".`);
+  });
+  // Telegram is the channel here: resolve native names from the loaded registry
+  // only. The bundled fallback would jiti-load this whole plugin from source in
+  // dev/test checkouts just to resolve the channel's command-name hook.
+  const nativeCommands = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg, {
+        skillCommands: telegramSkillCommands,
+        provider: "telegram",
+        includeBundledChannelFallback: false,
+      })
+    : [];
+  for (const command of telegramSkillCommands) {
     reservedCommands.add(normalizeTelegramCommandName(command.name));
   }
   const customResolution = resolveTelegramCustomCommands({
@@ -112,10 +145,6 @@ export const registerTelegramNativeCommands = ({
   for (const issue of pluginCatalog.issues) {
     runtime.error?.(danger(issue));
   }
-  const builtinCommands = listNativeCommandSpecsForConfig(cfg, {
-    provider: "telegram",
-    includeBundledChannelFallback: false,
-  });
   const firstSkillCommandIndex = nativeEnabled ? builtinCommands.length : 0;
   const nativeMenuCommands = nativeCommands
     .map((command, index): TelegramMenuCommand | null => {
@@ -169,7 +198,13 @@ export const registerTelegramNativeCommands = ({
     nativeEnabled
       ? nativeCommandsToHandle.map((command) => [
           normalizeTelegramCommandName(command.name),
-          command.name,
+          // Fall-through handlers consume canonical command text, not the channel's menu name.
+          skillNativeCommandNames.get(normalizeTelegramCommandName(command.name)) ??
+            (command.isAlias
+              ? command.name
+              : (findCommandByNativeName(command.name, "telegram", {
+                  includeBundledChannelFallback: false,
+                })?.nativeName ?? command.name)),
         ])
       : [],
   );
