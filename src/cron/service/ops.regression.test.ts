@@ -174,7 +174,10 @@ describe("cron service ops regressions", () => {
 
     try {
       await withOwnedSessionTranscriptWrites(
-        { sessionKey: callerSessionKey, withTranscriptWrite: callerTurn.withTranscriptWrite },
+        {
+          sessionKey: callerSessionKey,
+          withTranscriptWrite: (write) => callerTurn.withTranscriptWrite(write),
+        },
         async () => expectQueuedRunAck(await enqueueRun(state, job.id, "force")),
       );
       await callerTurn.dispose();
