@@ -200,6 +200,12 @@ type SessionTitleFieldsWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
+type SessionTranscriptWatermarkWorkerInput = {
+  kind: "transcript-watermark";
+  database: { agentId: string; path: string };
+  scope: SessionTranscriptReadScope;
+};
+
 type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput & {
   kind: "session-activity-summary-source";
   database: { agentId: string; path: string };
@@ -481,6 +487,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
+  | SessionTranscriptWatermarkWorkerInput
   | SessionActivitySummarySourceWorkerInput
   | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
@@ -539,6 +546,7 @@ export type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
+  "transcript-watermark": { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
   "session-activity-summary-source": {
     kind: "session-activity-summary-source";
     source: SessionActivitySummaryBatchResult;
@@ -645,6 +653,10 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionHistoryWorkerResult>;
   readPreview: SessionHistoryReader<SessionPreviewWorkerInput, SessionPreviewItem[]>;
   readTitleFields: SessionHistoryReader<SessionTitleFieldsWorkerInput, SessionTitleFields>;
+  readWatermark: SessionHistoryReader<
+    SessionTranscriptWatermarkWorkerInput,
+    SessionTranscriptWatermark
+  >;
   readActivitySummarySource: SessionHistoryReader<
     SessionActivitySummarySourceWorkerInput,
     SessionActivitySummaryBatchResult
