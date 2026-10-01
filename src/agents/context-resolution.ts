@@ -315,9 +315,5 @@ export function resolveModelContextTokenProjectionFromCache(
   const bareResult = lookupContextTokens(params.model);
   const bareWindow = lookupContextWindow(params.model);
   const bareCap = minPositiveContextTokens(bareResult, bareWindow);
-  if (bareCap !== undefined) {
-    return { contextTokens: bareCap, authoredContextTokens };
-  }
-
-  return { contextTokens: params.fallbackContextTokens, authoredContextTokens };
+  return { contextTokens: bareCap ?? params.fallbackContextTokens, authoredContextTokens };
 }

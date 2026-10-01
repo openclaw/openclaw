@@ -56,12 +56,10 @@ function rememberCommittedStandingIntentsSchema(db: DatabaseSync, schemaSql: str
   }
 }
 
-type StandingIntentColumnInfo = { name?: unknown };
-
 function ensureStandingIntentCreatorColumn(db: DatabaseSync): void {
   const columns = /* sqlite-allow-raw -- Canonical additive schema inspection only. */ db
     .prepare("PRAGMA table_info(standing_intents)")
-    .all() as StandingIntentColumnInfo[];
+    .all();
   if (columns.some((column) => column.name === "creator_sender")) {
     return;
   }

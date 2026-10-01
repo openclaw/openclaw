@@ -49,10 +49,6 @@ export function createDiscordDraftStream(params: {
   }: DiscordDraftUpdate): Promise<boolean> => {
     const generation = lifecycle.generation;
     const targetChannelId = channelId;
-    // Allow final flush even if stopped (e.g., after clear()).
-    if (streamState.stopped && !streamState.final) {
-      return false;
-    }
     const trimmed = text.trimEnd();
     if (!trimmed) {
       return false;

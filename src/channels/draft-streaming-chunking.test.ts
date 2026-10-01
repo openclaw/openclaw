@@ -1,20 +1,23 @@
-// Tests shared channel draft chunking resolution exposed through plugin-sdk/channel-outbound.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { resolveChannelDraftStreamingChunking } from "./channel-outbound.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelDraftStreamingChunking } from "./draft-streaming-chunking.js";
 
 describe("resolveChannelDraftStreamingChunking", () => {
-  it("returns draft stream defaults when channel config is unset", () => {
-    expect(
-      resolveChannelDraftStreamingChunking(undefined, "telegram", "default", {
-        fallbackLimit: 4096,
-      }),
-    ).toEqual({
-      minChars: 200,
-      maxChars: 800,
-      breakPreference: "paragraph",
-    });
-  });
+  it.each([
+    { channelId: "discord", cfg: {}, accountId: undefined, fallbackLimit: 2000 },
+    { channelId: "telegram", cfg: undefined, accountId: "default", fallbackLimit: 4096 },
+  ] as const)(
+    "returns draft stream defaults when $channelId chunking is unset",
+    ({ channelId, cfg, accountId, fallbackLimit }) => {
+      expect(
+        resolveChannelDraftStreamingChunking(cfg, channelId, accountId, { fallbackLimit }),
+      ).toEqual({
+        minChars: 200,
+        maxChars: 800,
+        breakPreference: "paragraph",
+      });
+    },
+  );
 
   it("clamps requested draft chunk sizes to the resolved text limit", () => {
     const cfg: OpenClawConfig = {

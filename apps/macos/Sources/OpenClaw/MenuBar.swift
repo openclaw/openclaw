@@ -308,6 +308,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         DockIconManager.shared.updateDockVisibility()
         if launchPlan.allowsInteractiveServices, let state {
+            BundledRuntime.refreshOwnedMacCLILink(
+                allowsPersistentIntegration: ApplicationRelocator.currentBundleAllowsPersistentIntegration())
             let controller = StatusMenuController(state: state, updater: self.updaterController)
             controller.start()
             self.statusMenuController = controller
@@ -424,14 +426,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // AppKit will not tear down onboarding while its sheet remains attached.
         // Retire it before terminateLater starts the asynchronous cleanup loop.
         OnboardingController.shared.close()
+        let cleanupDeadline = AppTerminationTiming.cleanupDeadlineSeconds(
+            hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway)
         self.terminationCleanupTask = Task { @MainActor [weak self] in
+            async let hostedGatewayCleanup: Void = GatewayProcessManager.shared.shutdownAppHostedGateway()
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()
-            _ = await (processCleanupResult, bridgeCleanupResult)
+            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult)
             self?.finishTerminationCleanup(for: sender)
         }
         self.terminationDeadlineTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(AppTerminationTiming.cleanupDeadlineSeconds))
+            try? await Task.sleep(for: .seconds(cleanupDeadline))
             guard !Task.isCancelled else { return }
             self?.finishTerminationCleanup(for: sender)
         }

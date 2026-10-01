@@ -120,7 +120,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
       jobId: job.id,
       target: { channel: "telegram", to: "123", threadId: 42 },
       payload: { text: "Readiness 65 today" },
-      completion: { job, runStartedAt: 1000 },
+      completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
       abortSignal: new AbortController().signal,
     });
 
@@ -151,7 +151,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
       jobId: job.id,
       target: { channel: "telegram", to: "123" },
       payload: { text: "report" },
-      completion: { job, runStartedAt: 1000 },
+      completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
       abortSignal: new AbortController().signal,
     });
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
@@ -181,7 +181,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
         jobId: job.id,
         target: { channel: "telegram", to: "123" },
         payload: { text: "report" },
-        completion: { job, runStartedAt: 1000 },
+        completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
         abortSignal: new AbortController().signal,
       });
       expect(result.status).toBe("sent");
