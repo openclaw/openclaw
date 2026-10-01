@@ -2,7 +2,7 @@
  * Tests bundled memory core runtime facade loading.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as module from "./memory-core-bundled-runtime.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 const configureMemoryCoreDreamingStateImpl = vi.hoisted(() => vi.fn());
@@ -66,6 +66,8 @@ describe("plugin-sdk memory-core bundled runtime", () => {
   });
 
   it("keeps the bundled memory facade cold until a helper is used", async () => {
+    const module = await import("./memory-core-bundled-runtime.js");
+
     expect(loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
     await module.createEmbeddingProvider({} as never);
     expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
@@ -79,6 +81,8 @@ describe("plugin-sdk memory-core bundled runtime", () => {
   });
 
   it("delegates doctor and embedding helpers through the bundled public surfaces", async () => {
+    const module = await import("./memory-core-bundled-runtime.js");
+
     await module.previewGroundedRemMarkdown({} as never);
     await module.removeGroundedShortTermCandidates({} as never);
     await module.loadShortTermPromotionDreamingStats({} as never);
