@@ -5,7 +5,11 @@ import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -665,7 +669,7 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
-  it("keeps the replacement source when retired admission completes", async () => {
+  it("keeps the replacement source when retired admission completes", async ({ signal }) => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const sourceContext = {
       Provider: "discord",
@@ -738,7 +742,14 @@ describe("runReplyAgent active steering", () => {
     );
     let replacement: ReplyOperation | undefined;
     try {
-      await withTestTimeout(committed.promise, 5_000, "first source admission did not persist");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          committed.promise,
+          firstAdmission,
+          "first source admission settled before persisting",
+        ),
+        signal,
+      );
       expect(requireStoredSessionEntry(storePath).restartRecoveryDeliverySourceRunId).toBe(
         "source-first",
       );
