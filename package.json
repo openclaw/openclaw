@@ -416,6 +416,8 @@
     "scripts/install-cli.sh",
     "scripts/install.ps1",
     "scripts/prepare-git-hooks.mjs",
+    "scripts/prepare-native-protocol.mjs",
+    "scripts/runtime-postbuild-shared.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-plugin-catalog.json",
