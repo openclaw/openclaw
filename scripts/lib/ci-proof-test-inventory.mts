@@ -1720,7 +1720,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/daemon-cli.coverage.test.ts",
   "src/cli/daemon-cli/install.definition-repair.test.ts",
   "src/cli/daemon-cli/install.integration.test.ts",
-  "src/cli/daemon-cli/install.output.integration.test.ts",
   "src/cli/daemon-cli/install.wrapper.integration.test.ts",
   "src/cli/daemon-cli/lifecycle-action-preflight.test.ts",
   "src/cli/daemon-cli/lifecycle-core.config-guard.test.ts",
