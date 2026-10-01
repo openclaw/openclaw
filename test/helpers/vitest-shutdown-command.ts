@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { createDeferredCore } from "../../src/shared/deferred.ts";
 import { createBoundedChildOutput } from "./bounded-child-output.ts";
-import { createDeferred } from "./promise.js";
 
 /** Capture fixture diagnostics without losing the managed cancellation outcome. */
 export async function runVitestShutdownCommand({
@@ -21,7 +21,7 @@ export async function runVitestShutdownCommand({
   const stdout = createBoundedChildOutput(maxBytes);
   const stderr = createBoundedChildOutput(maxBytes);
   const controller = new AbortController();
-  const workerCompletion = workerRun ? createDeferred<number>() : undefined;
+  const workerCompletion = workerRun ? createDeferredCore<number>() : undefined;
   let borrowerCompletion: Promise<number> | undefined;
   let overflow: Error | undefined;
   try {
