@@ -222,9 +222,6 @@ extension ChatTranscriptRow {
                 OpenClawChatMessageContent(
                     type: "tool_result",
                     text: toolText,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil,
                     id: toolCallId,
                     name: message.toolName,
                     details: message.details,

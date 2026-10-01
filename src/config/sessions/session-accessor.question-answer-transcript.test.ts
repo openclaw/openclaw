@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
@@ -17,6 +16,7 @@ import {
   readTranscriptMessages,
 } from "../../sessions/user-turn-transcript.test-support.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   replaceSessionEntry,
   rewriteTranscriptMessageAtAnchor,
@@ -24,7 +24,7 @@ import {
   withTranscriptWriteLock,
 } from "./session-accessor.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "question-transcript-append-");
 const questions = [
   { id: "destination", header: "Destination", question: "Where?", isOther: true, options: [] },
   { id: "budget", header: "Budget", question: "Budget?", isOther: true, options: [] },
@@ -41,7 +41,7 @@ it.each([
   "cancelled",
 ] as const)("fences the waiting question's transcript append: %s", async (scenario) => {
   await withQuestionGateway(async (gateway) => {
-    const dir = tempDirs.make("question-transcript-append-");
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.sqlite");
     const target = {
       ...createTestUserTurnTranscriptTarget({

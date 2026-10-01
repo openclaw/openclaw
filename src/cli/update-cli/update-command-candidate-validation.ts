@@ -8,6 +8,7 @@ import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { prepareOpenClawStateReadSource } from "../../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { readUpdateCandidateSource } from "./update-command-managed-context.js";
@@ -51,28 +52,41 @@ export async function validateUpdateCandidateWithProgress(
       throw new Error("Candidate progress lost its original state source.");
     }
   }
-  const validation = await validateUpdateCandidateCanary({
-    ...params,
-    assertCurrent,
-    stateDir: resolveStateDir(params.env),
-    nodeRunner: execution.packageUpdateNodeRunner,
-    timeoutMs: execution.timeoutMs,
-    onProgress: async (step) => {
-      assertCurrent();
-      if (run) {
-        await recordUpdateRunStepAsync(run.runId, step, {
-          ...writeOptions,
-          context: source?.workerContext(),
-        });
-      }
-      assertCurrent();
-      defaultRuntime[execution.opts.json ? "error" : "log"](
-        `${step.step}: ${step.detail ?? step.status}`,
-      );
-    },
-    onStep: (step) =>
-      reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
-  });
+  const validate = () =>
+    validateUpdateCandidateCanary({
+      ...params,
+      assertCurrent,
+      stateDir: resolveStateDir(params.env),
+      nodeRunner: execution.packageUpdateNodeRunner,
+      timeoutMs: execution.timeoutMs,
+      onProgress: async (step) => {
+        assertCurrent();
+        if (run) {
+          await recordUpdateRunStepAsync(run.runId, step, {
+            ...writeOptions,
+            context: source?.workerContext(),
+          });
+        }
+        assertCurrent();
+        defaultRuntime[execution.opts.json ? "error" : "log"](
+          `${step.step}: ${step.detail ?? step.status}`,
+        );
+      },
+      onStep: (step) =>
+        reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
+    });
+  const validation =
+    source && run
+      ? await runOpenClawStateWorkerOperation(
+          source.workerContext(),
+          // Keep the actual progress writer alive throughout even a silent copy.
+          validate,
+          { existingOnly: true, assertCurrent },
+        )
+      : await validate();
+  if (!validation) {
+    throw new Error("Candidate progress database disappeared before snapshot admission.");
+  }
   assertCurrent();
   const changes = validation.doctorConfigChanges ?? [];
   if (validation.status === "ok" && validation.doctorConfigWrites !== true && changes.length) {

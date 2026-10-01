@@ -150,15 +150,12 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   private closeError?: Error;
 
   hasSiblingWork(threadId: string): boolean {
-    for (const routedThreadId of this.routes.keys()) {
-      if (routedThreadId !== threadId) {
-        return true;
-      }
-    }
     // A released route can still be waiting for native interruption to settle.
-    for (const watchedThreadId of this.nativeTurnCompletionWatchers.keys()) {
-      if (watchedThreadId !== threadId) {
-        return true;
+    for (const threads of [this.routes, this.nativeTurnCompletionWatchers]) {
+      for (const siblingThreadId of threads.keys()) {
+        if (siblingThreadId !== threadId) {
+          return true;
+        }
       }
     }
     return false;

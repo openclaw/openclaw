@@ -607,6 +607,12 @@ export async function beginDoctorMaintenance(
         warn(message);
       }
     },
+    async cleanupRetainedRuntimes() {
+      if (this !== maintenance || custody !== "held") {
+        throw new Error("Updater runtime cleanup requires its original live maintenance owner.");
+      }
+      await settle(() => state.cleanupRetainedRuntimes(serviceUpdateVerdict !== undefined));
+    },
     async release() {
       if (this !== maintenance) {
         throw new Error("Gateway restoration requires its original live maintenance owner.");

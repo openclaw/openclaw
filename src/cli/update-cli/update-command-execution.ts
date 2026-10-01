@@ -614,7 +614,7 @@ export async function executeMutableUpdate(
         beforeActivate,
         ...createPackageUpdateActivationOptions({
           run: opts.run,
-          nodeRunner: params.packageUpdateNodeRunner,
+          runtime: params.packageActivationRuntime,
           assertCurrent: assertExecutionCurrent,
         }),
         managedServiceEnv: preManagedServiceStop?.serviceEnv,

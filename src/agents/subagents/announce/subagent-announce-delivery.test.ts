@@ -142,7 +142,6 @@ function deliverAnnouncement(
   return deliverSubagentAnnouncement({
     targetRequesterSessionKey: params.requesterSessionKey,
     triggerMessage: "child done",
-    steerMessage: "child done",
     requesterIsSubagent: false,
     expectsCompletionMessage: true,
     ...params,
@@ -208,7 +207,6 @@ describe("queued completion handoff", () => {
         requesterSessionKey: "agent:main:subagent:parent",
         requesterIsSubagent: true,
         triggerMessage: "Child result ready",
-        steerMessage: "Child result ready",
         directIdempotencyKey: "busy-parent-completion",
         ...(outcome === "private"
           ? { completionTarget: "parent" as const, completionRequesterSessionId: "busy-parent" }
@@ -658,25 +656,16 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     ],
   ])("%s", async (_name, sessionKey, sessionId, requesterAgentId, cfg) => {
     const persisted = sessionKey === "incident-42";
-    const getRequesterSessionActivity = vi.fn((_sessionKey: string, agentId?: string) => ({
+    const loadSessionEntry = vi.fn(({ agentId }: { agentId?: string }) => ({
       sessionId: persisted || agentId === "research" ? sessionId : "ops-session",
-      isActive: true,
+      updatedAt: 1,
     }));
-    const loadSessionEntry = vi.fn(() => ({ sessionId, updatedAt: 1 }));
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
-      getRequesterSessionActivity,
+      loadSessionEntry,
+      isEmbeddedAgentRunActive: () => true,
       queueEmbeddedAgentMessageWithOutcome,
-      ...(persisted
-        ? { loadSessionEntry }
-        : {
-            loadRequesterSessionEntry: (key: string) => ({
-              cfg,
-              entry: undefined,
-              canonicalKey: key,
-            }),
-          }),
     });
     const result = await announce({ requesterSessionKey: sessionKey, requesterAgentId });
     expectDeliveryPath(result, "steered");
@@ -685,7 +674,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         expect.objectContaining({ agentId: "ops", sessionKey: "incident-42" }),
       );
     }
-    expect(getRequesterSessionActivity).toHaveBeenCalledWith(sessionKey, requesterAgentId ?? "ops");
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
       sessionId,
       "child done",
@@ -2091,7 +2079,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requesterSessionKey: "agent:worker:subagent:parent",
       targetRequesterSessionKey: "agent:worker:subagent:parent",
       triggerMessage: "child done",
-      steerMessage: "child done",
       requesterIsSubagent: true,
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
@@ -2960,7 +2947,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requesterSessionKey: route.sessionKey,
       targetRequesterSessionKey: route.sessionKey,
       triggerMessage: "all spawned subagents settled",
-      steerMessage: "all spawned subagents settled",
       requesterSessionOrigin: route.origin,
       directOrigin: route.origin,
       requesterIsSubagent: route.requesterIsSubagent,

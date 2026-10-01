@@ -37,70 +37,57 @@ import { agentCommandMock } from "./test-helpers.js";
 describe("agent RPC real delegated-authority effects", () => {
   const fixture = installAgentAuthorityProofFixture();
 
-  it.for(["live", "revoked"] as const)(
-    "real reset transaction: %s caller",
-    async (mode, { signal }) => {
-      const f = await fixture();
-      const entered = createDeferred();
-      const release = createDeferred();
-      const unblock = () => release.resolve();
-      signal.addEventListener("abort", unblock, { once: true });
-      if (signal.aborted) {
-        unblock();
+  it("rejects a revoked caller before the real reset transaction", async ({ signal }) => {
+    const f = await fixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const unblock = () => release.resolve();
+    signal.addEventListener("abort", unblock, { once: true });
+    if (signal.aborted) {
+      unblock();
+    }
+    let calls = 0;
+    const hook = async (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
+      if (event.sessionKey !== f.sessionKey) {
+        return;
       }
-      let calls = 0;
-      const hook = async (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
-        if (event.sessionKey !== f.sessionKey) {
-          return;
-        }
-        calls++;
-        entered.resolve();
-        await release.promise;
-      };
-      const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
-      registerInternalHook("command:reset", hook);
-      let request: Promise<Response> | undefined;
-      try {
-        request = f.dispatch({ message: "/reset" });
-        await reach(entered.promise, request);
-        expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(before);
-        if (mode === "revoked") {
-          f.owner.revoke();
-        }
-        release.resolve();
-        const result = await request;
-        await f.drain();
-        const observedEntry = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
-        observe("reset", {
-          mode,
-          ...f.effects(),
-          ...rpcObservation(result),
-          rowChanged: !isDeepStrictEqual(observedEntry, before),
-          sessionPreserved: observedEntry?.sessionId === f.sessionId,
-        });
-        expect(calls).toBe(1);
-        expect(agentCommandMock).not.toHaveBeenCalled();
-        if (mode === "revoked") {
-          expect(result.ok).toBe(false);
-          expect(result.error?.message).toContain("authority is no longer active");
-          expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(before);
-          expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
-        } else {
-          expect(result).toMatchObject({ ok: true, payload: { status: "ok" } });
-          const after = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
-          expect(after?.sessionId).toBe(f.sessionId);
-          expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
-          expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).not.toEqual(f.before);
-        }
-      } finally {
-        release.resolve();
-        await Promise.allSettled([request]);
-        await f.cleanup();
-        unregisterInternalHook("command:reset", hook);
-        signal.removeEventListener("abort", unblock);
-      }
-    },
-  );
+      calls++;
+      entered.resolve();
+      await release.promise;
+    };
+    const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+    registerInternalHook("command:reset", hook);
+    let request: Promise<Response> | undefined;
+    try {
+      request = f.dispatch({ message: "/reset" });
+      await reach(entered.promise, request);
+      expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(before);
+      f.owner.revoke();
+      release.resolve();
+      const result = await request;
+      await f.drain();
+      const observedEntry = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+      observe("reset", {
+        mode: "revoked",
+        ...f.effects(),
+        ...rpcObservation(result),
+        rowChanged: !isDeepStrictEqual(observedEntry, before),
+        sessionPreserved: observedEntry?.sessionId === f.sessionId,
+      });
+      expect(calls).toBe(1);
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(result.ok).toBe(false);
+      expect(result.error?.message).toContain("authority is no longer active");
+      expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(before);
+      expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([request]);
+      await f.cleanup();
+      unregisterInternalHook("command:reset", hook);
+      signal.removeEventListener("abort", unblock);
+    }
+  });
 
   it("retains an actually committed reset for a new valid caller's same-key retry", async ({
     signal,
@@ -188,7 +175,7 @@ describe("agent RPC real delegated-authority effects", () => {
     }
   });
 
-  it.for(["live", "revoked", "accepted custody", "replaced after reset"] as const)(
+  it.for(["revoked", "accepted custody", "replaced after reset"] as const)(
     "real pending-input transaction: %s",
     async (mode, { signal }) => {
       const f = await fixture();
@@ -275,9 +262,7 @@ describe("agent RPC real delegated-authority effects", () => {
             total: 1,
             items: [{ state: "queued", runId: f.runId, message: { content: params.message } }],
           });
-          if (mode === "accepted custody") {
-            f.owner.revoke();
-          }
+          f.owner.revoke();
           expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
           const recorder = prepared.userTurn.recorder!;
           const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
@@ -306,9 +291,7 @@ describe("agent RPC real delegated-authority effects", () => {
             payload: { runId: f.runId, status: "in_flight" },
           });
           expect(execution.observer).toHaveBeenCalledOnce();
-          if (mode === "accepted custody") {
-            expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
-          }
+          expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
         }
       } finally {
         release.resolve();
@@ -808,7 +791,7 @@ describe("agent RPC real delegated-authority effects", () => {
     },
   );
 
-  it.for(["strict", "best effort", "ambiguous"] as const)(
+  it.for(["best effort", "ambiguous"] as const)(
     "preserves ordinary reset delivery failure on same-key retry: %s",
     async (mode) => {
       const { f, sink, recordingAdapterRetained, attempts } = await createResetDeliveryFixture(

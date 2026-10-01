@@ -1,4 +1,5 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-swap-contract.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import type { UpdateRunPhasePatch } from "../../infra/update-run-mutation.types.js";
@@ -57,6 +58,7 @@ export type MutableUpdateExecutionParams = {
   packageTargetVersion?: string;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
   packageUpdateNodeRunner?: string;
+  packageActivationRuntime?: PackageActivationRuntime;
   managedServiceNodeRunner?: string;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   managedServiceRoot?: string;

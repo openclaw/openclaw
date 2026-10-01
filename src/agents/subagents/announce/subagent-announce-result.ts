@@ -1,13 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
-import {
-  SUBAGENT_ENDED_REASON_KILLED,
-  type SubagentLifecycleEndedReason,
-} from "../registry/subagent-lifecycle-events.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
@@ -129,24 +125,21 @@ function formatChildResultData(resultText?: string | null): string {
   );
 }
 
-type CompletionResultSource = Parameters<typeof resolveSubagentCompletionResultText>[0];
-type ChildCompletionExecution = CompletionResultSource["execution"] & {
-  endedAt?: number;
-  outcome?: NonNullable<CompletionResultSource["execution"]["outcome"]> & { error?: string };
-  transcriptTarget?: AgentRunSessionTarget;
-  interruptionReason?: SubagentRunRecord["execution"]["interruptionReason"];
-};
-
-export type ChildCompletionRow = {
+export type ChildCompletionRow = Pick<
+  SubagentRunRecord,
+  "childSessionKey" | "task" | "taskName" | "label" | "createdAt" | "endedReason"
+> & {
   announceResult?: string;
-  childSessionKey: string;
-  task: string;
-  taskName?: string;
-  label?: string;
-  createdAt: number;
-  execution: ChildCompletionExecution;
-  endedReason?: SubagentLifecycleEndedReason;
-  completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
+  execution: Pick<
+    SubagentRunRecord["execution"],
+    "endedAt" | "outcome" | "transcriptTarget" | "interruptionReason"
+  >;
+  completion?: Partial<
+    Pick<
+      NonNullable<SubagentRunRecord["completion"]>,
+      "required" | "resultText" | "fallbackResultText" | "terminalReply"
+    >
+  >;
 };
 
 export function buildChildCompletionFindings(
@@ -179,6 +172,7 @@ export function buildChildCompletionFindings(
     if (
       child.execution.outcome?.status === "ok" &&
       !resultText &&
+      child.completion?.required !== true &&
       child.completion?.terminalReply?.disposition !== "empty" &&
       (child.completion?.terminalReply ||
         child.completion?.resultText?.trim() ||

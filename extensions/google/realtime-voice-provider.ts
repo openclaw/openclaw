@@ -16,6 +16,7 @@ import {
   StartSensitivity,
   TurnCoverage,
 } from "@google/genai";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -469,18 +470,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.connectAttempt) {
       return this.connectAttempt.promise;
     }
-    let cancel = () => {};
-    const cancelled = new Promise<void>((resolve) => {
-      cancel = resolve;
-    });
+    const cancelled = createDeferred();
     const attempt: GoogleLiveConnectionAttempt = {
-      promise: cancelled,
-      cancel,
+      promise: cancelled.promise,
+      cancel: cancelled.resolve,
     };
     this.connectionOwner = attempt;
     this.connectAttempt = attempt;
     const connection = this.connectOwned(attempt);
-    attempt.promise = Promise.race([connection, cancelled]).finally(() => {
+    attempt.promise = Promise.race([connection, cancelled.promise]).finally(() => {
       if (this.connectAttempt === attempt) {
         this.connectAttempt = undefined;
       }

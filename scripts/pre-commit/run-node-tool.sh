@@ -97,7 +97,9 @@ try {
     try { require(nativeEntry); platformFound = true; } catch {}
   }
   if (!platformFound) throw new Error("Missing formatter package for this platform.");
-  if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH || process.env.NAPI_RS_FORCE_WASI || process.env.NAPI_RS_WASI_FLAVOR) {
+  if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH ||
+      process.env.NAPI_RS_FORCE_WASI === "true" || process.env.NAPI_RS_FORCE_WASI === "error" ||
+      process.env.NAPI_RS_WASI_FLAVOR) {
     throw new Error("Cannot qualify an overridden formatter platform binding.");
   }
   const env = { ...process.env, NAPI_RS_ENFORCE_VERSION_CHECK: "1" };

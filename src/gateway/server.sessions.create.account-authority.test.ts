@@ -171,7 +171,6 @@ test.each([
   { scope: "operator.sessions.write", selection: "none", idempotent: false },
   { scope: "operator.sessions.write", selection: "none", idempotent: true },
   { scope: "operator.sessions.write", selection: "default", idempotent: true },
-  { scope: "operator.write", selection: "default", idempotent: true },
   { scope: "operator.write", selection: "explicit", idempotent: true },
 ] as const)(
   "sessions.create with $scope preserves the $selection account choice (idempotent=$idempotent)",

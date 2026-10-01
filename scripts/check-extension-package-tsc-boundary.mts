@@ -500,7 +500,7 @@ function resolveBoundaryInputReceiptPath(extensionId: string, rootDir = repoRoot
 function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
   return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
 }
-async function runCompileCheck(extensionIds: string[]) {
+async function runCompileCheck(extensionIds: string[], selectedPreparation: boolean) {
   if (extensionIds.length === 0) {
     return {
       prepElapsedMs: 0,
@@ -514,7 +514,15 @@ async function runCompileCheck(extensionIds: string[]) {
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
   );
-  await runNodeStepAsync("plugin-sdk boundary prep", prepareBoundaryArtifactsArgs, 420_000);
+  const preparation = await runNodeStepAsync(
+    "plugin-sdk boundary prep",
+    [
+      ...prepareBoundaryArtifactsArgs,
+      ...(selectedPreparation ? [`--extensions=${JSON.stringify(extensionIds)}`] : []),
+    ],
+    420_000,
+  );
+  process.stdout.write(preparation.stdout);
   const prepElapsedMs = Date.now() - prepStartedAt;
   const compileStartedAt = Date.now();
   const availableParallelism = os.availableParallelism();
@@ -750,7 +758,10 @@ async function runBoundaryCheck(argv: string[]) {
         appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
       }
       ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs, compileTimings } =
-        await runCompileCheck(selection.selected.map((row) => row.package)));
+        await runCompileCheck(
+          selection.selected.map((row) => row.package),
+          selection.mode === "affected",
+        ));
     }
     if (shouldRunCanary) {
       ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds));

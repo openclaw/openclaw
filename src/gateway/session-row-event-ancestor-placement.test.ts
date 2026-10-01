@@ -7,18 +7,17 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
 } from "./server-methods/session-change-event.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import {
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
@@ -132,30 +131,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     bindSessionRowProjection(context, () => projection);
     const detach = connection.attachSessionRowProjection(projection);
     const peers = profiles.map((profile, index) => {
-      const send = vi.fn();
-      const client = {
-        ...sharingPolicyClient({ user: profile.id }),
-        connId: `ancestor-${index}`,
-        usesSharedGatewayAuth: false,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: now,
-        },
-        socket: {
-          readyState: 1,
-          bufferedAmount: 0,
-          send,
-          close: vi.fn(),
-          terminate: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          once: vi.fn(),
-        },
-      } satisfies GatewayWsClient;
-      prepareGatewayRecipientProfile(client);
+      const { client, send } = createSessionRowEventPeer(profile, `ancestor-${index}`, now);
       connection.clients.add(client);
       return { client, send };
     });
@@ -210,6 +186,14 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
         placement: projectWorkerSessionPlacement(move.placement),
         placementMove: projectWorkerPlacementMove(move.intent),
       };
+      const archived = (key: string, sessionId: string) => ({
+        key,
+        sessionId,
+        kind: "direct" as const,
+        updatedAt: now - 100,
+        archived: true,
+        archivedAt: 1,
+      });
       emitSessionsChanged(context, { sessionKey: child, agentId: "main", reason: "patch" });
       await flushPendingSessionsChangedEvents(context);
       for (const [index, peer] of peers.entries()) {
@@ -224,36 +208,9 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
         const held = sessionsResult(
           [
             { key: child, sessionId: "child", kind: "direct", updatedAt: now - 100 },
-            {
-              key: gateway,
-              sessionId: "gateway",
-              kind: "direct",
-              updatedAt: now - 100,
-              archived: true,
-              archivedAt: 1,
-            },
-            {
-              key: root,
-              sessionId: "root",
-              kind: "direct",
-              updatedAt: now - 100,
-              archived: true,
-              archivedAt: 1,
-              ...rootFields,
-            },
-            ...(index === 0
-              ? [
-                  {
-                    key: parent,
-                    sessionId: "parent",
-                    kind: "direct" as const,
-                    updatedAt: now - 100,
-                    archived: true,
-                    archivedAt: 1,
-                    ...parentFields,
-                  },
-                ]
-              : []),
+            archived(gateway, "gateway"),
+            { ...archived(root, "root"), ...rootFields },
+            ...(index === 0 ? [{ ...archived(parent, "parent"), ...parentFields }] : []),
           ],
           now,
         );

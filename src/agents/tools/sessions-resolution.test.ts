@@ -164,6 +164,7 @@ describe("resolved session visibility checks", () => {
           key: sessionKey,
           displayKey: sessionKey,
           resolvedViaSessionId: false,
+          requesterOwned: false,
         },
         requesterSessionKey: sessionKey,
         requesterAgentId: "main",

@@ -515,7 +515,8 @@ for arch in "${BUILD_ARCHS[@]}"; do
 done
 
 echo "📦 Copying CLI installer"
-INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+node "$ROOT_DIR/scripts/build-installers.mjs" "$APP_STAGE_DIR/installers"
+INSTALL_CLI_SRC="$APP_STAGE_DIR/installers/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then
   echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
   exit 1
@@ -629,8 +630,8 @@ fi
 codesign --verify --deep --strict "$APP_ROOT"
 if [[ "${CLOUD_WORKER_HOST:-0}" == "1" ]]; then
   signing_metadata="$(codesign -dv --verbose=4 "$APP_ROOT" 2>&1)"
-  if ! printf '%s\n' "$signing_metadata" | grep -q '^Authority=Developer ID Application:' ||
-     ! printf '%s\n' "$signing_metadata" | grep -Eq '^TeamIdentifier=[A-Z0-9]{10}$'; then
+  if ! grep -q '^Authority=Developer ID Application:' <<<"$signing_metadata" ||
+     ! grep -Eq '^TeamIdentifier=[A-Z0-9]{10}$' <<<"$signing_metadata"; then
     echo "ERROR: Cloud worker app did not receive a Developer ID Application signature." >&2
     exit 1
   fi

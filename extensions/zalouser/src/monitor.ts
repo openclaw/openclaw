@@ -385,11 +385,8 @@ async function processMessage(
     channel: "zalouser",
     accountId: account.accountId,
     dmScope: resolveZalouserDmSessionScope(config),
-    peer: {
-      // Doctor migrates retired group-shaped DM keys; runtime consumes only canonical direct keys.
-      kind: peer.kind,
-      id: peer.id,
-    },
+    // Doctor migrates retired group-shaped DM keys; runtime consumes only canonical direct keys.
+    peer,
   });
   const messageSid = resolveZalouserMessageSid({
     msgId: message.msgId,

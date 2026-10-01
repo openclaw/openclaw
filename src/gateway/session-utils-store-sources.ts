@@ -24,7 +24,7 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
-import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-candidates.js";
 import type {
   GatewaySessionStoreReadSources,
   GatewaySessionStoreSourceRequest,

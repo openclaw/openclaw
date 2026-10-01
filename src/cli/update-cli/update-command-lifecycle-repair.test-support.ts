@@ -132,6 +132,7 @@ export function registerRepairCustodyTests(mocks: {
         release,
         releaseState,
         repairSqliteNoCow: vi.fn(async () => {}),
+        cleanupRetainedRuntimes: vi.fn(async () => {}),
       });
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
       // Observe reconciliation of the selected old run without inventing a live

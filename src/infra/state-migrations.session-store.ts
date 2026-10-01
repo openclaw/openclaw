@@ -5,13 +5,13 @@ import { isWithinDir } from "@openclaw/fs-safe/path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
-import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,

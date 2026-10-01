@@ -1,4 +1,3 @@
-// Feishu helper module supports chat schema behavior.
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 

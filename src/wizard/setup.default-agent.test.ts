@@ -75,7 +75,6 @@ vi.mock("./setup.gateway-config.js", () => ({
       bind: "loopback",
       authMode: "token",
       gatewayToken: "test-token",
-      tailscaleMode: "off",
     },
   }),
 }));

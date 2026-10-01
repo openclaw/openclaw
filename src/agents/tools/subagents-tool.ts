@@ -27,10 +27,10 @@ import {
 } from "../subagents/registry/subagent-list.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "../subagents/registry/subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
 import type { SubagentRunReadRecord } from "../subagents/registry/subagent-registry-read.types.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
-  onSubagentRegistryPersisted,
   prepareSubagentRunsSnapshotForRunIds,
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
@@ -204,7 +204,7 @@ function waitForSelectedRuns(params: {
         finish();
       });
     };
-    const unsubscribe = onSubagentRegistryPersisted(wake);
+    const unsubscribe = subscribeSubagentRunChanges("persistence", wake);
     params.signal?.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => {
       timedOut = true;

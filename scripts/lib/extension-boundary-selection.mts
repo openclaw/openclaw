@@ -49,6 +49,7 @@ export function selectAffectedBoundaryPackages(
   extensionIds: string[],
   changes: Change[],
   base?: string,
+  { includeTestSources = false }: { includeTestSources?: boolean } = {},
 ): Selection {
   const reasons = new Map<string, string>();
   let sharedChange: string | undefined;
@@ -66,9 +67,12 @@ export function selectAffectedBoundaryPackages(
       changedEntries.add(`openclaw/plugin-sdk/${entry}`);
     }
     if (
-      (/^(?:src|packages)\//u.test(file) &&
+      ((/^(?:src|packages)\//u.test(file) ||
+        (includeTestSources &&
+          (file.startsWith("scripts/") ||
+            (file.startsWith("extensions/") && !extensionIds.includes(owner ?? ""))))) &&
         SOURCE.test(file) &&
-        !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)) ||
+        (includeTestSources || !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file))) ||
       /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig[^/]*\.json)$/u.test(file) ||
       /^scripts\/(?:lib\/plugin-sdk-|(?:prepare|check|compile)-extension.*boundary)/u.test(file)
     ) {
@@ -89,7 +93,11 @@ export function selectAffectedBoundaryPackages(
       maxBuffer: 8 * 1024 * 1024,
     })
       .split("\0")
-      .filter((file) => SOURCE.test(file) && !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file));
+      .filter(
+        (file) =>
+          SOURCE.test(file) &&
+          (includeTestSources || !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)),
+      );
     const sources: { fileName: string; text: string; owner: string }[] = [];
     for (const file of files) {
       const owner = file.split("/")[1]!;
@@ -157,20 +165,35 @@ export function resolveExtensionBoundarySelection(
     return fullSelection(extensionIds, "missing pinned PR comparison base");
   }
   const git = (args: string[]) =>
-    execFileSync("git", args, { cwd: rootDir, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+    execFileSync("git", args, {
+      cwd: rootDir,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: "pipe",
+    });
   try {
-    const base = git(["merge-base", revision, "HEAD"]).trim();
+    git(["cat-file", "-e", `${revision}^{commit}`]);
+  } catch {
+    return fullSelection(
+      extensionIds,
+      `pinned PR comparison base unavailable in checkout: ${revision}`,
+    );
+  }
+  try {
+    // Depth-one checkouts hide parent edges from revision walks. The raw merge
+    // header still authenticates the pinned first parent without deepening HEAD.
+    const headers = git(["cat-file", "-p", "HEAD"]).split("\n\n", 1)[0]!;
+    const parents = [...headers.matchAll(/^parent ([a-f0-9]{40})$/gmu)].map((match) => match[1]);
+    const base =
+      parents.length > 1 && parents[0] === revision
+        ? revision
+        : git(["merge-base", revision, "HEAD"]).trim();
     if (base !== revision) {
       return fullSelection(extensionIds, "PR comparison base is not an ancestor of tested HEAD");
     }
-    const fields = git([
-      "diff",
-      "--name-status",
-      "--no-renames",
-      "-z",
-      `${base}...HEAD`,
-      "--",
-    ]).split("\0");
+    const fields = git(["diff", "--name-status", "--no-renames", "-z", base, "HEAD", "--"]).split(
+      "\0",
+    );
     fields.pop();
     if (fields.length % 2 !== 0) {
       return fullSelection(extensionIds, "incomplete PR diff");

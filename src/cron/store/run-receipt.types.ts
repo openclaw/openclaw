@@ -48,7 +48,7 @@ export type CronRunReceiptCurrentReadCommand = {
 
 export type CronRunReceiptCurrentFacts = {
   receipt: CronRunReceiptHandle | undefined;
-  job: CronAgentScope | undefined;
+  job: (CronAgentScope & { hasCanonicalDeliveryMode: boolean }) | undefined;
   deletionBlocked: boolean;
 };
 

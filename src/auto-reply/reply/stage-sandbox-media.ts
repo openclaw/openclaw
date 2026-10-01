@@ -67,10 +67,9 @@ export async function stageSandboxMedia(params: {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir, abortSignal } = params;
   abortSignal?.throwIfAborted();
   const media = normalizeMediaFacts(ctx.media);
-  const pathEntries = media.flatMap((fact, index) => {
-    const mediaPath = normalizeOptionalString(fact.path);
-    return mediaPath ? [{ index, path: mediaPath }] : [];
-  });
+  const pathEntries = media.flatMap((fact, index) =>
+    fact.path ? [{ index, path: fact.path }] : [],
+  );
   if (pathEntries.length === 0 || !sessionKey) {
     return EMPTY_STAGE_RESULT;
   }

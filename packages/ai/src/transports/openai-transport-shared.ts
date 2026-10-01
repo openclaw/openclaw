@@ -195,12 +195,8 @@ type MutableOpenAICompletionsReasoningBatch = {
   hasVisibleText: boolean;
 };
 
-const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch = {
-  deltas: [],
-  mirroredThinking: [],
-  hasThinking: false,
-  hasVisibleText: false,
-};
+const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch =
+  createOpenAICompletionsReasoningBatch();
 
 const OPENAI_COMPLETIONS_REASONING_FIELDS = [
   "reasoning_content",

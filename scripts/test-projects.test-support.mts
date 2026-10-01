@@ -4122,7 +4122,7 @@ function shouldUseBroadChangedTargets(env = process.env) {
   return parsePermissiveBooleanToken(env[BROAD_CHANGED_ENV_KEY]) === true;
 }
 
-function isRoutableChangedTarget(changedPath: string) {
+export function isRoutableChangedTarget(changedPath: string) {
   if (GENERATED_CHANGED_TEST_TARGET_PATTERNS.some((pattern) => pattern.test(changedPath))) {
     return false;
   }
@@ -4648,7 +4648,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) {
     return "ui";
   }
-  if (relative.startsWith("src/tui/tui-pty-") || tuiPtyTestFiles.includes(relative)) {
+  if (tuiPtyTestFiles.includes(relative)) {
     return "tuiPty";
   }
   if (relative.endsWith(".e2e.test.ts")) {
