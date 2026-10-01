@@ -101,7 +101,7 @@ describe("visitor access admitted caller", () => {
     await describe1AfterEach1();
   });
 
-  it.each(["writer", "revoked before commit", "revoked after commit"] as const)(
+  it.each(["admin", "writer", "revoked before commit", "revoked after commit"] as const)(
     "retains the original caller through Visitor Access: %s",
     async (scenario) => {
       await withOpenClawTestState(visitorTestStateOptions, async (state) => {
@@ -214,6 +214,9 @@ describe("visitor access admitted caller", () => {
                         "invitation was not recorded",
                       );
                       expect(previous.expiresAt).toBeGreaterThan(previous.createdAt);
+                      if (scenario === "admin") {
+                        return;
+                      }
                       const createAdmission =
                         mutationAdmission.createSqliteWorkerOperationAdmission;
                       const revokeSource = () => {
@@ -313,6 +316,10 @@ describe("visitor access admitted caller", () => {
           expect(provider.emails()).toEqual([EMAIL]);
           expect(provider.writes).toEqual(["POST"]);
           const original = expectDefined(previous, "initial grant missing");
+          if (scenario === "admin") {
+            expect(saved).toEqual(original);
+            return;
+          }
           expect(revocationState).toEqual({
             ownerBefore: true,
             callerCurrent: false,

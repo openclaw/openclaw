@@ -76,6 +76,10 @@ test.each([
   [new Error("password=synthetic-value"), "Error: password=***"],
   [{ message: "token=synthetic-value", code: "E1" }, "token=*** code=E1"],
   ["to%6ben\u3164=synthetic-value&mode=read", "to%6ben\u3164=***&mode=read"],
+  [
+    "-----BEGIN PRIVATE KEY-----\nsynthetic-data\n-----END PRIVATE KEY-----",
+    "-----BEGIN PRIVATE KEY-----\n…redacted…\n-----END PRIVATE KEY-----",
+  ],
 ])("preserves redacted WS frame output for %j", (detail, expected) => {
   logFrame(detail);
   expect(output.mock.calls.map(([line]) => stripVTControlCharacters(line))).toEqual([

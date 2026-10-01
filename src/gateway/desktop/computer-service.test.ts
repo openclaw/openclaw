@@ -632,6 +632,9 @@ describe("Gateway computer service", () => {
       if (mode === "plugins-disabled") {
         f.config.plugins!.enabled = false;
       }
+      if (mode === "provider-disabled") {
+        f.config.plugins!.entries!.fixture!.enabled = false;
+      }
       if (mode === "provider-default") {
         delete f.config.plugins!.entries!.fixture;
       }
