@@ -17,8 +17,12 @@ export function containingSegment(
   // JSC can include the preceding segment for high-surrogate queries in grapheme,
   // word, and sentence mode. Query the low half of a valid pair instead.
   // https://github.com/oven-sh/WebKit/pull/753
-  const codePoint = text.codePointAt(index);
-  return segments.containing(codePoint !== undefined && codePoint > 0xffff ? index + 1 : index);
+  // Integer-normalize first, as containing() does, so the offset cannot round past a boundary.
+  const position = Number.isNaN(index) ? 0 : Math.trunc(index);
+  const codePoint = text.codePointAt(position);
+  return segments.containing(
+    codePoint !== undefined && codePoint > 0xffff ? position + 1 : position,
+  );
 }
 
 /**

@@ -50,6 +50,7 @@ describe("containingSegment", () => {
     -1.5,
     -0.5,
     0.5,
+    0.9999999999999999,
     1.5,
     2.5,
     Number.NaN,
