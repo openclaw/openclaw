@@ -4119,6 +4119,54 @@ describe("cron method validation", () => {
     },
   );
 
+  it.each([
+    { caller: "allowed", releasesOutcome: true },
+    { caller: "revoked during the history read", releasesOutcome: false },
+  ])("returns the finished run only to a caller still $caller", async ({ releasesOutcome }) => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+    context.cron.waitForManualRun.mockResolvedValueOnce(true);
+    let authorized = true;
+    cronRunRecordsOverride.mockImplementation(async () => {
+      authorized = releasesOutcome;
+      return [
+        {
+          id: "cron-1-history",
+          jobId: "cron-1",
+          runId: "run-1",
+          agentId: "ops",
+          createdAt: 1,
+          startedAt: 1,
+          endedAt: 1,
+          status: "succeeded",
+          detail: cronRunLogEntryToDetail(
+            { jobId: "cron-1", runId: "run-1", action: "finished", status: "ok", ts: 1 },
+            { storeKey: cronStoreKey(context.cronStorePath) },
+          ),
+        },
+      ];
+    });
+
+    const { respond } = await invokeCron(
+      "cron.run",
+      { id: "cron-1", waitTimeoutMs: 60_000 },
+      { context, client: callerClient("ops"), hasCurrentClientAuthority: () => authorized },
+    );
+
+    const ack = {
+      ok: true,
+      enqueued: true,
+      runId: "run-1",
+      processInstanceId: getGatewayProcessInstanceId(),
+    };
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      releasesOutcome
+        ? { ...ack, run: expect.objectContaining({ runId: "run-1", status: "ok" }) }
+        : ack,
+      undefined,
+    );
+  });
+
   it("rejects cron.run before enqueue when the Gateway process changed after preflight", async () => {
     const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
 

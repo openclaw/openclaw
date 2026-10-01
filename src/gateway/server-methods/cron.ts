@@ -926,12 +926,18 @@ export const cronHandlers: GatewayRequestHandlers = {
                 ok && isRecord(page) && Array.isArray(page.entries) ? page.entries[0] : undefined;
             },
           });
-        } catch (error) {
-          // A delegated grant can lapse during a long wait; the accepted run must not turn
-          // into a request error, so return the ack without history instead.
-          if (!(error instanceof TypeError)) {
-            throw error;
+          // The mutation response skips the read-response guard, so recheck read authority
+          // with no await between the check and releasing the outcome.
+          assertCronReadCurrent(options);
+          const identity = client?.internal?.agentRuntimeIdentity;
+          if (identity) {
+            getCronManagementAuthority(identity)?.();
           }
+        } catch {
+          // Authority can lapse during a long wait (grant expiry, revocation). The run is
+          // already accepted, so return only its ack and release nothing about the outcome.
+          run = undefined;
+          finished = false;
         }
       }
       respond(true, run ? { ...ack, run } : finished ? { ...ack, finished } : ack, undefined);
