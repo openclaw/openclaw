@@ -19,11 +19,19 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
   repairLegacyCronStoreWithoutPrompt,
 } from "./legacy-repair.js";
+
+const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
+
+vi.mock("../../../../packages/terminal-core/src/note.js", () => ({
+  note: noteMock,
+}));
 
 let tempRoot: string | undefined;
 
@@ -37,6 +45,7 @@ afterEach(async () => {
     tempRoot = undefined;
   }
   vi.unstubAllEnvs();
+  noteMock.mockClear();
 });
 
 it.each<{
@@ -288,4 +297,136 @@ it("does not reactivate quarantined automations during startup repair", async ()
   expect(result).toEqual({ changes: [], warnings: [] });
   expect((await loadCronStore(storePath)).jobs).toEqual([]);
   expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(1);
+});
+
+it.each([
+  { mode: "not-a-route", legacyHints: false },
+  { mode: 42, legacyHints: true },
+])(
+  "preserves unknown delivery mode $mode alongside legacy hints=$legacyHints",
+  async ({ mode, legacyHints }) => {
+    await withOpenClawTestState({ label: "cron-unsupported-delivery" }, async (state) => {
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronStore(storePath, {
+        version: 1,
+        jobs: [
+          {
+            ...job("sqlite-job"),
+            enabled: false,
+            agentId: "ops",
+            schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+            payload: { kind: "agentTurn", message: "synthetic unknown delivery", toolsAllow: [] },
+            delivery: { mode: "none" },
+          },
+          {
+            ...job("repairable-sibling"),
+            enabled: false,
+            agentId: "ops",
+            schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+            payload: { kind: "agentTurn", message: "repair supported sibling", toolsAllow: [] },
+            delivery: { mode: "announce", channel: "telegram", to: "synthetic-target" },
+          },
+        ],
+      });
+      const db = openOpenClawStateDatabase().db;
+      db.prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery.mode', json(?), '$.isolation', json(?)) WHERE store_key = ? AND job_id = 'sqlite-job'",
+      ).run(JSON.stringify(mode), JSON.stringify({ legacy: "retain me" }), cronStoreKey(storePath));
+      db.prepare(
+        "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.delivery.mode') WHERE store_key = ? AND job_id = 'repairable-sibling'",
+      ).run(cronStoreKey(storePath));
+      if (legacyHints) {
+        db.prepare(
+          "UPDATE cron_jobs SET job_json = json_set(job_json, '$.notify', json('true'), '$.payload.deliver', json('true'), '$.payload.channel', 'telegram') WHERE store_key = ? AND job_id = 'sqlite-job'",
+        ).run(cronStoreKey(storePath));
+      }
+      const readRows = () =>
+        db
+          .prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = 'sqlite-job'")
+          .all(cronStoreKey(storePath));
+      const before = readRows();
+      const cfg = {
+        cron: { store: storePath, webhook: "https://example.invalid/cron-finished" },
+      } as OpenClawConfig;
+      expect(await collectLegacyCronStoreHealthFindings({ cfg })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            requirement: "cron-delivery-mode-valid",
+            message: expect.stringContaining("unsupported delivery mode"),
+          }),
+        ]),
+      );
+      const prompter = { confirm: vi.fn().mockResolvedValue(true) };
+      await maybeRepairLegacyCronStore({ cfg, options: {}, prompter });
+      expect(noteMock).toHaveBeenCalledWith(
+        expect.stringContaining("Unsupported cron delivery modes were left unchanged"),
+        "Cron",
+      );
+      expect(readRows()).toEqual(before);
+      expect(prompter.confirm).toHaveBeenCalledOnce();
+      const sibling = db
+        .prepare(
+          "SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = 'repairable-sibling'",
+        )
+        .get(cronStoreKey(storePath));
+      expect(JSON.parse(String(sibling?.job_json)).delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "synthetic-target",
+      });
+      expect(noteMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("Failed writing migrated cron store"),
+        "Doctor warnings",
+      );
+    });
+  },
+);
+
+it("retains an unsupported legacy import and rolls back its receipt and supported sibling", async () => {
+  await withOpenClawTestState({ label: "cron-unsupported-import" }, async (state) => {
+    const storePath = await state.writeJson("cron/jobs.json", {
+      version: 1,
+      jobs: [
+        {
+          ...job("unsupported-import"),
+          agentId: "ops",
+          enabled: false,
+          payload: { kind: "agentTurn", message: "preserve original source", toolsAllow: [] },
+          delivery: { mode: "not-a-route" },
+        },
+        {
+          ...job("supported-import"),
+          agentId: "ops",
+          enabled: false,
+          payload: { kind: "agentTurn", message: "no partial import", toolsAllow: [] },
+          delivery: { mode: "none" },
+        },
+      ],
+    });
+    const original = await fs.readFile(storePath, "utf8");
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: { store: storePath, webhook: "https://example.invalid/cron-finished" },
+      } as OpenClawConfig,
+      options: {},
+      prompter: { confirm: vi.fn().mockResolvedValue(true) },
+    });
+    expect(await fs.readFile(storePath, "utf8")).toBe(original);
+    await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await loadCronStore(storePath)).jobs).toEqual([]);
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT source_path FROM migration_sources WHERE source_path = ?")
+        .all(storePath),
+    ).toEqual([]);
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("unsupported delivery mode"),
+      "Doctor warnings",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Failed writing migrated cron store"),
+      "Doctor warnings",
+    );
+  });
 });

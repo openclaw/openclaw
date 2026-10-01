@@ -426,6 +426,25 @@ it.each([
           const beforeDoctor = rows(storePath);
 
           const ctx = await repair(state);
+          if (mode === undefined) {
+            const snapshot = vi
+              .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
+              .mockRejectedValueOnce(new Error("synthetic backup failure"));
+            try {
+              await withDoctorConfigMaintenance(() =>
+                maybeRepairLegacyCronStore({
+                  cfg: ctx.cfg,
+                  options: ctx.options,
+                  prompter: ctx.prompter,
+                }),
+              );
+              expect(snapshot).toHaveBeenCalledOnce();
+              expect(rows(storePath)).toEqual(beforeDoctor);
+              expect(await backups()).toEqual([]);
+            } finally {
+              snapshot.mockRestore();
+            }
+          }
           await withDoctorConfigMaintenance(() =>
             maybeRepairLegacyCronStore({
               cfg: ctx.cfg,
@@ -624,7 +643,7 @@ it.each([
           ],
         });
       }
-      const legacySource = machineStore ? await fs.readFile(storePath, "utf8") : undefined;
+      const legacySource = customStore ? await fs.readFile(storePath, "utf8") : undefined;
       const ctx = await repair(state);
       expect(ctx.configWriteRefusal).toBeUndefined();
       const saved = await readConfigFileSnapshot();
@@ -701,19 +720,42 @@ it.each([
           sessionKey: "agent:research:main",
         });
         expect(JSON.parse(importedSession.job_json)).not.toHaveProperty("agentId");
+      }
+      if (customStore) {
         await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.readFile(`${storePath}.migrated`, "utf8")).resolves.toBe(legacySource);
       }
       const savedBackups = await backups();
-      expect(savedBackups).toHaveLength(1);
-      const backup = new DatabaseSync(savedBackups[0]!, { readOnly: true });
-      try {
-        expect(
-          backup.prepare("SELECT agent_id FROM cron_jobs WHERE job_id = 'historical'").get()
-            ?.agent_id,
-        ).toBeNull();
-      } finally {
-        backup.close();
+      expect(savedBackups).toHaveLength(customStore ? 2 : 1);
+      const backedUpRows = savedBackups.map((backupPath) => {
+        const backup = new DatabaseSync(backupPath, { readOnly: true });
+        try {
+          expect(backup.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+          expect(backup.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+          return loadCronRows(backup, cronStoreKey(storePath));
+        } finally {
+          backup.close();
+        }
+      });
+      expect(
+        backedUpRows.filter((rows) => !rows.some((row) => row.job_id === "json-import")),
+      ).toEqual([original]);
+      if (customStore) {
+        const beforeOwnership = expectDefined(
+          backedUpRows.find((rows) => rows.some((row) => row.job_id === "json-import")),
+          "backup after legacy import and before ownership repair",
+        );
+        expect(beforeOwnership.map((row) => row.job_id).toSorted()).toEqual(
+          repaired.map((row) => row.job_id).toSorted(),
+        );
+        for (const id of ["historical", "json-import"]) {
+          const ownerless = expectDefined(
+            beforeOwnership.find((row) => row.job_id === id),
+            `unrepaired ${id} backup`,
+          );
+          expect(ownerless.agent_id).toBeNull();
+          expect(JSON.parse(ownerless.job_json)).not.toHaveProperty("agentId");
+        }
       }
       const repairedDefinitions = rows(storePath);
       await repair(state);
@@ -721,6 +763,8 @@ it.each([
       expect(await backups()).toEqual(savedBackups);
       if (machineStore) {
         expect(readOtherRows()).toEqual(otherRowsBefore);
+      }
+      if (customStore) {
         await expect(fs.readFile(`${storePath}.migrated`, "utf8")).resolves.toBe(legacySource);
       }
     },

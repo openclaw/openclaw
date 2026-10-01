@@ -69,6 +69,12 @@ unchanged. Doctor saves a verified SQLite backup and rechecks the stored owner
 and definition before committing. If ownership cannot be repaired, it preserves
 the roster marker and reports the condition to resolve.
 
+When legacy import or delivery normalization precedes ownership repair, each
+stage saves its own verified snapshot. The earliest backup preserves the original
+persisted cron definitions, ownership, and runtime state; the later backup also
+includes imported jobs before their owners are pinned. Archived legacy JSON keeps
+its original bytes.
+
 An owner recorded only in the SQLite owner column is copied into the job's
 canonical definition by Doctor. Its agent identity and runtime state stay the
 same; a different system-agent selection does not override it.

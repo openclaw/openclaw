@@ -548,15 +548,44 @@ function assertUpdated(p, observations, packageRoot) {
   const added = current.backups.filter(
     (entry) => !fixture.before.backups.some((before) => before.name === entry.name),
   );
-  assert.equal(added.length, 1, "Ownership repair did not retain one verified cron backup");
-  const backupPath = path.join(path.dirname(p.databasePath), added[0].name);
-  const backupRows = inspectRows(backupPath, fixture.storePath);
-  assert.equal(backupRows.find((row) => row.job_id === `${prefix}historical`)?.agent_id, null);
-  assert.equal(backupRows.find((row) => row.job_id === `${prefix}json-import`)?.agent_id, null);
-  readDatabase(backupPath, (db) => {
-    assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
-    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  assert.equal(added.length, 2, "Import and ownership repair must each retain a verified backup");
+  const backedUp = added.map((backup) => {
+    const backupPath = path.join(path.dirname(p.databasePath), backup.name);
+    readDatabase(backupPath, (db) => {
+      assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
+      assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    });
+    return { backup, rows: inspectRows(backupPath, fixture.storePath) };
   });
+  const beforeImport = backedUp.filter(
+    ({ rows }) => !rows.some((row) => row.job_id === `${prefix}json-import`),
+  );
+  const beforeOwnership = backedUp.filter(({ rows }) =>
+    rows.some((row) => row.job_id === `${prefix}json-import`),
+  );
+  assert.equal(beforeImport.length, 1, "Missing unique pre-import snapshot");
+  assert.equal(beforeOwnership.length, 1, "Missing unique pre-ownership snapshot");
+  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
+    job_id,
+    agent_id,
+    job_json,
+    state_json,
+  });
+  assert.deepEqual(
+    beforeImport[0].rows.map(persistedFields),
+    fixture.before.rows.map(persistedFields),
+    "Initial backup did not preserve the original persisted definitions, owners, and state",
+  );
+  assert.deepEqual(
+    beforeOwnership[0].rows.map((row) => row.job_id).toSorted(),
+    fixture.definitions.map((job) => job.id).toSorted(),
+  );
+  for (const name of ["historical", "json-import"]) {
+    const row = beforeOwnership[0].rows.find((entry) => entry.job_id === `${prefix}${name}`);
+    assert(row, `Ownership backup omitted ${name}`);
+    assert.equal(row.agent_id, null);
+    assert.equal(Object.hasOwn(JSON.parse(row.job_json), "agentId"), false);
+  }
   const archive = parseCliJson(
     fs.readFileSync(path.join(p.artifacts, "cron-owner-backup.json"), "utf8"),
   );
@@ -577,7 +606,10 @@ function assertUpdated(p, observations, packageRoot) {
     updateRunId: update.runId,
     updaterPid: updater.pid,
     doctorPid: doctor.pid,
-    backup: added[0],
+    backups: {
+      beforeImport: beforeImport[0].backup,
+      beforeOwnership: beforeOwnership[0].backup,
+    },
     verifiedArchive: {
       path: archive.archivePath,
       sha256: hash(fs.readFileSync(archive.archivePath)),

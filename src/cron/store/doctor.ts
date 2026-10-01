@@ -192,14 +192,15 @@ export async function repairCronJobsForDoctor(
   return { changed: changes.length, backupPath };
 }
 
-async function commitCronDoctorRepair(
+/** Shared pre-mutation backup for core and plugin cron repairs. */
+export async function backupCronStoreForDoctor(
   scope: DoctorCronScope,
-  authority: PluginDoctorRepairAuthority,
   repair: {
+    assertCurrent: () => void;
     assertRowsUnchanged: (db: DatabaseSync) => void;
-    write: (db: DatabaseSync) => void;
   },
 ): Promise<string> {
+  repair.assertCurrent();
   const sourcePath = resolveOpenClawStateSqlitePath(scope.env);
   const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
   await createVerifiedSqliteSnapshot({
@@ -209,8 +210,23 @@ async function commitCronDoctorRepair(
     transform: sanitizeOpenClawStateLeaseRows,
     requireNonEmptySource: true,
     validate: repair.assertRowsUnchanged,
-    beforePublish: () => authority.assertCurrent(),
-    afterPublish: (guard) => guard.assertTargetUnchanged(() => authority.assertCurrent()),
+    beforePublish: repair.assertCurrent,
+    afterPublish: (guard) => guard.assertTargetUnchanged(repair.assertCurrent),
+  });
+  return backupPath;
+}
+
+async function commitCronDoctorRepair(
+  scope: DoctorCronScope,
+  authority: PluginDoctorRepairAuthority,
+  repair: {
+    assertRowsUnchanged: (db: DatabaseSync) => void;
+    write: (db: DatabaseSync) => void;
+  },
+): Promise<string> {
+  const backupPath = await backupCronStoreForDoctor(scope, {
+    assertCurrent: () => authority.assertCurrent(),
+    assertRowsUnchanged: repair.assertRowsUnchanged,
   });
   try {
     authority.assertCurrent();
