@@ -49,6 +49,56 @@ describe("buildTurnStartParams active computer context", () => {
   );
 });
 
+describe("buildTurnStartParams session link context", () => {
+  const sessionUrl = "https://gateway.example/chat/main/founder/x-20260929";
+
+  it.each([false, true])(
+    "gives the model the host-prepared session link on every turn (native settings=%s)",
+    (preserveNativeTurnSettings) => {
+      const params = createParams("/tmp/session.jsonl", "/repo");
+      params.sessionUrl = sessionUrl;
+      const options = {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions(),
+        preserveNativeTurnSettings,
+      };
+
+      // Codex re-emits a key only when its value changes, so repeated turns must stay identical.
+      for (let turnIndex = 0; turnIndex < 2; turnIndex += 1) {
+        expect(buildTurnStartParams(params, options).additionalContext?.openclaw_session).toEqual({
+          kind: "application",
+          value: `Runtime: sessionUrl=${sessionUrl}`,
+        });
+      }
+    },
+  );
+
+  it("supersedes an earlier link with a stable no-link value once the host stops resolving one", () => {
+    const params = createParams("/tmp/session.jsonl", "/repo");
+    const options = { threadId: "thread-1", cwd: "/repo", appServer: createAppServerOptions() };
+    const sessionContext = () =>
+      buildTurnStartParams(params, options).additionalContext?.openclaw_session?.value;
+
+    params.sessionUrl = sessionUrl;
+    const linked = sessionContext();
+    // The operator removes gateway.publicOrigin while the native thread is warm. Codex cannot
+    // retract the fragment it already emitted, so the next turn's value has to change.
+    params.sessionUrl = undefined;
+    const unlinked = sessionContext();
+    params.sessionUrl = sessionUrl;
+    const relinked = sessionContext();
+
+    expect(linked).toBe(`Runtime: sessionUrl=${sessionUrl}`);
+    expect(unlinked).toContain("no session link is available");
+    // A `sessionUrl=` token here could be mistaken for a link by skills that key on it.
+    expect(unlinked).not.toContain("sessionUrl=");
+    expect(relinked).toBe(linked);
+    params.sessionUrl = undefined;
+    expect(sessionContext()).toBe(unlinked);
+  });
+});
+
 describe("buildTurnStartParams model thinking defaults", () => {
   it.each([
     { thinking: undefined, thinkingDefault: undefined, expected: "medium" },
@@ -117,6 +167,10 @@ describe("buildTurnStartParams temporal context", () => {
       openclaw_active_computer: {
         kind: "application",
         value: "Current active computer: active_node=unknown (host presence unavailable)",
+      },
+      openclaw_session: {
+        kind: "application",
+        value: expect.stringContaining("no session link is available"),
       },
       openclaw_source_delivery: {
         kind: "application",
@@ -347,6 +401,10 @@ describe("buildTurnStartParams native supervised settings", () => {
         openclaw_active_computer: {
           kind: "application",
           value: "Current active computer: active_node=unknown (host presence unavailable)",
+        },
+        openclaw_session: {
+          kind: "application",
+          value: expect.stringContaining("no session link is available"),
         },
         openclaw_source_delivery: {
           kind: "application",

@@ -51,17 +51,6 @@ export function buildSystemPromptParams(params: {
     : resolveSystemPromptRepoRoot(params);
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userDate = formatDateStamp(Date.now(), userTimezone);
-  const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
-  // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
-  // defeating byte-identical prompt-prefix reuse across runs of the same job.
-  const sessionUrl =
-    runId === undefined
-      ? resolveControlUiSessionUrl(params.config, {
-          sessionKey: params.runtime.sessionKey,
-          fallbackAgentId: params.agentId,
-          exactKey: true,
-        })
-      : undefined;
   return {
     runtimeInfo: {
       agentId: params.agentId,
@@ -71,11 +60,11 @@ export function buildSystemPromptParams(params: {
           : undefined,
       ...params.runtime,
       gitCoauthorPrompt: params.preparedGitCoauthorPrompt ?? undefined,
-      // Published links must be externally usable and bounded before entering model context.
-      sessionUrl:
-        sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
-          ? sessionUrl
-          : undefined,
+      sessionUrl: resolveRuntimeSessionUrl({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.runtime.sessionKey,
+      }),
       activeNode: formatActiveNodeContextLabel(
         getCurrentActiveNodeContext(params.requesterProfileId),
       ),
@@ -85,6 +74,31 @@ export function buildSystemPromptParams(params: {
     userTimezone,
     userDate,
   };
+}
+
+/**
+ * Owns the model-visible session link for every runtime that describes the session:
+ * the embedded and CLI Runtime line and plugin harnesses that receive it prepared.
+ */
+export function resolveRuntimeSessionUrl(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): string | undefined {
+  // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
+  // defeating byte-identical prompt-prefix reuse across runs of the same job.
+  if (parseCronRunScopeSuffix(params.sessionKey).runId !== undefined) {
+    return undefined;
+  }
+  const sessionUrl = resolveControlUiSessionUrl(params.config, {
+    sessionKey: params.sessionKey,
+    fallbackAgentId: params.agentId,
+    exactKey: true,
+  });
+  // Published links must be externally usable and bounded before entering model context.
+  return sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
+    ? sessionUrl
+    : undefined;
 }
 
 export function resolveRuntimeAgentName(config: OpenClawConfig, agentId: string) {

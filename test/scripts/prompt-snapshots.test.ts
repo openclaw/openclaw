@@ -254,6 +254,7 @@ describe("happy path prompt snapshots", () => {
     const keyOrder = [
       "openclaw_active_computer",
       "openclaw_current_sender",
+      "openclaw_session",
       "openclaw_source_delivery",
       "openclaw_temporal_context",
     ].filter((key) => Object.hasOwn(turn.additionalContext, key));

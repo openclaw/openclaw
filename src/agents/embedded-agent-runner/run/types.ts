@@ -142,6 +142,12 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
   githubPublicationAvailable?: boolean;
+  /**
+   * Host-resolved Control UI link to this exact session: HTTPS, bounded, and absent for
+   * isolated cron runs. Embedded and CLI runs render it in the Runtime line; plugin
+   * harnesses must render it themselves and must not construct or alter the URL.
+   */
+  sessionUrl?: string;
   disableToolSearch?: true;
   sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;

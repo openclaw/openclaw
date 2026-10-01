@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
+import { resolveRuntimeSessionUrl } from "../../system-prompt-params.js";
 
 /** Prepares host-owned additions before either embedded or plugin harness dispatch. */
 export async function prepareAttemptSystemPromptAdditions(params: {
@@ -27,6 +28,12 @@ export async function prepareAttemptSystemPromptAdditions(params: {
     sessionId: params.sessionId,
     storePath: params.storePath,
   });
+  // Plugin harnesses have no Runtime line; they render this same prepared link themselves.
+  const sessionUrl = resolveRuntimeSessionUrl({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
   // Credit has its own retained prompt placement; do not fold it into dynamic additions.
-  return { extraSystemPrompt, gitCoauthorPrompt };
+  return { extraSystemPrompt, gitCoauthorPrompt, sessionUrl };
 }

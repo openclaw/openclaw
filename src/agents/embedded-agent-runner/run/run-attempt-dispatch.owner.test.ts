@@ -245,6 +245,7 @@ it.each(dispatchCases)(
           },
         },
         session: { scope: "global" as const },
+        gateway: { publicOrigin: "https://gateway.example" },
       };
       const provisioned: string[] = [];
       const localBackend = vi.fn<SandboxBackendFactory>(async ({ scopeKey }) => {
@@ -574,6 +575,8 @@ it.each(dispatchCases)(
             sessionKey: "global",
             sandboxSessionKey,
             gitCoauthorPrompt,
+            // Plugin harnesses have no Runtime line, so the host hands them the prepared link.
+            sessionUrl: `https://gateway.example/chat/${agentId}`,
           }),
         );
         expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({

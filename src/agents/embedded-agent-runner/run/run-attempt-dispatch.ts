@@ -331,18 +331,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     params.execOverrides ??= {};
     params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
   }
-  const { extraSystemPrompt, gitCoauthorPrompt } = await prepareAttemptSystemPromptAdditions({
-    agentId: workspaceResolution.agentId,
-    authProfileId: runtime.lastProfileId,
-    config: params.config,
-    extraSystemPrompt: params.extraSystemPrompt,
-    modelId,
-    provider,
-    sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.sessionTarget?.storePath,
-    toolsAllow: params.toolsAllow,
-  });
+  const { extraSystemPrompt, gitCoauthorPrompt, sessionUrl } =
+    await prepareAttemptSystemPromptAdditions({
+      agentId: workspaceResolution.agentId,
+      authProfileId: runtime.lastProfileId,
+      config: params.config,
+      extraSystemPrompt: params.extraSystemPrompt,
+      modelId,
+      provider,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.sessionTarget?.storePath,
+      toolsAllow: params.toolsAllow,
+    });
   assertActiveRun();
   let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
   let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
@@ -611,6 +612,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
     gitCoauthorPrompt,
+    sessionUrl,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,

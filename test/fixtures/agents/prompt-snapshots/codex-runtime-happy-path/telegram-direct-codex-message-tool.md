@@ -152,6 +152,10 @@
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
     },
+    "openclaw_session": {
+      "kind": "application",
+      "value": "Runtime: no session link is available; disregard any earlier sessionUrl."
+    },
     "openclaw_source_delivery": {
       "kind": "application",
       "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere.\n\nCommentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
@@ -238,8 +242,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "additionalContext": {
-    "chars": 1348,
-    "roughTokens": 337
+    "chars": 1459,
+    "roughTokens": 365
   },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 0,
@@ -270,12 +274,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27378,
-    "roughTokens": 6845
+    "chars": 27489,
+    "roughTokens": 6873
   },
   "totalWithDynamicToolsJson": {
-    "chars": 98050,
-    "roughTokens": 24513
+    "chars": 98161,
+    "roughTokens": 24541
   },
   "userInputText": {
     "chars": 879,
@@ -531,6 +535,12 @@ This turn asks Codex app-server to resolve its built-in Default collaboration-mo
 
 ```text
 <external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
+```
+
+### Developer: OpenClaw Additional Context (openclaw_session)
+
+```text
+<openclaw_session>Runtime: no session link is available; disregard any earlier sessionUrl.</openclaw_session>
 ```
 
 ### Developer: OpenClaw Additional Context (openclaw_source_delivery)

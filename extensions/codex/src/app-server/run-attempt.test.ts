@@ -4848,6 +4848,54 @@ describe("runCodexAppServerAttempt", () => {
       },
     ]);
   });
+  it("sends the host-prepared session link with the turn, not in thread developer instructions", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const sessionUrl = "https://gateway.example/chat/main/founder/x-20260929";
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1");
+      }
+      return {};
+    });
+    const params = createParams(sessionFile, workspaceDir, {
+      prompt: "where can I find this session?",
+      runId: "run-session-url",
+    });
+    params.sessionUrl = sessionUrl;
+
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(
+      () =>
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
+          1,
+        ),
+      fastWait,
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStartParams = harness.requests.find((request) => request.method === "turn/start")
+      ?.params as
+      | { additionalContext?: Record<string, { kind: string; value: string }> }
+      | undefined;
+    expect(turnStartParams?.additionalContext?.openclaw_session).toEqual({
+      kind: "application",
+      value: `Runtime: sessionUrl=${sessionUrl}`,
+    });
+    // Developer instructions feed the thread binding fingerprint; carrying the link there
+    // would rotate every existing native thread on upgrade.
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    expect(JSON.stringify(threadStart?.params)).not.toContain(sessionUrl);
+  });
   it("keeps context usage fresh across two turns of one Codex thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const turnIds = ["turn-1", "turn-2"] as const;

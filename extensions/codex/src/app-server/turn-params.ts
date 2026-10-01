@@ -146,6 +146,17 @@ export function buildTurnStartParams(
         }),
       ].join("\n"),
     },
+    // The host owns the URL; embedded and CLI runs carry the same `sessionUrl=` Runtime fact.
+    // Codex re-emits a key only when its value changes, so this costs tokens once per thread,
+    // and unlike developer instructions it cannot rotate the thread binding fingerprint. A link
+    // that later disappears (the operator removes gateway.publicOrigin) must explicitly
+    // supersede the one already in history, so the no-link value is sent rather than omitted.
+    openclaw_session: {
+      kind: "application",
+      value: params.sessionUrl
+        ? `Runtime: sessionUrl=${params.sessionUrl}`
+        : "Runtime: no session link is available; disregard any earlier sessionUrl.",
+    },
   };
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
   if (currentSender) {
