@@ -831,11 +831,14 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
 
 private enum MacChatMessageSpeechError: LocalizedError {
     case invalidRequest
+    case unsupportedTransport
 
     var errorDescription: String? {
         switch self {
         case .invalidRequest:
             "Failed to encode tts.speak request"
+        case .unsupportedTransport:
+            "Gateway TTS is unavailable for this chat transport"
         }
     }
 }
