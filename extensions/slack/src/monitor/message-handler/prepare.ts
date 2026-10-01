@@ -1384,7 +1384,6 @@ export async function prepareSlackMessage(params: {
     });
   }
 
-  // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
   let inboundMedia = await toInboundMediaFactsWithMetadata(effectiveMedia, {
     transcribed: (entry) =>

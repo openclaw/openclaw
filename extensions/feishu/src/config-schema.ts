@@ -322,9 +322,7 @@ const FeishuConfigSchemaBase = z
     requireMention: z.boolean().optional(),
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
-    // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
-    // Optimization flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
   })

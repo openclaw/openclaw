@@ -169,7 +169,6 @@ export async function sendMessageTelegram(
     const tableMode = opts.tableMode ?? resolveTelegramTableMode(richMessagesParams);
     const renderHtmlText = (value: string) =>
       renderTelegramHtmlText(value, { textMode, tableMode });
-    // Resolve link preview setting from config (default: enabled).
     const linkPreviewEnabled = account.config.linkPreview ?? true;
     const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
 

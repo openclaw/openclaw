@@ -134,7 +134,6 @@ export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
   }
 }
 
-/** Formats a parsed config issue path into a user-facing dotted path. */
 export function formatConfigKeyPath(parts: Array<string | number>): string {
   let out = "";
   for (const part of parts) {

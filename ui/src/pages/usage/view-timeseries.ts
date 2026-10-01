@@ -11,9 +11,9 @@ import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
 
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
 const CHART_MAX_BAR_WIDTH = 8; // Max bar width in SVG viewBox units
-const CHART_SELECTION_OPACITY = 0.06; // Opacity of range selection overlay
+const CHART_SELECTION_OPACITY = 0.06;
 const HANDLE_WIDTH = 5; // Width of drag handle in SVG units
-const HANDLE_HEIGHT = 12; // Height of drag handle
+const HANDLE_HEIGHT = 12;
 const HANDLE_GRIP_OFFSET = 0.7; // Offset of grip lines inside handle
 
 function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 1): number {
