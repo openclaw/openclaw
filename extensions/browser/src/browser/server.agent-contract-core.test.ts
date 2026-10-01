@@ -29,9 +29,6 @@ import {
 } from "./server.control-server.test-harness.js";
 import { createBrowserTestClient, getBrowserTestFetch } from "./test-support/fetch.js";
 
-// A timed-out lazy import must not start a late warmup teardown against the next suite.
-await import("../server.js");
-
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 
 async function postActAndReadError(base: string, body?: unknown) {

@@ -214,7 +214,12 @@ beforeEach(async () => {
       prints++;
       onPrint?.();
       return isPidAlive(pid)
-        ? { code: 0, termination: "exit", stdout: `state = running\npid = ${pid}\n`, stderr: "" }
+        ? {
+            code: 0,
+            termination: "exit",
+            stdout: `${args[1]} = {\n\tstate = running\n\tpid = ${pid}\n}`,
+            stderr: "",
+          }
         : { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
     }
     if (args[0] === "bootout" || args[0] === "disable") {

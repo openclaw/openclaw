@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const { prepare, prepareCopy, createToken, SourceChangedError } = vi.hoisted(() => ({
   prepare: vi.fn(),

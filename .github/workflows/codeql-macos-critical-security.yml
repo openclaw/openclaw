@@ -98,6 +98,24 @@ jobs:
           artifact-ids: ${{ needs.prepare-mermaid.outputs.artifact-id }}
           path: apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid
 
+      - name: Setup Node environment for native protocol generation
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Install native protocol dependencies
+        env:
+          CI: "true"
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline --optional
+          --filter '@openclaw/gateway-protocol...'
+          --config.ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
@@ -141,7 +159,10 @@ jobs:
             jq '
               def in_dependency_build:
                 ((.locations // []) | length > 0)
-                and all(.locations[]; (.physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
+                and all(.locations[];
+                  (.physicalLocation.artifactLocation.uri? // "")
+                  | test("^apps/macos/\\.build/")
+                    and (endswith("/GenerateGatewayProtocol/GatewayModels.swift") | not));
 
               .runs |= map(.results = ((.results // []) | map(select(in_dependency_build | not))))
             ' "$file" > "sarif-results-filtered/$(basename "$file")"

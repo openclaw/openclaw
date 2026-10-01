@@ -105,6 +105,9 @@ export async function runSessionsSendA2AFlow(params: {
   requesterChannel?: string;
   reply?: AgentWaitResult & { replyText?: string };
   notifyRequesterOnWaitFailure?: boolean;
+  deliverRequesterReply?: (
+    reply: Pick<Parameters<typeof runAgentStep>[0], "message" | "extraSystemPrompt">,
+  ) => Promise<void>;
 }) {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   const requesterStepContext = {
@@ -115,6 +118,7 @@ export async function runSessionsSendA2AFlow(params: {
     sourceSessionKey: params.targetSessionKey,
     callGateway: gatewayCall,
   };
+  const deliverRequesterReply = params.deliverRequesterReply ?? runAgentStep;
   try {
     const wait =
       params.reply ??
@@ -132,7 +136,7 @@ export async function runSessionsSendA2AFlow(params: {
       ) {
         const error =
           typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
-        await runAgentStep({
+        await deliverRequesterReply({
           ...requesterStepContext,
           sessionKey: params.requesterSessionKey,
           message: wait.sourceReplyDelivered
@@ -213,7 +217,7 @@ export async function runSessionsSendA2AFlow(params: {
 
     if (params.requesterSessionKey) {
       const child = params.replyMode === "one-way";
-      await runAgentStep({
+      await deliverRequesterReply({
         ...requesterStepContext,
         sessionKey: params.requesterSessionKey,
         message: reply,
@@ -224,6 +228,9 @@ export async function runSessionsSendA2AFlow(params: {
       });
     }
   } catch (err) {
+    if (params.deliverRequesterReply) {
+      throw err;
+    }
     log.warn("sessions_send reply flow failed", {
       runId: params.runId,
       error: formatErrorMessage(err),

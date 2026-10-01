@@ -55,14 +55,18 @@ describe("resolveCronDeliveryPlan", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("defaults to announce when delivery object has no mode", () => {
-    const plan = resolveCronDeliveryPlan({
-      delivery: { channel: "telegram", to: "123", mode: undefined as never },
+  it("rejects an unrepaired primary route while retaining an explicit failure destination", () => {
+    const job = makeCronJob({
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
     });
-    expect(plan.mode).toBe("announce");
-    expect(plan.requested).toBe(true);
-    expect(plan.channel).toBe("telegram");
-    expect(plan.to).toBe("123");
+    Reflect.deleteProperty(job.delivery!, "mode");
+    expect(() => resolveCronDeliveryPlan(job)).toThrow("openclaw doctor --fix");
+    expect(resolveFailureDestination(job, { channel: "telegram", to: "123" })).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+      accountId: undefined,
+    });
   });
 
   it.each(["googlechat", "gchat"])(

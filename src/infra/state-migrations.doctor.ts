@@ -1,6 +1,8 @@
 import { lstatSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
@@ -228,7 +230,7 @@ function hasCustomAgentDirOverride(env: NodeJS.ProcessEnv): boolean {
 }
 
 function resolveConcreteBindingAccountId(value: unknown): string | undefined {
-  const accountId = typeof value === "string" ? value.trim() : undefined;
+  const accountId = normalizeOptionalString(value);
   return accountId && accountId !== "*" ? accountId : undefined;
 }
 
@@ -264,11 +266,7 @@ export async function detectLegacyStateMigrations(params: {
     migrationAgentId,
   );
   const targetAgentId = migrationAgentId ?? sessionMigrationAgentId ?? LEGACY_IMPLICIT_AGENT_ID;
-  const rawMainKey = params.cfg.session?.mainKey;
-  const targetMainKey =
-    typeof rawMainKey === "string" && rawMainKey.trim().length > 0
-      ? rawMainKey.trim()
-      : DEFAULT_MAIN_KEY;
+  const targetMainKey = normalizeOptionalString(params.cfg.session?.mainKey) ?? DEFAULT_MAIN_KEY;
   const targetScope = params.cfg.session?.scope;
 
   const sessionsLegacyDir = path.join(stateDir, "sessions");
@@ -512,10 +510,7 @@ export async function detectLegacyStateMigrations(params: {
       }
       const configuredAccountIds = Object.fromEntries(
         configuredChannels.map(([channelId, value]) => {
-          const channelConfig =
-            value && typeof value === "object" && !Array.isArray(value)
-              ? (value as { accounts?: unknown; defaultAccount?: unknown })
-              : undefined;
+          const channelConfig = asOptionalRecord(value);
           const plugin = pluginPlanningEnabled
             ? getChannelPlugin(channelId as ChannelId)
             : undefined;
@@ -556,12 +551,9 @@ export async function detectLegacyStateMigrations(params: {
             if (concreteBoundAccountId) {
               return [[channelId, concreteBoundAccountId]];
             }
-            const defaultAccount =
-              value && typeof value === "object" && !Array.isArray(value)
-                ? (value as { defaultAccount?: unknown }).defaultAccount
-                : undefined;
-            if (typeof defaultAccount === "string" && defaultAccount.trim()) {
-              return [[channelId, defaultAccount.trim()]];
+            const defaultAccount = normalizeOptionalString(asOptionalRecord(value)?.defaultAccount);
+            if (defaultAccount) {
+              return [[channelId, defaultAccount]];
             }
             const plugin = pluginPlanningEnabled
               ? getChannelPlugin(channelId as ChannelId)
@@ -1017,10 +1009,7 @@ function listMigrationEndpointsOutsideRoot(
       }
       const resolvedPath = path.resolve(endpoint.path);
       const identityPath = resolveIdentityPathViaExistingAncestorSync(resolvedPath);
-      return (
-        (resolvedPath !== resolvedRoot && !isPathInside(resolvedRoot, resolvedPath)) ||
-        (identityPath !== identityRoot && !isPathInside(identityRoot, identityPath))
-      );
+      return !isPathInside(resolvedRoot, resolvedPath) || !isPathInside(identityRoot, identityPath);
     }),
   );
 }
@@ -1732,9 +1721,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     ? resolveOAuthDir({ ...callerEnv, OPENCLAW_OAUTH_DIR: rawOAuthDir }, requestedSnapshot.stateDir)
     : undefined;
   const oauthDirOutsideSnapshot =
-    callerOAuthDir !== undefined &&
-    path.resolve(callerOAuthDir) !== requestedSnapshot.stateDir &&
-    !isPathInside(requestedSnapshot.stateDir, callerOAuthDir);
+    callerOAuthDir !== undefined && !isPathInside(requestedSnapshot.stateDir, callerOAuthDir);
   const pendingStateDirMigration = resolvePendingLegacyStateDirMigrationPaths({
     env: callerEnv,
     homedir: () => requestedSnapshot.homeDir,

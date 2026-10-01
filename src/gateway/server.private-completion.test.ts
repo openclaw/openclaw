@@ -43,6 +43,7 @@ import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { holdMetadataThroughSubagentStop } from "./server.private-completion.metadata-overlap.test-support.js";
+import { registerSessionsSendPrivateCompletionTests } from "./server.private-completion.sessions-send.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import {
@@ -137,12 +138,25 @@ describe("private subagent completion processing receipts", () => {
   function recorder(input: unknown) {
     const command = input as AgentCommandOpts;
     expect(command.deliver).toBe(false);
+    expect(command.privateCompletion).toBe(true);
     expect(command.sessionId).toBe(sessionId);
     return expectDefined(
       command.userTurnTranscriptRecorder,
       "Expected real private input recorder",
     );
   }
+
+  registerSessionsSendPrivateCompletionTests(() => ({
+    context: kernel.gatewayRequestContext,
+    sequence,
+    sessionKey,
+    sessionId,
+    completions,
+    pending,
+    transcript,
+    recorder,
+    agentCommandMock,
+  }));
 
   it("binds a settle handoff to the source accepted by pending-input replay", async () => {
     const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;

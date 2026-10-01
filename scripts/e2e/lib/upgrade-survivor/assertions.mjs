@@ -502,6 +502,20 @@ function assertConfigSurvived() {
     }
   }
 
+  if (coverage && acceptsIntent(coverage, "silent-reply-internal-retirement")) {
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assertStrict.deepEqual(
+      config.agents?.defaults?.silentReply,
+      baseline ? { group: "allow", internal: "allow" } : { group: "allow" },
+      "default silent-reply policy was not preserved or migrated",
+    );
+    assertStrict.deepEqual(
+      config.surfaces?.discord?.silentReply,
+      baseline ? { group: "disallow", internal: "disallow" } : { group: "disallow" },
+      "Discord silent-reply policy was not preserved or migrated",
+    );
+  }
+
   if (acceptsIntent(coverage, "agents")) {
     const legacyAgents = config.agents?.list ?? [];
     const mainAgent =

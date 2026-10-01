@@ -1,6 +1,7 @@
 // Verifies outbound channel resolution fast paths, active-registry reads,
 // bootstrap fallback, and runtime facade projection.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,

@@ -103,6 +103,8 @@ export function registerSessionsSendRequesterRetirementTests({
         }
         if (request.method === "agent") {
           return {
+            status: "ok",
+            inputProcessingCompleted: true,
             result: {
               payloads: [{ text: "Retired requester's child result delivered" }],
               deliveryStatus: { status: "sent", resultCount: 1 },
@@ -359,6 +361,8 @@ export function registerSessionsSendRequesterRetirementTests({
       }
       if (request.method === "agent" && sessionKey === requesterSessionKey) {
         return {
+          status: "ok",
+          inputProcessingCompleted: true,
           result: {
             payloads: [{ text: "Both watched results reached the requester" }],
             deliveryStatus: { status: "sent", resultCount: 1 },

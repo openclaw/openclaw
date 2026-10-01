@@ -212,8 +212,9 @@ const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "silentReply"],
     message:
-      'agents.defaults.silentReply.direct was removed; direct chats never receive NO_REPLY prompt guidance. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => Object.hasOwn(getRecord(value) ?? {}, "direct"),
+      'agents.defaults.silentReply.direct and agents.defaults.silentReply.internal were removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove them.',
+    match: (value) =>
+      hasOwnRecordProperty(value, "direct") || hasOwnRecordProperty(value, "internal"),
   },
   {
     path: ["surfaces"],
@@ -224,8 +225,8 @@ const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
   {
     path: ["surfaces"],
     message:
-      'surfaces.*.silentReply.direct was removed; direct chats never receive NO_REPLY prompt guidance. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasSurfaceSilentReplyDirect(value),
+      'surfaces.*.silentReply.direct and surfaces.*.silentReply.internal were removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove them.',
+    match: (value) => hasSurfaceLegacySilentReplyPolicy(value),
   },
 ];
 
@@ -460,50 +461,44 @@ function hasSurfaceSilentReplyRewrite(value: unknown): boolean {
   );
 }
 
-function hasSurfaceSilentReplyDirect(value: unknown): boolean {
+function hasSurfaceLegacySilentReplyPolicy(value: unknown): boolean {
   const surfaces = getRecord(value);
   if (!surfaces) {
     return false;
   }
-  return Object.values(surfaces).some((surface) =>
-    Object.hasOwn(getRecord(getRecord(surface)?.silentReply) ?? {}, "direct"),
+  return Object.entries(surfaces).some(
+    ([surfaceId, surface]) =>
+      !isBlockedObjectKey(surfaceId) &&
+      ["direct", "internal"].some((key) =>
+        hasOwnRecordProperty(getRecord(surface)?.silentReply, key),
+      ),
   );
 }
 
 function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: string[]): void {
-  const defaults = getRecord(getRecord(raw.agents)?.defaults);
-  const defaultSilentReply = getRecord(defaults?.silentReply);
-  if (defaultSilentReply && Object.hasOwn(defaultSilentReply, "direct")) {
-    delete defaultSilentReply.direct;
-    changes.push("Removed agents.defaults.silentReply.direct; direct chats never use NO_REPLY.");
+  const scopes: Array<[string, unknown]> = [["agents.defaults", getRecord(raw.agents)?.defaults]];
+  for (const [surfaceId, surface] of Object.entries(getRecord(raw.surfaces) ?? {})) {
+    if (!isBlockedObjectKey(surfaceId)) {
+      scopes.push([`surfaces.${surfaceId}`, surface]);
+    }
   }
-  if (defaults && hasOwnRecordProperty(defaults, "silentReplyRewrite")) {
-    delete defaults.silentReplyRewrite;
-    changes.push("Removed agents.defaults.silentReplyRewrite.");
-  }
-
-  const surfaces = getRecord(raw.surfaces);
-  if (!surfaces) {
-    return;
-  }
-  for (const [surfaceId, surfaceValue] of Object.entries(surfaces)) {
-    if (isBlockedObjectKey(surfaceId)) {
+  for (const [path, value] of scopes) {
+    const container = getRecord(value);
+    if (!container) {
       continue;
     }
-    const surface = getRecord(surfaceValue);
-    if (!surface) {
-      continue;
+    const silentReply = getRecord(container.silentReply);
+    for (const conversationType of ["direct", "internal"]) {
+      if (silentReply && Object.hasOwn(silentReply, conversationType)) {
+        delete silentReply[conversationType];
+        changes.push(
+          `Removed ${path}.silentReply.${conversationType}; ${conversationType} sessions never use NO_REPLY.`,
+        );
+      }
     }
-    const silentReply = getRecord(surface.silentReply);
-    if (silentReply && Object.hasOwn(silentReply, "direct")) {
-      delete silentReply.direct;
-      changes.push(
-        `Removed surfaces.${surfaceId}.silentReply.direct; direct chats never use NO_REPLY.`,
-      );
-    }
-    if (hasOwnRecordProperty(surface, "silentReplyRewrite")) {
-      delete surface.silentReplyRewrite;
-      changes.push(`Removed surfaces.${surfaceId}.silentReplyRewrite.`);
+    if (Object.hasOwn(container, "silentReplyRewrite")) {
+      delete container.silentReplyRewrite;
+      changes.push(`Removed ${path}.silentReplyRewrite.`);
     }
   }
 }
@@ -894,7 +889,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
   }),
   defineLegacyConfigMigration({
     id: "silentReplyRewrite-removed",
-    describe: "Remove legacy silent reply rewrite and direct-chat silent reply config",
+    describe: "Remove legacy silent reply rewrite, direct-chat, and internal silent reply config",
     legacyRules: SILENT_REPLY_LEGACY_RULES,
     apply: removeLegacySilentReplyConfig,
   }),
