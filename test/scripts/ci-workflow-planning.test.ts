@@ -11090,6 +11090,7 @@ describe("ci workflow guards", () => {
 
   it.each([
     { eventName: "pull_request", sameRevision: true, result: "success", exitCode: 0 },
+    { eventName: "schedule", sameRevision: true, result: "failure", exitCode: 1 },
     { eventName: "pull_request", sameRevision: true, result: "skipped", exitCode: 1 },
     { eventName: "workflow_dispatch", sameRevision: false, result: "skipped", exitCode: 0 },
   ] as const)(

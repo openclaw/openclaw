@@ -1686,6 +1686,9 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
+    outputs:
+      published_driver_artifact_id: ${{ steps.published_driver_package_upload.outputs.artifact-id }}
+      published_driver_sha256: ${{ steps.published_driver_package.outputs.sha256 }}
     # The measured hosted tail reached 898s before preflight and gate overhead.
     runs-on: &shared_16vcpu_linux_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     # Hosted rows (github backend, hybrid retries, full-release dispatches, fork PRs) run slower.
@@ -1746,6 +1749,26 @@ jobs:
             # Their own build remains the available asset validation surface.
             echo "Selected release candidate predates plugins:assets:check; skipping unavailable check."
           fi
+
+      - name: Package published-driver candidate
+        id: published_driver_package
+        if: needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha
+        run: |
+          node scripts/package-openclaw-for-docker.mjs --skip-build \
+            --allow-unreleased-changelog --output-dir .artifacts/published-driver-package \
+            --output-name openclaw-candidate.tgz
+          echo "sha256=$(sha256sum .artifacts/published-driver-package/openclaw-candidate.tgz | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload published-driver candidate
+        id: published_driver_package_upload
+        if: needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: published-driver-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: .artifacts/published-driver-package/openclaw-candidate.tgz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Smoke test CLI launcher help
         run: node openclaw.mjs --help
@@ -6016,9 +6039,12 @@ jobs:
   published-driver-update:
     permissions:
       contents: read
-    needs: [preflight]
+    needs: [preflight, build-artifacts]
     if: needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha
     uses: ./.github/workflows/ci-published-driver-update.yml
+    with:
+      candidate_artifact_id: ${{ needs.build-artifacts.outputs.published_driver_artifact_id }}
+      candidate_sha256: ${{ needs.build-artifacts.outputs.published_driver_sha256 }}
 
   docker-seed-e2e:
     permissions:
