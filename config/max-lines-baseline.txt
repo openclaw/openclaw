@@ -362,7 +362,6 @@ src/cli/command-secret-gateway.ts
 src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts
-src/cli/devices-cli.test.ts
 src/cli/exec-approvals-cli.ts
 src/cli/gateway-cli/register.ts
 src/cli/gateway-cli/run-loop.test.ts
