@@ -170,7 +170,7 @@ function selectReferenceRows(
     candidateSessionIds.every((sessionId) => isNarrowableSessionId(sessionId));
   return db
     .selectFrom("session_nodes")
-    .select([sessionEntryMetadataJson, "current_session_id", "session_key"])
+    .select(["entry_json", "current_session_id", "session_key"])
     .$if(excludedKeys.length > 0, (builder) =>
       builder.where("session_key", "not in", sqliteStringSet(excludedKeys)),
     )

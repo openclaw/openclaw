@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const calls = vi.hoisted(() => [] as string[]);
@@ -34,13 +35,21 @@ vi.mock("./session-history-eviction.js", () => ({
 import { runSessionsCleanup } from "./cleanup-service.js";
 
 describe("sessions cleanup ordering", () => {
-  afterEach(() => {
+  let tempDir: string | undefined;
+
+  afterEach(async () => {
     calls.length = 0;
     sweepTombstones.mockClear();
+    // Drain the agent database owners before the temp-dir tracker (registered
+    // earlier, so it runs later) removes the state directory under them.
+    if (tempDir) {
+      await cleanupSessionStateForTest({ stateDir: tempDir });
+      tempDir = undefined;
+    }
   });
 
   it("sweeps retained cron placeholders before disk-budget enforcement", async () => {
-    const tempDir = tempDirs.make("openclaw-cleanup-order-");
+    tempDir = tempDirs.make("openclaw-cleanup-order-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     process.env.OPENCLAW_STATE_DIR = tempDir;
     try {

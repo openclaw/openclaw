@@ -12,6 +12,7 @@ import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admi
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { sweepTombstonedCronRunRemnantsForStore } from "./cleanup-tombstones.js";
@@ -352,7 +353,10 @@ describe("sweepTombstonedCronRunRemnants", () => {
       { type: "session", id: sessionId, content: "cron run transcript" },
     ]);
     const database = openDatabase();
-    deleteSessionEntryRows(database, key);
+    runOpenClawAgentWriteTransaction((writer) => deleteSessionEntryRows(writer, key), {
+      agentId: "main",
+      path: database.path,
+    });
     const updatedAt = NOW_MS - (params.ageMs ?? 20 * DAY_MS);
     const db = getSessionKysely(database.db);
     executeSqliteQuerySync(
