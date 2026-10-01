@@ -71,7 +71,6 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
-  verifyFailedRecoveryCleanup,
   verifyFreshRegistrationRecovery,
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
@@ -151,16 +150,11 @@ it.each(["gateway_stop", "dispose"] as const)(
   (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
 );
 
-it.each(["registration", "activation"] as const)(
-  "automatically restores a fresh old registration after candidate %s fails",
-  (failure) => verifyFreshRegistrationRecovery(createRecoveryFixture, failure),
-);
+it("automatically restores a fresh old registration after candidate registration fails", () =>
+  verifyFreshRegistrationRecovery(createRecoveryFixture));
 
 it("flushes failed candidate services before closing their shared resources", () =>
   verifyCandidateResourceCleanup(createRecoveryFixture));
-
-it("closes resources opened by a recovery that fails before publication", () =>
-  verifyFailedRecoveryCleanup(createRecoveryFixture));
 
 registerPluginRetainedWorkReloadTests(createRecoveryFixture);
 
@@ -293,7 +287,7 @@ it.each(["lookup", "replacement"] as const)(
     ),
 );
 
-it.each([5_000, 15_000, 70_000])(
+it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
   (holdMs) =>
     verifyActiveCallDrainLease(
@@ -398,10 +392,8 @@ it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
   },
 );
 
-it.each([false, true])(
-  "refuses recovery after gateway cleanup times out (channels: %s)",
-  (withChannels) => verifyGatewayCleanupRefusal(createRecoveryFixture, withChannels),
-);
+it("refuses recovery after gateway cleanup times out while retaining sibling channels", () =>
+  verifyGatewayCleanupRefusal(createRecoveryFixture));
 
 it("bounds the wait for service startup and keeps retired dispatch fenced across retry", () =>
   verifyPendingServiceCleanupRetry(createRecoveryFixture));

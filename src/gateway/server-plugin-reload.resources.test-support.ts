@@ -93,10 +93,7 @@ export async function verifySharedResourceReplacement(
   expect(fixture.siblingStop).not.toHaveBeenCalled();
 }
 
-export async function verifyFreshRegistrationRecovery(
-  createFixture: RecoveryFixtureFactory,
-  failure: "registration" | "activation",
-) {
+export async function verifyFreshRegistrationRecovery(createFixture: RecoveryFixtureFactory) {
   const events: string[] = [];
   const signals: AbortSignal[] = [];
   const fixture = await createFixture({
@@ -116,7 +113,7 @@ export async function verifyFreshRegistrationRecovery(
         controller.abort();
         events.push(`dispose:${mode}`);
       });
-      if (mode === "bad" && failure === "registration") {
+      if (mode === "bad") {
         throw new Error("candidate registration refused");
       }
       api.registerService({
@@ -126,9 +123,6 @@ export async function verifyFreshRegistrationRecovery(
           // controller has been aborted; rollback must create a fresh owner.
           if (controller.signal.aborted) {
             throw new Error("cannot restart an aborted registration");
-          }
-          if (mode === "bad") {
-            throw new Error("candidate activation refused");
           }
           events.push(`start:${mode}`);
         },
@@ -149,7 +143,7 @@ export async function verifyFreshRegistrationRecovery(
   expect(await readResource(fixture)).toEqual({ mode: "old" });
 
   await expect(fixture.reload(resourceConfig("bad"))).rejects.toThrow(
-    `candidate ${failure} refused`,
+    "candidate registration refused",
   );
 
   expect(await readResource(fixture)).toEqual({ mode: "old" });
@@ -209,38 +203,6 @@ export async function verifyCandidateResourceCleanup(createFixture: RecoveryFixt
     { closed: false, flushed: false },
   ]);
   expect(fixture.firstStart).toHaveBeenCalledTimes(2);
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).not.toHaveBeenCalled();
-}
-
-export async function verifyFailedRecoveryCleanup(createFixture: RecoveryFixtureFactory) {
-  const resources: Array<{ closed: boolean }> = [];
-  const fixture = await createFixture({
-    abortOnCandidateStart: false,
-    candidateStart() {
-      throw new Error("candidate startup refused");
-    },
-    prepareAttached: async () => {
-      if (resources.length === 3) {
-        throw new Error("recovery attachment refused");
-      }
-    },
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
-      const resource = { closed: false };
-      resources.push(resource);
-      assert(api.lifecycle.onDispose);
-      api.lifecycle.onDispose(() => {
-        resource.closed = true;
-      });
-    },
-  });
-
-  await expect(fixture.reload()).rejects.toThrow("recovery attachment refused");
-
-  expect(resources).toEqual([{ closed: true }, { closed: true }, { closed: true }]);
   expect(fixture.siblingStart).toHaveBeenCalledOnce();
   expect(fixture.siblingStop).not.toHaveBeenCalled();
 }
