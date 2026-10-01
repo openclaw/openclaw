@@ -190,6 +190,7 @@ export async function persistCliAssistantTranscript(params: {
         : {}),
       storePath: runParams.storePath,
       idempotencyKey,
+      runId: runParams.runId,
       config: runParams.config,
       beforeMessageWrite: (write) =>
         runAgentHarnessBeforeMessageWriteHook({

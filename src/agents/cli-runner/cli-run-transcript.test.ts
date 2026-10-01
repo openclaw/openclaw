@@ -6,6 +6,7 @@ import type { AssistantMessage } from "../../llm/types.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
   onInternalSessionTranscriptUpdate,
+  readSessionTranscriptRunId,
   type InternalSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -60,6 +61,7 @@ it("prepares the exact CLI assistant before its first transcript publication", a
       idempotencyKey: result.idempotencyKey,
       openclawDelivery: { mediaUrls: ["./artifact.json"] },
     });
+    expect(readSessionTranscriptRunId(updates[0]?.message)).toBe("cli-media-run");
   } finally {
     unsubscribe();
   }
