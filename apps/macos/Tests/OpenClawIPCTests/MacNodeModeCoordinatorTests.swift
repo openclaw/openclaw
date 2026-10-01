@@ -204,6 +204,7 @@ struct MacNodeModeCoordinatorDeviceAuthTests {
     }
 }
 
+@Suite(.testWaitLimit)
 struct MacNodeModeCoordinatorTests {
     private func nodeDeviceAuthBinding(
         deviceAuthGatewayID: String?) throws -> (allowStoredDeviceAuth: Bool, gatewayID: String?)
@@ -700,7 +701,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ])
             task.emitReceiveSuccess(.data(invokeEvent))
-            try await self.waitUntil("computer invoke start") {
+            try await TestWait.state("computer invoke start") {
                 await lifecycle.state().started
             }
 
@@ -731,7 +732,7 @@ struct MacNodeModeCoordinatorTests {
             #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
                 generationsBeforeRefresh.routeAuthority,
                 isPaused: true))
-            try await self.waitUntil("route invalidation start") {
+            try await TestWait.state("route invalidation start") {
                 await lifecycle.state().invalidated
             }
 
@@ -751,7 +752,7 @@ struct MacNodeModeCoordinatorTests {
                     onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
             }
             successor = successorTask
-            try await self.waitUntil("successor captured first invalidation") {
+            try await TestWait.state("successor captured first invalidation") {
                 await drainSnapshot.hasCaptured()
             }
             coordinator.enqueueRouteInvalidationForTesting()

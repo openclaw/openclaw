@@ -1103,8 +1103,8 @@ describeWindows("native tasklist CSV contract", () => {
 });
 
 describe.skipIf(process.platform !== "linux")("native ss process metadata contract", () => {
-  it("preserves a spaced and colon-bearing native TCP client name", async ({ skip }) => {
-    await withNativeSsConnection(skip, async ({ port, clientPort, pid, stdout }) => {
+  it("preserves a spaced and colon-bearing native TCP client name", async (context) => {
+    await withNativeSsConnection(context, async ({ port, clientPort, pid, stdout }) => {
       mockUnixCommands({ lsof: commandOutput("", 2), ss: commandOutput(stdout) });
       const result = await inspectPortConnections(port);
       expect(result.connections).toContainEqual({

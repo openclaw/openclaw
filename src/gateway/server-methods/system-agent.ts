@@ -31,7 +31,6 @@ import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js
 import { appendTranscriptReset, readTranscriptTail } from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
-import { listVisiblePendingApprovalRequests } from "./approval-shared.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -124,20 +123,6 @@ async function evictOldestSession(
 }
 
 export const systemAgentHandlers: GatewayRequestHandlers = {
-  "openclaw.approval.list": async ({ respond, client, context }) => {
-    const manager = context.systemAgentApprovalManager;
-    respond(
-      true,
-      manager
-        ? await listVisiblePendingApprovalRequests({
-            manager,
-            client,
-            ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
-          })
-        : [],
-      undefined,
-    );
-  },
   "openclaw.chat.history": defineValidatedGatewayHandler(
     "openclaw.chat.history",
     validateSystemAgentChatHistoryParams,

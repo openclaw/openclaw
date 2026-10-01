@@ -847,13 +847,28 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       expect(result.output).toMatch(diagnosis);
       expect(result.output).not.toContain(nodeBootstrap.token);
       expect(result.output).not.toContain(setupCode);
-      expect(authorizations).toEqual(
-        failure === "tls-reset"
-          ? []
-          : Array(failure === "http-reset" || failure === "truncated" ? 3 : 1).fill(
-              `Bearer ${nodeBootstrap.token}`,
-            ),
+      const authorization = `Bearer ${nodeBootstrap.token}`;
+      expect(new Set(authorizations)).toEqual(
+        failure === "tls-reset" ? new Set() : new Set([authorization]),
       );
+      if (failure === "truncated") {
+        expect(authorizations.length).toBeGreaterThanOrEqual(3);
+      } else {
+        expect(authorizations).toHaveLength(
+          failure === "http-reset" ? 3 : failure === "tls-reset" ? 0 : 1,
+        );
+      }
+      if (failure === "http-reset" || failure === "truncated") {
+        const terminalNoProgressFailure =
+          /\(download attempt \d+; 3 consecutive no-progress failures\)/;
+        const retryOnlyOutput = result.output
+          .split("\n")
+          .filter((line) => /\([0-2]\/3 consecutive no-progress failures\)/.test(line))
+          .join("\n");
+        expect(retryOnlyOutput).not.toBe("");
+        expect(retryOnlyOutput).not.toMatch(terminalNoProgressFailure);
+        expect(result.output).toMatch(terminalNoProgressFailure);
+      }
       expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
       expect(fs.readdirSync(stateDir)).toEqual([]);
       expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([]);

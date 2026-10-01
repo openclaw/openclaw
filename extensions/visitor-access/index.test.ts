@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -55,11 +56,18 @@ function requestUrl(input: Parameters<typeof fetch>[0]): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
-function createPolicyFetch(initialEmails: string[] = []) {
-  let emails = [...initialEmails];
+function createPolicyFetch(initialTargets: Array<string | number> = []) {
+  let targets = [...initialTargets];
   const controls = { failWrites: false, loseWriteResponse: false };
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = requestUrl(input);
+    if (
+      url.origin === "https://api.github.com" &&
+      url.pathname === "/users/invitation-login" &&
+      (init?.method ?? "GET") === "GET"
+    ) {
+      return Response.json({ id: 42, login: "invitation-login", email: null });
+    }
     if (!url.href.startsWith(policiesUrl)) {
       throw new Error(`Unexpected test request: ${url}`);
     }
@@ -67,32 +75,63 @@ function createPolicyFetch(initialEmails: string[] = []) {
       id: "visitor-policy",
       name: "Visitors (openclaw-managed)",
       decision: "allow",
-      include: emails.map((email) => ({ email: { email } })),
+      include: targets.map((target) =>
+        typeof target === "string"
+          ? { email: { email: target } }
+          : {
+              oidc: {
+                identity_provider_id: "test-oidc",
+                claim_name: "github_id",
+                claim_value: String(target),
+              },
+            },
+      ),
     };
     if (init?.method === "GET") {
-      const result = url.search ? (emails.length ? [policy] : []) : policy;
+      const result = url.search ? (targets.length ? [policy] : []) : policy;
       return Response.json({ success: true, result });
     }
     if (controls.failWrites) {
       return new Response("Unavailable", { status: 503 });
     }
     if (init?.method === "DELETE") {
-      emails = [];
+      targets = [];
     } else {
       if (typeof init?.body !== "string") {
         throw new Error("Expected a JSON policy body");
       }
-      const body = JSON.parse(init.body) as {
-        include: Array<{ email: { email: string } }>;
-      };
-      emails = body.include.map((rule) => rule.email.email);
+      const body: unknown = JSON.parse(init.body);
+      const schema = Type.Object({
+        include: Type.Array(
+          Type.Union([
+            Type.Object({ email: Type.Object({ email: Type.String() }) }),
+            Type.Object({
+              oidc: Type.Object({
+                identity_provider_id: Type.Literal("test-oidc"),
+                claim_name: Type.Literal("github_id"),
+                claim_value: Type.Literal("42"),
+              }),
+            }),
+          ]),
+        ),
+      });
+      if (!Value.Check(schema, body)) {
+        throw new Error("Unexpected visitor policy rules");
+      }
+      targets = body.include.map((rule) =>
+        "email" in rule ? rule.email.email : Number(rule.oidc.claim_value),
+      );
     }
     if (controls.loseWriteResponse) {
       throw new Error(`Transport failure with Authorization: Bearer ${TOKEN}`);
     }
     return Response.json({ success: true, result: {} });
   });
-  return { fetcher, emails: () => emails, controls };
+  return {
+    fetcher,
+    emails: () => targets.filter((target) => typeof target === "string"),
+    controls,
+  };
 }
 
 describe("visitor-access plugin lifecycle", () => {
@@ -124,6 +163,7 @@ describe("visitor-access plugin lifecycle", () => {
   function registerPlugin(
     contextOverrides: Partial<OpenClawPluginToolContext<2>> = {},
     config: OpenClawConfig = gatewayConfig,
+    githubProfiles: Parameters<typeof visitorProfileFixture>[1] = [],
   ) {
     const tools = new Map<string, AnyAgentTool>();
     const services: OpenClawPluginService[] = [];
@@ -160,7 +200,7 @@ describe("visitor-access plugin lifecycle", () => {
       openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests<T>("visitor-access", { ...options, env }),
     };
-    const directory = visitorProfileFixture();
+    const directory = visitorProfileFixture([], githubProfiles);
     api.runtime.gateway = directory.gateway;
     const gatewayRequest = directory.request;
     api.runtime.config = {
@@ -338,19 +378,51 @@ describe("visitor-access plugin lifecycle", () => {
     }
   });
 
-  it.each([
-    { github: undefined, selector: "email" },
-    { github: "invitation-login", selector: "email" },
-    { github: "invitation-login", selector: "github" },
-  ])(
-    "lists profile identity and revokes by $selector after invitation input $github",
-    async ({ github, selector }) => {
+  it.each(["email", "github"] as const)(
+    "lists verified profile identity for the %s target and revokes by listed profileId",
+    async (selector) => {
       const policy = createPolicyFetch();
       vi.stubGlobal("fetch", policy.fetcher);
-      const registered = registerPlugin();
+      const config = structuredClone(gatewayConfig);
+      config.gateway = {
+        ...config.gateway,
+        auth: {
+          trustedProxy: {
+            userHeader: "cf-access-authenticated-user-email",
+            cloudflareAccessOidc: {
+              issuer: "https://example.cloudflareaccess.com",
+              providerId: "test-oidc",
+              githubAccountIdClaim: "github_id",
+            },
+          },
+        },
+      };
+      const registered = registerPlugin({}, config, [
+        { accountId: 42, profileId: "linked-person" },
+      ]);
       await registered.start();
-      await registered.execute("visitor_invite", { email: "alias@example.test", github, days: 7 });
-      const grant = await registered.store.lookup("alias@example.test");
+      const invited = await registered.execute("visitor_invite", {
+        ...(selector === "email"
+          ? { email: "alias@example.test" }
+          : { github: "invitation-login" }),
+        days: 7,
+      });
+      expect(invited).not.toHaveProperty("isError", true);
+      if (selector === "github") {
+        expect(invited.details).toMatchObject({
+          githubAccountId: 42,
+          githubLogin: "invitation-login",
+        });
+      }
+      const key = selector === "email" ? "alias@example.test" : "github:42";
+      const recorded = await registered.store.lookup(key);
+      if (!recorded) {
+        throw new Error("Missing invitation grant");
+      }
+      const grant = { ...recorded, githubLogin: "invitation-login" };
+      if (selector === "email") {
+        await registered.store.register(key, grant);
+      }
 
       const pending = await registered.execute("visitor_list");
       expect(pending.details).not.toHaveProperty("grants.0.githubLogin");
@@ -363,12 +435,15 @@ describe("visitor-access plugin lifecycle", () => {
 
       await registered.execute("visitor_invite", {
         email: "unrelated@example.test",
-        github: "current-person",
         days: 7,
       });
-      const otherGrant = await registered.store.lookup("unrelated@example.test");
+      const otherRecorded = await registered.store.lookup("unrelated@example.test");
+      if (!otherRecorded) {
+        throw new Error("Missing unrelated invitation grant");
+      }
+      const otherGrant = { ...otherRecorded, githubLogin: "current-person" };
+      await registered.store.register("unrelated@example.test", otherGrant);
       let listedGrant: VisitorListDetails["grants"][number] | undefined;
-      // The directory selects the verified primary account, or null when none is selected.
       for (const login of ["verified-person", null, "current-person"]) {
         registered.setProfiles([
           {
@@ -400,9 +475,10 @@ describe("visitor-access plugin lifecycle", () => {
         if (!Value.Check(visitorListDetailsSchema, listed.details)) {
           throw new Error("Invalid visitor_list details");
         }
-        const target = listed.details.grants.find((entry) => entry.email === grant?.email);
+        const target = listed.details.grants.find((entry) => entry.grantId === grant.grantId);
         expect(target).toMatchObject({
-          email: "alias@example.test",
+          ...(selector === "email" ? { email: "alias@example.test" } : { githubAccountId: 42 }),
+          profileId: "linked-person",
           ...(login ? { githubLogin: login } : {}),
         });
         if (!login) {
@@ -415,28 +491,27 @@ describe("visitor-access plugin lifecycle", () => {
         }
         expect(Value.Check(schema, listed.details)).toBe(true);
       }
-      expect(await registered.store.lookup("alias@example.test")).toEqual(grant);
+      expect(await registered.store.lookup(key)).toEqual(grant);
       if (!listedGrant) {
         throw new Error("Missing listed grant");
       }
-      expect(listedGrant.email).toBe("alias@example.test");
-      const revoked = await registered.execute(
-        "visitor_revoke",
-        selector === "email" ? { email: listedGrant.email } : { github: listedGrant.githubLogin },
-      );
+      policy.fetcher.mockClear();
+      const revoked = await registered.execute("visitor_revoke", {
+        profileId: listedGrant.profileId,
+      });
       expect(revoked.details).toEqual({
         outcome: "revoked",
-        emails: ["alias@example.test"],
-        ...(selector === "github" ? { githubLogin: "current-person" } : {}),
+        emails: selector === "email" ? ["alias@example.test"] : [],
+        ...(selector === "github" ? { githubAccountIds: [42] } : {}),
       });
-      expect(await registered.store.lookup("alias@example.test")).toBeUndefined();
+      expect(await registered.store.lookup(key)).toBeUndefined();
       expect(await registered.store.lookup("unrelated@example.test")).toEqual(otherGrant);
       expect(policy.emails()).toEqual(["unrelated@example.test"]);
       expect(
-        policy.fetcher.mock.calls.every(
-          ([input]) => requestUrl(input).hostname === "api.cloudflare.com",
+        policy.fetcher.mock.calls.filter(
+          ([input]) => requestUrl(input).hostname === "api.github.com",
         ),
-      ).toBe(true);
+      ).toHaveLength(0);
     },
   );
 
@@ -479,6 +554,14 @@ describe("visitor-access plugin lifecycle", () => {
         { email: staff, profileId: "staff-profile", grantId: expect.any(String) },
       ],
     });
+    if (!Value.Check(visitorListDetailsSchema, listed.details)) {
+      throw new Error("Invalid visitor_list details");
+    }
+    const listedPending = listed.details.grants.find((grant) => grant.email === pending);
+    const listedPerson = listed.details.grants.find((grant) => grant.email === first);
+    if (!listedPending?.grantId || !listedPerson?.profileId) {
+      throw new Error("Missing listed revocation selectors");
+    }
     const authorities = [first, alias].map((email) =>
       registered.authorize({
         profileId: "visitor-profile",
@@ -490,13 +573,13 @@ describe("visitor-access plugin lifecycle", () => {
     await registered.execute("visitor_invite", { email: pending, days: 30 });
     expect((await registered.store.lookup(pending))?.grantId).toBe(pendingGrant?.grantId);
     await expect(
-      registered.execute("visitor_revoke", { grantId: pendingGrant?.grantId }),
+      registered.execute("visitor_revoke", { grantId: listedPending.grantId }),
     ).resolves.toMatchObject({
       details: { outcome: "revoked", emails: [pending] },
     });
     expect(registered.policy.emails()).toEqual([first, alias, staff, "manual@example.test"]);
     await expect(
-      registered.execute("visitor_revoke", { profileId: "visitor-profile" }),
+      registered.execute("visitor_revoke", { profileId: listedPerson.profileId }),
     ).resolves.toMatchObject({
       details: { outcome: "revoked", emails: [alias, first] },
     });
@@ -516,7 +599,7 @@ describe("visitor-access plugin lifecycle", () => {
     const replacement = await registered.store.lookup(pending);
     expect(replacement?.grantId).not.toBe(pendingGrant?.grantId);
     await expect(
-      registered.execute("visitor_revoke", { grantId: pendingGrant?.grantId }),
+      registered.execute("visitor_revoke", { grantId: listedPending.grantId }),
     ).resolves.toMatchObject({
       details: { outcome: "not_found", emails: [] },
     });
@@ -697,11 +780,11 @@ describe("visitor-access plugin lifecycle", () => {
   );
 
   it("gates registered visitor access across restart, expiry, and failed provider revocation", async () => {
-    const grants: VisitorGrant[] = [
+    const grants = [
       { email: "expired@example.test", createdAt: START_MS - DAY_MS, expiresAt: START_MS + 1_000 },
       { email: "deadline@example.test", createdAt: START_MS - DAY_MS, expiresAt: START_MS + 2_000 },
       { email: "revoked@example.test", createdAt: START_MS - DAY_MS, expiresAt: START_MS + DAY_MS },
-    ];
+    ] satisfies VisitorGrant[];
     const policy = createPolicyFetch(grants.map((grant) => grant.email));
     vi.stubGlobal("fetch", policy.fetcher);
     const first = registerPlugin();

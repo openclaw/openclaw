@@ -55,21 +55,33 @@ extension GatewayLaunchAgentManager {
         }
     }
 
+    struct ServiceFileCapture: Equatable, Sendable {
+        let resolvedPath: String
+        let contents: Data
+
+        var digestData: Data {
+            Data((self.resolvedPath + "\0").utf8) + self.contents
+        }
+    }
+
+    static func captureServiceFile(at url: URL) throws -> ServiceFileCapture? {
+        let contents: Data
+        do { contents = try Data(contentsOf: url) } catch let error as NSError where
+            error.domain == NSCocoaErrorDomain &&
+            (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError)
+        {
+            return nil
+        }
+        return ServiceFileCapture(resolvedPath: url.resolvingSymlinksInPath().path, contents: contents)
+    }
+
     static func serviceDefinitionDigest(
         plist: URL, environment: URL, wrapper: URL) throws -> ServiceDefinitionDigest
     {
-        func data(_ url: URL) throws -> Data? {
-            let contents: Data
-            do { contents = try Data(contentsOf: url) } catch let error as NSError where
-                error.domain == NSCocoaErrorDomain &&
-                (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError)
-            {
-                return nil
-            }
-            return Data((url.resolvingSymlinksInPath().path + "\0").utf8) + contents
-        }
-        return try ServiceDefinitionDigest(
-            plist: data(plist), environment: data(environment), wrapper: data(wrapper))
+        try ServiceDefinitionDigest(
+            plist: self.captureServiceFile(at: plist)?.digestData,
+            environment: self.captureServiceFile(at: environment)?.digestData,
+            wrapper: self.captureServiceFile(at: wrapper)?.digestData)
     }
 
     static func gatewayServiceAuthority(

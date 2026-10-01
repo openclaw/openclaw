@@ -173,6 +173,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   voicewake: () => import("./voicewake.js").then((module) => module.voicewakeHandlers),
   web: () => import("./web.js").then((module) => module.webHandlers),
   "system-agent": () => import("./system-agent.js").then((module) => module.systemAgentHandlers),
+  "system-agent-approvals": () =>
+    import("./system-agent-approvals.js").then((module) => module.systemAgentApprovalHandlers),
   "system-changes": () =>
     import("./system-changes.js").then((module) => module.systemChangesHandlers),
   wizard: () => import("./wizard.js").then((module) => module.wizardHandlers),

@@ -9,6 +9,7 @@ import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -30,6 +31,7 @@ import type { TelegramTransport } from "./fetch.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
   photoUpdate,
+  forwardedPhotoUpdate,
   forwardedTextUpdate,
   textUpdate,
 } from "./telegram-ingress-coalescing.test-support.js";
@@ -41,6 +43,14 @@ const downstreamTurns = vi.hoisted(() =>
   })),
 );
 const runtimeErrors: unknown[] = [];
+const saveRemoteMedia = vi.hoisted(() =>
+  vi.fn(async (params: { filePathHint?: string }) => ({
+    id: path.basename(params.filePathHint ?? "photo"),
+    path: `/tmp/${path.basename(params.filePathHint ?? "photo.jpg")}`,
+    size: 4,
+    contentType: "image/jpeg",
+  })),
+);
 
 vi.mock("./fetch.js", () => ({
   resolveTelegramApiBase: (apiRoot?: string) => apiRoot ?? "https://api.telegram.org",
@@ -67,12 +77,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
     ...actual,
-    saveRemoteMedia: async (params: { filePathHint?: string }) => ({
-      id: path.basename(params.filePathHint ?? "photo"),
-      path: `/tmp/${path.basename(params.filePathHint ?? "photo.jpg")}`,
-      size: 4,
-      contentType: "image/jpeg",
-    }),
+    saveRemoteMedia,
   };
 });
 
@@ -153,6 +158,22 @@ function createTelegramDeps(stateDir: string): TelegramBotDeps {
   } as TelegramBotDeps;
 }
 
+/** Holds the production forward quiet window; a frozen clock keeps its 80 ms delay. */
+function holdForwardWindow() {
+  vi.useFakeTimers({ toFake: ["performance"] });
+  const timers = holdTelegramMediaTimeouts(80);
+  return {
+    flush: () => {
+      const flush = resolveFlushTimerForDelay(timers, 80);
+      if (!flush) {
+        throw new Error("Expected the forwarded burst's flush timer");
+      }
+      flush();
+    },
+    restore: () => timers.mockRestore(),
+  };
+}
+
 /** Both members must land in one turn; a second turn is the split this file guards. */
 async function awaitSingleDownstreamTurn(): Promise<MsgContext & Record<string, unknown>> {
   await vi.waitFor(
@@ -208,6 +229,7 @@ describe("Telegram durable ingress coalescing", () => {
     downstreamTurns
       .mockReset()
       .mockResolvedValue({ queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } });
+    saveRemoteMedia.mockReset();
     resetInboundDedupe();
     resetPluginStateStoreForTests({ closeDatabase: false });
     resetTelegramAccountThrottlersForTest();
@@ -487,15 +509,22 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("coalesces a forwarded burst admitted a few milliseconds apart", async () => {
+  it("coalesces forwarded members admitted across separate drain passes", async () => {
     const { monitor, telegramTransport } = await createMonitor();
+    const forwardWindow = holdForwardWindow();
     monitor.start();
 
-    await monitor.admit(forwardedTextUpdate({ updateId: 301, messageId: 1, text: "First note" }));
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-    await monitor.admit(forwardedTextUpdate({ updateId: 302, messageId: 2, text: "Second note" }));
+    try {
+      await monitor.admit(forwardedTextUpdate({ updateId: 301, messageId: 1, text: "First note" }));
+      await monitor.waitForIdle();
+      await monitor.admit(
+        forwardedTextUpdate({ updateId: 302, messageId: 2, text: "Second note" }),
+      );
+      await monitor.waitForIdle();
+      forwardWindow.flush();
+    } finally {
+      forwardWindow.restore();
+    }
 
     const turn = await awaitSingleDownstreamTurn();
     expect(turn.Body).toContain("First note");
@@ -571,8 +600,15 @@ describe("Telegram durable ingress coalescing", () => {
       update: forwardedTextUpdate({ updateId: 402, messageId: 2, text: "Second note" }),
     });
     const { monitor, telegramTransport } = await createMonitor();
+    const forwardWindow = holdForwardWindow();
 
-    monitor.start();
+    try {
+      monitor.start();
+      await monitor.waitForIdle();
+      forwardWindow.flush();
+    } finally {
+      forwardWindow.restore();
+    }
     const turn = await awaitSingleDownstreamTurn();
     expect(turn.Body).toContain("First note");
     expect(turn.Body).toContain("Second note");
@@ -581,6 +617,59 @@ describe("Telegram durable ingress coalescing", () => {
 
     await monitor.stop();
     await telegramTransport.close();
+  });
+
+  it("keeps a forwarded burst pending when its deferred attachment download fails transiently", async () => {
+    const downloadError = new MediaFetchError("http_error", "Telegram file download HTTP 502", {
+      status: 502,
+    });
+    saveRemoteMedia.mockRejectedValueOnce(downloadError);
+    await writeTelegramSpooledUpdate({
+      stateDir,
+      update: forwardedTextUpdate({ updateId: 601, messageId: 1, text: "Forwarded context" }),
+    });
+    await writeTelegramSpooledUpdate({
+      stateDir,
+      update: forwardedPhotoUpdate({ updateId: 602, messageId: 2 }),
+    });
+    const { monitor } = await createMonitor({ onRuntimeError: vi.fn() });
+    const forwardWindow = holdForwardWindow();
+
+    try {
+      monitor.start();
+      await monitor.waitForIdle();
+      // Both members are buffered before either attachment downloads.
+      expect(saveRemoteMedia).not.toHaveBeenCalled();
+      forwardWindow.flush();
+      await monitor.waitForDeferredClaims();
+    } finally {
+      forwardWindow.restore();
+      await monitor.stop();
+    }
+
+    expect(saveRemoteMedia).toHaveBeenCalledOnce();
+    expect(downstreamTurns).not.toHaveBeenCalled();
+    const queue = openTelegramIngressQueue({ stateDir });
+    expect(await queue.listClaims()).toEqual([]);
+    expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+    expect(await queue.listPending({ limit: "all" })).toMatchObject([
+      { id: telegramQueueEventId(601), attempts: 1, lastError: downloadError.message },
+      { id: telegramQueueEventId(602), attempts: 1, lastError: downloadError.message },
+    ]);
+    // Released dispatch claims let the replay process both messages again.
+    const replayGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard();
+    for (const update of [
+      forwardedTextUpdate({ updateId: 601, messageId: 1, text: "Forwarded context" }),
+      forwardedPhotoUpdate({ updateId: 602, messageId: 2 }),
+    ]) {
+      expect(
+        await replayGuard.hasRecent({
+          accountId: "default",
+          botUserId: telegramBotInfoForTest.id,
+          msg: update.message,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("keeps a text update pending when shutdown aborts the turn before adoption", async () => {

@@ -134,7 +134,7 @@ healthy while leaving the invoking CLI unchanged. The routing and explicit
 Bun selection described above apply from the first updater containing the fix;
 a newer candidate cannot change the installed updater's first-hop behavior.
 
-Npm-sourced plugins use OpenClaw's bundled npm 11.20.0 CLI under Bun and do not require a separate Node or npm installation.
+Npm-sourced plugins use OpenClaw's bundled npm 12.1.0 CLI under Bun and do not require a separate Node or npm installation.
 
 ## SQLite worker lifecycle
 
@@ -201,7 +201,7 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 | Unreleased (main)                  | Updates owned split-root Bun Gateway installations in place, retains their runtime pins, and uses explicit Bun executables for package-manager probes and installs.                                   |
 | Unreleased (main)                  | Keeps Bun maintenance children and service runtime selection, and adds `OPENCLAW_PACKAGE_BUN_LAUNCHER` for preinstall validation of Bun-only installs and updater staging.                            |
 | Unreleased (main)                  | Headless node update checks read the npm registry in-process under Bun instead of running `npm view`. #160154                                                                                         |
-| Unreleased (main)                  | Runs the bundled npm 11.20.0 CLI under Bun for npm-sourced plugin installs, updates, and removal without a separate Node or npm installation.                                                         |
+| Unreleased (main)                  | Runs the bundled npm 12.1.0 CLI under Bun for npm-sourced plugin installs, updates, and removal without a separate Node or npm installation.                                                          |
 | Unreleased (main)                  | Implicit Gateway and managed node host reinstalls, update refresh, and Doctor's unloaded-service reinstall retain a supported recorded Bun executable without creating a runtime pin.                 |
 | Unreleased (main)                  | Tool Search code mode (`tool_search_code`) is retired; structured Tool Search needs no Node under Bun.                                                                                                |
 | Unreleased (main)                  | Starts the packaged Chrome DevTools MCP server with the current runtime, so existing-session browser profiles no longer require a Node installation under Bun.                                        |
