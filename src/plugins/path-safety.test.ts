@@ -65,12 +65,18 @@ function installWindowsPathFixture(params: {
       ? stat(value, options)
       : lstatSync(value, options)) as typeof fs.lstatSync);
   const realpathSync = fs.realpathSync;
-  vi.spyOn(fs, "realpathSync").mockImplementation(((value, options) => {
-    if (String(value) === params.root) {
-      return params.canonicalRoot ?? params.root;
-    }
-    return realpathSync(value, options);
-  }) as typeof fs.realpathSync);
+  vi.spyOn(fs, "realpathSync").mockImplementation(
+    (value: fs.PathLike, options?: fs.EncodingOption | fs.BufferEncodingOption) => {
+      const encoding = typeof options === "string" ? options : options?.encoding;
+      if (String(value) === params.root) {
+        const resolved = Buffer.from(params.canonicalRoot ?? params.root);
+        return encoding === "buffer" ? resolved : resolved.toString(encoding ?? "utf8");
+      }
+      return encoding === "buffer"
+        ? realpathSync(value, "buffer")
+        : realpathSync(value, { encoding });
+    },
+  );
   return stat;
 }
 
