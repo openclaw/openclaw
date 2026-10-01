@@ -61,13 +61,8 @@ export function attachBindingToCurrentActiveSession(params: {
   if (!entry?.sessionId || entry.archivedAt !== undefined) {
     return undefined;
   }
-  if (entry.sessionId === params.binding.sessionId) {
-    if (params.binding.detachedAt === undefined) {
-      return params.binding;
-    }
-    const { detachedAt: _detachedAt, ...attached } = params.binding;
-    params.store.set(params.sessionKey, attached);
-    return attached;
+  if (entry.sessionId === params.binding.sessionId && params.binding.detachedAt === undefined) {
+    return params.binding;
   }
   const { detachedAt: _detachedAt, ...retained } = params.binding;
   const attached = { ...retained, sessionId: entry.sessionId };

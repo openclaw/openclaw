@@ -39,7 +39,7 @@ export async function ensureCliPluginRegistryLoaded(params: {
       loggingState.forceConsoleToStderr = true;
     }
     try {
-      ensurePluginRegistryLoaded({
+      return ensurePluginRegistryLoaded({
         scope: params.scope === "sandbox-management" ? "sandbox-backends" : params.scope,
         ...(params.config ? { config: params.config } : {}),
         ...(params.activationSourceConfig

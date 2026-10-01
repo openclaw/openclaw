@@ -145,9 +145,13 @@ describe("session tab lifecycle cleanup", () => {
     },
   );
 
-  it.each(["durable", "volatile"] as const)(
-    "settles admitted %s cleanup but stops claiming tabs when its caller changes",
-    async (kind) => {
+  it.each(
+    (["durable", "volatile"] as const).flatMap((kind) =>
+      (["synchronous", "prepared"] as const).map((guard) => ({ kind, guard })),
+    ),
+  )(
+    "settles admitted $kind cleanup but stops new claims after its $guard caller changes",
+    async ({ kind, guard }) => {
       const registry = await freshRegistry(`caller-generation-${kind}`);
       const sessionKey = "agent:subagent:ended";
       for (const targetId of ["tab-a", "tab-b"]) {
@@ -177,7 +181,8 @@ describe("session tab lifecycle cleanup", () => {
       };
       const cleanup = registry.closeTrackedBrowserTabsForSessions({
         sessionKeys: [sessionKey],
-        isCurrent: () => current,
+        isCurrent: () => guard === "prepared" || current,
+        ...(guard === "prepared" ? { prepareCurrent: async () => current } : {}),
         closeTab,
         closeDurableTab,
       });
@@ -260,4 +265,48 @@ describe("session tab lifecycle cleanup", () => {
       ).toEqual([expect.objectContaining({ nativeTargetId: "NATIVE-ACTIVE" })]);
     },
   );
+
+  it("converges after close succeeds but the first durable delete fails", async () => {
+    let failDelete = true;
+    await installRuntime((options) => {
+      const store = createPluginStateKeyedStoreForTests("browser", options);
+      return {
+        ...store,
+        withCurrent: (authority) => {
+          const action = store.withCurrent(authority);
+          return {
+            ...action,
+            compareAndApply: async (key, comparison, intent) => {
+              if (intent.action === "delete" && failDelete) {
+                failDelete = false;
+                throw new Error("delete unavailable");
+              }
+              return await action.compareAndApply(key, comparison, intent);
+            },
+          };
+        },
+      };
+    });
+    const first = await freshRegistry("delete-failure");
+    await first.trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "tab-a",
+      profile: "remote",
+      ownership: ownership("NATIVE-A"),
+    });
+    await first.closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:main"],
+      closeDurableTab: async () => ({ status: "closed" }),
+    });
+    expect(openStore().entries()).toHaveLength(1);
+
+    resetPluginStateStoreForTests();
+    await installRuntime();
+    const restarted = await freshRegistry("delete-failure-restart");
+    await restarted.closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:main"],
+      closeDurableTab: async () => ({ status: "missing" }),
+    });
+    expect(openStore().entries()).toEqual([]);
+  });
 });

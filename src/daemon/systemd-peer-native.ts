@@ -23,12 +23,10 @@ const invoke = (fn: NativeFunction, ...args: unknown[]): Promise<number> =>
     fn.async(...args, (error: Error | null, result: number) => {
       if (error) {
         reject(error);
+      } else if (result < 0) {
+        reject(unavailable());
       } else {
-        try {
-          resolve(checked(result));
-        } catch (failure) {
-          reject(failure instanceof Error ? failure : unavailable());
-        }
+        resolve(result);
       }
     });
   });

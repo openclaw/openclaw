@@ -94,7 +94,7 @@ type PrepareEmbeddedAttemptStreamInput = {
   applyPermissionMode?: (
     mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
     revokeApprovals: () => void,
-  ) => void;
+  ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
   runtimeChannel?: string;
   hookAgentId: string;
@@ -557,8 +557,12 @@ function prepareStream(
             return true;
           }
           try {
-            applyPermissionMode(mode, revokeApprovals);
-            return true;
+            await applyPermissionMode(mode, revokeApprovals);
+            return (
+              admission.accepting &&
+              !input.runAbortController.signal.aborted &&
+              ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle
+            );
           } catch (error) {
             // A partially rebuilt surface must never resume its revoked tools.
             input.abortRun(false, error);

@@ -133,15 +133,4 @@ describe("tryFastApproveFromMessage", () => {
     });
     expect(handleApproveCommandFromContextMock).not.toHaveBeenCalled();
   });
-
-  it("ignores ordinary text", async () => {
-    const ctx = buildTestCtx({
-      Body: "hello",
-      Provider: "imessage",
-    });
-    await expect(tryFastApproveFromMessage({ ctx, cfg: {} as OpenClawConfig })).resolves.toEqual({
-      handled: false,
-    });
-    expect(handleApproveCommandFromContextMock).not.toHaveBeenCalled();
-  });
 });

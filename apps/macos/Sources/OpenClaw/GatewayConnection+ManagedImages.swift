@@ -18,12 +18,10 @@ extension GatewayConnection {
             agentID: agentID,
             artifactId: artifactId)
         let responseData = try await self.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
+            request,
             ifCurrentServerLease: lease)
         let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: responseData)
-        let maximumBytes = Self.maximumManagedMediaBytes(for: kind)
+        let maximumBytes = kind.maximumDownloadBytes
         let declaredMIME = response.artifact.mimetype?.lowercased()
         if playback != .transcode,
            let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -117,13 +115,5 @@ extension GatewayConnection {
                 sizeBytes: response.artifact.sizebytes))
         }
         return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
-    }
-
-    private static func maximumManagedMediaBytes(for kind: OpenClawChatMediaKind) -> Int {
-        switch kind {
-        case .image: 12 * 1024 * 1024
-        case .audio, .video: 16 * 1024 * 1024
-        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
-        }
     }
 }

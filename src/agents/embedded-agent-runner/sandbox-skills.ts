@@ -101,25 +101,6 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   });
 }
 
-function mapSandboxSkillUsagePaths(params: {
-  paths?: SkillUsagePath[];
-  skillsWorkspaceDir: string;
-  skillsPromptWorkspaceDir: string;
-}): SkillUsagePath[] | undefined {
-  if (!params.paths || params.skillsWorkspaceDir === params.skillsPromptWorkspaceDir) {
-    return params.paths;
-  }
-  return params.paths.map((entry) => ({
-    ...entry,
-    readPath:
-      mapPathFromWorkspaceToContainer({
-        filePath: entry.readPath,
-        sourceWorkspaceDir: params.skillsWorkspaceDir,
-        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
-      }) ?? entry.readPath,
-  }));
-}
-
 export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
   // Fallback skill discovery anchors to the configured agent workspace so
@@ -145,19 +126,32 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
-    const skillUsagePaths = mapSandboxSkillUsagePaths({
-      paths: params.sandbox.skillUsagePaths,
-      skillsWorkspaceDir,
-      skillsPromptWorkspaceDir,
-    });
+    const skillUsagePaths =
+      skillsWorkspaceDir === skillsPromptWorkspaceDir
+        ? params.sandbox.skillUsagePaths
+        : params.sandbox.skillUsagePaths?.map((entry) => ({
+            ...entry,
+            readPath:
+              mapPathFromWorkspaceToContainer({
+                filePath: entry.readPath,
+                sourceWorkspaceDir: skillsWorkspaceDir,
+                targetWorkspaceDir: skillsPromptWorkspaceDir,
+              }) ?? entry.readPath,
+          }));
     // An explicit empty snapshot excludes instructions; it has no host paths to remap.
     let selectedSnapshot =
-      params.skillsSnapshot && !params.skillsSnapshot.prompt.trim()
+      params.skillsSnapshot &&
+      !params.skillsSnapshot.prompt.trim() &&
+      !params.skillsSnapshot.discoverySkills?.length
         ? params.skillsSnapshot
         : undefined;
-    if (params.skillsSnapshot?.librarySelections?.length) {
+    const snapshot = params.skillsSnapshot;
+    if (
+      snapshot &&
+      (snapshot.librarySelections?.length || (snapshot.discoverySkills && skillUsagePaths?.length))
+    ) {
       const usageBySkillName = indexFirstByKey(skillUsagePaths ?? [], (usage) => usage.skillName);
-      const resolvedSkills = params.skillsSnapshot.resolvedSkills?.map((skill) => {
+      const mapSkill = (skill: NonNullable<SkillSnapshot["resolvedSkills"]>[number]) => {
         const materialized = usageBySkillName.get(skill.name);
         if (!materialized) {
           throw new Error(`Selected skill ${skill.name} was not delivered to the sandbox.`);
@@ -167,13 +161,21 @@ export function resolveSandboxSkillRuntimeInputs(params: {
           filePath: materialized.readPath,
           baseDir: path.posix.dirname(materialized.readPath),
         };
-      });
+      };
+      const resolvedSkills = snapshot.resolvedSkills
+        ?.filter((skill) => snapshot.librarySelections?.length || usageBySkillName.has(skill.name))
+        .map(mapSkill);
+      // Discovery cannot advertise host resources absent from this sandbox's delivery.
+      const discoverySkills = snapshot.discoverySkills
+        ?.filter((skill) => usageBySkillName.has(skill.name))
+        .map(mapSkill);
       if (!resolvedSkills) {
         throw new Error("Selected skill snapshot must be hydrated before sandbox delivery.");
       }
       selectedSnapshot = {
-        ...params.skillsSnapshot,
+        ...snapshot,
         resolvedSkills,
+        discoverySkills,
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       };
     }

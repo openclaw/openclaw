@@ -1,6 +1,6 @@
 import path from "node:path";
+import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
 import {
-  defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
   prepareQaTransportAdapterFactories,
   qaTransportSupportsModuleFlows,
@@ -112,7 +112,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     : normalizeQaSuiteConcurrency(
         params?.concurrency,
         selectedScenarios.length,
-        channelDriver === "crabline" ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
+        channelDriver === "crabline" ? 1 : QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY,
       );
   const progressEnabled = shouldLogQaSuiteProgress();
   const context: QaSuiteResolvedRunContext = {

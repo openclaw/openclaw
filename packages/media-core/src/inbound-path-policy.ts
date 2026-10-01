@@ -121,9 +121,6 @@ export function resolveInboundPathRoot(params: {
   const roots = normalizeInboundPathRoots(params.roots);
   const effectiveRoots =
     roots.length > 0 ? roots : normalizeInboundPathRoots(params.fallbackRoots ?? undefined);
-  if (effectiveRoots.length === 0) {
-    return undefined;
-  }
   for (const rootPattern of effectiveRoots) {
     const resolved = resolveRootPatternMatch({ candidatePath, rootPattern });
     if (resolved) {

@@ -42,7 +42,7 @@ function acceptedInput(
 
 function visibleRows(
   overrides: Partial<BuildChatItemsProps>,
-  build = buildChatItems,
+  build: (input: BuildChatItemsProps) => ReturnType<typeof buildChatItems> = buildChatItems,
 ): Array<string | null> {
   return build({
     paneId: "input-order",
@@ -99,6 +99,11 @@ describe("transcript input order", () => {
         }));
         expect(
           visibleRows({ messages: [canonical[1]], queue: [first] }, buildCachedChatItems),
+        ).toEqual(["First input", "Second input"]);
+        expect(
+          visibleRows({ messages: [canonical[1]], queue: [first] }, (input) =>
+            buildCachedChatItems(input, "unfiltered"),
+          ),
         ).toEqual(["First input", "Second input"]);
         expect(visibleRows({ messages: canonical, queue: [] }, buildCachedChatItems)).toEqual([
           "First input",

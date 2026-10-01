@@ -5,6 +5,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
   fetchWithTimeoutGuarded,
   pollProviderOperationJson,
@@ -184,12 +185,6 @@ function resolveVydraHttpTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undef
   return resolved;
 }
 
-function createVydraTimeoutError(deadline: ProviderOperationDeadline): Error {
-  const timeoutLabel =
-    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
-  return new Error(`${deadline.label} timed out${timeoutLabel}`);
-}
-
 function resolveVydraGuardedRequestOptions(
   policy: VydraRequestPolicy,
 ): NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]> {
@@ -207,13 +202,9 @@ function resolveVydraAssetRequestHeaders(
   url: string,
   policy: VydraRequestPolicy,
 ): Headers | undefined {
-  try {
-    // Same-origin assets may need the configured provider headers. Cross-origin
-    // result URLs must not receive the Vydra API credential or custom headers.
-    return new URL(url).origin === policy.headerOrigin ? policy.headers : undefined;
-  } catch {
-    return undefined;
-  }
+  // Same-origin assets may need the configured provider headers. Cross-origin
+  // result URLs must not receive the Vydra API credential or custom headers.
+  return URL.parse(url)?.origin === policy.headerOrigin ? policy.headers : undefined;
 }
 
 export async function downloadVydraAsset(params: {
@@ -247,7 +238,7 @@ export async function downloadVydraAsset(params: {
   try {
     await assertOkOrThrowHttpError(result.response, `Vydra ${params.kind} download failed`, {
       bodyTimeoutMs: resolveTimeoutMs,
-      onBodyTimeout: () => createVydraTimeoutError(deadline),
+      onBodyTimeout: () => createProviderOperationTimeoutError(deadline),
     });
     const mimeType =
       result.response.headers.get("content-type")?.trim() ||
@@ -260,7 +251,7 @@ export async function downloadVydraAsset(params: {
       maxBytes: params.maxBytes,
       chunkTimeoutMs: 0,
       timeoutMs: resolveTimeoutMs,
-      onTimeout: () => createVydraTimeoutError(deadline),
+      onTimeout: () => createProviderOperationTimeoutError(deadline),
       onOverflow: ({ maxBytes }) => new Error(`${deadline.label} exceeds ${maxBytes} bytes`),
     });
     const extension = resolveVydraFileExtension(params.kind, mimeType);
@@ -272,7 +263,7 @@ export async function downloadVydraAsset(params: {
   } catch (error) {
     // The request timer can fire before wall-clock time reaches the operation deadline.
     if (error instanceof Error && error.name === "TimeoutError") {
-      throw createVydraTimeoutError(deadline);
+      throw createProviderOperationTimeoutError(deadline);
     }
     throw error;
   } finally {

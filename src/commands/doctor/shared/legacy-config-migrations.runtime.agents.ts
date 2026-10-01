@@ -19,12 +19,12 @@ import {
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
-import { visitAgentConfigScopes, visitAgentEntries } from "./legacy-config-record-shared.js";
+import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENT_POLICY } from "./legacy-config-migrations.runtime.agent-policy.js";
 import {
-  modelEntryWithRuntimePolicy,
-  selectedCanonicalModelRefsForRuntimePolicy,
-} from "./legacy-runtime-model-policy.js";
-import { resolveLegacyCliRuntimeAlias } from "./legacy-runtime-model-providers.js";
+  someAgentEntry,
+  visitAgentConfigScopes,
+  visitAgentEntries,
+} from "./legacy-config-record-shared.js";
 
 const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
   { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
@@ -129,17 +129,6 @@ function getAgentMemorySearchRecord(
   return getRecord(agent.memorySearch) ?? getRecord(getRecord(agent.memory)?.search);
 }
 
-function someAgentEntry(
-  value: unknown,
-  predicate: (agent: Record<string, unknown>) => boolean,
-): boolean {
-  let matched = false;
-  visitAgentEntries({ agents: value }, (agent) => {
-    matched ||= predicate(agent);
-  });
-  return matched;
-}
-
 const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "sandbox", "browser", "network"],
@@ -155,26 +144,6 @@ const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
       someAgentEntry(value, (agent) =>
         isUnsupportedSandboxBrowserNetwork(getSandboxBrowserConfig(agent)?.network),
       ),
-  },
-];
-
-const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "agentRuntime", "fallback"],
-    message:
-      'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["agents", "defaults", "agentRuntime"],
-    message:
-      'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
-    match: (value) => getRecord(value) !== null,
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.agentRuntime is ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
-    match: (value) => someAgentEntry(value, (agent) => getRecord(agent.agentRuntime) !== null),
   },
 ];
 
@@ -243,8 +212,9 @@ const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "silentReply"],
     message:
-      'agents.defaults.silentReply.direct was removed; direct chats never receive NO_REPLY prompt guidance. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => Object.hasOwn(getRecord(value) ?? {}, "direct"),
+      'agents.defaults.silentReply.direct and agents.defaults.silentReply.internal were removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove them.',
+    match: (value) =>
+      hasOwnRecordProperty(value, "direct") || hasOwnRecordProperty(value, "internal"),
   },
   {
     path: ["surfaces"],
@@ -255,8 +225,8 @@ const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
   {
     path: ["surfaces"],
     message:
-      'surfaces.*.silentReply.direct was removed; direct chats never receive NO_REPLY prompt guidance. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasSurfaceSilentReplyDirect(value),
+      'surfaces.*.silentReply.direct and surfaces.*.silentReply.internal were removed; only channel groups may use NO_REPLY. Run "openclaw doctor --fix" to remove them.',
+    match: (value) => hasSurfaceLegacySilentReplyPolicy(value),
   },
 ];
 
@@ -455,52 +425,6 @@ function migrateUnsupportedSandboxBrowserNetworks(
   }
 }
 
-function removeLegacyAgentRuntimePolicy(
-  container: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  if (getRecord(container.agentRuntime) !== null) {
-    preserveLegacyWholeAgentRuntimePolicy(container, pathLabel, changes);
-    delete container.agentRuntime;
-    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
-  }
-}
-
-function preserveLegacyWholeAgentRuntimePolicy(
-  container: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  const intent = resolveLegacyCliRuntimeAlias(getRecord(container.agentRuntime)?.id);
-  if (!intent) {
-    return;
-  }
-  const selectedRefs = selectedCanonicalModelRefsForRuntimePolicy(container.model, intent.provider);
-  if (selectedRefs.length === 0) {
-    return;
-  }
-
-  const currentModels = getRecord(container.models);
-  const nextModels: Record<string, unknown> = currentModels ? { ...currentModels } : {};
-  let changed = false;
-  for (const ref of selectedRefs) {
-    const updated = modelEntryWithRuntimePolicy(nextModels[ref], intent.runtime);
-    if (!updated.changed) {
-      continue;
-    }
-    nextModels[ref] = updated.entry;
-    changed = true;
-  }
-  if (!changed) {
-    return;
-  }
-  container.models = nextModels;
-  changes.push(
-    `Moved ${pathLabel}.agentRuntime.id ${intent.runtime} to matching ${intent.provider} model runtime policy.`,
-  );
-}
-
 function removeIgnoredAgentModelTimeouts(
   agent: Record<string, unknown>,
   pathLabel: string,
@@ -537,50 +461,44 @@ function hasSurfaceSilentReplyRewrite(value: unknown): boolean {
   );
 }
 
-function hasSurfaceSilentReplyDirect(value: unknown): boolean {
+function hasSurfaceLegacySilentReplyPolicy(value: unknown): boolean {
   const surfaces = getRecord(value);
   if (!surfaces) {
     return false;
   }
-  return Object.values(surfaces).some((surface) =>
-    Object.hasOwn(getRecord(getRecord(surface)?.silentReply) ?? {}, "direct"),
+  return Object.entries(surfaces).some(
+    ([surfaceId, surface]) =>
+      !isBlockedObjectKey(surfaceId) &&
+      ["direct", "internal"].some((key) =>
+        hasOwnRecordProperty(getRecord(surface)?.silentReply, key),
+      ),
   );
 }
 
 function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: string[]): void {
-  const defaults = getRecord(getRecord(raw.agents)?.defaults);
-  const defaultSilentReply = getRecord(defaults?.silentReply);
-  if (defaultSilentReply && Object.hasOwn(defaultSilentReply, "direct")) {
-    delete defaultSilentReply.direct;
-    changes.push("Removed agents.defaults.silentReply.direct; direct chats never use NO_REPLY.");
+  const scopes: Array<[string, unknown]> = [["agents.defaults", getRecord(raw.agents)?.defaults]];
+  for (const [surfaceId, surface] of Object.entries(getRecord(raw.surfaces) ?? {})) {
+    if (!isBlockedObjectKey(surfaceId)) {
+      scopes.push([`surfaces.${surfaceId}`, surface]);
+    }
   }
-  if (defaults && hasOwnRecordProperty(defaults, "silentReplyRewrite")) {
-    delete defaults.silentReplyRewrite;
-    changes.push("Removed agents.defaults.silentReplyRewrite.");
-  }
-
-  const surfaces = getRecord(raw.surfaces);
-  if (!surfaces) {
-    return;
-  }
-  for (const [surfaceId, surfaceValue] of Object.entries(surfaces)) {
-    if (isBlockedObjectKey(surfaceId)) {
+  for (const [path, value] of scopes) {
+    const container = getRecord(value);
+    if (!container) {
       continue;
     }
-    const surface = getRecord(surfaceValue);
-    if (!surface) {
-      continue;
+    const silentReply = getRecord(container.silentReply);
+    for (const conversationType of ["direct", "internal"]) {
+      if (silentReply && Object.hasOwn(silentReply, conversationType)) {
+        delete silentReply[conversationType];
+        changes.push(
+          `Removed ${path}.silentReply.${conversationType}; ${conversationType} sessions never use NO_REPLY.`,
+        );
+      }
     }
-    const silentReply = getRecord(surface.silentReply);
-    if (silentReply && Object.hasOwn(silentReply, "direct")) {
-      delete silentReply.direct;
-      changes.push(
-        `Removed surfaces.${surfaceId}.silentReply.direct; direct chats never use NO_REPLY.`,
-      );
-    }
-    if (hasOwnRecordProperty(surface, "silentReplyRewrite")) {
-      delete surface.silentReplyRewrite;
-      changes.push(`Removed surfaces.${surfaceId}.silentReplyRewrite.`);
+    if (Object.hasOwn(container, "silentReplyRewrite")) {
+      delete container.silentReplyRewrite;
+      changes.push(`Removed ${path}.silentReplyRewrite.`);
     }
   }
 }
@@ -971,7 +889,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
   }),
   defineLegacyConfigMigration({
     id: "silentReplyRewrite-removed",
-    describe: "Remove legacy silent reply rewrite and direct-chat silent reply config",
+    describe: "Remove legacy silent reply rewrite, direct-chat, and internal silent reply config",
     legacyRules: SILENT_REPLY_LEGACY_RULES,
     apply: removeLegacySilentReplyConfig,
   }),
@@ -990,14 +908,52 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         removeIgnoredAgentModelTimeouts(agent, path, changes),
       ),
   }),
+  ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENT_POLICY,
   defineLegacyConfigMigration({
-    id: "agents.agentRuntime-ignored",
-    describe: "Remove ignored agent-wide runtime policy",
-    legacyRules: LEGACY_AGENT_RUNTIME_POLICY_RULES,
-    apply: (raw, changes) =>
-      visitAgentConfigScopes(raw, (agent, path) =>
-        removeLegacyAgentRuntimePolicy(agent, path, changes),
-      ),
+    id: "agents.sandbox.perSession->scope",
+    describe: "Move supported legacy sandbox perSession settings to scope",
+    legacyRules: [
+      {
+        path: ["agents"],
+        message:
+          'Agent sandbox.perSession settings moved to sandbox.scope. Run "openclaw doctor --fix".',
+        match: (value) => {
+          let found = false;
+          visitAgentConfigScopes({ agents: value }, (agent) => {
+            found ||= Object.hasOwn(getRecord(agent.sandbox) ?? {}, "perSession");
+          });
+          return found;
+        },
+      },
+    ],
+    apply: (raw, changes) => {
+      const inheritedScope = getRecord(getRecord(getRecord(raw.agents)?.defaults)?.sandbox)?.scope;
+      visitAgentConfigScopes(raw, (agent, path) => {
+        const sandbox = getRecord(agent.sandbox);
+        if (
+          !sandbox ||
+          !Object.hasOwn(sandbox, "perSession") ||
+          typeof sandbox.perSession !== "boolean"
+        ) {
+          return;
+        }
+        // An authored defaults scope already outranked per-agent legacy booleans.
+        const canonicalScope =
+          sandbox.scope !== undefined
+            ? sandbox.scope
+            : path === "agents.defaults"
+              ? undefined
+              : inheritedScope;
+        if (canonicalScope === undefined) {
+          const scope = sandbox.perSession ? "session" : "shared";
+          sandbox.scope = scope;
+          changes.push(`Moved ${path}.sandbox.perSession → ${path}.sandbox.scope (${scope}).`);
+        } else {
+          changes.push(`Removed ${path}.sandbox.perSession (canonical sandbox.scope already set).`);
+        }
+        delete sandbox.perSession;
+      });
+    },
   }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.browser.network-none",

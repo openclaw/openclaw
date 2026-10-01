@@ -184,7 +184,7 @@ export async function fenceOAuthRefreshPeers(params: {
         profileId: params.profileId,
         updater: (currentStore) => {
           const current = currentStore.profiles[params.profileId];
-          if (!isExactOAuthCredential(current?.type === "oauth" ? current : undefined, original)) {
+          if (!isExactOAuthCredential(current, original)) {
             return false;
           }
           currentStore.profiles[params.profileId] = { ...params.fence };
@@ -194,7 +194,7 @@ export async function fenceOAuthRefreshPeers(params: {
       });
       if (!claimed) {
         const current = updated.store.profiles[params.profileId];
-        if (isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)) {
+        if (isExactOAuthCredential(current, params.fence)) {
           claims.push({ candidate });
           continue;
         }
@@ -266,9 +266,7 @@ export function rollbackOAuthRefreshPeerClaims(params: {
         profileId: params.profileId,
         updater: (store) => {
           const current = store.profiles[params.profileId];
-          if (
-            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-          ) {
+          if (!isExactOAuthCredential(current, params.fence)) {
             return false;
           }
           store.profiles[params.profileId] = { ...claim.original! };
@@ -288,9 +286,7 @@ export function rollbackOAuthRefreshPeerClaims(params: {
         profileId: params.profileId,
         updater: (store) => {
           const current = store.profiles[params.profileId];
-          if (
-            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-          ) {
+          if (!isExactOAuthCredential(current, params.fence)) {
             return false;
           }
           store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
@@ -338,9 +334,7 @@ export function settleOAuthRefreshPeerClaims(params: {
         profileId: params.profileId,
         updater: (store) => {
           const current = store.profiles[params.profileId];
-          if (
-            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-          ) {
+          if (!isExactOAuthCredential(current, params.fence)) {
             return false;
           }
           const inherited = params.authoritativeSharedCredential;
@@ -385,9 +379,7 @@ export function failOAuthRefreshPeerClaims(params: {
         profileId: params.profileId,
         updater: (store) => {
           const current = store.profiles[params.profileId];
-          if (
-            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-          ) {
+          if (!isExactOAuthCredential(current, params.fence)) {
             return false;
           }
           store.profiles[params.profileId] = failed;

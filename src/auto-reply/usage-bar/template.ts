@@ -13,7 +13,6 @@ type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
 const fileCache = new Map<string, CacheEntry>();
-/** Maximum number of template file paths to cache concurrently. */
 const MAX_CACHED_TEMPLATE_FILES = 64;
 const MAX_WARNED_TEMPLATE_OVERRIDES = 256;
 // Retain recent warning keys without accumulating every historical config value.
@@ -43,10 +42,7 @@ function hasOutputPieces(output: unknown): boolean {
     return true;
   }
   const surfaces = output.surfaces;
-  return (
-    isPlainObject(surfaces) &&
-    Object.values(surfaces).some((surfacePieces) => hasPieces(surfacePieces))
-  );
+  return isPlainObject(surfaces) && Object.values(surfaces).some(hasPieces);
 }
 
 function isEmptyTemplate(value: unknown): boolean {
@@ -56,7 +52,7 @@ function isEmptyTemplate(value: unknown): boolean {
   if (Object.keys(value).length === 0) {
     return true;
   }
-  if ("segments" in value && Array.isArray(value.segments)) {
+  if (Array.isArray(value.segments)) {
     return value.segments.length === 0;
   }
   const output = value.output;
@@ -121,10 +117,7 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
   if (result.reason) {
     warnInvalidUsageTemplate("file", result.reason, path);
   }
-  // Only evict when inserting a new key that would exceed the limit.
-  // Eviction must happen before watcher allocation so we don't create a
-  // watcher only to close it immediately. Retries for an existing key
-  // (same-path re-read after a prior miss) must not evict other entries.
+  // Evict before allocating a watcher, but preserve other entries on same-path retries.
   if (!fileCache.has(path) && fileCache.size >= MAX_CACHED_TEMPLATE_FILES) {
     const oldestKey = fileCache.keys().next().value;
     if (oldestKey !== undefined) {
@@ -133,20 +126,31 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
     }
   }
   const entry: CacheEntry = { template: result.template };
+  // The next load rereads the path and installs a fresh watcher.
+  const invalidate = () => {
+    entry.watcher?.close();
+    entry.watcher = undefined;
+    entry.template = undefined;
+  };
   if (entry.template) {
     try {
-      const watcher = watch(path, { persistent: false }, () => {
+      const watcher = watch(path, { persistent: false }, (eventType) => {
+        // A late event from an invalidated watcher must not repopulate a template it no longer tracks.
+        if (entry.watcher !== watcher) {
+          return;
+        }
+        // Atomic saves rename a new file over the path, leaving this watcher on the old inode.
+        if (eventType === "rename") {
+          invalidate();
+          return;
+        }
         const next = readTemplateFile(path);
         if (next.reason) {
           warnInvalidUsageTemplate("file", next.reason, path);
         }
         entry.template = next.template;
       });
-      watcher.on("error", () => {
-        watcher.close();
-        entry.watcher = undefined;
-        entry.template = undefined;
-      });
+      watcher.on("error", invalidate);
       entry.watcher = watcher;
     } catch {
       // Cache remains valid without live refresh.
@@ -170,9 +174,9 @@ export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarT
   const path = expandPath(configured);
   const cached = fileCache.get(path);
   return (
-    (cached
-      ? (cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path)))
-      : cacheTemplateFile(path)) ?? DEFAULT_USAGE_BAR_TEMPLATE
+    cached?.template ??
+    (cached?.watcher ? undefined : cacheTemplateFile(path)) ??
+    DEFAULT_USAGE_BAR_TEMPLATE
   );
 }
 

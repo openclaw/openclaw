@@ -30,6 +30,7 @@ import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration
 export async function prepareDoctorMigrationPlugins(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  retainedPluginIds?: readonly string[];
   measure?: ConfigSnapshotReadMeasure;
   snapshotRead: ConfigPreflightSnapshotRead;
   readRefreshedSnapshot: () => Promise<ConfigPreflightSnapshotRead>;

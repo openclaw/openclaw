@@ -25,6 +25,7 @@ import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
+import type { LegacyMigrationSourceSnapshot as SourceSnapshot } from "./state-migrations.source-snapshot.js";
 import {
   createWorkspaceSetupFingerprint,
   resolveWorkspaceMigrationSourceKey,
@@ -41,17 +42,6 @@ type WorkspaceMigrationDatabase = Pick<
   | "workspace_generated_bootstrap_hashes"
   | "migration_sources"
 >;
-
-export type SourceSnapshot = {
-  sourcePath: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
-  raw: string;
-  buffer: Buffer;
-};
 
 type ParsedSetup = {
   bootstrapSeededAt?: string;

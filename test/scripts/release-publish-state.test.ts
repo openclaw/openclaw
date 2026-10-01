@@ -253,16 +253,26 @@ describe("release publication state", () => {
   );
 });
 
-function observeRuns(params: { workflow: string; title?: string; log?: string; count?: number }) {
+function observeRuns(params: {
+  workflow: string;
+  title?: string;
+  log?: string;
+  count?: number;
+  onProgress?: (message: string) => void;
+}) {
   return observeReleaseGitHubState({
     repository: "openclaw/openclaw",
     releaseTag: `v${version}`,
     sourceSha,
     npmDistTag: "latest",
+    onProgress: params.onProgress,
     runGh: (args) => {
       const endpoint = args[1];
       if (endpoint === undefined) {
         throw new Error("Expected a GitHub REST endpoint.");
+      }
+      if (endpoint.includes("/releases/tags/")) {
+        throw new Error("HTTP 404: Not Found");
       }
       if (endpoint.includes("/releases?")) {
         return "[]";
@@ -304,6 +314,138 @@ function observeRuns(params: { workflow: string; title?: string; log?: string; c
 }
 
 describe("release concurrency observations", () => {
+  it("bounds slow GitHub reads and names every uninspected inventory with its exact command", () => {
+    let now = 0;
+    const runGh = vi.fn((args: string[], options?: { timeoutMs?: number }) => {
+      if (args[1]?.includes("/releases/tags/")) {
+        throw new Error("HTTP 404: Not Found");
+      }
+      expect(options?.timeoutMs).toBe(100);
+      now += 100;
+      return "[]";
+    });
+    const result = observeReleaseGitHubState({
+      repository: "openclaw/openclaw",
+      releaseTag: `v${version}`,
+      sourceSha,
+      npmDistTag: "latest",
+      budgetMs: 100,
+      now: () => now,
+      runGh,
+    });
+    expect(result.gates.every((gate) => gate.status === "WARN")).toBe(true);
+    expect(result.gates[0]?.message).toContain("observation budget exhausted (100 ms)");
+    for (const workflow of [
+      "openclaw-release-publish.yml",
+      "plugin-npm-release.yml",
+      "plugin-clawhub-release.yml",
+      "plugin-clawhub-new.yml",
+    ]) {
+      expect(result.gates).toContainEqual(
+        expect.objectContaining({
+          id: `concurrency.${workflow}.inventory`,
+          status: "WARN",
+          message: expect.stringContaining("observation budget exhausted"),
+          remediation: expect.stringContaining(
+            `gh api 'repos/openclaw/openclaw/actions/workflows/${workflow}/runs?status=in_progress&per_page=100' --method GET`,
+          ),
+        }),
+      );
+    }
+    expect(runGh).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains a gh stderr failure and exact unread command without hiding known blockers", () => {
+    const result = observeReleaseGitHubState({
+      repository: "openclaw/openclaw",
+      releaseTag: `v${version}`,
+      sourceSha,
+      npmDistTag: "latest",
+      runGh(args) {
+        if (args[1]?.includes("/plugin-npm-release.yml/") && args[1].includes("status=queued")) {
+          return JSON.stringify({
+            total_count: 1,
+            workflow_runs: [
+              {
+                id: 321,
+                run_attempt: 1,
+                status: "queued",
+                event: "workflow_dispatch",
+                display_title: `Plugin NPM Release [default] ${sourceSha}`,
+                html_url: "https://github.com/openclaw/openclaw/actions/runs/321",
+              },
+            ],
+          });
+        }
+        throw Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
+          stderr: Buffer.from("HTTP 503: upstream unavailable"),
+        });
+      },
+    });
+    expect(result.gates).toContainEqual(
+      expect.objectContaining({
+        id: "concurrency.plugin-npm-release.yml.321",
+        status: "FAIL",
+      }),
+    );
+    expect(result.gates).toContainEqual(
+      expect.objectContaining({
+        id: "concurrency.plugin-npm-release.yml.inventory",
+        status: "WARN",
+        message: expect.stringContaining("HTTP 503: upstream unavailable"),
+        remediation: expect.stringContaining("status=in_progress"),
+      }),
+    );
+  });
+
+  it("reads a published release by exact tag without transferring the full release inventory", () => {
+    const release = {
+      id: 7,
+      draft: false,
+      prerelease: false,
+      tag_name: `v${version}`,
+      html_url: `https://github.com/openclaw/openclaw/releases/tag/v${version}`,
+      target_commitish: sourceSha,
+    };
+    const runGh = vi.fn((args: string[]) =>
+      args[1]?.includes("/releases/tags/")
+        ? JSON.stringify(release)
+        : JSON.stringify({ total_count: 0, workflow_runs: [] }),
+    );
+    const result = observeReleaseGitHubState({
+      repository: "openclaw/openclaw",
+      releaseTag: `v${version}`,
+      sourceSha,
+      npmDistTag: "latest",
+      runGh,
+    });
+    expect(result.release).toMatchObject(release);
+    expect(runGh.mock.calls.some(([args]) => args[1]?.includes("/releases?"))).toBe(false);
+  });
+
+  it("replays a failed filtered release-inventory read with its exact --jq filter", () => {
+    const result = observeReleaseGitHubState({
+      repository: "openclaw/openclaw",
+      releaseTag: `v${version}`,
+      sourceSha,
+      npmDistTag: "latest",
+      runGh(args) {
+        if (args[1]?.includes("/releases/tags/")) {
+          throw new Error("HTTP 404: Not Found");
+        }
+        if (args[1]?.includes("/releases?")) {
+          throw new Error("HTTP 502: Bad Gateway");
+        }
+        return JSON.stringify({ total_count: 0, workflow_runs: [] });
+      },
+    });
+    const gate = result.gates.find((entry) => entry.id === "github.release");
+    expect(gate).toMatchObject({ status: "WARN", message: expect.stringContaining("HTTP 502") });
+    expect(gate?.remediation).toContain(
+      `gh api 'repos/openclaw/openclaw/releases?per_page=100&page=1' --method GET --jq 'map(if .tag_name == "v${version}" then . else {tag_name} end)'`,
+    );
+  });
+
   it("recognizes the npm target from the exact preflight title because it shares the publish group", () => {
     const gates = observeRuns({
       workflow: "plugin-npm-release.yml",
@@ -320,7 +462,15 @@ describe("release concurrency observations", () => {
       "2026-09-18T01:02:03Z   DRY_RUN: false",
       "2026-09-18T01:02:03Z   RELEASE_PUBLISH_RUN_ID: 789",
     ].join("\n");
-    const gates = observeRuns({ workflow: "plugin-clawhub-release.yml", log });
+    const progress: string[] = [];
+    const gates = observeRuns({
+      workflow: "plugin-clawhub-release.yml",
+      log,
+      onProgress: (message) => progress.push(message),
+    });
+    expect(progress.join("\n")).toContain("release lookup page 1");
+    expect(progress.join("\n")).toContain("workflow plugin-clawhub-release.yml inventory");
+    expect(progress.join("\n")).toContain("inspecting candidate run 123 1/1 via job log");
     expect(gates).toMatchObject([
       { status: "FAIL", message: expect.stringContaining("Parent 789 is terminal (failure)") },
     ]);

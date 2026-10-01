@@ -14,17 +14,13 @@ enum HealthAuthorization {
     }
 
     static var readTypes: Set<HKObjectType> {
-        var types: Set<HKObjectType> = [HKWorkoutType.workoutType()]
-        if let steps = HKObjectType.quantityType(forIdentifier: .stepCount) {
-            types.insert(steps)
-        }
-        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
-            types.insert(sleep)
-        }
-        if let restingHeartRate = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
-            types.insert(restingHeartRate)
-        }
-        return types
+        let types: [HKObjectType?] = [
+            HKWorkoutType.workoutType(),
+            HKObjectType.quantityType(forIdentifier: .stepCount),
+            HKObjectType.categoryType(forIdentifier: .sleepAnalysis),
+            HKObjectType.quantityType(forIdentifier: .restingHeartRate),
+        ]
+        return Set(types.compactMap(\.self))
     }
 
     @MainActor

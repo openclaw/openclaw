@@ -2,15 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-
-export function writeRecoveryJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-export function readRecoveryJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
+import {
+  readJson as readRecoveryJson,
+  writeJson as writeRecoveryJson,
+} from "../fixtures/common.mjs";
 
 export function recoveryFileIdentity(file) {
   const stat = fs.lstatSync(file, { bigint: true });

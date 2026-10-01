@@ -12,7 +12,14 @@ import {
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { convertToLlm } from "../messages.js";
-import { CompactionError, err, InvalidSummaryOutputError, ok, type Result } from "../types.js";
+import {
+  CompactionError,
+  err,
+  InvalidSummaryOutputError,
+  ok,
+  SummaryOutputBudgetError,
+  type Result,
+} from "../types.js";
 import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
 import { extractSummaryText, serializeConversation } from "./utils.js";
 
@@ -103,6 +110,13 @@ export async function runSummarizationCompletion(
 
   const summary = extractSummaryText(response);
   if (summary === undefined) {
+    if (response.stopReason === "length") {
+      return err(
+        new SummaryOutputBudgetError(
+          `${params.errorLabel} failed: summary output budget (${params.maxTokens} tokens) was exhausted without visible text; reduce thinking or increase the selected model's maxTokens before retrying`,
+        ),
+      );
+    }
     return err(
       new InvalidSummaryOutputError(`${params.errorLabel} failed: model returned no summary text`),
     );

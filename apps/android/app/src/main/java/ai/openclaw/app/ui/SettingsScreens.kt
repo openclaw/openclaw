@@ -74,7 +74,6 @@ import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.audioInputDeviceOptionFromKey
 import android.Manifest
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -87,7 +86,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -312,17 +310,13 @@ private fun CronJobsSettingsScreen(
       label = nativeString("Search"),
       enabled = isConnected,
     )
-    val filterOptions = CronJobsListFilter.entries.map(CronJobsListFilter::label)
     ClawSegmentedControl(
-      options = filterOptions,
-      selected = filter.label,
-      onSelect = { selected ->
-        CronJobsListFilter.entries.firstOrNull { it.label == selected }?.let {
-          filterName = it.name
-        }
-      },
+      options = CronJobsListFilter.entries,
+      selected = filter,
+      onSelect = { filterName = it.name },
       modifier = Modifier.fillMaxWidth(),
-      enabledOptions = if (isConnected) filterOptions.toSet() else emptySet(),
+      enabledOptions = if (isConnected) CronJobsListFilter.entries.toSet() else emptySet(),
+      optionLabel = CronJobsListFilter::label,
     )
     Text(
       text = nativeString("Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it."),
@@ -873,19 +867,7 @@ private fun AudioInputDeviceRow(
     subtitle = subtitle,
     metadata = nativeString("Next session").takeIf { pending },
     leading = { ClawIconBadge(Icons.Default.Mic) },
-    trailing =
-      if (selected) {
-        {
-          Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = nativeString("Selected"),
-            modifier = Modifier.size(18.dp),
-            tint = ClawTheme.colors.primary,
-          )
-        }
-      } else {
-        null
-      },
+    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
     onClick = onClick,
   )
 }
@@ -1125,17 +1107,10 @@ private fun NotificationSettingsScreen(
     ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(text = nativeString("Forwarding Mode"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       ClawSegmentedControl(
-        options = listOf(nativeString("Blocklist"), nativeString("Allowlist")),
-        selected = nativeString(modeLabel),
-        onSelect = { selected ->
-          viewModel.setNotificationForwardingMode(
-            if (selected == nativeString("Allowlist")) {
-              NotificationPackageFilterMode.Allowlist
-            } else {
-              NotificationPackageFilterMode.Blocklist
-            },
-          )
-        },
+        options = listOf(NotificationPackageFilterMode.Blocklist, NotificationPackageFilterMode.Allowlist),
+        selected = mode,
+        onSelect = viewModel::setNotificationForwardingMode,
+        optionLabel = { if (it == NotificationPackageFilterMode.Blocklist) nativeString("Blocklist") else nativeString("Allowlist") },
       )
     }
     NotificationPackagePickerPanel(
@@ -1495,9 +1470,10 @@ private fun PhoneCapabilitiesScreen(
     ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       ClawSegmentedControl(
-        options = locationModeLabels(backgroundLocationAvailable),
-        selected = locationMode.displayLabel,
-        onSelect = { selected -> setLocationAccess(locationModeForLabel(selected)) },
+        options = locationModeOptions(backgroundLocationAvailable),
+        selected = locationMode,
+        onSelect = ::setLocationAccess,
+        optionLabel = { it.displayLabel },
       )
       if (backgroundLocationAvailable) {
         Text(
@@ -2017,17 +1993,12 @@ private fun GatewaySettingsScreen(
           )
         }
         Text(text = nativeString("Connection security"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-        val securityOptions = listOf(nativeString("Unencrypted"), nativeString("Secure (TLS)"))
         ClawSegmentedControl(
-          options = securityOptions,
-          selected = if (transport.effectiveTls) nativeString("Secure (TLS)") else nativeString("Unencrypted"),
-          onSelect = { selected -> tlsInput = selected == nativeString("Secure (TLS)") },
-          enabledOptions =
-            if (transport.requiresTls) {
-              setOf(nativeString("Secure (TLS)"))
-            } else {
-              securityOptions.toSet()
-            },
+          options = listOf(false, true),
+          selected = transport.effectiveTls,
+          onSelect = { tlsInput = it },
+          enabledOptions = if (transport.requiresTls) setOf(true) else setOf(false, true),
+          optionLabel = { if (it) nativeString("Secure (TLS)") else nativeString("Unencrypted") },
         )
         transport.helperText?.let { helperText ->
           Text(
@@ -2154,9 +2125,10 @@ private fun AppearanceSettingsScreen(
         modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
       )
       ClawSegmentedControl(
-        options = appearanceThemeOptions(),
-        selected = appearanceThemeSummary(themeMode),
-        onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
+        options = AppearanceThemeMode.entries,
+        selected = themeMode,
+        onSelect = viewModel::setAppearanceThemeMode,
+        optionLabel = ::appearanceThemeSummary,
       )
       Text(
         text = nativeString("Accent color"),
@@ -2312,20 +2284,18 @@ private fun AppLanguageRow(
     title = appLanguageTitle(language),
     subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
     leading = { ClawIconBadge(Icons.Default.Language) },
-    trailing =
-      if (selected) {
-        {
-          Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = nativeString("Selected"),
-            modifier = Modifier.size(18.dp),
-            tint = ClawTheme.colors.primary,
-          )
-        }
-      } else {
-        null
-      },
+    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
     onClick = onClick,
+  )
+}
+
+@Composable
+private fun SettingsSelectionCheck() {
+  Icon(
+    imageVector = Icons.Default.Check,
+    contentDescription = nativeString("Selected"),
+    modifier = Modifier.size(18.dp),
+    tint = ClawTheme.colors.primary,
   )
 }
 
@@ -2339,25 +2309,7 @@ internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
     AppearanceThemeMode.Light -> nativeString("Light")
   }
 
-internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map(::appearanceThemeSummary)
-
-internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode =
-  AppearanceThemeMode.entries.firstOrNull { appearanceThemeSummary(it).equals(label.trim(), ignoreCase = true) }
-    ?: AppearanceThemeMode.Dark
-
-internal fun locationModeLabels(backgroundLocationAvailable: Boolean): List<String> =
-  if (backgroundLocationAvailable) {
-    listOf(nativeString("Off"), nativeString("While Using"), nativeString("Always"))
-  } else {
-    listOf(nativeString("Off"), nativeString("While Using"))
-  }
-
-internal fun locationModeForLabel(label: String): LocationMode =
-  when (label) {
-    nativeString("While Using") -> LocationMode.WhileUsing
-    nativeString("Always") -> LocationMode.Always
-    else -> LocationMode.Off
-  }
+internal fun locationModeOptions(backgroundLocationAvailable: Boolean): List<LocationMode> = LocationMode.entries.filter { backgroundLocationAvailable || it != LocationMode.Always }
 
 private val LocationMode.displayLabel: String
   get() =
@@ -2990,8 +2942,7 @@ private fun copySettingsDetailValue(
   value: String,
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw $title", value))
-  Toast.makeText(context, nativeString("\$title copied", title), Toast.LENGTH_SHORT).show()
+  clipboard.copyTextWithConfirmation(context, "OpenClaw $title", value, nativeString("\$title copied", title))
 }
 
 @Composable

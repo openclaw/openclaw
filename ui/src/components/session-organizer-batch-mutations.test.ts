@@ -37,6 +37,7 @@ import {
   deleteSessionsBatch,
   patchSession,
   stopCloudWorker,
+  snoozeSessionWithUndo,
 } from "./session-organizer-operations.runtime.ts";
 
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
@@ -46,6 +47,7 @@ function sessionRow(index: number): SidebarRecentSession {
     key: `agent:main:batch-${index}`,
     label: `Batch ${index}`,
     sessionId: `session-${index}`,
+    sharingRole: "owner",
     pinned: index === 0 || index === 100,
   } as SidebarRecentSession;
 }
@@ -121,6 +123,7 @@ function createHarness(
   }));
   const deleteOne = vi.fn(async () => ({ deleted: true }));
   const groupsDelete = vi.fn(async () => "completed" as const);
+  const connection = {};
   const scope = {
     epoch: 1,
     context: {
@@ -130,6 +133,8 @@ function createHarness(
     },
     gateway: { snapshot },
     sessions: {
+      captureConnectionScope: () => connection,
+      isConnectionScopeCurrent: () => current,
       patch,
       patchMany: (
         targets: SessionsPatchManyParams["targets"],
@@ -423,27 +428,26 @@ describe("patchSessionRows", () => {
     );
   });
 
-  it("keeps scoped organization owner-only with independent interaction grants", async () => {
+  it.each([
+    { scope: "operator.sessions.write", archived: true },
+    { scope: "operator.sessions.write", archived: false },
+    { scope: "operator.write", archived: true },
+    { scope: "operator.write", archived: false },
+  ])("keeps archive=$archived owner-only with $scope", async ({ scope, archived }) => {
     const harness = createHarness({
-      scopes: [
-        "operator.read",
-        "operator.sessions.write",
-        "operator.questions",
-        "operator.approvals",
-        "operator.talk",
-      ],
+      scopes: ["operator.read", scope, "operator.questions", "operator.approvals", "operator.talk"],
     });
-    const own = { ...sessionRow(0), sharingRole: "owner" as const };
-    const member = { ...sessionRow(1), sharingRole: "member" as const };
+    const own = { ...sessionRow(0), archived: !archived, sharingRole: "owner" as const };
+    const member = { ...sessionRow(1), archived: !archived, sharingRole: "member" as const };
     expect(
       sessionMenuReasons({
         snapshot: harness.scope.gateway.snapshot,
         session: own,
         batchRows: [own, member],
       })["toggle-archived"],
-    ).toBe("Only the session owner can make this change.");
+    ).toBe("Only the session creator or an admin can make this change.");
     await expect(
-      patchSessionRows(harness.host, [own, member], { archived: true }, harness.scope, {
+      patchSessionRows(harness.host, [own, member], { archived }, harness.scope, {
         sessionScope: true,
       }),
     ).resolves.toBeNull();
@@ -451,18 +455,18 @@ describe("patchSessionRows", () => {
     expect(harness.reconcileMutation).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
-      "Only the session owner can make this change.",
+      "Only the session creator or an admin can make this change.",
     );
 
     await expect(
-      patchSessionRows(harness.host, [own], { archived: true }, harness.scope, {
+      patchSessionRows(harness.host, [own], { archived }, harness.scope, {
         sessionScope: true,
       }),
     ).resolves.toEqual([own]);
     expect(harness.request).toHaveBeenCalledOnce();
     expect(harness.request.mock.calls[0]?.[1]).toMatchObject({
       targets: [{ key: own.key }],
-      patch: { archived: true },
+      patch: { archived },
     });
   });
 });
@@ -823,5 +827,52 @@ describe("session organizer destructive confirmations", () => {
 
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(harness.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("session organizer snooze", () => {
+  beforeEach(() => vi.mocked(showToast).mockClear());
+  afterEach(() => vi.useRealTimers());
+
+  it("snoozes the captured session and offers a scoped wake through Undo", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date(2026, 8, 29, 9).getTime();
+    vi.setSystemTime(now);
+    const h = createHarness();
+    const row = sessionRow(0);
+    await snoozeSessionWithUndo(h.host, row, now + 3_600_000, h.scope);
+    expect(h.patch).toHaveBeenCalledWith(
+      row.key,
+      { snoozedUntil: now + 3_600_000 },
+      {
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      },
+    );
+    const toast = vi.mocked(showToast).mock.calls.at(-1)?.[0];
+    expect(toast).toMatchObject({ message: "Snoozed until 10:00 AM", actionLabel: "Undo" });
+    expect(toast?.onAction).toBeTypeOf("function");
+    toast?.onAction?.();
+    expect(h.patch).toHaveBeenLastCalledWith(
+      row.key,
+      { snoozedUntil: null },
+      {
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      },
+    );
+    expect(h.pruneSidebarSessionEntry).not.toHaveBeenCalled();
+    h.retireScope();
+    toast?.onAction?.();
+    expect(h.patch).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a rejected snooze through the ordinary session mutation error path", async () => {
+    const h = createHarness();
+    const error = new Error("snooze wake time must be in the future");
+    h.patch.mockRejectedValueOnce(error);
+    await snoozeSessionWithUndo(h.host, sessionRow(0), 200, h.scope);
+    expect(h.publishSessionMutationError).toHaveBeenCalledWith(h.scope, error);
+    expect(showToast).not.toHaveBeenCalled();
   });
 });

@@ -11,7 +11,7 @@ import { populateSessionFilePreview } from "./workspace-files.js";
 import { normalizeRelativePath, sortWorkspaceEntries } from "./workspace-fs.js";
 
 type StoredRepository = Extract<
-  ReturnType<typeof resolveRepositoryWorkspaceAccess>,
+  Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>,
   { kind: "stored" }
 >;
 

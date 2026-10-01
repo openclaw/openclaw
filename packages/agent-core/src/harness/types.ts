@@ -23,6 +23,13 @@ export class InvalidSummaryOutputError extends CompactionError {
   }
 }
 
+/** A length stop with no visible summary is deterministic for an unchanged request. */
+export class SummaryOutputBudgetError extends CompactionError {
+  constructor(message: string) {
+    super("summarization_failed", message);
+  }
+}
+
 type BranchSummaryErrorCode = "aborted" | "summarization_failed" | "invalid_session";
 
 export class BranchSummaryError extends Error {

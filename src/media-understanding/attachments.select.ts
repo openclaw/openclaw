@@ -1,11 +1,5 @@
-// Attachment selection applies per-capability filters, ordering preferences,
-// and max-count policy before provider execution.
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
-import {
-  isAudioAttachment,
-  isImageAttachment,
-  isVideoAttachment,
-} from "./attachments.normalize.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
 import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 1;
@@ -69,13 +63,7 @@ export function selectAttachments(params: {
     if (capability === "audio" && item.alreadyTranscribed) {
       return false;
     }
-    if (capability === "image") {
-      return isImageAttachment(item);
-    }
-    if (capability === "audio") {
-      return isAudioAttachment(item);
-    }
-    return isVideoAttachment(item);
+    return resolveAttachmentKind(item) === capability;
   });
   if (matches.length === 0) {
     return { selected: [], droppedAttachmentIndexes: [] };

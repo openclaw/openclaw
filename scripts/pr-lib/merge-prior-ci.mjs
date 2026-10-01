@@ -6,7 +6,7 @@ import { runBelongsToPullRequest } from "../verify-pr-hosted-gates.mts";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhJson } from "./github.mjs";
 import {
-  qualifyPriorCiDeadlineJobs,
+  qualifyPriorCiCancelledRoots,
   verifyPriorCiCancellation,
 } from "./merge-prior-ci-cancellation.mjs";
 import { verifyPriorCiSecurity } from "./merge-prior-ci-security.mjs";
@@ -316,7 +316,7 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
     (check) => check.name === "openclaw/ci-gate" && positiveInteger(check.statusId),
   );
   requireEvidence(combined.length === 1, "current combined CI/security status is required");
-  const deadlines = qualifyPriorCiDeadlineJobs({
+  const cancelledRoots = qualifyPriorCiCancelledRoots({
     evidence,
     run,
     jobs,
@@ -327,7 +327,7 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
   const failed = jobs.filter(
     (job) =>
       job !== gates[0] &&
-      (["failure", "timed_out"].includes(job.conclusion) || deadlines.has(job.id)),
+      (["failure", "timed_out"].includes(job.conclusion) || cancelledRoots.has(job.id)),
   );
   const attributions = evidence.failures;
   requireEvidence(
@@ -376,7 +376,8 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
       sourcePaths: entry.sourcePaths,
       evidence: entry.evidence,
       sourceObjects,
-      deadline: deadlines.get(entry.jobId),
+      deadline: cancelledRoots.get(entry.jobId)?.deadline,
+      failedStep: cancelledRoots.get(entry.jobId)?.failedStep,
     };
   });
   const rootIds = failures.map((entry) => entry.jobId).toSorted((a, b) => a - b);

@@ -58,6 +58,7 @@ export function createHookRunnerWithRegistry(
     timeoutMs?: number;
     eligibleTriggers?: readonly PluginHookAgentTrigger[];
     requiresToolAuthority?: true;
+    conversationAccessAllowed?: true;
   }>,
   options?: Parameters<typeof createHookRunner>[1],
 ) {

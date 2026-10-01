@@ -3,7 +3,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { BeamStoredSession, BeamUpload } from "./types.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS } from "./types.js";
 
-export type BeamSessionSummary = Readonly<
+type BeamSessionSummary = Readonly<
   Pick<BeamStoredSession, "beamId" | "title" | "source" | "completed" | "createdAt" | "receivedAt">
 >;
 

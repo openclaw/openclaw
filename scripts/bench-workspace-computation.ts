@@ -539,10 +539,7 @@ async function runSource(
   const samples: Sample[] = [];
   try {
     const ready = await receive();
-    assert.equal(ready.type, "ready");
-    if (ready.type !== "ready") {
-      throw new Error("child did not become ready");
-    }
+    assert.equal<"ready">(ready.type, "ready");
     const url = `http://127.0.0.1:${ready.port}/readyz`;
     const initial = await fetch(url, { signal: AbortSignal.timeout(options.timeoutMs) });
     assert.equal(initial.status, 200);

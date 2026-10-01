@@ -23,6 +23,7 @@ import {
   resolveVisibleMessagePositions,
 } from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type {
   TranscriptRecentReadLimits,
   TranscriptAnchorPageOptions,
@@ -100,6 +101,28 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
     }
   }
   return messages;
+}
+
+function capAnchorEventsByBytes(
+  events: SessionTranscriptMessageEvent[],
+  maxBytes: number | undefined,
+): SessionTranscriptMessageEvent[] {
+  if (maxBytes === undefined) {
+    return events;
+  }
+  const limit = Math.max(1_024, Math.floor(maxBytes));
+  let bytes = 2;
+  let start = events.length;
+  while (start > 0) {
+    const eventBytes = jsonUtf8Bytes(events[start - 1]);
+    const separatorBytes = start === events.length ? 0 : 1;
+    if (bytes + separatorBytes + eventBytes > limit) {
+      break;
+    }
+    bytes += separatorBytes + eventBytes;
+    start -= 1;
+  }
+  return events.slice(start);
 }
 
 function normalizeRecentSqliteReadOptions(
@@ -387,7 +410,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
       ...(page.readWindow ? { readWindow: page.readWindow } : {}),
       displaySource: page.displaySource,
       hasOverreadContext: page.hasOverreadContext,
-      messages: page.events
+      messages: capAnchorEventsByBytes(page.events, opts.maxBytes)
         .map(sqliteMessageEventWithSeq)
         .filter((message) => message !== undefined),
       offset: page.offset,

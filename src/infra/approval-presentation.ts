@@ -26,16 +26,7 @@ import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals
 const PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
 
 function normalizeDecisionList(decisions: readonly ApprovalDecision[]): ApprovalDecision[] {
-  const result: ApprovalDecision[] = [];
-  for (const decision of decisions) {
-    if (!result.includes(decision)) {
-      result.push(decision);
-    }
-  }
-  if (!result.includes("deny")) {
-    result.push("deny");
-  }
-  return result;
+  return [...new Set<ApprovalDecision>([...decisions, "deny"])];
 }
 
 function sanitizeOptionalSingleLine(value: unknown): string | null {
@@ -45,7 +36,7 @@ function sanitizeOptionalSingleLine(value: unknown): string | null {
 
 function normalizePluginExternalResolution(
   value: PluginApprovalRequestPayload["externalResolution"],
-): NonNullable<PluginApprovalRequestPayload["externalResolution"]> | null {
+) {
   if (!value) {
     return null;
   }
@@ -145,14 +136,7 @@ function buildPluginApprovalPresentation(params: {
     agentId: sanitizeOptionalSingleLine(request.agentId),
     ...(scope ? { scope } : {}),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
-    ...(externalResolution
-      ? {
-          externalResolution: {
-            label: externalResolution.label,
-            decisions: [...(externalResolution.decisions ?? ["allow-once"])],
-          },
-        }
-      : {}),
+    ...(externalResolution ? { externalResolution } : {}),
   };
 }
 

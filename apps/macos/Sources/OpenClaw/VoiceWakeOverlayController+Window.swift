@@ -4,17 +4,17 @@ import SwiftUI
 
 extension VoiceWakeOverlayController {
     func present() {
-        if !self.enableUI || ProcessInfo.processInfo.isRunningTests {
-            if !self.model.isVisible {
-                self.model.isVisible = true
-            }
-            return
-        }
+        let isFirst = !self.model.isVisible
+        if isFirst { self.model.isVisible = true }
+        self.presentation.present(self, isFirst)
+    }
+
+    func presentWindow(isFirst: Bool) {
+        if !self.enableUI || ProcessInfo.processInfo.isRunningTests { return }
         self.ensureWindow()
         self.hostingView?.rootView = VoiceWakeOverlayView(controller: self)
         let target = self.targetFrame()
-        let isFirst = !self.model.isVisible
-        if isFirst { self.model.isVisible = true }
+        let actions = self.actions()
         OverlayPanelFactory.present(
             window: self.window,
             isFirstPresent: isFirst,
@@ -24,7 +24,7 @@ extension VoiceWakeOverlayController {
                     level: .info,
                     "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
                 // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
-                AppStateStore.shared.startVoiceEars()
+                actions?.didPresent()
             },
             onAlreadyVisible: { window in
                 self.updateWindowFrame(animate: true)
@@ -49,6 +49,10 @@ extension VoiceWakeOverlayController {
 
     /// Reassert window ordering when other panels are shown.
     func bringToFrontIfVisible() {
+        self.presentation.bringToFront(self)
+    }
+
+    func bringNativeWindowToFront() {
         guard self.model.isVisible, let window = self.window else { return }
         window.level = Self.preferredWindowLevel
         window.orderFrontRegardless()
@@ -66,7 +70,39 @@ extension VoiceWakeOverlayController {
     }
 
     func updateWindowFrame(animate: Bool = false) {
+        self.presentation.updateFrame(self, animate)
+    }
+
+    func updateNativeWindowFrame(animate: Bool) {
         OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: animate)
+    }
+
+    func animateWindowDismissal(
+        reason: DismissReason,
+        outcome: SendOutcome,
+        completion: @escaping @MainActor @Sendable (DismissalCompletion) -> Void)
+    {
+        guard self.enableUI else {
+            completion(.disabledUI)
+            return
+        }
+        guard let window else {
+            completion(.missingWindow)
+            return
+        }
+        let target = self.dismissTargetFrame(for: window.frame, reason: reason, outcome: outcome)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            if let target {
+                window.animator().setFrame(target, display: true)
+            }
+            window.animator().alphaValue = 0
+        } completionHandler: {
+            Task { @MainActor in
+                completion(.animated(finishWindow: { window.orderOut(nil) }))
+            }
+        }
     }
 
     func measuredHeight() -> CGFloat {

@@ -11,32 +11,45 @@ describe("fetchOllamaModels preflight timeout", () => {
     vi.unstubAllEnvs();
   });
 
-  it("aborts at the configured deadline when preflight lookup stalls", async () => {
+  it.each([
+    { opts: undefined, budget: TAGS_TIMEOUT_MS },
+    { opts: { timeoutMs: 150 }, budget: 150 },
+  ])("aborts stalled preflight lookup at the $budget ms deadline", async ({ opts, budget }) => {
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
-    let lookupCalls = 0;
+    const lookupStarted = Promise.withResolvers<void>();
     const stalledLookup: LookupFn = (() => {
-      lookupCalls += 1;
+      lookupStarted.resolve();
       return new Promise<never>(() => {});
     }) as LookupFn;
     const fetchSpy = vi.fn(async () => new Response("should not run"));
 
     const started = Date.now();
-    // Capture settlement time so advancing the clock cannot hide an early timeout.
-    const pending = fetchOllamaModels("https://ollama.example.com", undefined, {
+    let settlement:
+      | { result: Awaited<ReturnType<typeof fetchOllamaModels>>; elapsedMs: number }
+      | undefined;
+    const pending = fetchOllamaModels("https://ollama.example.com", opts, {
       fetchImpl: fetchSpy,
       lookupFn: stalledLookup,
-    }).then((result) => ({ result, elapsedMs: Date.now() - started }));
-    await vi.waitFor(() => expect(lookupCalls).toBeGreaterThan(0));
-    await vi.advanceTimersByTimeAsync(TAGS_TIMEOUT_MS);
-    const { result, elapsedMs } = await pending;
-
-    expect(result).toEqual({ reachable: false, models: [] });
-    // Preflight ran and never handed off to the socket.
-    expect(fetchSpy).not.toHaveBeenCalled();
-    // Bounded by the guard-owned deadline, not left to hang.
-    expect(elapsedMs).toBeGreaterThanOrEqual(TAGS_TIMEOUT_MS - 500);
-    expect(elapsedMs).toBeLessThan(TAGS_TIMEOUT_MS * 3);
+    }).then((result) => {
+      settlement = { result, elapsedMs: Date.now() - started };
+    });
+    try {
+      await lookupStarted.promise;
+      await vi.advanceTimersByTimeAsync(budget - 1);
+      expect(settlement).toBeUndefined();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settlement).toEqual({
+        result: { reachable: false, models: [] },
+        elapsedMs: budget,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      // Drain the default deadline even when a custom-budget assertion fails.
+      await vi.advanceTimersByTimeAsync(TAGS_TIMEOUT_MS);
+      await pending;
+    }
   });
 
   it("still dispatches the fetch when preflight lookup resolves", async () => {

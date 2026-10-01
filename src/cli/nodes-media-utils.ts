@@ -1,4 +1,3 @@
-// Media utility adapters for node CLI commands and temporary media outputs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";

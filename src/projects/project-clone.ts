@@ -26,7 +26,6 @@ import {
 } from "./project-registration.js";
 import {
   listProjectRegistry,
-  removeProjectCheckoutReference,
   resolveProjectCloneRefreshOwner,
   type ProjectRegistryRecord,
 } from "./project-registry.js";
@@ -258,24 +257,44 @@ async function resolveClonedProjectCheckout(
 export async function removeClonedProjectCheckout(
   project: ProjectRegistryRecord,
   assertUnreferenced: () => void | Promise<void>,
-  options: OpenClawStateDatabaseOptions & { env?: NodeJS.ProcessEnv } = {},
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<boolean> {
-  return await withProjectCheckoutLifecycle(project.repoRoot, options, async (lease) => {
-    const checkout = await resolveClonedProjectCheckout(project, options);
-    await assertUnreferenced();
-    const result = removeProjectCheckoutReference(project, lease, options);
-    if (result === "missing") {
-      return false;
-    }
-    if (result === "changed") {
-      throw new ProjectCloneError("clone_failed", "The cloned project changed before deletion.");
-    }
-    if (result === "remaining") {
+  const selectedProject = { ...project };
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  const databaseOptions = { path: context.admission.databasePath, env };
+  return await withProjectCheckoutLifecycle(
+    selectedProject.repoRoot,
+    databaseOptions,
+    async (lease) => {
+      const checkout = await resolveClonedProjectCheckout(selectedProject, databaseOptions);
+      lease.assertOwned();
+      await assertUnreferenced();
+      const { runWithOpenClawStateLeaseWorker } =
+        await import("../state/openclaw-state-lease-worker-operation.js");
+      const result = await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
+        scope.execute({
+          type: "projects.removeCheckoutReference",
+          input: { project: selectedProject, lease: identity },
+        }),
+      );
+      if (result === "missing") {
+        return false;
+      }
+      if (result === "changed") {
+        throw new ProjectCloneError("clone_failed", "The cloned project changed before deletion.");
+      }
+      if (result === "remaining") {
+        return true;
+      }
+      await assertUnreferenced();
+      context.admission.assertCurrent();
+      lease.assertOwned();
+      await fs.rm(checkout, { recursive: true });
+      context.admission.assertCurrent();
+      lease.assertOwned();
+      await fs.rmdir(path.dirname(checkout)).catch(() => {});
       return true;
-    }
-    lease.assertOwned();
-    await fs.rm(checkout, { recursive: true });
-    await fs.rmdir(path.dirname(checkout)).catch(() => {});
-    return true;
-  });
+    },
+  );
 }

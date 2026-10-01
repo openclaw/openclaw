@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
 import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
@@ -8,6 +7,7 @@ import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
+import { digestClawValue } from "./digest.js";
 import {
   resolveClawProfileCapabilities,
   resolveClawToolProfileSnapshot,
@@ -37,7 +37,7 @@ function capabilityValue(
 ): ClawUpdateCapabilityValue {
   return {
     summary,
-    digest: `sha256:${createHash("sha256").update(stableStringify(digestSource)).digest("hex")}`,
+    digest: digestClawValue(digestSource),
   };
 }
 

@@ -120,9 +120,6 @@ function isModuleSpecifierStringNode(node: ts.Node) {
   );
 }
 
-/**
- * Finds channel-specific references inside channel-agnostic protected sources.
- */
 export function findChannelAgnosticBoundaryViolations(
   _content: string,
   _fileName: string,
@@ -223,9 +220,6 @@ export function findChannelAgnosticBoundaryViolations(
   return violations;
 }
 
-/**
- * Finds reverse dependencies from channel core into plugin/runtime surfaces.
- */
 export function findChannelCoreReverseDependencyViolations(
   content: string,
   fileName: string,
@@ -240,55 +234,33 @@ export function findChannelCoreReverseDependencyViolations(
   });
 }
 
-/**
- * Finds user-facing channel names in ACP-owned text sources.
- */
-export function findAcpUserFacingChannelNameViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  const violations: BoundaryViolation[] = [];
-
-  const visit = (node: ts.Node): void => {
-    const text = readStringLiteral(node);
-    if (text && userFacingChannelNameRe.test(text) && !isModuleSpecifierStringNode(node)) {
-      violations.push({
-        line: toLine(sourceFile, node),
-        reason: `user-facing text references channel name (${JSON.stringify(text)})`,
-      });
-    }
-    node.forEachChild(visit);
+function stringLiteralBoundaryRule(matches: (text: string) => boolean, reason: string) {
+  return (_content: string, _fileName: string, sourceFile: ts.SourceFile) => {
+    const violations: BoundaryViolation[] = [];
+    const visit = (node: ts.Node): void => {
+      const text = readStringLiteral(node);
+      if (text && matches(text) && !isModuleSpecifierStringNode(node)) {
+        violations.push({
+          line: toLine(sourceFile, node),
+          reason: `${reason} (${JSON.stringify(text)})`,
+        });
+      }
+      node.forEachChild(visit);
+    };
+    visit(sourceFile);
+    return violations;
   };
-
-  visit(sourceFile);
-  return violations;
 }
 
-/**
- * Finds raw system mark literals where shared constants should be used.
- */
-export function findSystemMarkLiteralViolations(
-  _content: string,
-  _fileName: string,
-  sourceFile: ts.SourceFile,
-) {
-  const violations: BoundaryViolation[] = [];
+export const findAcpUserFacingChannelNameViolations = stringLiteralBoundaryRule(
+  (text) => userFacingChannelNameRe.test(text),
+  "user-facing text references channel name",
+);
 
-  const visit = (node: ts.Node): void => {
-    const text = readStringLiteral(node);
-    if (text && text.includes(systemMarkLiteral) && !isModuleSpecifierStringNode(node)) {
-      violations.push({
-        line: toLine(sourceFile, node),
-        reason: `hardcoded system mark literal (${JSON.stringify(text)})`,
-      });
-    }
-    node.forEachChild(visit);
-  };
-
-  visit(sourceFile);
-  return violations;
-}
+export const findSystemMarkLiteralViolations = stringLiteralBoundaryRule(
+  (text) => text.includes(systemMarkLiteral),
+  "hardcoded system mark literal",
+);
 
 const boundaryRuleSets = [
   {
@@ -313,9 +285,6 @@ const boundaryRuleSets = [
   },
 ];
 
-/**
- * Runs all channel-agnostic boundary checks.
- */
 export async function main() {
   using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const violations: string[] = [];

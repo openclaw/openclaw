@@ -1,4 +1,3 @@
-// Local skill loader reads skill definitions from local filesystem roots.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -30,7 +29,6 @@ export type LocalSkillLoadDiagnostic = {
   message: string;
 };
 
-// Read SKILL.md through the root boundary helper so symlinks cannot escape the skill root.
 function readSkillFileSync(params: {
   rootRealPath: string;
   filePath: string;

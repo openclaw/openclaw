@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
+  VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationRequest,
   VideoGenerationSourceAsset,
@@ -160,28 +161,16 @@ async function readPixVerseJson<T>(response: Response, label: string): Promise<T
   return readPixVerseSuccess(payload, label);
 }
 
-function readPixVerseVideoId(payload: PixVerseVideoCreateResponse): number {
-  const videoId = asSafeIntegerInRange(payload.video_id, { min: 0 });
-  if (videoId == null) {
-    throw new Error("PixVerse video generation response missing video_id");
+function readPixVerseInteger(value: unknown, label: string): number {
+  const integer = asSafeIntegerInRange(value, { min: 0 });
+  if (integer === undefined) {
+    throw new Error(label);
   }
-  return videoId;
-}
-
-function readPixVerseImageId(payload: PixVerseUploadImageResponse): number {
-  const imageId = asSafeIntegerInRange(payload.img_id, { min: 0 });
-  if (imageId == null) {
-    throw new Error("PixVerse image upload response missing img_id");
-  }
-  return imageId;
+  return integer;
 }
 
 function readPixVerseStatus(payload: PixVerseVideoResultResponse): number {
-  const status = asSafeIntegerInRange(payload.status, { min: 0 });
-  if (status == null) {
-    throw new Error("PixVerse video status response missing status");
-  }
-  return status;
+  return readPixVerseInteger(payload.status, "PixVerse video status response missing status");
 }
 
 function buildUploadImageForm(asset: VideoGenerationSourceAsset): FormData {
@@ -308,6 +297,31 @@ function extractPixVerseVideo(payload: PixVerseVideoResultResponse): GeneratedVi
   };
 }
 
+function buildPixVerseModeCapabilities(imageToVideo = false): VideoGenerationModeCapabilities {
+  return {
+    maxVideos: 1,
+    ...(imageToVideo ? { maxInputImages: 1 } : {}),
+    maxDurationSeconds: MAX_DURATION_SECONDS,
+    supportedDurationSeconds: Array.from({ length: MAX_DURATION_SECONDS }, (_, index) => index + 1),
+    ...(!imageToVideo ? { aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS] } : {}),
+    resolutions: ["360P", "540P", "720P", "1080P"],
+    ...(!imageToVideo ? { supportsAspectRatio: true } : {}),
+    supportsResolution: true,
+    supportsAudio: true,
+    providerOptions: {
+      seed: "number",
+      negative_prompt: "string",
+      negativePrompt: "string",
+      quality: "string",
+      ...(imageToVideo ? { motion_mode: "string" as const, motionMode: "string" as const } : {}),
+      camera_movement: "string",
+      cameraMovement: "string",
+      template_id: "number",
+      templateId: "number",
+    },
+  };
+}
+
 export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: PIXVERSE_PROVIDER_ID,
@@ -317,53 +331,10 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     models: [...PIXVERSE_VIDEO_MODELS],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS],
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
-      },
+      generate: buildPixVerseModeCapabilities(),
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
-        maxInputImages: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          motion_mode: "string",
-          motionMode: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
+        ...buildPixVerseModeCapabilities(true),
       },
       videoToVideo: {
         enabled: false,
@@ -424,11 +395,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         });
         try {
           await assertOkOrThrowHttpError(upload.response, "PixVerse image upload failed");
-          imageId = readPixVerseImageId(
-            await readPixVerseJson<PixVerseUploadImageResponse>(
-              upload.response,
-              "PixVerse image upload failed",
-            ),
+          const uploaded = await readPixVerseJson<PixVerseUploadImageResponse>(
+            upload.response,
+            "PixVerse image upload failed",
+          );
+          imageId = readPixVerseInteger(
+            uploaded.img_id,
+            "PixVerse image upload response missing img_id",
           );
         } finally {
           await upload.release();
@@ -450,11 +423,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(create.response, "PixVerse video generation failed");
-        const videoId = readPixVerseVideoId(
-          await readPixVerseJson<PixVerseVideoCreateResponse>(
-            create.response,
-            "PixVerse video generation failed",
-          ),
+        const submitted = await readPixVerseJson<PixVerseVideoCreateResponse>(
+          create.response,
+          "PixVerse video generation failed",
+        );
+        const videoId = readPixVerseInteger(
+          submitted.video_id,
+          "PixVerse video generation response missing video_id",
         );
         const completed = await pollPixVerseVideo({
           videoId,

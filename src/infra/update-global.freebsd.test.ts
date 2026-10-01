@@ -177,6 +177,7 @@ describe("FreeBSD package-manager admission", () => {
             const startup = createGatewayUpdateCheck({
               lifecycle: createGatewayUpdateLifecycle(createTestGatewayScheduler()),
               getConfig: () => ({}),
+              applyRemoteCatalogUpdate: async () => "unchanged",
               log: { info: vi.fn() },
               isNixMode: false,
             });

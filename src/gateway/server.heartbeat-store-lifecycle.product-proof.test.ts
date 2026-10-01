@@ -245,7 +245,8 @@ describe("heartbeat notification store ownership through the Gateway", () => {
             },
             { expectFinal: false },
           );
-          expect((await wait(followup.runId)).status).toBe("ok");
+          const followupResult = await wait(followup.runId);
+          expect(followupResult.status, JSON.stringify(followupResult)).toBe("ok");
 
           if (transition === "different store") {
             const { hash } = await gateway.client.request<{ hash: string }>("config.get", {});

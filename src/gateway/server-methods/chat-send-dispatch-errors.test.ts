@@ -265,7 +265,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         ]);
         if (stateContention) {
           const summary =
-            "The turn was interrupted while the server was busy. Check its status before trying again.";
+            "Your request was interrupted while the server was busy. Check its status before trying again.";
           const terminal = broadcast.mock.calls.at(-1)?.[1];
           expect(terminal).toMatchObject({ errorKind: "state_contention" });
           expect(terminal.errorMessage).toMatch(new RegExp(`^${summary.replaceAll(".", "\\.")}`));

@@ -3,34 +3,6 @@ import OpenClawKit
 import OpenClawProtocol
 @preconcurrency import UserNotifications
 
-private struct ApprovalNotificationUTF8Key: Hashable {
-    let bytes: [UInt8]
-
-    init(_ rawValue: String) {
-        self.bytes = Array(rawValue.utf8)
-    }
-
-    var notificationComponent: String {
-        let hexDigits = Array("0123456789ABCDEF".utf8)
-        var encoded: [UInt8] = []
-        encoded.reserveCapacity(self.bytes.count)
-        for byte in self.bytes {
-            switch byte {
-            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x2E, 0x5F, 0x7E:
-                encoded.append(byte)
-            default:
-                encoded.append(0x25)
-                encoded.append(hexDigits[Int(byte >> 4)])
-                encoded.append(hexDigits[Int(byte & 0x0F)])
-            }
-        }
-        guard let component = String(bytes: encoded, encoding: .utf8) else {
-            preconditionFailure("Percent-encoded approval ID must be UTF-8")
-        }
-        return component
-    }
-}
-
 struct ApprovalNotificationPrompt: Codable, Equatable, Hashable {
     let approvalId: String
     let gatewayDeviceId: String?
@@ -61,17 +33,17 @@ struct ApprovalNotificationPrompt: Codable, Equatable, Hashable {
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        let sameApprovalID = ApprovalNotificationUTF8Key(lhs.approvalId) ==
-            ApprovalNotificationUTF8Key(rhs.approvalId)
-        let sameGatewayID = lhs.gatewayDeviceId.map(ApprovalNotificationUTF8Key.init) ==
-            rhs.gatewayDeviceId.map(ApprovalNotificationUTF8Key.init)
+        let sameApprovalID = ExactOpaqueIdentifierKey(lhs.approvalId) ==
+            ExactOpaqueIdentifierKey(rhs.approvalId)
+        let sameGatewayID = lhs.gatewayDeviceId.map(ExactOpaqueIdentifierKey.init) ==
+            rhs.gatewayDeviceId.map(ExactOpaqueIdentifierKey.init)
         return lhs.kind == rhs.kind && sameApprovalID && sameGatewayID
     }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(self.kind)
-        hasher.combine(ApprovalNotificationUTF8Key(self.approvalId))
-        hasher.combine(self.gatewayDeviceId.map(ApprovalNotificationUTF8Key.init))
+        hasher.combine(ExactOpaqueIdentifierKey(self.approvalId))
+        hasher.combine(self.gatewayDeviceId.map(ExactOpaqueIdentifierKey.init))
     }
 }
 
@@ -202,8 +174,8 @@ enum ApprovalNotificationBridge {
             else { return nil }
             let matchesCurrentOwner = requestedPush == push
             let matchesLegacyOwnerless = includingLegacyOwnerless &&
-                ApprovalNotificationUTF8Key(requestedPush.approvalId) ==
-                ApprovalNotificationUTF8Key(push.approvalId) &&
+                ExactOpaqueIdentifierKey(requestedPush.approvalId) ==
+                ExactOpaqueIdentifierKey(push.approvalId) &&
                 requestedPush.gatewayDeviceId == nil
             guard matchesCurrentOwner || matchesLegacyOwnerless else { return nil }
             return snapshot.identifier
@@ -260,8 +232,9 @@ enum ApprovalNotificationBridge {
         guard let approvalID = ExecApprovalIdentifier.exact(push.approvalId) else {
             return nil
         }
-        let approvalComponent = ApprovalNotificationUTF8Key(approvalID).notificationComponent
-        let ownerComponent = ApprovalNotificationUTF8Key(owner).notificationComponent
+        // The owner length disambiguates dots in this shipped notification ID format.
+        let approvalComponent = ExactOpaqueIdentifierKey(approvalID).notificationComponent(preservingDots: true)
+        let ownerComponent = ExactOpaqueIdentifierKey(owner).notificationComponent(preservingDots: true)
         return "\(configuration.encodedRequestPrefix)\(ownerComponent.utf8.count):" +
             "\(ownerComponent).\(approvalComponent)"
     }

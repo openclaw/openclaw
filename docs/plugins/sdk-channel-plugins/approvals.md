@@ -23,12 +23,38 @@ only - core no longer reads approval auth hooks from that object.
 Use `approvalCapability.delivery` only for native approval routing or fallback
 suppression, and `approvalCapability.render` only when a channel truly needs
 custom approval payloads instead of the shared renderer.
+`delivery.shouldBlockForwardingFallback` rejects a fallback that cannot enforce
+the selected reviewer policy even when no native handler is running. A channel
+may require native reviewer delivery and reject all generic forwarding for a
+selected policy;
+`delivery.shouldSuppressForwardingFallback` avoids duplicate delivery only while
+the native handler is active. Both receive the approval request payload. For a
+terminal notice without a cached pending request, core reconstructs it from the
+resolved event with `createdAtMs` and `expiresAtMs` set to zero; policy checks
+should use the nested request payload.
 
 ### Approval auth
 
 - `approvalCapability.authorizeActorAction` and
   `approvalCapability.getActionAvailabilityState` are the canonical
   approval-auth seam.
+- A channel that enforces host-configured, request-scoped plugin reviewer lists
+  for native cards, forwarded prompts, and final decisions sets
+  `approvalCapability.supportsScopedPluginApprovalApprovers: true`. When a
+  reviewer policy exists for the channel, the host declines plugin approval
+  routes and decisions through an older capability without this marker. Keep
+  the marker absent until every approval path enforces the selected list.
+- If plugin `/approve` authorization needs a space-qualified reviewer ID,
+  implement `approvalCapability.resolveReviewerSenderId`. Core passes `cfg`,
+  `accountId`, `senderId`, and `spaceId`, then uses the result only for plugin
+  approval command authorization. Derive the space from authenticated channel
+  ingress; the callback does not receive the pending request. If it is unknown,
+  return `undefined`: core retains the raw sender ID. An unqualified raw ID
+  cannot satisfy a space-qualified policy. The channel's
+  `authorizeActorAction` and Gateway custody still check the exact request
+  when resolving a decision. Older hosts ignore this optional callback and
+  also retain the raw sender ID; channels that supply only unqualified IDs
+  need a host that calls the callback for space-qualified `/approve` policy.
 - Use `getActionAvailabilityState` for same-chat approval auth availability.
   Keep configured approvers available for `/approve` even when native delivery
   is disabled; use native initiating-surface state for delivery/setup guidance

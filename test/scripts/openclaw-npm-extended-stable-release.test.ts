@@ -655,7 +655,7 @@ describe("extended-stable selector capture", () => {
 });
 
 describe("extended-stable registry readback", () => {
-  it.each([2, 20, 60])(
+  it.each([2, 20, 60, 120])(
     "accepts convergence on attempt %s within the propagation window",
     async (visibleAt) => {
       let attempt = 0;
@@ -680,14 +680,14 @@ describe("extended-stable registry readback", () => {
     },
   );
 
-  it("fails closed after the fifteen-minute propagation window", async () => {
+  it("fails closed after the thirty-minute propagation window", async () => {
     const query = vi.fn(async () => ({ status: 1, stdout: "" }));
     const sleep = vi.fn(async (_delay: number) => {});
     await expect(
       verifyExtendedStableRegistryReadback({ expectedVersion: "2026.6.33", query, sleep }),
-    ).rejects.toThrow(/after 91 attempts/u);
-    expect(query).toHaveBeenCalledTimes(182);
-    expect(sleep).toHaveBeenCalledTimes(90);
+    ).rejects.toThrow(/after 181 attempts/u);
+    expect(query).toHaveBeenCalledTimes(362);
+    expect(sleep).toHaveBeenCalledTimes(180);
     expect(sleep.mock.calls.every(([delay]) => delay === 10_000)).toBe(true);
   });
 });

@@ -178,10 +178,10 @@ function matchesRuntimePatchInput(
   ) {
     return false;
   }
+  // Update hunks may use a contextual @@ marker or omit the first marker entirely.
   return operation === "add"
     ? lines.includes("+runtime patch")
-    : lines.includes("@@") &&
-        lines.includes(`-${RUNTIME_PATCH_DENIED_CONTENTS.trimEnd()}`) &&
+    : lines.includes(`-${RUNTIME_PATCH_DENIED_CONTENTS.trimEnd()}`) &&
         lines.includes("+runtime patch outside the workspace");
 }
 

@@ -12,11 +12,11 @@ import OpenClawKit
 struct GatewayConnectConfig: Sendable {
     let url: URL
     let stableID: String
-    let tls: GatewayTLSParams?
+    var tls: GatewayTLSParams?
     let token: String?
     let bootstrapToken: String?
     let password: String?
-    let nodeOptions: GatewayConnectOptions
+    var nodeOptions: GatewayConnectOptions
 
     /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.
@@ -75,13 +75,7 @@ struct GatewayConnectConfig: Sendable {
     }
 
     private static func sameOptions(_ lhs: GatewayConnectOptions, _ rhs: GatewayConnectOptions) -> Bool {
-        let lhsScopes = Self.normalizedValues(lhs.scopes)
-        let rhsScopes = Self.normalizedValues(rhs.scopes)
-        let lhsCaps = Self.normalizedValues(lhs.caps)
-        let rhsCaps = Self.normalizedValues(rhs.caps)
-        let lhsCommands = Self.normalizedValues(lhs.commands)
-        let rhsCommands = Self.normalizedValues(rhs.commands)
-        return lhs.role == rhs.role &&
+        lhs.role == rhs.role &&
             lhs.scopesAreExplicit == rhs.scopesAreExplicit &&
             lhs.clientId == rhs.clientId &&
             lhs.clientMode == rhs.clientMode &&
@@ -91,9 +85,9 @@ struct GatewayConnectConfig: Sendable {
             lhs.allowStoredDeviceAuth == rhs.allowStoredDeviceAuth &&
             lhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) ==
             rhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) &&
-            lhsScopes == rhsScopes &&
-            lhsCaps == rhsCaps &&
-            lhsCommands == rhsCommands &&
+            self.normalizedValues(lhs.scopes) == self.normalizedValues(rhs.scopes) &&
+            self.normalizedValues(lhs.caps) == self.normalizedValues(rhs.caps) &&
+            self.normalizedValues(lhs.commands) == self.normalizedValues(rhs.commands) &&
             lhs.permissions == rhs.permissions
     }
 

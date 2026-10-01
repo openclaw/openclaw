@@ -264,7 +264,7 @@ describe("embedded run retry dispatch", () => {
       turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
     });
 
-    expect(authority.exec).toEqual({
+    expect(authority.toolAuthority.exec).toEqual({
       host: "node",
       security: "full",
       ask: "off",
@@ -282,7 +282,12 @@ describe("embedded run retry dispatch", () => {
       turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
     });
 
-    expect(authority.exec).toEqual({ host: "sandbox", security: "deny", ask: "off", safeBins: [] });
+    expect(authority.toolAuthority.exec).toEqual({
+      host: "sandbox",
+      security: "deny",
+      ask: "off",
+      safeBins: [],
+    });
   });
 
   it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {

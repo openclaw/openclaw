@@ -688,16 +688,14 @@ export class Agent {
         this.followUpQueue.commit(event.message);
         break;
 
-      case "tool_execution_start": {
-        const pendingToolCalls = new Set(this.mutableState.pendingToolCalls);
-        pendingToolCalls.add(event.toolCallId);
-        this.mutableState.pendingToolCalls = pendingToolCalls;
-        break;
-      }
-
+      case "tool_execution_start":
       case "tool_execution_end": {
         const pendingToolCalls = new Set(this.mutableState.pendingToolCalls);
-        pendingToolCalls.delete(event.toolCallId);
+        if (event.type === "tool_execution_start") {
+          pendingToolCalls.add(event.toolCallId);
+        } else {
+          pendingToolCalls.delete(event.toolCallId);
+        }
         this.mutableState.pendingToolCalls = pendingToolCalls;
         break;
       }

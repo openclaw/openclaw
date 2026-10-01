@@ -1,4 +1,3 @@
-// Gateway status probe helper used by `gateway status` service diagnostics.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import {

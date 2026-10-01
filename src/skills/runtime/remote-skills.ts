@@ -26,7 +26,7 @@ const log = createSubsystemLogger("gateway/skills-remote");
 let reconcileRemoteSkillConnections: (() => ReadonlySet<string> | undefined) | null = null;
 let prepareRemoteSkillConnectionsOwner: (() => Promise<unknown>) | undefined;
 
-function remoteConnectionKey(nodeId: string, connId: string): string {
+export function remoteConnectionKey(nodeId: string, connId: string): string {
   return `${nodeId}\0${connId}`;
 }
 
@@ -61,7 +61,7 @@ function prepareNodeSkills(
       }
       prepared.push({ ...skill, frontmatter, contentHash: sha256Hex(skill.content) });
     } catch (error) {
-      const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
+      const filePath = remoteSkillLocation(nodeId, skill.name);
       log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
     }
   }

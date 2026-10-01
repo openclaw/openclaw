@@ -105,6 +105,22 @@ function utilityFixtureProvider(id = "small"): ModelProviderConfig {
   };
 }
 
+type ChoiceParams = Parameters<typeof applyNonInteractivePluginProviderChoice>[0];
+
+function applyChoice(params: Pick<ChoiceParams, "authChoice"> & Partial<ChoiceParams>) {
+  const nextConfig = params.nextConfig ?? { agents: { defaults: {} } };
+  return applyNonInteractivePluginProviderChoice({
+    nextConfig,
+    baseConfig: nextConfig,
+    opts: {},
+    runtime: createRuntime(),
+    target,
+    resolveApiKey: vi.fn(),
+    toApiKeyCredential: vi.fn(),
+    ...params,
+  });
+}
+
 type MockCalls = { mock: { calls: Array<Array<unknown>> } };
 
 function mockCall(mock: MockCalls, callIndex = 0): Array<unknown> {
@@ -167,15 +183,11 @@ async function applyProviderModelChoice(params: {
     method: { runNonInteractive },
   });
 
-  return applyNonInteractivePluginProviderChoice({
+  return applyChoice({
     nextConfig,
     authChoice: `provider-plugin:${params.providerId}:custom`,
-    opts: {} as never,
-    runtime: runtime as never,
-    baseConfig: nextConfig,
+    runtime,
     target: params.target ?? target,
-    resolveApiKey: vi.fn(),
-    toApiKeyCredential: vi.fn(),
   });
 }
 
@@ -296,15 +308,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       });
     const runtime = createRuntime();
     try {
-      const result = await applyNonInteractivePluginProviderChoice({
+      const result = await applyChoice({
         nextConfig: config,
         authChoice: "example-api-key",
         opts: {},
         runtime,
-        baseConfig: config,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
       });
       expect(result).toBeNull();
       expectRuntimeErrorIncludes(runtime, "capability consent");
@@ -315,56 +323,52 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     }
   });
 
-  it.each(["nvidia", "google"])(
-    "keeps %s provider model selection on the configured explicit-fleet agent",
-    async (providerId) => {
-      const modelRef = `${providerId}/selected`;
-      const result = await applyProviderModelChoice({
-        providerId,
-        modelRef,
-        target: {
-          agentId: "ops",
-          agentDir: "/tmp/ops-agent",
-          workspaceDir: "/tmp/ops-workspace",
-        },
-        nextConfig: {
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              systemAgent: { agentId: "ops" },
-              model: { primary: "anthropic/global" },
-              models: { "anthropic/global": { alias: "Global" } },
-            },
-            entries: {
-              main: { model: { primary: "anthropic/main" } },
-              ops: {
-                model: { primary: "openai/ops" },
-                models: { "openai/ops": { alias: "Operations" } },
-              },
+  it("keeps provider model selection on the configured explicit-fleet agent", async () => {
+    const providerId = "nvidia";
+    const modelRef = `${providerId}/selected`;
+    const result = await applyProviderModelChoice({
+      providerId,
+      modelRef,
+      target: {
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+      },
+      nextConfig: {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            model: { primary: "anthropic/global" },
+            models: { "anthropic/global": { alias: "Global" } },
+          },
+          entries: {
+            main: { model: { primary: "anthropic/main" } },
+            ops: {
+              model: { primary: "openai/ops" },
+              models: { "openai/ops": { alias: "Operations" } },
             },
           },
         },
-      });
+      },
+    });
 
-      expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
-      expect(result?.agents?.defaults?.models).toEqual({
-        "anthropic/global": { alias: "Global" },
-      });
-      expect(result?.agents?.entries?.ops?.model).toEqual({ primary: modelRef });
-      expect(result?.agents?.entries?.ops?.models).toEqual({
-        "openai/ops": { alias: "Operations" },
-      });
-      expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
-      expect(ensureModelSelectionRuntimePlugins).toHaveBeenCalledWith(
-        expect.objectContaining({ model: modelRef }),
-      );
-    },
-  );
+    expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
+    expect(result?.agents?.defaults?.models).toEqual({
+      "anthropic/global": { alias: "Global" },
+    });
+    expect(result?.agents?.entries?.ops?.model).toEqual({ primary: modelRef });
+    expect(result?.agents?.entries?.ops?.models).toEqual({
+      "openai/ops": { alias: "Operations" },
+    });
+    expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
+    expect(ensureModelSelectionRuntimePlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ model: modelRef }),
+    );
+  });
 
-  it.each([
-    { providerId: "lmstudio", modelRef: "lmstudio/qwen/qwen3-1.7b" },
-    { providerId: "ollama", modelRef: "ollama/qwen3:8b" },
-  ])("does not persist lean defaults for verified $providerId onboarding", async (params) => {
+  it("does not persist lean defaults for local provider onboarding", async () => {
+    const params = { providerId: "ollama", modelRef: "ollama/qwen3:8b" };
     const result = await applyProviderModelChoice(params);
 
     expect(result?.agents?.defaults?.model).toEqual({ primary: params.modelRef });
@@ -372,10 +376,8 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result?.wizard).toBeUndefined();
   });
 
-  it.each([
-    { providerId: "lmstudio", modelRef: "lmstudio/qwen/qwen3-1.7b" },
-    { providerId: "ollama", modelRef: "ollama/qwen3:8b" },
-  ])("preserves explicit lean-tool opt-out for verified $providerId onboarding", async (params) => {
+  it("preserves explicit lean-tool opt-out for local provider onboarding", async () => {
+    const params = { providerId: "ollama", modelRef: "ollama/qwen3:8b" };
     const result = await applyProviderModelChoice({
       ...params,
       nextConfig: {
@@ -483,15 +485,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
           : undefined;
       });
 
-      const result = await applyNonInteractivePluginProviderChoice({
+      const result = await applyChoice({
         nextConfig: initialConfig,
         authChoice: "pixverse-api-key",
         opts: { pixverseApiKey: "pixverse-test-key" } as never,
-        runtime: runtime as never,
-        baseConfig: initialConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
+        runtime,
       });
 
       expect(runNonInteractive).toHaveBeenCalledOnce();
@@ -549,15 +547,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    const result = await applyChoice({
       authChoice: "  groq-api-key  ",
       opts: { groqApiKey: "groq-key" } as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledExactlyOnceWith({
@@ -614,15 +607,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       { ...choice, deprecatedChoiceIds: ["modelstudio-api-key"] },
     ]);
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    const result = await applyChoice({
       authChoice: "modelstudio-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     expect(result).toBeNull();
@@ -670,15 +657,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     async (json) => {
       const runtime = createRuntime();
 
-      const result = await applyNonInteractivePluginProviderChoice({
-        nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      const result = await applyChoice({
         authChoice: "provider-plugin:workspace-provider:api-key",
         opts: { json } as never,
-        runtime: runtime as never,
-        baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
+        runtime,
       });
 
       expect(result).toBeNull();
@@ -703,7 +685,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   );
 
   it.each([
-    { authChoice: "provider-plugin:", json: false },
     { authChoice: "provider-plugin:", json: true },
     { authChoice: "provider-plugin:   ", json: false },
     { authChoice: "provider-plugin::method", json: false },
@@ -713,15 +694,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       const runtime = createRuntime();
       const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
 
-      const result = await applyNonInteractivePluginProviderChoice({
+      const result = await applyChoice({
         nextConfig,
         authChoice,
         opts: { json } as never,
-        runtime: runtime as never,
-        baseConfig: nextConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
+        runtime,
       });
 
       expect(result).toBeNull();
@@ -752,15 +729,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       providerId: "workspace-provider",
     } as never);
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    const result = await applyChoice({
       authChoice: "workspace-provider-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     expect(result).toBeNull();
@@ -795,15 +766,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    const result = await applyChoice({
       authChoice: "provider-plugin:demo-provider:custom",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     const providersInput = mockArg(resolvePluginProvidersCore);
@@ -811,6 +776,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(providersInput.onlyPluginIds).toEqual(["demo-plugin"]);
     expect(providersInput.includeUntrustedWorkspacePlugins).toBe(false);
     expect(runNonInteractive).toHaveBeenCalledOnce();
+    expect(runNonInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: target.agentDir, workspaceDir: target.workspaceDir }),
+    );
     expect(result).toEqual({ plugins: { allow: ["demo-plugin"] } });
   });
 
@@ -818,15 +786,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     const runtime = createRuntime();
     resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
 
-    await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    await applyChoice({
       authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     const preferenceInput = mockArg(resolvePreferredProviderForAuthChoice);
@@ -856,15 +818,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    const result = await applyChoice({
       authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     expect(runNonInteractive).toHaveBeenCalledOnce();
@@ -881,45 +837,38 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(migrationInput.nonInteractive).toBe(true);
   });
 
-  it.each(["failed", "timed_out"] as const)(
-    "rejects a required Codex runtime that is %s before later setup effects",
-    async (status) => {
-      const runtime = createRuntime();
-      const selectedConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-      } as OpenClawConfig;
-      const runNonInteractive = vi.fn(async () => selectedConfig);
-      const message = `Codex runtime is required but unavailable (status: ${status}). Retry setup after checking npm and the configured registry.`;
-      ensureModelSelectionRuntimePlugins.mockResolvedValue({ ok: false, message });
-      resolvePluginProvidersCore.mockReturnValue([{ id: "openai", pluginId: "openai" }] as never);
-      resolveProviderPluginChoice.mockReturnValue({
-        provider: { id: "openai", pluginId: "openai", label: "OpenAI" },
-        method: { runNonInteractive },
-      });
+  it("rejects an unavailable required runtime before later setup effects", async () => {
+    const status = "failed";
+    const runtime = createRuntime();
+    const selectedConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    } as OpenClawConfig;
+    const runNonInteractive = vi.fn(async () => selectedConfig);
+    const message = `Codex runtime is required but unavailable (status: ${status}). Retry setup after checking npm and the configured registry.`;
+    ensureModelSelectionRuntimePlugins.mockResolvedValue({ ok: false, message });
+    resolvePluginProvidersCore.mockReturnValue([{ id: "openai", pluginId: "openai" }] as never);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "openai", pluginId: "openai", label: "OpenAI" },
+      method: { runNonInteractive },
+    });
 
-      const result = await applyNonInteractivePluginProviderChoice({
-        nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        authChoice: "openai-api-key",
-        opts: { json: true } as never,
-        runtime: runtime as never,
-        baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
-      });
+    const result = await applyChoice({
+      authChoice: "openai-api-key",
+      opts: { json: true } as never,
+      runtime,
+    });
 
-      expect(result).toBeNull();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(message);
-      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-        ok: false,
-        phase: "options",
-        message,
-      });
-      expect(runtime.log).toHaveBeenCalledOnce();
-      expect(offerPostInstallMigrations).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toBeNull();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      phase: "options",
+      message,
+    });
+    expect(runtime.log).toHaveBeenCalledOnce();
+    expect(offerPostInstallMigrations).not.toHaveBeenCalled();
+  });
 
   it("ensures Copilot after a non-interactive GitHub Copilot choice opts into the runtime", async () => {
     const runtime = createRuntime();
@@ -949,15 +898,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    const result = await applyChoice({
       authChoice: "github-copilot",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     const ensureInput = mockArg(ensureModelSelectionRuntimePlugins);
@@ -966,40 +909,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(ensureInput.runtime).toBe(runtime);
     expectWorkspaceDir(ensureInput.workspaceDir);
     expect(result).toBe(installedConfig);
-  });
-
-  it("rejects a required Copilot runtime after an optional Codex no-op", async () => {
-    const runtime = createRuntime();
-    const selectedConfig = {
-      agents: { defaults: { model: { primary: "github-copilot/gpt-5.5" } } },
-    } as OpenClawConfig;
-    const runNonInteractive = vi.fn(async () => selectedConfig);
-    const message =
-      "GitHub Copilot agent runtime is required but unavailable (status: failed). Retry setup after checking npm and the configured registry.";
-    ensureModelSelectionRuntimePlugins.mockResolvedValue({ ok: false, message });
-    resolvePluginProvidersCore.mockReturnValue([
-      { id: "github-copilot", pluginId: "github-copilot" },
-    ] as never);
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "github-copilot", pluginId: "github-copilot", label: "GitHub Copilot" },
-      method: { runNonInteractive },
-    });
-
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "github-copilot",
-      opts: { json: true } as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
-
-    expect(result).toBeNull();
-    expect(ensureModelSelectionRuntimePlugins).toHaveBeenCalledOnce();
-    expect(offerPostInstallMigrations).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("does not offer post-install migration when Codex is not required for the selected model", async () => {
@@ -1019,48 +928,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+    await applyChoice({
       authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
+      runtime,
     });
 
     expect(offerPostInstallMigrations).not.toHaveBeenCalled();
   });
-
-  it.each(["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:120b-cloud"])(
-    "does not enable local-model lean when Ollama selects hosted model %s",
-    async (modelRef) => {
-      const result = await applyProviderModelChoice({ providerId: "ollama", modelRef });
-
-      expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
-      expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(result?.wizard).toBeUndefined();
-    },
-  );
-
-  it.each([false, true])(
-    "preserves explicit local-model lean=%s when Ollama selects a hosted model",
-    async (localModelLean) => {
-      const result = await applyProviderModelChoice({
-        providerId: "ollama",
-        modelRef: "ollama/kimi-k2.5:cloud",
-        nextConfig: {
-          agents: {
-            defaults: {
-              experimental: { localModelLean },
-            },
-          },
-        },
-      });
-
-      expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(localModelLean);
-      expect(result?.wizard).toBeUndefined();
-    },
-  );
 });

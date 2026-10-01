@@ -3125,7 +3125,7 @@ class TalkModeManagerTest {
   private fun completeRemoteSynthesis(synthesizer: FakeTalkSpeechSynthesizer) {
     synthesizer.result.complete(
       TalkSpeakResult.Success(
-        TalkSpeakAudio(byteArrayOf(1, 2, 3), "test", "mp3_44100_128", true, "audio/mpeg", ".mp3"),
+        TalkSpeakAudio(byteArrayOf(1, 2, 3), "mp3_44100_128", "audio/mpeg", ".mp3"),
       ),
     )
   }

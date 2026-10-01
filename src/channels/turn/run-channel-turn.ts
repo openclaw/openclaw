@@ -52,8 +52,6 @@ function assertPreparedDispatchLifecycle<TDispatchResult>(
   turnAdoptionLifecycle: RunChannelTurnParams<unknown>["turnAdoptionLifecycle"],
 ): void {
   if (!turnAdoptionLifecycle) {
-    // Top-level lifecycle ownership is meaningful only when the caller supplied
-    // that owner.
     return;
   }
   const lifecycle = turn.runDispatchLifecycle;

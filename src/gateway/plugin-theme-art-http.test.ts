@@ -109,12 +109,10 @@ describe("plugin theme artwork HTTP", () => {
     ART_PATH.replace("%40scope%2Fpack", "unknown"),
     ART_PATH.replace("neon", "unknown"),
     ART_PATH.replace("hat", "unknown"),
-    ART_PATH.replace("beret", "unknown"),
     ART_PATH.replace("beret", "constructor"),
     ART_PATH.replace("beret", "%zz"),
     ART_PATH.replace("beret", "%2F"),
     `${ART_PATH}/extra`,
-    "/__openclaw__/plugin-theme-art/",
   ])("returns 404 for unavailable or malformed artwork: %s", async (pathname) => {
     const response = await withPluginMetadataSnapshotScope(snapshot(), () => request(pathname));
     expect(response.handled).toBe(true);

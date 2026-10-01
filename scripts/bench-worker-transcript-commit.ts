@@ -244,14 +244,11 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
             assertCurrent: () => undefined,
           });
           durationsMs.push(performance.now() - start);
-          assert.equal(
+          assert.equal<true>(
             outcome.ok,
             true,
             `commit ${index + 1} rejected: ${JSON.stringify(outcome)}`,
           );
-          if (!outcome.ok) {
-            throw new Error("unreachable rejected commit");
-          }
           assert.equal(outcome.result.entryIds.length, 4);
           assert.equal(outcome.result.newLeafId, outcome.result.entryIds.at(-1));
           entryIds.push(...outcome.result.entryIds);

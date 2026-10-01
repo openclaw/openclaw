@@ -38,6 +38,7 @@ Dedicated deep references:
 - [Configuration — browser, UI, and desktop](/gateway/config-browser-ui-desktop) — browser automation, Control UI presentation, and desktop or paired-node config.
 - [Configuration — gateway](/gateway/config-gateway) — gateway config: bind, auth, roles, Control UI, terminal, remote, nodes, TLS, and reload.
 - [Configuration — cloud worker environments](/gateway/config-cloud-workers) — cloud worker profiles under `cloudWorkers`, including Crabbox and static SSH development.
+- [Storage locations](/concepts/storage-locations) — named storage destinations under `storage.locations`, initialization, and encryption.
 - [Configuration — hooks](/gateway/config-hooks) — hook config: HTTP contract, agent payload, session policy, mapping, retries, and Gmail.
 - [Configuration — environment, secrets, and includes](/gateway/config-secrets-env) — environment variables, secret providers, auth storage, and `$include` config splitting.
 - [Configuration — audit, logging, diagnostics, and telemetry](/gateway/config-observability) — observability config: audit, logging, diagnostics, and telemetry keys.

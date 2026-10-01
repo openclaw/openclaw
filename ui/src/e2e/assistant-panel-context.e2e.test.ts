@@ -9,6 +9,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({ name: "Control UI Home context updates" });
 
 suite.define(() => {
@@ -17,7 +18,10 @@ suite.define(() => {
     async (mainSlot) => {
       const artifactDir = suite.artifactDir;
       await suite.withPage(
-        { viewport: { width: 1280, height: 900 }, recordVideo: { dir: artifactDir } },
+        {
+          viewport: { width: 1280, height: 900 },
+          recordVideo: captureUiProof ? { dir: artifactDir } : undefined,
+        },
         async ({ page }) => {
           const workKey = "agent:main:parser";
           const homeKey = "agent:main:main";

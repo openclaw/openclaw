@@ -301,7 +301,17 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     message: `${LLAMA_CPP_PROVIDER_LABEL} URL`,
     initialValue: defaultOrigin,
     placeholder: LLAMA_SERVER_DEFAULT_ORIGIN,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
+    validate: (value) => {
+      if (!value?.trim()) {
+        return "Required";
+      }
+      try {
+        resolveLlamaServerEndpoint(value);
+        return undefined;
+      } catch {
+        return "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:8080).";
+      }
+    },
   });
   const endpoint = resolveLlamaServerEndpoint(baseUrl);
   const endpointChanged =

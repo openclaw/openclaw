@@ -57,7 +57,9 @@ vi.mock("./userbot-skill.runtime.js", () => ({
 import { createQaBusState } from "../../bus-state.js";
 import { createQaStateBackedTransportAdapter } from "../../qa-transport.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
+import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
 import { runQaSuiteRoundTripProbe } from "../../suite-round-trip.js";
+import { recentOutboundSummary } from "../../suite-runtime-transport.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
 
 const credential = {
@@ -217,6 +219,59 @@ describe("Telegram QA transport adapter", () => {
 
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();
+  });
+
+  it("runs the DM/group routing scenario with one authorized participant", async () => {
+    const state = createQaBusState();
+    let onUpdate: ((update: unknown) => Promise<void>) | undefined;
+    let nextMessageId = 10;
+    mocks.userbotStart.mockImplementationOnce(async (params) => {
+      onUpdate = params.onUpdate;
+      return {
+        assertHealthy: mocks.userbotAssertHealthy,
+        close: mocks.userbotClose,
+        send: mocks.userbotSend,
+      };
+    });
+    mocks.userbotSend.mockImplementation(async (input) => {
+      const chatId = Number(input.chatId);
+      const messageId = nextMessageId++;
+      if (!onUpdate) {
+        throw new Error("Telegram observer was not started");
+      }
+      await onUpdate({
+        kind: "message",
+        chatId,
+        messageId: nextMessageId++,
+        senderId: 200,
+        timestamp: Date.now(),
+        text: input.text,
+        entities: [],
+      });
+      return { messageId, senderId: 100, chatId };
+    });
+    const definition = await createTelegramQaTransportAdapter({
+      adapterOptions: {},
+      messages: state,
+    } as never);
+    const transport = createQaStateBackedTransportAdapter(state, definition);
+    try {
+      await expect(
+        runLoadedScenarioFlow("channel-dm-group-routing", {
+          state,
+          api: { transport, recentOutboundSummary },
+        }),
+      ).resolves.toMatchObject({ status: "pass" });
+      expect(
+        state
+          .getSnapshot()
+          .messages.filter((message) => message.direction === "inbound")
+          .map((message) => message.senderId),
+      ).toEqual(["100", "100"]);
+    } finally {
+      await definition.cleanup?.();
+      await definition.cleanupAfterGatewayStop?.();
+    }
   });
 
   it.each([

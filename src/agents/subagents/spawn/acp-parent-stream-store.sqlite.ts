@@ -15,10 +15,6 @@ type AcpParentStreamDatabase = Pick<OpenClawAgentKyselyDatabase, "acp_parent_str
 
 export type AcpParentStreamEvent = Record<string, unknown>;
 
-function getAcpParentStreamKysely(database: import("node:sqlite").DatabaseSync) {
-  return getNodeSqliteKysely<AcpParentStreamDatabase>(database);
-}
-
 /** Records one ordered batch in the same synchronous commit section as sequence allocation. */
 export function recordAcpParentStreamEvents(
   options: OpenClawAgentDatabaseOptions & {
@@ -46,7 +42,7 @@ export function recordAcpParentStreamEvents(
   }
   runOpenClawAgentWriteTransaction(
     (database) => {
-      const db = getAcpParentStreamKysely(database.db);
+      const db = getNodeSqliteKysely<AcpParentStreamDatabase>(database.db);
       const row = executeSqliteQueryTakeFirstSync(
         database.db,
         db

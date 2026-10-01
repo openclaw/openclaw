@@ -18,6 +18,7 @@ import type { reviewPrivateComposerDraft } from "../pages/chat/components/privat
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { AssistantDock } from "./assistant-dock.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
@@ -140,6 +141,7 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;
   readonly plugins: ControlUiPluginCapability;
+  readonly assistantDock: AssistantDock;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;

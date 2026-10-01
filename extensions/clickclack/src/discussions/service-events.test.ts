@@ -5,7 +5,8 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
-import { createHarness } from "./service-test-support.js";
+import { discussionChannel, createHarness } from "./service-test-support.js";
+import { ClickClackDiscussionService } from "./service.js";
 
 function createGatewayEventsHarness() {
   const handlers = new Set<(event: OpenClawPluginSessionsChangedEvent) => void>();
@@ -101,10 +102,7 @@ describe("ClickClack discussion session events", () => {
         await new Promise<void>((resolve) => {
           releaseUpdate = resolve;
         });
-        return {
-          id: "chn_discussion",
-          route_id: "discussion-route",
-          workspace_id: "wsp_team",
+        return discussionChannel({
           name: patch.name ?? "renamed",
           kind: "public",
           external_managed: true,
@@ -113,8 +111,7 @@ describe("ClickClack discussion session events", () => {
           sidebar_section: patch.sidebar_section ?? "Projects",
           ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
           archived: false,
-          created_at: "2026-07-19T00:00:00.000Z",
-        };
+        });
       });
       harness.setSessionEntry({
         sessionId: "session-original",
@@ -350,6 +347,30 @@ describe("ClickClack discussion session events", () => {
       // interval poll their bindings would never reconcile renames or archives.
       expect(reconcileAll).toHaveBeenCalled();
     } finally {
+      await harness.service.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not poll persisted bindings until the service starts", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness({ label: "Pre-start" });
+    let service: ClickClackDiscussionService | undefined;
+    try {
+      await harness.service.open("agent:main:pre-start");
+      service = new ClickClackDiscussionService(harness.runtime, {
+        clientFactory: () => harness.client,
+        startTimer: true,
+      });
+      const reconcileAll = vi.spyOn(service, "reconcileAll").mockResolvedValue(undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcileAll).not.toHaveBeenCalled();
+
+      await service.bindGatewayEvents(undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcileAll).toHaveBeenCalled();
+    } finally {
+      await service?.cleanup();
       await harness.service.cleanup();
       vi.useRealTimers();
     }

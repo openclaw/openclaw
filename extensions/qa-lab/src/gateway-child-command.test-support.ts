@@ -1,5 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { expect, it } from "vitest";
+import type { createQaGatewayChild } from "./gateway-child.js";
+import type { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 export async function writePackagedGatewayFixture(root: string): Promise<string> {
   const fixturePath = path.join(root, "packaged-gateway-fixture.mjs");
@@ -147,4 +150,56 @@ export async function readJsonLines(filePath: string): Promise<Array<Record<stri
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+export function registerSourceGatewayHostLifelineTest({
+  tempDirs,
+  qaTempPathState,
+  ownGateway,
+}: {
+  tempDirs: ReturnType<typeof createTempDirHarness>;
+  qaTempPathState: { preferredTmpDir: string };
+  ownGateway: typeof createQaGatewayChild;
+}) {
+  it("binds a source Gateway to the candidate root and host lifeline pipe", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-source-root-");
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-source-root");
+    const candidateRepoRoot = process.cwd();
+    const captureScript = [
+      'const fs = require("node:fs");',
+      "const input = fs.fstatSync(0);",
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify({
+        sourceRoot: process.env.OPENCLAW_DEV_SOURCE_ROOT,
+        lifeline: process.env.OPENCLAW_GATEWAY_HOST_LIFELINE,
+        hostPipe: input.isFIFO() || input.isSocket(),
+      }));`,
+    ].join("\n");
+
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot: candidateRepoRoot,
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: ["--eval", captureScript],
+        },
+        runtimeEnvPatch: {
+          OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+        },
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
+
+    expect(JSON.parse(await readFile(observedEnvPath, "utf8"))).toEqual({
+      sourceRoot: candidateRepoRoot,
+      lifeline: "stdin",
+      hostPipe: true,
+    });
+  });
 }

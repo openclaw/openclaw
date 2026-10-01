@@ -43,6 +43,7 @@ it("joins accepted workspace retention before sealing journals on close", async 
   try {
     await nextTurn();
     expect(closed).toBe(false);
+    expect(mocks.quiescenceClose).toHaveBeenCalledOnce();
     expect(mocks.drain).not.toHaveBeenCalled();
     expect(await supervisor.hasActiveWork()).toBe(true);
     await expect(supervisor.retainWorkspaces(input)).rejects.toThrow("supervisor is closed");

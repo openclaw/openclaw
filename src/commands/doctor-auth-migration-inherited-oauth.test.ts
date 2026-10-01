@@ -1,7 +1,7 @@
 // Doctor auth tests cover migrating a non-main agent whose legacy JSON holds an
 // OAuth credential the main store already owns at a newer expiry.
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
@@ -13,22 +13,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { maybeMigrateAuthProfileJsonStoresToSqlite } from "./doctor-auth-flat-profiles.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const states: OpenClawTestState[] = [];
-
-function makePrompter(): DoctorPrompter {
-  return {
-    confirm: vi.fn(async () => true),
-    confirmAutoFix: vi.fn(async () => true),
-    confirmAggressiveAutoFix: vi.fn(async () => true),
-    confirmRuntimeRepair: vi.fn(async () => true),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair: true,
-    shouldForce: false,
-    repairMode: { shouldRepair: true, shouldForce: false },
-  } as unknown as DoctorPrompter;
-}
 
 async function makeTestState(): Promise<OpenClawTestState> {
   const state = await createOpenClawTestState();
@@ -95,7 +81,7 @@ describe("auth profile migration with an inherited main OAuth credential", () =>
 
     const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: { agents: { list: [{ id: "gadget", agentDir: secondaryAgentDir }] } },
-      prompter: makePrompter(),
+      prompter: { confirmAutoFix: async () => true },
       env: state.env,
       now: () => Date.parse("2026-07-26T12:00:00.000Z"),
     });

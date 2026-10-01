@@ -1,9 +1,9 @@
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db-contract.js";
+import type { DatabaseSync } from "node:sqlite";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../state/worker-operation-registry.js";
 import {
   acquireFleetCellOperationInDatabase,
   assertFleetCellOperationInDatabase,
@@ -13,41 +13,34 @@ import {
   reserveFleetCellInDatabase,
   updateFleetCellImageInDatabase,
 } from "./registry.kernel.js";
-import type { FleetRegistryWriteOperations } from "./registry.types.js";
+import type { ReserveFleetCellParams } from "./registry.types.js";
 
-export function executeFleetRegistryCommand(
-  command: SqliteWorkerCommand<FleetRegistryWriteOperations>,
-  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
-): FleetRegistryWriteOperations[keyof FleetRegistryWriteOperations]["output"] {
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    switch (command.type) {
-      case "fleet.cell.reserve":
-        assertFleetCellOperationInDatabase(
-          db,
-          command.input.tenantId,
-          command.input.operationOwner,
-        );
-        return reserveFleetCellInDatabase(db, command.input);
-      case "fleet.cell.updateImage":
-        assertFleetCellOperationInDatabase(
-          db,
-          command.input.tenantId,
-          command.input.operationOwner,
-        );
-        return updateFleetCellImageInDatabase(db, command.input.tenantId, command.input.image);
-      case "fleet.cell.delete":
-        assertFleetCellOperationInDatabase(
-          db,
-          command.input.tenantId,
-          command.input.operationOwner,
-        );
-        return deleteFleetCellInDatabase(db, command.input.tenantId);
-      case "fleet.operation.acquire":
-        return acquireFleetCellOperationInDatabase(db, command.input);
-      case "fleet.operation.heartbeat":
-        return heartbeatFleetCellOperationInDatabase(db, command.input);
-      case "fleet.operation.release":
-        return releaseFleetCellOperationInDatabase(db, command.input);
-    }
-  }, options);
+function inTransaction<Input, Output>(operation: (db: DatabaseSync, input: Input) => Output) {
+  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
+    runOpenClawStateWriteTransaction(({ db }) => operation(db, input), {
+      database: open(),
+      ...stateOptions(),
+    });
 }
+
+export const fleetOperations = {
+  "fleet.cell.reserve": inTransaction(
+    (db, input: ReserveFleetCellParams & { operationOwner?: string }) => {
+      assertFleetCellOperationInDatabase(db, input.tenantId, input.operationOwner);
+      return reserveFleetCellInDatabase(db, input);
+    },
+  ),
+  "fleet.cell.updateImage": inTransaction(
+    (db, input: { tenantId: string; image: string; operationOwner?: string }) => {
+      assertFleetCellOperationInDatabase(db, input.tenantId, input.operationOwner);
+      return updateFleetCellImageInDatabase(db, input.tenantId, input.image);
+    },
+  ),
+  "fleet.cell.delete": inTransaction((db, input: { tenantId: string; operationOwner?: string }) => {
+    assertFleetCellOperationInDatabase(db, input.tenantId, input.operationOwner);
+    return deleteFleetCellInDatabase(db, input.tenantId);
+  }),
+  "fleet.operation.acquire": inTransaction(acquireFleetCellOperationInDatabase),
+  "fleet.operation.heartbeat": inTransaction(heartbeatFleetCellOperationInDatabase),
+  "fleet.operation.release": inTransaction(releaseFleetCellOperationInDatabase),
+} satisfies WorkerOperationHandlers;

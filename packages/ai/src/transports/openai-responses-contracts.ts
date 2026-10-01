@@ -190,15 +190,6 @@ export const responsesPromptObserver = {
   },
 };
 
-export type OpenAIResponsesReplayContext = {
-  provider: string;
-  api: Api;
-  model: string;
-  baseUrlHash?: string;
-  sessionHash?: string;
-  authProfileHash?: string;
-};
-
 export type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;

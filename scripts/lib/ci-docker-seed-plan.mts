@@ -1,7 +1,5 @@
-import { isTestOnlyPath } from "./changed-path-facts.mjs";
-
 const MAIN_DOCKER_SEED_LANES = ["published-upgrade-survivor"] as const;
-const RELEASE_ONLY_DOCKER_SEED_LANES = [
+const OWNER_DOCKER_SEED_LANES = [
   "mcp-channels",
   "cron-mcp-cleanup",
   "mcp-code-mode-gateway",
@@ -11,20 +9,20 @@ const RELEASE_ONLY_DOCKER_SEED_LANES = [
 
 export function resolveDockerSeedLanes(options: { includeReleaseOnly: boolean }) {
   return options.includeReleaseOnly
-    ? [...MAIN_DOCKER_SEED_LANES, ...RELEASE_ONLY_DOCKER_SEED_LANES]
+    ? [...MAIN_DOCKER_SEED_LANES, ...OWNER_DOCKER_SEED_LANES]
     : [...MAIN_DOCKER_SEED_LANES];
 }
 
-// PR owner selection reuses the established Docker lane map; main keeps its
-// independent published-upgrade tripwire and full validation keeps every lane.
+// The published-driver tripwire runs intact in hourly main and full release
+// validation. PRs retain the other Docker lanes through their owner map.
 const MCP_DOCKER_SEED_LANES = [
   "mcp-channels",
   "cron-mcp-cleanup",
   "mcp-code-mode-gateway",
 ] as const;
-type DockerSeedLane = ReturnType<typeof resolveDockerSeedLanes>[number];
+type DockerSeedLane = (typeof OWNER_DOCKER_SEED_LANES)[number];
 const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
-  ".github/workflows/ci.yml": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
+  ".github/workflows/ci.yml": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
   "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/fleet-cache-docker.sh": ["fleet-cache"],
@@ -34,16 +32,11 @@ const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane
   "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
   "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
   "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
-  "scripts/lib/changed-path-facts.mjs": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
-  "scripts/lib/ci-docker-seed-plan.mts": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
+  "scripts/lib/changed-path-facts.mjs": MCP_DOCKER_SEED_LANES,
+  "scripts/lib/ci-docker-seed-plan.mts": MCP_DOCKER_SEED_LANES,
   "src/agents/embedded-agent-runner/run/attempt-bundle-tools.ts": ["mcp-code-mode-gateway"],
   "src/agents/runtime-plan/tools.ts": ["mcp-code-mode-gateway"],
 };
-// Keep the whole state owner: both schema-version constants and future migrations
-// must exercise an installed release's updater before they reach main.
-const PUBLISHED_UPGRADE_OWNER_RE =
-  /^src\/(?:cli\/update-cli\/|infra\/(?:update-|package-update-)|plugins\/update(?:-|\.ts$)|commands\/doctor|state\/)|^scripts\/e2e\/(?:upgrade-survivor|lib\/upgrade-survivor\/)|^scripts\/(?:resolve-upgrade-survivor-baselines\.mts|lib\/(?:docker-e2e-(?:plan|scenarios)|upgrade-survivor-[^/]+)\.(?:mjs|mts))$|^package\.json$/u;
-
 export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
   const selected = new Set<DockerSeedLane>();
   for (const changedPath of changedPaths) {
@@ -51,15 +44,9 @@ export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
     if (normalizedPath.startsWith("scripts/e2e/lib/fleet-cache/")) {
       selected.add("fleet-cache");
     }
-    if (
-      PUBLISHED_UPGRADE_OWNER_RE.test(normalizedPath) &&
-      (!normalizedPath.startsWith("src/") || !isTestOnlyPath(normalizedPath))
-    ) {
-      selected.add("published-upgrade-survivor");
-    }
     for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
       selected.add(lane);
     }
   }
-  return resolveDockerSeedLanes({ includeReleaseOnly: true }).filter((lane) => selected.has(lane));
+  return OWNER_DOCKER_SEED_LANES.filter((lane) => selected.has(lane));
 }
