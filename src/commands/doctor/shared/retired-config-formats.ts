@@ -67,15 +67,15 @@ export function findRetiredConfigUpgradeRequirement(
   }
   const messages = isRecord(config.messages) ? config.messages : undefined;
   const queue = isRecord(messages?.queue) ? messages.queue : undefined;
-  for (const [key, value] of [
-    ["mode", queue?.mode],
-    ...Object.entries(isRecord(queue?.byChannel) ? queue.byChannel : {}).map(([id, mode]) => [
-      `byChannel.${id}`,
-      mode,
-    ]),
-  ]) {
+  const checkQueueMode = (value: unknown, configPath: string) => {
     if (value === "queue" || value === "steer-backlog" || value === "steer+backlog") {
-      retired.push(`messages.queue.${key}`);
+      retired.push(configPath);
+    }
+  };
+  checkQueueMode(queue?.mode, "messages.queue.mode");
+  if (isRecord(queue?.byChannel)) {
+    for (const [channel, mode] of Object.entries(queue.byChannel)) {
+      checkQueueMode(mode, `messages.queue.byChannel.${channel}`);
     }
   }
   const channels = isRecord(config.channels) ? config.channels : {};
