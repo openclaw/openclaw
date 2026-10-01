@@ -254,7 +254,8 @@ class SystemsPage extends OpenClawLightDomElement {
                   event.preventDefault();
                   controller.context.navigate(face, target.options);
                 }}
-                ><strong>${session.displayName ?? session.label ?? session.key}</strong
+                ><strong class="systems-session-link__title"
+                  >${session.displayName ?? session.label ?? session.key}</strong
                 ><span>${t("systems.relations." + relation.kind)}</span></a
               >`;
             })

@@ -298,14 +298,14 @@ openclaw-systems-page {
   font-size: 10px;
   overflow-wrap: anywhere;
 }
-.systems-session-link strong {
+.systems-session-link__title {
   color: var(--text);
   font-weight: 500;
 }
 .systems-session-link span {
   color: var(--muted);
 }
-.systems-session-link:hover strong {
+.systems-session-link:hover .systems-session-link__title {
   color: var(--accent);
 }
 .systems-mobile-picker {

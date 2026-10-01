@@ -221,7 +221,7 @@ openclaw-chat-question-panel {
   outline-offset: -2px;
 }
 
-.chat-question-panel__option:hover:not(:disabled) .chat-question-panel__option-copy strong {
+.chat-question-panel__option:hover:not(:disabled) .chat-question-panel__option-label {
   color: var(--text-strong);
 }
 
@@ -266,7 +266,7 @@ openclaw-chat-question-panel {
   min-width: 0;
 }
 
-.chat-question-panel__option-copy strong {
+.chat-question-panel__option-label {
   display: block;
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
