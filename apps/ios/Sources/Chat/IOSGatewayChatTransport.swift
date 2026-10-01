@@ -5,6 +5,12 @@ import OpenClawProtocol
 import OSLog
 
 struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
+    typealias RunActivityObservation = (
+        binding: IOSNativeActionBinding,
+        accepted: @MainActor @Sendable (_ runID: String, _ sessionID: String?) -> Void)
+    typealias RunActivityCapture = @MainActor @Sendable (
+        OpenClawChatSessionTarget, GatewayNodeSessionRoute) async throws -> RunActivityObservation?
+
     var chatGatewayAgentID: String? {
         self.globalAgentId
     }
@@ -38,6 +44,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     let globalAgentId: String?
     let outboxGatewayID: String?
     let nativeBinding: IOSNativeActionBinding?
+    let captureRunActivity: RunActivityCapture?
     private let mediaArtifactLoader: IOSMediaArtifactLoader?
 
     var outboxRequiresSessionRoutingContract: Bool {
@@ -50,7 +57,8 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         globalAgentId: String? = nil,
         outboxGatewayID: String? = nil,
         mediaArtifactLoader: IOSMediaArtifactLoader? = nil,
-        nativeBinding: IOSNativeActionBinding? = nil)
+        nativeBinding: IOSNativeActionBinding? = nil,
+        captureRunActivity: RunActivityCapture? = nil)
     {
         self.gateway = nativeBinding?.gateway ?? gateway
         self.widgetGateway = nativeBinding == nil ? widgetGateway : nil
@@ -59,6 +67,60 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         self.outboxGatewayID = nativeBinding?.session.owner.gatewayID ?? GatewayStableIdentifier.exact(outboxGatewayID)
         self.mediaArtifactLoader = mediaArtifactLoader
         self.nativeBinding = nativeBinding
+        self.captureRunActivity = captureRunActivity
+    }
+
+    static func captureRunActivityBinding(
+        gateway: GatewayNodeSession,
+        route: GatewayNodeSessionRoute,
+        target: SessionTarget,
+        nativeBinding: IOSNativeActionBinding? = nil) async throws -> IOSNativeActionBinding?
+    {
+        try Task.checkCancellation()
+        guard await gateway.currentRoute() == route else {
+            throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
+        }
+        let profileBinding = await gateway.supportsServerCapability(.profileBinding, ifCurrentRoute: route)
+        let activitySupported = await gateway.supportsServerMethod("push.liveActivity.prepare", ifCurrentRoute: route)
+        let gatewayID = await gateway.currentGatewayID(ifCurrentRoute: route)
+        try Task.checkCancellation()
+        guard await gateway.currentRoute() == route else {
+            throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
+        }
+        let agentID = Self.composerAgentID(for: target)
+        if let nativeBinding {
+            guard nativeBinding.gateway === gateway, nativeBinding.route == route,
+                  gatewayID?.utf8.elementsEqual(nativeBinding.session.owner.gatewayID.utf8) == true,
+                  agentID?.utf8.elementsEqual(nativeBinding.session.agentID.utf8) == true,
+                  nativeBinding.session.sessionKey.utf8.elementsEqual(target.sessionKey.utf8)
+            else { throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch }
+        }
+        guard profileBinding == true, activitySupported == true,
+              let gatewayID, let agentID
+        else { return nil }
+        let ownerGateway = OpenClawChatNativeActionGateway(
+            gatewayID: gatewayID,
+            gatewayName: gatewayID,
+            supportsProfileBinding: {
+                await gateway.supportsServerCapability(.profileBinding, ifCurrentRoute: route) == true
+            },
+            request: { request, expectedProfileId in
+                try await gateway.request(
+                    request,
+                    ifCurrentRoute: route,
+                    distinguishPreDispatchRouteChange: true,
+                    expectedProfileId: expectedProfileId)
+            },
+            isCurrent: { await gateway.currentRoute(ifGatewayID: gatewayID) == route })
+        let owner = try await ownerGateway.owner(expected: nativeBinding?.session.owner)
+        try Task.checkCancellation()
+        // Capture only the send owner. The broader native capture also loads
+        // roster/media state, neither of which belongs on this dispatch path.
+        return IOSNativeActionBinding(
+            session: .init(owner: owner, agentID: agentID, sessionKey: target.sessionKey),
+            gateway: gateway,
+            route: route,
+            sessionRoutingContract: nativeBinding?.sessionRoutingContract)
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {

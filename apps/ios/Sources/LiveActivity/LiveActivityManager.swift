@@ -1,10 +1,10 @@
 @preconcurrency import ActivityKit
 import Foundation
+import OpenClawKit
 import os
 
-/// Owns the single ActivityKit presentation for connection, attention, tool,
-/// and voice state. Producers update independent inputs; the arbiter decides
-/// which state is visible so lower-priority updates cannot hide urgent work.
+/// Owns local and remote ActivityKit slots. The local arbiter still selects
+/// connection, attention, tool, and voice state independently of remote runs.
 @MainActor
 final class LiveActivityManager {
     static let shared = LiveActivityManager()
@@ -41,12 +41,55 @@ final class LiveActivityManager {
     private var voiceStaleRefreshGeneration: UInt64 = 0
     private var toolStaleRefreshTask: Task<Void, Never>?
     private var toolStaleRefreshGeneration: UInt64 = 0
+    private lazy var remoteRunActivity = RemoteRunLiveActivity()
     #if DEBUG
     private var voicePreviewActive = false
     #endif
 
     private init() {
         self.hydrateCurrentAndPruneDuplicates()
+    }
+
+    func observeAcceptedRun(
+        _ run: OpenClawNativeRunRef,
+        sessionID: String?,
+        binding: IOSNativeActionBinding,
+        pushRegistrationManager: PushRegistrationManager)
+    {
+        guard PushEnrollmentConsent.disclosureAccepted else {
+            self.logger.info("accepted_activity_unavailable_consent")
+            return
+        }
+        self.remoteRunActivity.observeAcceptedRun(
+            run,
+            sessionID: sessionID,
+            gateway: RemoteRunActivityGateway(binding: binding),
+            relay: .init(manager: pushRegistrationManager))
+    }
+
+    func resumeRemoteActivities(
+        binding: IOSNativeActionBinding,
+        pushRegistrationManager: PushRegistrationManager)
+    {
+        guard PushEnrollmentConsent.disclosureAccepted else {
+            self.remoteRunActivity.suspend()
+            return
+        }
+        self.remoteRunActivity.resume(
+            gateway: RemoteRunActivityGateway(binding: binding),
+            relay: .init(manager: pushRegistrationManager))
+    }
+
+    func suspendRemoteActivities() {
+        self.remoteRunActivity.suspend()
+    }
+
+    func retireRemoteActivities(owner: OpenClawNativeOwnerRef) async {
+        await self.remoteRunActivity.retire(owner: owner)
+    }
+
+    func forgetRemoteActivities(gatewayID: String) async {
+        await self.remoteRunActivity.forget(gatewayID: gatewayID)
     }
 
     func showConnecting(
@@ -363,7 +406,7 @@ final class LiveActivityManager {
                 attributes: OpenClawActivityAttributes(
                     agentName: request.agentName,
                     sessionKey: request.sessionKey),
-                content: ActivityContent(state: request.state, staleDate: request.staleDate),
+                content: ActivityContent(state: request.state, staleDate: request.staleDate, relevanceScore: 100),
                 pushType: nil)
             self.activityGeneration &+= 1
             self.currentActivity = activity
@@ -399,7 +442,8 @@ final class LiveActivityManager {
                       let pending = self.pendingActivityUpdate
                 else { break }
                 self.pendingActivityUpdate = nil
-                await activity.update(ActivityContent(state: pending.state, staleDate: pending.staleDate))
+                await activity.update(ActivityContent(
+                    state: pending.state, staleDate: pending.staleDate, relevanceScore: 100))
             }
 
             guard let self, generation == self.activityGeneration else { return }
@@ -429,7 +473,7 @@ final class LiveActivityManager {
             startedAt: startedAt)
         Task {
             await activity.end(
-                ActivityContent(state: finalState, staleDate: nil),
+                ActivityContent(state: finalState, staleDate: nil, relevanceScore: 100),
                 dismissalPolicy: .immediate)
         }
     }
@@ -554,7 +598,8 @@ final class LiveActivityManager {
                         status: .disconnected,
                         verbatimDetail: nil,
                         startedAt: startedAt),
-                    staleDate: nil),
+                    staleDate: nil,
+                    relevanceScore: 100),
                 dismissalPolicy: .immediate)
         }
     }

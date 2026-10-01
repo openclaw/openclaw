@@ -88,6 +88,7 @@ final class GatewayConnectionController {
     private let serviceEndpointResolver: GatewayServiceEndpointResolver?
     private let forceReconnectReset: GatewayForceReconnectReset
     private let persistTLSFingerprint: GatewayTLSFingerprintPersist
+    private let remoteActivityForget: @MainActor (String) async -> Void
 
     init(
         appModel: NodeAppModel,
@@ -101,6 +102,9 @@ final class GatewayConnectionController {
         },
         persistTLSFingerprint: @escaping GatewayTLSFingerprintPersist = { fingerprint, stableID in
             GatewayTLSStore.replaceFingerprint(fingerprint, stableID: stableID)
+        },
+        remoteActivityForget: @escaping @MainActor (String) async -> Void = { gatewayID in
+            await LiveActivityManager.shared.forgetRemoteActivities(gatewayID: gatewayID)
         })
     {
         self.discoveryEnabled = startDiscovery
@@ -111,6 +115,7 @@ final class GatewayConnectionController {
         self.serviceEndpointResolver = serviceEndpointResolver
         self.forceReconnectReset = forceReconnectReset
         self.persistTLSFingerprint = persistTLSFingerprint
+        self.remoteActivityForget = remoteActivityForget
 
         GatewaySettingsStore.bootstrapPersistence()
         Self.migrateLegacyDeviceAuth()
@@ -701,6 +706,9 @@ final class GatewayConnectionController {
 
         Self.clearDeviceAuthTokens(gatewayID: stableID)
         _ = appModel.commitChatOfflineDataRemoval(gatewayID: stableID)
+        // Remote retirement can stall; forgotten credentials and local history
+        // must already be erased while the same-ID cleanup barrier remains held.
+        await self.remoteActivityForget(stableID)
         self.scheduleOperatorFleetReconcile()
         return true
     }
