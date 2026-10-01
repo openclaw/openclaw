@@ -109,6 +109,7 @@ export async function withInterruptedTurn(
     toolProgress?: boolean;
     settledPrefix?: boolean;
     oversizedMetadata?: boolean;
+    compactedInput?: boolean;
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
@@ -165,6 +166,10 @@ export async function withInterruptedTurn(
     if (options.oversizedMetadata) {
       appendCompletedToolWork(original, runId, undefined, "-before-window");
       appendOversizedCacheSnapshot(original);
+    }
+    if (options.compactedInput) {
+      const firstKeptEntryId = original.appendCustomEntry("openclaw.cache-ttl", { timestamp: 2 });
+      original.appendCompaction("Continue the unfinished request", firstKeptEntryId, 9_000);
     }
     if (options.toolProgress) {
       appendCompletedToolWork(original, runId);

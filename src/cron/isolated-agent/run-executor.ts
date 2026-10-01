@@ -1,5 +1,4 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
-import { createHash } from "node:crypto";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
@@ -42,18 +41,17 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
+import { prepareCronRunAdmission } from "../run-admission.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
-import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
+import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
-import {
-  assertCronRuntimeAuthorityCandidate,
-  prepareCronPromptRunAdmission,
-} from "./run-admission.js";
+import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
+import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
 import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import {
@@ -98,31 +96,6 @@ function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
 
 const COMMAND_STYLE_CRON_PREFIX =
   /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
-
-function resolveIsolatedCronPromptCacheKey(params: {
-  job: CronJob;
-  agentId: string;
-  agentSessionKey: string;
-  provider: string;
-  model: string;
-}): string | undefined {
-  if (params.job.sessionTarget !== "isolated") {
-    return undefined;
-  }
-  const material = JSON.stringify({
-    version: 1,
-    kind: "isolated-cron",
-    jobId: params.job.id,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    provider: params.provider,
-    model: params.model,
-  });
-  const digest = createHash("sha256").update(material).digest("hex").slice(0, 32);
-  // Isolated cron rotates transcript/session ids per run; keep cache affinity
-  // on stable job identity without sending raw local session labels upstream.
-  return `openclaw-cron-${digest}`;
-}
 
 /** Detects single-line cron prompts that look like shell commands or command invocations. */
 function isCommandStyleCronMessage(message: string): boolean {
@@ -243,8 +216,9 @@ function createCronPromptExecutor(
       preparedRunAdmission,
       messageActionTurnCapability,
       close: closePromptAdmission,
-    } = prepareCronPromptRunAdmission({
+    } = prepareCronRunAdmission({
       admissionSource: params.admissionSource,
+      deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
       runId,

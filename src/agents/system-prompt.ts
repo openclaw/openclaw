@@ -995,17 +995,11 @@ export function buildAgentSystemPrompt(params: {
               : elevated
                 ? "Elevated exec is unavailable for this session."
                 : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? "User can toggle with /elevated on|off|ask|full."
+            elevated?.allowed
+              ? `User can toggle with /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""}.`
               : "",
-            elevated?.allowed && !elevated.fullAccessAvailable
-              ? "User can toggle with /elevated on|off|ask."
-              : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? "You may also send /elevated on|off|ask|full when needed."
-              : "",
-            elevated?.allowed && !elevated.fullAccessAvailable
-              ? "You may also send /elevated on|off|ask when needed."
+            elevated?.allowed
+              ? `You may also send /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""} when needed.`
               : "",
             elevated?.fullAccessAvailable === false
               ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`

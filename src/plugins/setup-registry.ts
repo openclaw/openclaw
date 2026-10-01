@@ -5,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
@@ -28,7 +29,6 @@ import {
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { getPluginValueInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import { PluginLruCache } from "./plugin-lru-cache.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import {
@@ -115,7 +115,7 @@ const NOOP_LOGGER: PluginLogger = {
 // Setup results cannot outlive their module owner or keep a retired graph alive.
 const setupRegistries = new WeakMap<
   PluginCache,
-  { snapshot: unknown; results: PluginLruCache<PluginSetupRegistry> }
+  { snapshot: unknown; results: LruCache<PluginSetupRegistry> }
 >();
 
 function getSetupRegistryCache() {
@@ -123,7 +123,7 @@ function getSetupRegistryCache() {
   const { snapshot } = owner.metadata.current;
   let cached = setupRegistries.get(owner);
   if (!cached || cached.snapshot !== snapshot) {
-    cached = { snapshot, results: new PluginLruCache<PluginSetupRegistry>(16) };
+    cached = { snapshot, results: new LruCache<PluginSetupRegistry>(16) };
     setupRegistries.set(owner, cached);
   }
   return cached.results;

@@ -559,7 +559,7 @@ export async function createMattermostDirectChannelWithRetry(
       minDelayMs: Math.min(initialDelayMs, maxDelayMs),
       maxDelayMs,
       // Full jitter (uniform [delay, 2*delay) with maxDelayMs applied after
-      // the draw) preserves the schedule pinned by client.retry.test.ts.
+      // the draw) preserves the schedule pinned by client.test.ts.
       jitter: "full",
       shouldRetry: (err) => isRetryableError(err as Error),
       onRetry: (info) => onRetry?.(info.attempt, info.delayMs, info.err as Error),

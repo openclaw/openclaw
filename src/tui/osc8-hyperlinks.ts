@@ -121,7 +121,6 @@ function findUrlRanges(
     }
   }
 
-  // Find new URL starts in visible text
   const urlRe =
     /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)/gi;
   urlRe.lastIndex = searchFrom;

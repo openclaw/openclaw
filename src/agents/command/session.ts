@@ -77,6 +77,14 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
+type SessionRequest = {
+  cfg: OpenClawConfig;
+  to?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+};
+
 export function clearRotatedSessionMetadata(entry: InternalSessionEntry): InternalSessionEntry {
   const next = {
     ...entry,
@@ -382,14 +390,9 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   };
 }
 
-function resolveSessionKeyForRequestInternal(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  createMissingSessionId: boolean;
-}): SessionKeyResolution {
+function resolveSessionKeyForRequestInternal(
+  opts: SessionRequest & { createMissingSessionId: boolean },
+): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -566,23 +569,11 @@ export function resolveExistingSessionKeyForRequest(opts: {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: false });
 }
 
-export function resolveSessionKeyForRequestCore(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): SessionKeyResolution {
+export function resolveSessionKeyForRequestCore(opts: SessionRequest): SessionKeyResolution {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
 }
 
-export function resolveSession(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): SessionResolution {
+export function resolveSession(opts: SessionRequest): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const {
     agentId: resolvedAgentId,

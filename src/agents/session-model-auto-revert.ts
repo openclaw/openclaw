@@ -203,8 +203,6 @@ export function createAgentPatchedSessionModelRunGuard(params: {
       captureFailure(error, reason);
       await reconcile(false);
     },
-    async finish(success: boolean) {
-      await reconcile(success);
-    },
+    finish: reconcile,
   };
 }

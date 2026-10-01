@@ -155,7 +155,11 @@ pending/skipped `openclaw/ci-gate`. An explicitly approved `pre-existing-failure
 attribution instead binds the current failed attempt, effective gate check-run,
 tested merge/base, unchanged failure inputs, and inspected qualification artifacts.
 Every failed job and fail-fast cancellation must be accounted for; cancelled
-coverage stays unrun. An independently attributed cancelled Node test,
+coverage stays unrun. Current `openclaw/openclaw` PR reruns let every Node matrix
+leg finish; only PRs in other workflow repositories use native matrix fail-fast.
+Historical runs retain their tested workflow's cancellation policy, so the matrix
+attribution route still verifies that exact expression and run context.
+An independently attributed cancelled Node test,
 `check-prod-types`, or real-Gateway UI root can use
 `failures[].failedStep: { number, workflowJob }`, with
 `checks-node-core-test-nondist-shard`, `check-shard`, or

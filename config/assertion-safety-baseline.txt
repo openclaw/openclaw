@@ -894,7 +894,6 @@ extensions/slack/src/monitor/ingress.ts	8
 extensions/slack/src/monitor/media.ts	1
 extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	5
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
-extensions/slack/src/monitor/message-handler/prepare.ts	1
 extensions/slack/src/monitor/provider-support.ts	3
 extensions/slack/src/monitor/provider.ts	4
 extensions/slack/src/monitor/reconnect-policy.ts	6
@@ -1136,7 +1135,7 @@ packages/ai/src/providers/anthropic-server-fallback.ts	3
 packages/ai/src/providers/anthropic-thinking-replay.ts	2
 packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	3
-packages/ai/src/providers/anthropic.ts	6
+packages/ai/src/providers/anthropic.ts	3
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	8
 packages/ai/src/providers/google-shared.ts	2
@@ -1144,7 +1143,7 @@ packages/ai/src/providers/mistral.ts	5
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	20
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
-packages/ai/src/providers/openai-completions.ts	6
+packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
@@ -1158,7 +1157,7 @@ packages/ai/src/providers/tool-schema-json-projection.ts	2
 packages/ai/src/stream.ts	1
 packages/ai/src/transports/anthropic-compaction-replay.ts	2
 packages/ai/src/transports/anthropic-payload-policy.ts	7
-packages/ai/src/transports/anthropic-transport-stream.ts	5
+packages/ai/src/transports/anthropic-transport-stream.ts	4
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
 packages/ai/src/transports/openai-completions-params.ts	7
@@ -1267,7 +1266,6 @@ src/acp/translator.session-list.ts	1
 src/acp/translator.session-state.ts	1
 src/agents/agent-bundle-lsp-runtime.ts	3
 src/agents/agent-bundle-mcp-combined.ts	1
-src/agents/agent-bundle-mcp-manager-api.ts	2
 src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
@@ -1320,7 +1318,6 @@ src/agents/bootstrap-files.ts	1
 src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
 src/agents/btw.ts	6
-src/agents/bundle-mcp-config.ts	5
 src/agents/cache-trace.ts	3
 src/agents/cli-auth-epoch.ts	1
 src/agents/cli-backends.ts	1
@@ -1344,7 +1341,7 @@ src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
 src/agents/codex-mcp-config.ts	1
-src/agents/command/attempt-execution.helpers.ts	6
+src/agents/command/attempt-execution.helpers.ts	5
 src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
@@ -1480,7 +1477,7 @@ src/agents/mcp-auth-profile.ts	1
 src/agents/mcp-codex-tool-approval.ts	1
 src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	4
-src/agents/mcp-transport-config.ts	5
+src/agents/mcp-transport-config.ts	1
 src/agents/mcp-transport.ts	2
 src/agents/mcp-ui-resource.ts	2
 src/agents/media-generation-task-status-shared.ts	1
@@ -1495,7 +1492,7 @@ src/agents/model-scan.ts	2
 src/agents/model-selection-shared.ts	1
 src/agents/model-tool-support.ts	1
 src/agents/models-config.merge.ts	2
-src/agents/models-config.plan.ts	3
+src/agents/models-config.plan.ts	2
 src/agents/models-config.providers.policy.lookup.ts	1
 src/agents/modes/interactive/theme/theme.ts	11
 src/agents/node-plugin-tools.ts	1
@@ -1513,7 +1510,7 @@ src/agents/provider-auth-aliases.ts	1
 src/agents/provider-http-errors.ts	1
 src/agents/provider-local-service.ts	1
 src/agents/provider-model-route.ts	1
-src/agents/provider-request-config.ts	5
+src/agents/provider-request-config.ts	4
 src/agents/provider-secret-egress.ts	1
 src/agents/provider-tool-policy.ts	1
 src/agents/provider-transport-fetch.ts	1
@@ -1951,7 +1948,6 @@ src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	12
 src/commands/doctor/shared/empty-allowlist-scan.ts	4
-src/commands/doctor/shared/legacy-config-compat.ts	1
 src/commands/doctor/shared/legacy-config-core-migrate.ts	1
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	11
 src/commands/doctor/shared/legacy-config-issues.ts	1
@@ -2034,7 +2030,6 @@ src/config/plugin-install-record-map.ts	1
 src/config/plugins-allowlist.ts	1
 src/config/redact-snapshot.ts	4
 src/config/runtime-overrides.ts	1
-src/config/runtime-snapshot.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
 src/config/sessions/cleanup-service.ts	3
@@ -2111,7 +2106,6 @@ src/cron/service/timer.ts	1
 src/cron/session-reaper.ts	1
 src/cron/stagger.ts	1
 src/cron/store/delivery-codec.ts	2
-src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	3
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	4
@@ -2605,8 +2599,7 @@ src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store.ts	2
 src/plugin-sdk/secret-ref-runtime.ts	2
-src/plugin-sdk/session-store-runtime-internal.ts	1
-src/plugin-sdk/session-store-runtime.ts	5
+src/plugin-sdk/session-store-runtime.ts	3
 src/plugin-sdk/session-transcript-runtime.ts	6
 src/plugin-sdk/setup-credential.ts	1
 src/plugin-sdk/ssrf-policy.ts	1
@@ -2826,11 +2819,7 @@ src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	1
-src/state/openclaw-agent-db-session-provenance.ts	1
-src/state/openclaw-agent-standing-intents-schema.ts	1
-src/state/openclaw-database-verify.worker.ts	1
 src/state/openclaw-quarantine-store.ts	2
-src/state/openclaw-schema-versions.ts	7
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
 src/state/openclaw-state-db-legacy-backfills.ts	4
 src/state/openclaw-state-db-schema-additive.ts	1

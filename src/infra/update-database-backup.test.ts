@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as diskSpace from "./disk-space.js";
+import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
 import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
 
@@ -96,6 +97,11 @@ it.each(["legacy", "current"] as const)(
           ].toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
     );
     expect(backup.databases).toHaveLength(1);
+    const published = await fs.readFile(backup.databases[0]!.snapshotPath);
+    expect(backup.databases[0]).toMatchObject({
+      sha256: createHash("sha256").update(published).digest("hex"),
+      sizeBytes: published.length,
+    });
     const snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
     try {
       expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([
@@ -105,6 +111,41 @@ it.each(["legacy", "current"] as const)(
       snapshot.close();
     }
     expect(await fs.readFile(f.shared)).toEqual(before);
+  },
+);
+
+it.each(["modified", "replaced"] as const)(
+  "keeps the verified digest when a snapshot is %s before backup metadata is recorded",
+  async (change) => {
+    const f = await fixture();
+    const createSnapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
+    let published: Buffer | undefined;
+    vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
+      async (options) => {
+        const result = await createSnapshot(options);
+        published = await fs.readFile(result.path);
+        const changed = Buffer.from(published);
+        const offset = changed.indexOf("retained");
+        assert(offset >= 0, "Snapshot must contain the captured row");
+        changed.write("modified", offset);
+        if (change === "modified") {
+          await fs.writeFile(result.path, changed);
+        } else {
+          const replacement = `${result.path}.replacement`;
+          await fs.writeFile(replacement, changed);
+          await fs.rename(replacement, result.path);
+        }
+        return result;
+      },
+    );
+
+    const backup = await f.capture();
+    assert(published, "Snapshot publication must complete before the injected change");
+    expect(backup.databases[0]).toMatchObject({
+      sha256: createHash("sha256").update(published).digest("hex"),
+      sizeBytes: published.length,
+    });
+    expect(await fs.readFile(backup.databases[0]!.snapshotPath)).not.toEqual(published);
   },
 );
 

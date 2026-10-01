@@ -1,12 +1,12 @@
 import AppKit
 import CoreGraphics
-import Observation
 import OpenClawChatUI
 import SwiftUI
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@Suite(.testWaitLimit)
 @MainActor
 struct QuickChatCatalogPresentationTests {
     @Test(.timeLimit(.minutes(1)))
@@ -40,7 +40,7 @@ struct QuickChatCatalogPresentationTests {
         do {
             application.deactivate()
             controller.present()
-            try await self.waitForModel { model.canUseModelControls }
+            try await TestWait.observed("available model controls") { model.canUseModelControls }
             #expect(model.speed.supportsFastMode)
             model.selectModel("fixture/current")
             #expect(model.selectedModelSelectionID == nil, "Retained metadata does not permit manual selection")
@@ -66,7 +66,7 @@ struct QuickChatCatalogPresentationTests {
                 #expect(choices.items[allowed].isEnabled)
                 choices.performActionForItem(at: allowed)
             }
-            try await self.waitForModel { !model.isUpdatingModel }
+            try await TestWait.observed("allowed model selection") { !model.isUpdatingModel }
             #expect(model.selectedModelSelectionID == "fixture/allowed")
             #expect(model.displayedModelSelectionID == "fixture/allowed")
 
@@ -88,7 +88,7 @@ struct QuickChatCatalogPresentationTests {
                 $0.accessibilityRole?() == .slider && $0.accessibilityLabel?() == "Thinking effort"
             })
             #expect(slider.accessibilityPerformIncrement?() == true)
-            try await self.waitForModel { model.selectedThinkingLevel == "high" }
+            try await TestWait.observed("high thinking effort") { model.selectedThinkingLevel == "high" }
             effort = try await self.waitForEffort(in: panel, value: "Thorough")
             let effortValue: Any? = effort.accessibilityValue?()
             #expect(effortValue as? String == "Thorough")
@@ -100,7 +100,7 @@ struct QuickChatCatalogPresentationTests {
             }
             #expect(fast.isAccessibilityEnabled?() == true)
             _ = fast.accessibilityPerformPress?()
-            try await self.waitForModel { model.speed.isEnabled && !model.isUpdatingModel }
+            try await TestWait.observed("enabled fast mode") { model.speed.isEnabled && !model.isUpdatingModel }
             #expect(model.speed.isEnabled)
             #expect(model.speed.override == .on)
             effort = try await self.waitForEffort(in: panel, value: "Thorough, Fast")
@@ -110,7 +110,7 @@ struct QuickChatCatalogPresentationTests {
                 .filter { $0.accessibilityRole?() == .button && $0.accessibilityLabel?() == "Use session default" }
             #expect(defaults.count == 2, "Thinking and speed each have their own inheritance control")
             #expect(try #require(defaults.last).accessibilityPerformPress?() == true)
-            try await self.waitForModel { !model.isUpdatingModel }
+            try await TestWait.observed("inherited fast mode") { !model.isUpdatingModel }
             #expect(model.speed.override == nil)
             #expect(!model.speed.isEnabled)
             #expect(model.selectedThinkingLevel == "high")
@@ -123,7 +123,7 @@ struct QuickChatCatalogPresentationTests {
                 let unknown = try #require(choices.items.firstIndex { $0.title == "Unknown fixture" })
                 choices.performActionForItem(at: unknown)
             }
-            try await self.waitForModel { !model.isUpdatingModel }
+            try await TestWait.observed("unknown model selection") { !model.isUpdatingModel }
             #expect(model.displayedModelSelectionID == "fixture/unknown")
             let patches = await fixture.patches
             #expect(patches == ["model=fixture/allowed", "fast=true", "fast=null", "model=fixture/unknown"])
@@ -154,7 +154,7 @@ struct QuickChatCatalogPresentationTests {
         defer { controller.stop() }
         do {
             controller.present()
-            try await self.waitForModel { model.canUseModelControls }
+            try await TestWait.observed("restricted model controls") { model.canUseModelControls }
             model.dismissPermissionsForSession()
             model.text = "Unsent fixture draft"
             let panel = try #require(application.windows.first {
@@ -172,12 +172,16 @@ struct QuickChatCatalogPresentationTests {
                 let fallback = try #require(choices.items.firstIndex { $0.title == "Fallback fixture" })
                 choices.performActionForItem(at: fallback)
             }
-            try await self.waitForModel { !model.isUpdatingModel && !model.isLoadingModelControls }
+            try await TestWait.observed("fallback model selection") {
+                !model.isUpdatingModel && !model.isLoadingModelControls
+            }
             #expect(model.displayedModelSelectionID == "fixture/fallback")
 
             let noDefault = try await fixture.prepareModelChange(.noDefault)
             noDefault()
-            try await self.waitForModel { model.modelChoices.map(\.modelID) == ["custom"] && model.canUseModelControls }
+            try await TestWait.observed("custom model choice") {
+                model.modelChoices.map(\.modelID) == ["custom"] && model.canUseModelControls
+            }
             button = try await self.waitForModelButton(in: panel, value: model.modelControlLabel)
             try AppKitTestSupport.pointAtModelButton(button, in: panel)
             try await AppKitTestSupport.openMenu(button, in: panel, requireCompositedPopup: true) { menu in
@@ -187,7 +191,9 @@ struct QuickChatCatalogPresentationTests {
             }
             model.selectModel(OpenClawChatViewModel.defaultModelSelectionID)
             #expect(!model.isUpdatingModel, "An old reset action cannot bypass a null permitted default")
-            try await self.waitForModel { !model.isUpdatingModel && !model.isLoadingModelControls }
+            try await TestWait.observed("settled model controls") {
+                !model.isUpdatingModel && !model.isLoadingModelControls
+            }
 
             let held = AsyncTestGate()
             let invalidate = try await fixture.prepareModelChange(.holding, onHeldRead: { held.open() })
@@ -199,21 +205,12 @@ struct QuickChatCatalogPresentationTests {
                 try AppKitTestSupport.record(menu: menu, content: content, name: "guest-model-open")
                 invalidate()
             }
-            let heldDeadline = ContinuousClock.now + .seconds(5)
-            let heldTimeout = Task {
-                do {
-                    try await Task.sleep(until: heldDeadline, clock: .continuous)
-                    held.open()
-                } catch {}
-            }
             await held.wait()
-            heldTimeout.cancel()
-            await heldTimeout.value
             try Task.checkCancellation()
-            let heldReadArrived = await fixture.heldCatalogReadAt.map { $0 <= heldDeadline } == true
-            #expect(heldReadArrived, "The replacement catalog read must arrive before the five-second deadline")
             await fixture.releaseHeldCatalog()
-            try await self.waitForModel { model.modelControlStatusMessage != nil && !model.isLoadingModelControls }
+            try await TestWait.observed("catalog refresh failure") {
+                model.modelControlStatusMessage != nil && !model.isLoadingModelControls
+            }
             button = try await self.waitForModelButton(in: panel, value: model.modelControlLabel)
             try AppKitTestSupport.pointAtModelButton(button, in: panel)
             try await AppKitTestSupport.openMenu(button, in: panel, requireCompositedPopup: true) { menu in
@@ -225,7 +222,9 @@ struct QuickChatCatalogPresentationTests {
 
             let recover = try await fixture.prepareModelChange(.permitted)
             recover()
-            try await self.waitForModel { model.modelChoices.count == 3 && model.canUseModelControls }
+            try await TestWait.observed("recovered model choices") {
+                model.modelChoices.count == 3 && model.canUseModelControls
+            }
             button = try await self.waitForModelButton(in: panel, value: model.modelControlLabel)
             try AppKitTestSupport.pointAtModelButton(button, in: panel)
             try await AppKitTestSupport.openMenu(button, in: panel, requireCompositedPopup: true) { menu in
@@ -273,19 +272,18 @@ struct QuickChatCatalogPresentationTests {
     private func waitForEffortPopover(application: NSApplication) async throws
         -> (window: NSWindow, elements: [AnyObject])
     {
-        let deadline = ContinuousClock.now + .seconds(5)
-        repeat {
+        var popover: (window: NSWindow, elements: [AnyObject])?
+        try await TestWait.state("rendered effort popover slider") {
             for window in application.windows where window.isVisible {
                 let elements = try await AppKitTestSupport.accessibilityElements(in: window)
                 if elements.contains(where: { $0.accessibilityRole?() == .slider }) {
-                    return (window, elements)
+                    popover = (window, elements)
+                    return true
                 }
             }
-            try await Task.sleep(for: .milliseconds(20))
-        } while ContinuousClock.now < deadline
-        throw NSError(
-            domain: "QuickChatCatalogPresentation", code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "The rendered effort popover did not expose its slider"])
+            return false
+        }
+        return try #require(popover)
     }
 
     private func captureEffortPopover(_ window: NSWindow, name: String) async throws {
@@ -294,25 +292,6 @@ struct QuickChatCatalogPresentationTests {
               let directory = environment["OPENCLAW_TEST_MENU_CAPTURE_DIR"] else { return }
         try await AppKitTestSupport.recordCompositedWindow(
             window, name: name, directory: URL(fileURLWithPath: directory, isDirectory: true))
-    }
-
-    private func waitForModel(_ condition: @escaping @MainActor () -> Bool) async throws {
-        let ready = AsyncTestGate()
-        let observation = QuickChatCatalogObservation(condition: condition, ready: ready)
-        let timeout = Task { @MainActor in
-            do {
-                try await Task.sleep(for: .seconds(5))
-                ready.open()
-            } catch {}
-        }
-        observation.observe()
-        await ready.wait()
-        observation.stop()
-        timeout.cancel()
-        await timeout.value
-        try Task.checkCancellation()
-        #expect(observation.satisfied)
-        #expect(condition())
     }
 
     private static func makeModel(gateway: GatewayConnection) -> QuickChatModel {
@@ -381,7 +360,6 @@ private actor QuickChatCatalogFixture {
     private var sequence = 0
     private var heldReads: [CheckedContinuation<Void, Never>] = []
     private var onHeldRead: (@Sendable () -> Void)?
-    private(set) var heldCatalogReadAt: ContinuousClock.Instant?
     private(set) var patches: [String] = []
 
     init(restrictedCatalog: QuickChatRestrictedCatalog? = nil) {
@@ -399,7 +377,6 @@ private actor QuickChatCatalogFixture {
     {
         self.restrictedCatalog = mode
         self.onHeldRead = onHeldRead
-        self.heldCatalogReadAt = nil
         self.sequence += 1
         let currentSocket = self.socket
         let socket = try #require(currentSocket)
@@ -432,7 +409,6 @@ private actor QuickChatCatalogFixture {
             if self.restrictedCatalog == .holding {
                 await withCheckedContinuation { continuation in
                     self.heldReads.append(continuation)
-                    if self.heldCatalogReadAt == nil { self.heldCatalogReadAt = ContinuousClock.now }
                     self.onHeldRead?()
                     self.onHeldRead = nil
                 }
@@ -508,34 +484,5 @@ private actor QuickChatCatalogFixture {
                 userInfo: [NSLocalizedDescriptionKey: "Unexpected request: \(method)"])
         }
         return Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#.utf8)
-    }
-}
-
-@MainActor
-private final class QuickChatCatalogObservation {
-    let condition: @MainActor () -> Bool
-    let ready: AsyncTestGate
-    private(set) var satisfied = false
-    private var stopped = false
-
-    init(condition: @escaping @MainActor () -> Bool, ready: AsyncTestGate) {
-        self.condition = condition
-        self.ready = ready
-    }
-
-    func observe() {
-        guard !self.stopped else { return }
-        let satisfied = withObservationTracking { self.condition() } onChange: { [weak self] in
-            Task { @MainActor in self?.observe() }
-        }
-        if satisfied {
-            self.satisfied = true
-            self.stopped = true
-            self.ready.open()
-        }
-    }
-
-    func stop() {
-        self.stopped = true
     }
 }

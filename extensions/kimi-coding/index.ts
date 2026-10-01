@@ -2,7 +2,7 @@ import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
+import { applyKimiCodeConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
@@ -25,7 +25,6 @@ export default defineSingleProviderPluginEntry({
     envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
     manifestAuth: {
       promptMessage: "Enter Kimi API key",
-      defaultModel: KIMI_CODING_MODEL_REF,
       expectedProviders: ["kimi", "kimi-code", "kimi-coding"],
       applyConfig: applyKimiCodeConfig,
       noteMessage: [

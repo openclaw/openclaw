@@ -12,6 +12,7 @@ import {
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 
 const sourceRoot = process.cwd();
@@ -65,7 +66,7 @@ export function runFixture(
   privateQa = false,
   env: NodeJS.ProcessEnv = {},
 ) {
-  return command.run(process.execPath, args, fixtureOptions(root, privateQa, env));
+  return command.run(requireNodeTool("node"), args, fixtureOptions(root, privateQa, env));
 }
 
 export function runFixtureModule(
@@ -91,7 +92,7 @@ function readConfigEntries(
   groups: readonly string[],
 ): ConfigEntries {
   const result = spawnSync(
-    process.execPath,
+    requireNodeTool("node"),
     [
       "--input-type=module",
       "--eval",
@@ -179,6 +180,7 @@ export function createFixture(groups: readonly string[], root: string) {
   fs.mkdirSync(path.join(root, "scripts/lib"));
   for (const script of [
     "build-all.mts",
+    "generate-kysely-types.mts",
     "tsdown-build.mts",
     "pnpm-runner.mts",
     "windows-cmd-helpers.mjs",

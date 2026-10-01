@@ -472,7 +472,7 @@
 }
 
 .chat-group-timestamp {
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   /* Keep full-opacity --muted: opacity < 1 composites below WCAG AA on dark surfaces. */
   color: var(--muted);
   line-height: 1.2;
@@ -480,7 +480,6 @@
   white-space: nowrap;
 }
 
-/* ── Group footer action buttons ── */
 .chat-group-footer-actions button,
 .chat-group-footer .chat-send-status__action,
 .chat-message-actions-row button,
@@ -915,7 +914,7 @@ img.chat-avatar {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--panel) 72%, transparent);
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 700;
   line-height: 1;
   vertical-align: 0.08em;
@@ -1659,7 +1658,6 @@ button.chat-reply-attribution__target:disabled {
   color: var(--text-strong);
 }
 
-/* ── Message metadata (tokens, cost, model, context %) ── */
 .msg-meta {
   --openclaw-tooltip-max-width: min(36rem, calc(100vw - 32px));
 }
@@ -1737,7 +1735,6 @@ button.chat-reply-attribution__target:disabled {
   color: var(--danger);
 }
 
-/* ── Confirmed action popover ── */
 .chat-confirm-wrap {
   position: relative;
   display: inline-flex;
@@ -1769,7 +1766,7 @@ button.chat-reply-attribution__target:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   color: var(--muted);
   margin-bottom: 10px;
   user-select: none;

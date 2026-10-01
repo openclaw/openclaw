@@ -469,6 +469,39 @@ describe("chat pane header", () => {
     expect(facepile !== null).toBe(expectedViewers.length > 0);
   });
 
+  it("keeps header viewers settled until presence changes", async () => {
+    const presence: PresenceEntry[] = [
+      {
+        instanceId: "guest-instance",
+        ts: 1,
+        user: { id: "guest", identity: { type: "profile", id: "guest" }, name: "Guest" },
+        watchedSessions: ["agent:main:current"],
+      },
+    ];
+    const mounted = mountIntegratedPresenceHeader({ owners: [], presence });
+    const facepile = mounted.container.querySelector("openclaw-viewer-facepile")!;
+    await facepile.updateComplete;
+    const updates = vi.spyOn(facepile, "render");
+    mounted.renderHeader();
+    await facepile.updateComplete;
+    expect(updates).not.toHaveBeenCalled();
+    mounted.pane.presencePayload = {
+      presence: [
+        ...presence,
+        {
+          instanceId: "second-instance",
+          ts: 1,
+          user: { id: "second", identity: { type: "profile", id: "second" }, name: "Second" },
+          watchedSessions: ["agent:main:current"],
+        },
+      ],
+    };
+    mounted.renderHeader();
+    await facepile.updateComplete;
+    expect(updates).toHaveBeenCalledOnce();
+    expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
+  });
+
   it("updates the header owner vitality from live session presence", async () => {
     const sessionKey = "agent:main:current";
     const owners = [

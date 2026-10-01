@@ -456,19 +456,15 @@ export async function resolveEmbeddedModelSelection(params: {
       agentId: params.sessionAgentId,
       sessionKey: params.sessionKey,
     });
-    const authAliasLookupParams = params.pluginsEnabled
-      ? {
-          config: authConfig,
-          workspaceDir: params.workspaceDir,
-          ...(params.manifestMetadataSnapshot
-            ? { metadataSnapshot: params.manifestMetadataSnapshot }
-            : {}),
-        }
-      : {
-          config: authConfig,
-          workspaceDir: params.workspaceDir,
-          metadataSnapshot: { plugins: [] },
-        };
+    const authAliasLookupParams = {
+      config: authConfig,
+      workspaceDir: params.workspaceDir,
+      ...(params.pluginsEnabled
+        ? params.manifestMetadataSnapshot
+          ? { metadataSnapshot: params.manifestMetadataSnapshot }
+          : {}
+        : { metadataSnapshot: { plugins: [] } }),
+    };
     const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
       provider: providerForAuthProfileValidation,
       harnessRuntime: validationHarnessPolicy.runtime,

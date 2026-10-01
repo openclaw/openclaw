@@ -128,6 +128,53 @@ data class QuestionListResult(
 )
 
 @Serializable
+data class MessageReactionSummary(
+  val emoji: String,
+  val count: Long,
+  val identities: List<MessageReactionSummaryIdentitiesItem>,
+)
+
+@Serializable
+data class SessionReactionsListParams(
+  val sessionKey: String,
+  val agentId: String? = null,
+)
+
+@Serializable
+data class SessionReactionsSetParams(
+  val sessionKey: String,
+  val agentId: String? = null,
+  val messageId: String,
+  val emoji: String,
+  val remove: Boolean? = null,
+)
+
+@Serializable
+data class SessionReactionsListResult(
+  val sessionId: String,
+  val reactions: Map<String, List<MessageReactionSummary>>,
+)
+
+@Serializable
+data class SessionReactionsSetResult(
+  val messageId: String,
+  val reactions: List<MessageReactionSummary>,
+  val mirror: SessionReactionsSetResultMirror? = null,
+)
+
+@Serializable
+data class SessionReactionEvent(
+  val sessionKey: String,
+  val agentId: String,
+  val sessionId: String,
+  val messageId: String,
+  val emoji: String,
+  val action: String,
+  val actor: SessionReactionEventActor,
+  val reactions: List<MessageReactionSummary>,
+)
+
+@Serializable
 data class SessionObserverPlanProgress(
   val completed: Long,
   val total: Long,
@@ -381,6 +428,27 @@ data class QuestionSecretStore(
 data class QuestionSecretStoreExisting(
   val updatedAtMs: Long,
   val updatedBy: String? = null,
+)
+
+@Serializable
+data class MessageReactionSummaryIdentitiesItem(
+  val id: String,
+  val label: String? = null,
+)
+
+@Serializable
+data class SessionReactionsSetResultMirror(
+  val status: String,
+  val reason: String? = null,
+)
+
+@Serializable
+data class SessionReactionEventActor(
+  val type: String,
+  val id: String,
+  val label: String? = null,
+  val avatarUrl: String? = null,
+  val identity: JsonElement? = null,
 )
 
 @Serializable
@@ -980,6 +1048,10 @@ enum class GatewayMethod(
   UsersMerge("users.merge"),
   GatewayStopRequest("gateway.stop.request"),
   DiagnosticsHeapSnapshot("diagnostics.heapSnapshot"),
+  SessionsCatalogImport("sessions.catalog.import"),
+  BackupStatus("backup.status"),
+  StorageLocationsList("storage.locations.list"),
+  StorageLocationsProbe("storage.locations.probe"),
 }
 
 enum class GatewayEvent(

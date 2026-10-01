@@ -1,0 +1,130 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function createLintFixture() {
+  const root = tempDirs.make("oxlint-kysely-");
+  fs.mkdirSync(path.join(root, ".git"));
+  installDistArtifactScripts(root, ["run-oxlint.mjs", "run-oxlint.mts", "run-oxlint-shards.mts"], {
+    compiler: false,
+    dependencies: [
+      "tsx",
+      "@openclaw/fs-safe",
+      "json5",
+      "p-map",
+      "kysely",
+      "oxlint",
+      "oxlint-tsgolint",
+    ],
+  });
+  fs.symlinkSync(
+    path.resolve("node_modules/.bin"),
+    path.join(root, "node_modules/.bin"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const write = (file: string, content: string) => {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), content);
+  };
+  write("package.json", '{"type":"module"}');
+  write(
+    "tsconfig.json",
+    JSON.stringify({ compilerOptions: { strict: true, types: [], module: "nodenext" } }),
+  );
+  write("config/tsconfig/oxlint.core.json", '{"extends":"../../tsconfig.json"}');
+  write(
+    ".oxlintrc.json",
+    JSON.stringify({
+      plugins: ["typescript"],
+      categories: { correctness: "off" },
+      rules: { "typescript/no-redundant-type-constituents": "error" },
+    }),
+  );
+  for (const name of ["state", "agent"]) {
+    write(
+      "src/state/openclaw-" + name + "-schema.sql",
+      "CREATE TABLE records (title TEXT NOT NULL);",
+    );
+  }
+  write(
+    "src/state/openclaw-state-db.generated.ts",
+    'export type * from "../../.artifacts/kysely/openclaw-state-db.generated.js";',
+  );
+  write(
+    "src/state/consumer.ts",
+    'import type { DB } from "./openclaw-state-db.generated.js"; export type Row = DB["records"] | null;',
+  );
+  const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
+    spawnSync(process.execPath, args, {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_ACTIONS: "false",
+        OPENCLAW_CI_STATIC_EVIDENCE: "0",
+        OPENCLAW_OXLINT_SKIP_PREPARE: "0",
+        ...env,
+      },
+    });
+  return {
+    root,
+    run,
+    write,
+    output: path.join(root, ".artifacts/kysely/openclaw-state-db.generated.ts"),
+  };
+}
+
+const direct = [
+  "scripts/run-oxlint.mjs",
+  "--tsconfig",
+  "config/tsconfig/oxlint.core.json",
+  "src/state/consumer.ts",
+];
+const striped = [
+  "--import",
+  "./scripts/tsx.mjs",
+  "scripts/run-oxlint-shards.mts",
+  "--only=core",
+  "--split-core",
+  "--core-stripe=1/5",
+  "--files-json",
+  '["src/state/consumer.ts"]',
+  "--threads=1",
+];
+
+describe("typed lint Kysely prerequisites", () => {
+  it.each([
+    { name: "direct", args: direct },
+    { name: "striped", args: striped },
+  ])("prepares cold declarations before $name core lint without plugin artifacts", ({ args }) => {
+    const fixture = createLintFixture();
+    expect(fs.existsSync(fixture.output)).toBe(false);
+    const result = fixture.run(args);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(fs.readFileSync(fixture.output, "utf8")).toContain("title: string;");
+    expect(fs.existsSync(path.join(fixture.root, ".artifacts/extension-package-boundary"))).toBe(
+      false,
+    );
+  });
+
+  it("leaves preparation to skip-prepare callers and skips syntax-only and metadata commands", () => {
+    const fixture = createLintFixture();
+    const skipped = fixture.run(direct, { OPENCLAW_OXLINT_SKIP_PREPARE: "1" });
+    expect(skipped.status, skipped.stdout + skipped.stderr).toBe(1);
+    expect(skipped.stdout).toContain("no-redundant-type-constituents");
+    for (const args of [
+      ["scripts/run-oxlint.mjs", "--version"],
+      [...direct, "--openclaw-focused-config"],
+      [...striped, "--openclaw-focused-config"],
+    ]) {
+      const result = fixture.run(args);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(fs.existsSync(fixture.output)).toBe(false);
+    }
+  });
+});

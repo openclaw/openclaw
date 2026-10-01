@@ -170,7 +170,7 @@ export function readExactSessionEntriesWithLifecycle(
             runSqliteDeferredTransactionSync(database.db, () => {
               assertCanonicalSqliteSessionKeysCurrent(database);
               if (request.projection === "creation") {
-                const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
+                const { identity, canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];
                 if (
                   typeof identity !== "string" ||
@@ -192,7 +192,7 @@ export function readExactSessionEntriesWithLifecycle(
                       request.creationLabel,
                     ),
                     databaseIdentity: identity,
-                    databasePath: filename,
+                    databasePath: canonicalPath,
                   },
                 };
               }

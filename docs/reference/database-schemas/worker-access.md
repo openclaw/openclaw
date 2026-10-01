@@ -262,6 +262,10 @@ planning and vector inspection use the same retrieval worker and captured store
 target. Indexed memory text stays with that reader; the host receives only selected
 chunk identities, source paths, and counts. Preview remains noncreating, and native
 vector inspection closes its probe and read-only connection before replying.
+Forget's corpus discovery requests read-only metadata without unused transcript
+revisions. Durable session summaries use the existing retained history worker,
+preserving captured store selection and classification without writable bootstrap.
+Synchronous corpus callers and process-held transcripts keep their existing owners.
 Session policy metadata reads and cold bootstrap remain separate. Schemas, stored
 formats, and update behavior are unchanged.
 
@@ -275,8 +279,10 @@ at a time and preserves cache binary values. Source-file inspection remains on t
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache reads, the published-generation guard for shadow source writes, and cold
-opening remain separate work. Schemas, cache retention, and stored formats are unchanged.
+Cache and source-hash reads use the retained publication worker, with caller
+authority checked after delivery. The published-generation guard for shadow source
+writes and cold opening remain separate work. Schemas, cache retention, and stored
+formats are unchanged.
 
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally

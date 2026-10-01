@@ -42,7 +42,6 @@ function parseTimestampMs(value: unknown): number | undefined {
   return undefined;
 }
 
-/** Parse a common provider media frame. */
 function parseMediaFrame(msg: Record<string, unknown>): StreamFrame {
   const mediaData = asOptionalObjectRecord(msg.media);
   const payload = typeof mediaData?.payload === "string" ? mediaData.payload : undefined;
@@ -58,7 +57,6 @@ function parseMediaFrame(msg: Record<string, unknown>): StreamFrame {
   };
 }
 
-/** Parse a common provider mark frame. */
 function parseMarkFrame(msg: Record<string, unknown>): StreamFrame {
   const markData = asOptionalObjectRecord(msg.mark);
   const name = typeof markData?.name === "string" ? markData.name : undefined;
@@ -96,7 +94,6 @@ function parseProviderInboundFrame(
   }
 }
 
-/** Serialize a provider media frame. */
 function serializeMediaFrame(payloadBase64: string, streamSid?: string): string {
   return JSON.stringify({
     event: "media",
@@ -105,12 +102,10 @@ function serializeMediaFrame(payloadBase64: string, streamSid?: string): string 
   });
 }
 
-/** Serialize a provider clear frame. */
 function serializeClearFrame(streamSid?: string): string {
   return JSON.stringify({ event: "clear", streamSid });
 }
 
-/** Serialize a provider mark frame. */
 function serializeMarkFrame(name: string, streamSid?: string): string {
   return JSON.stringify({
     event: "mark",
@@ -124,7 +119,6 @@ export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
   readonly providerName = "twilio" as const;
   private streamSid = "";
 
-  /** Parse one Twilio websocket message into a normalized frame. */
   parseInbound(rawMessage: string): StreamFrame {
     return parseProviderInboundFrame(rawMessage, (msg) => {
       const startData = asOptionalObjectRecord(msg.start);
@@ -138,27 +132,22 @@ export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
     });
   }
 
-  /** Serialize Twilio media with the active streamSid. */
   serializeMedia(payloadBase64: string): string {
     return serializeMediaFrame(payloadBase64, this.streamSid);
   }
 
-  /** Serialize Twilio clear with the active streamSid. */
   serializeClear(): string {
     return serializeClearFrame(this.streamSid);
   }
 
-  /** Serialize Twilio mark with the active streamSid. */
   serializeMark(name: string): string {
     return serializeMarkFrame(name, this.streamSid);
   }
 }
 
-/** Telnyx media stream adapter. */
 export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
   readonly providerName = "telnyx" as const;
 
-  /** Parse one Telnyx websocket message into a normalized frame. */
   parseInbound(rawMessage: string): StreamFrame {
     return parseProviderInboundFrame(
       rawMessage,
@@ -197,17 +186,14 @@ export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
     );
   }
 
-  /** Serialize Telnyx media. */
   serializeMedia(payloadBase64: string): string {
     return serializeMediaFrame(payloadBase64);
   }
 
-  /** Serialize Telnyx clear. */
   serializeClear(): string {
     return serializeClearFrame();
   }
 
-  /** Serialize Telnyx mark. */
   serializeMark(name: string): string {
     return serializeMarkFrame(name);
   }

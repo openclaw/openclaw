@@ -332,6 +332,7 @@ type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
   database: { agentId: string; path: string };
   scope: SessionEntryListScope;
+  continuation?: CanonicalSessionReaderContinuation;
 };
 
 export type SessionExactEntriesWorkerInput = {
@@ -651,7 +652,10 @@ export type SessionHistoryWorkerDatabase = {
     signal?: AbortSignal,
   ) => Promise<SessionExactEntriesWorkerResult>;
   readRowFacts: SessionHistoryReader<SessionRowFactsWorkerInput>;
-  readEntries: (scope: SessionEntryListWorkerInput["scope"]) => Promise<SessionEntrySummary[]>;
+  readEntries: (
+    scope: SessionEntryListWorkerInput["scope"],
+    continuation?: CanonicalSessionReaderContinuation,
+  ) => Promise<SessionEntrySummary[]>;
   readEntryResult: SessionHistoryReader<
     SessionEntryReadWorkerInput,
     import("@openclaw/normalization-core/result").Result<

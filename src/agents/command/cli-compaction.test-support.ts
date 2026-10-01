@@ -98,6 +98,7 @@ export function createPreparedRuntimeLease(input: {
       ...(input.agentId ? { agentId: input.agentId } : {}),
     },
     pluginGeneration: {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: prepared.metadataSnapshot,

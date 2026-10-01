@@ -69,16 +69,20 @@ async function runDoctorConfigPreflightOperation(
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
   const skipLegacyParentConfigWrite = shouldSkipLegacyUpdateDoctorConfigWrite(process.env);
-  if (stateMigrationsRequested) {
-    await assertOpenClawStateWriteAllowedAtPath({
-      databasePath: resolveOpenClawStateSqlitePath(process.env),
-      env: process.env,
-      recoverOrphanedSidecars: true,
-    });
-  }
-  await noteStaleUpdateRuns({ migrateState: stateMigrationsRequested });
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
+  if (stateMigrationsRequested) {
+    await measurePreflightStep("state-write-admission", () =>
+      assertOpenClawStateWriteAllowedAtPath({
+        databasePath: resolveOpenClawStateSqlitePath(process.env),
+        env: process.env,
+        recoverOrphanedSidecars: true,
+      }),
+    );
+  }
+  await measurePreflightStep("stale-update-runs", () =>
+    noteStaleUpdateRuns({ migrateState: stateMigrationsRequested }),
+  );
   let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];

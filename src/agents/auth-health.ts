@@ -3,10 +3,7 @@
  * Classifies stored and runtime credentials into profile/provider rollups for
  * status commands and doctor output without prompting keychain access.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +16,7 @@ import {
 } from "./auth-profiles/credential-state.js";
 import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
+import { resolveExplicitAuthOrderSelection } from "./auth-profiles/explicit-order.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -304,22 +302,17 @@ export function buildAuthHealthSummary(params: {
     }
   }
 
-  const resolveExplicitAuthOrder = (provider: string): string[] | undefined => {
-    const authProvider = resolveProviderIdForAuth(provider, {
-      config: params.cfg,
-      ...params.authAliasLookupParams,
-      storedCredential: true,
-    });
-    return (
-      findNormalizedProviderValue(params.store.order, authProvider) ??
-      findNormalizedProviderValue(params.store.order, provider) ??
-      findNormalizedProviderValue(params.cfg?.auth?.order, authProvider) ??
-      findNormalizedProviderValue(params.cfg?.auth?.order, provider)
-    );
-  };
-
   const resolveProviderStatusProfiles = (provider: AuthProviderHealth): AuthProfileHealth[] => {
-    const explicitOrder = resolveExplicitAuthOrder(provider.provider);
+    const { order: explicitOrder } = resolveExplicitAuthOrderSelection({
+      storeOrder: params.store.order,
+      configuredOrder: params.cfg?.auth?.order,
+      providerKey: provider.provider,
+      providerAuthKey: resolveProviderIdForAuth(provider.provider, {
+        config: params.cfg,
+        ...params.authAliasLookupParams,
+        storedCredential: true,
+      }),
+    });
     if (explicitOrder && explicitOrder.length === 0) {
       return [];
     }

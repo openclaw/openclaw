@@ -278,7 +278,7 @@ it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       }
       const { pid } = JSON.parse(fs.readFileSync(marker, "utf8")) as { pid: number };
       expect(() => process.kill(pid, 0)).toThrow();
-      expect(fs.readdirSync(cache)).toEqual(["openclaw", "unrelated.txt"]);
+      expect(fs.readdirSync(cache).toSorted()).toEqual(["openclaw", "unrelated.txt"]);
       expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
       expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved");
       expect(writer.prepare("PRAGMA user_version").get()).toEqual({

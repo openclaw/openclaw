@@ -207,7 +207,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     >
       <summary
         class="chat-controls__inline-select-trigger chat-controls__effort-trigger ${
-          params.fastMode.active ? "chat-controls__effort-trigger--fast" : ""
+          ultrafast ? "chat-controls__effort-trigger--ultrafast" : ""
         } ${params.disabled ? "chat-controls__inline-select-trigger--disabled" : ""}"
         data-chat-thinking-select="true"
         data-chat-thinking-value=${selectedThinkingValue}
@@ -251,15 +251,19 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
               `
             : html`<span class="chat-controls__effort-speed" aria-hidden="true">${icons.zap}</span>`
         }
-        <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         ${
           params.fastMode.active
-            ? html`<span class="chat-controls__effort-tier">
-                <span class="chat-controls__effort-zap" aria-hidden="true">${icons.zap}</span>
-                ${speedLabel}
+            ? html`<span
+                class="chat-controls__effort-zap ${
+                  ultrafast ? "chat-controls__effort-zap--ultrafast" : ""
+                }"
+                aria-hidden="true"
+              >
+                ${ultrafast ? icons.zap : nothing}${icons.zap}
               </span>`
             : nothing
         }
+        <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         <span class="chat-controls__inline-select-chevron" aria-hidden="true"
           >${icons.chevronUp}</span
         >

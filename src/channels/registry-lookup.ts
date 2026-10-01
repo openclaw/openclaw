@@ -68,7 +68,6 @@ function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
   return registeredChannelPluginLookup;
 }
 
-/** Lists active channel plugin registrations from the current registry snapshot. */
 export function listRegisteredChannelPluginEntries(): ActivePluginChannelRegistration[] {
   return buildRegisteredChannelPluginLookup().entries;
 }

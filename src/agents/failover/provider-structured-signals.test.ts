@@ -25,6 +25,18 @@ describe("provider failover hook structured signals", () => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
   });
 
+  it("explains a saved misalignment code without newer refusal diagnostics", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "This request was blocked by our safety systems.",
+      errorCode: "misalignment_policy_violation",
+      errorType: "invalid_request_error",
+      errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
+    });
+    expect(formatUserFacingAssistantErrorText(message)).toBe(
+      "The provider stopped this request as a safety precaution (misalignment).",
+    );
+  });
+
   it.each([
     {
       errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,

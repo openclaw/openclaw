@@ -599,10 +599,10 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
 }
 
 /** Upgrade older owned databases to the structural schema required by the media cutover. */
-export function migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(
+export function* migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(
   db: DatabaseSync,
   options: OpenClawAgentDatabaseOptions,
-): void {
+): SqliteIntegrityOperation<void> {
   const targetVersion = AGENT_MEDIA_SCHEMA_VERSION - 1;
   if (readSqliteUserVersion(db) > targetVersion) {
     return;
@@ -615,7 +615,7 @@ export function migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(
       options.env,
     );
   }
-  runSqliteIntegrityOperationSync(agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname));
+  yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });

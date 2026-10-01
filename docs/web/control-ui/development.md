@@ -26,12 +26,14 @@ from the complete chat and new-session boot totals. Those route totals include
 the entry assets and the route's measured immediate dynamic imports, counting
 each asset once even when both preload lists reference it. Moving an existing
 boot import into the first request wave therefore remains visible in the byte
-accounting. The initial-entry ceilings and baseline are unchanged; route totals
+accounting. The initial-entry ceilings and baseline are unchanged; route byte totals
 are reported without introducing a higher limit. `--base-dist` on
 `scripts/check-control-ui-performance.mts` compares route bytes and requests when
 both builds contain route preload templates. Older builds report that comparison
 as unavailable, so use a cold-load network capture to compare their complete boot
 cost.
+
+Route boot JavaScript is limited to 35 requests per route, with three requests of headroom above the measured maximum, to catch facade regressions caused by top-level await disabling chunk optimization.
 
 For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache serves at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Each pruner claims an old directory before removing it so concurrent publishers do not delete the same tree. Cleanup failures log a warning and may temporarily leave extra files on disk, without discarding a successfully published generation. Later preparation can reclaim abandoned staging directories after one hour. Configured `gateway.controlUi.root` builds do not use this cache.
 

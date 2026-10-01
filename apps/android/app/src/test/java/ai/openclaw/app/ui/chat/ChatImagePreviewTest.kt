@@ -41,6 +41,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -251,6 +252,9 @@ class ChatImagePreviewTest {
         output.toByteArray()
       }
     bitmap.recycle()
+    // Warm the decoder before composition; the first method in JUnit's hash order otherwise
+    // risks cold decode/Exif initialization on Dispatchers.Default during waitUntil.
+    assertNotNull(decodeImageBytes(bytes))
     val content: @androidx.compose.runtime.Composable () -> Unit = {
       val context = LocalContext.current
       SideEffect {

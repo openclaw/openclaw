@@ -14,10 +14,18 @@ import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { enqueueCommandInLane, getQueueSize } from "../../process/command-queue.js";
+import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  getQueueSize,
+} from "../../process/command-queue.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import { createActiveRun } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 
@@ -164,6 +172,122 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
     await Promise.allSettled([blocker, ...queuedTasks]);
   }
 });
+
+it.each([true, false])(
+  "broad research Stop preserves main's work sharing a bare session key (persisted=%s)",
+  async (persisted) => {
+    const sharedKey = "shared";
+    const canonicalKey = "agent:research:shared";
+    const researchSessionId = "research-shared";
+    const cfg = {
+      ...getRuntimeConfig(),
+      agents: {
+        entries: { main: {}, research: {} },
+        ownership: "explicit" as const,
+        defaults: { ...getRuntimeConfig().agents?.defaults, systemAgent: { agentId: "research" } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    if (persisted) {
+      await upsertSessionEntryCore(
+        { agentId: "research", sessionKey: canonicalKey },
+        { sessionId: researchSessionId, updatedAt: 1 },
+      );
+    }
+    const enqueueSharedFollowup = (
+      agentId: string,
+      targetSessionId: string,
+      admissionSessionId?: string,
+    ) => {
+      const run = createQueueTestRun({ prompt: agentId });
+      Object.assign(run.run, { agentId, sessionKey: sharedKey, sessionId: targetSessionId });
+      run.admissionSessionId = admissionSessionId;
+      const settled = vi.fn();
+      run.turnAdoptionLifecycle = {
+        admission: "cancel-only",
+        onAdopted: () => {},
+        onSettled: settled,
+      };
+      enqueueFollowupRun(sharedKey, run, createQueueSettings(), "none", undefined, false);
+      return { run, settled };
+    };
+    const foreign = enqueueSharedFollowup("main", "main-shared");
+    const owned = enqueueSharedFollowup("research", researchSessionId);
+    const otherIncarnation = enqueueSharedFollowup(
+      "research",
+      "research-previous",
+      "research-next",
+    );
+    const entered = createDeferred();
+    const release = createDeferred();
+    const lane = resolveEmbeddedSessionLane(sharedKey);
+    const blocker = enqueueCommandInLane(lane, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const commands = [
+      enqueueCommandInLane(lane, async () => "main tagged", {
+        sessionTarget: { agentId: "main", sessionKey: sharedKey, sessionId: "main-shared" },
+      }),
+      enqueueCommandInLane(lane, async () => "main untagged"),
+      enqueueCommandInLane(lane, async () => "research", {
+        sessionTarget: { agentId: "research", sessionKey: sharedKey, sessionId: researchSessionId },
+      }),
+      enqueueCommandInLane(lane, async () => "research previous", {
+        sessionTarget: {
+          agentId: "research",
+          sessionKey: sharedKey,
+          sessionId: "research-previous",
+        },
+      }),
+    ];
+    const settled = Promise.allSettled(commands);
+    try {
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "research-shared-stop",
+          method: "sessions.abort",
+          params: { key: sharedKey, clearQueued: true },
+        },
+        client: sharingPolicyClient({ scopes: ["operator.admin"] }),
+        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionAbortHandlers,
+      });
+      expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+      expect.soft(foreign.run.queueAbortSignal?.aborted, "main follow-up must survive").toBe(false);
+      expect.soft(foreign.settled).not.toHaveBeenCalled();
+      expect(owned.settled).toHaveBeenCalledOnce();
+      expect(otherIncarnation.settled).toHaveBeenCalledOnce();
+      expect
+        .soft(FOLLOWUP_QUEUES.get(sharedKey)?.items, "main follow-up must remain queued")
+        .toEqual([foreign.run]);
+      release.resolve();
+      await blocker;
+      expect(await settled).toEqual([
+        { status: "fulfilled", value: "main tagged" },
+        { status: "fulfilled", value: "main untagged" },
+        {
+          status: "rejected",
+          reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
+        },
+        {
+          status: "rejected",
+          reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
+        },
+      ]);
+    } finally {
+      release.resolve();
+      clearSessionQueues([sharedKey, canonicalKey, researchSessionId]);
+      clearCommandLane(lane);
+      await Promise.allSettled([blocker, settled]);
+    }
+  },
+);
 
 it.each(["session", "queue", "new-source", "source"] as const)(
   "narrow clearQueued does not adopt %s changed by an earlier Stop callback",

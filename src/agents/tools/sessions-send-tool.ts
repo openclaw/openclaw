@@ -829,7 +829,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
             });
           if (timeoutSeconds === 0) {
-            startReplyFlow({ notifyRequesterOnWaitFailure: true });
+            await startReplyFlow({ notifyRequesterOnWaitFailure: true });
             return accepted(delivery);
           }
 
@@ -837,14 +837,14 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             ? await completion.take(timeoutMs)
             : await waitForAgentRunReply({ runId, timeoutMs, callGateway: gatewayCall });
           if (!result) {
-            startReplyFlow({ notifyRequesterOnWaitFailure: true });
+            await startReplyFlow({ notifyRequesterOnWaitFailure: true });
             return accepted(delayedDelivery);
           }
           completion?.close();
 
           if (result.status === "timeout") {
             if (result.pendingError === true && result.error?.trim()) {
-              startReplyFlow({ notifyRequesterOnWaitFailure: targetIsSubagent });
+              await startReplyFlow({ notifyRequesterOnWaitFailure: targetIsSubagent });
               return jsonResult({
                 runId,
                 status: "timeout",
@@ -856,7 +856,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               });
             }
             if (!isTerminalAgentWaitTimeout(result)) {
-              startReplyFlow({ notifyRequesterOnWaitFailure: true });
+              await startReplyFlow({ notifyRequesterOnWaitFailure: true });
               return accepted(delayedDelivery);
             }
           }
@@ -882,7 +882,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                   : NO_REPLY_MESSAGE,
               };
           if (reply) {
-            startReplyFlow({ reply: result });
+            await startReplyFlow({ reply: result });
           }
           return jsonResult({ runId, sessionKey: displayKey, ...response, ...watchField });
         },

@@ -171,6 +171,7 @@ export type SessionHistoryWorkerRequest =
       kind: "recent-page";
       params: {
         target: SessionTranscriptReadScope;
+        exactArchivePath?: string;
         options: Parameters<SessionTranscriptReader["readRecentSessionMessagesWithStatsAsync"]>[1];
       };
     }

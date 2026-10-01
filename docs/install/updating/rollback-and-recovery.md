@@ -37,8 +37,18 @@ are copied when supported. Regular-file launchers still require matching modes
 and contents. If backup verification fails, the report names the differing
 fields and the retained failed copy for inspection before retrying.
 
+Package rollback checks file hashes, inode identity, permissions, ownership, and
+symlink targets. It ignores regular `node_modules/.package-lock.json` files,
+which npm documents as a disposable cache, and link counts and change times
+that can change without altering the retained bytes. Executable `.bin` entries
+remain part of verification. During the original update process, a mismatch
+records up to five differing relative paths and field names (including `sha256`
+for changed contents) in the failure facts and report. Recovery after a process
+restart retains the saved digest check but cannot reconstruct that entry list.
+
 This behavior belongs to the installed updater. An older updater, including
-2026.9.4, can refuse a macOS launcher backup before the target version runs.
+2026.9.4, can refuse package or launcher verification before the target version runs
+and cannot gain these diagnostics from the candidate.
 Use the installation's [manual package-manager update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 if that first update is blocked.
 
@@ -117,11 +127,18 @@ Confirm no update is in progress and inspect the corresponding update report and
 recovery state before manual cleanup.
 If the Gateway was confirmed stopped during capture, a failed candidate
 that was never allowed to start can restore those databases before package
-rollback when Doctor's recorded write fingerprints still match. A change between
-capture and Doctor admission, or after Doctor finishes, preserves the current
+rollback only when database write fingerprints remain unchanged through Doctor
+and restoration. Maintenance ownership cannot identify independent SQLite writers,
+so any change during Doctor, including Doctor's own writes or a newly created
+database, makes these snapshots available for manual recovery only. A change between
+capture and Doctor admission, during Doctor, or after Doctor finishes preserves the current
 databases and reports `state-migrated-no-rollback` with the snapshot location and
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
+On Windows, an eligible capture first runs the same native SQLite exclusion check
+used by rollback. This settles any retained WAL before recording write fingerprints,
+so later probe cleanup is not mistaken for another writer. If another connection
+prevents exclusion, snapshots remain available for manual recovery.
 Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.
 Migrated files are kept as

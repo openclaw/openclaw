@@ -260,6 +260,7 @@ export async function runUpdateStep(params: {
   timeoutMs?: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   runCommand?: Parameters<typeof runStep>[0]["runCommand"];
   results?: UpdateStepResult[];
 }): Promise<UpdateStepResult> {

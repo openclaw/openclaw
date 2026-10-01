@@ -208,6 +208,44 @@ openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
 
+An interrupted automatic triage can leave an uncertain installation handoff after
+its updater and helper exit. Explicit `openclaw update repair` can reclaim that
+handoff when both recorded PID/start identities are provably dead, a complete
+host census finds no remaining references to its run or retained paths, and at
+least 45 minutes have passed since the lease's last recorded activity. A
+recoverable larger recorded timeout extends that grace period. Gateway startup
+and borrowed update processes do not reclaim these leases.
+
+The original run must be identifiable from its retained helper, update history,
+or generation-bound repair metadata, and readable in the selected state database.
+Repair needs that record to check rollback and recovery evidence. Use the same
+profile and state overrides as the failed update; repair does not substitute a
+lease owner ID for a missing run.
+
+Refusals name the processes, inspection gap, or remaining grace period. Stop
+named work through its owning terminal or service, then retry; do not delete the
+lease database. Repair retains unreadable helper paths in its census instead of
+assuming their work has stopped.
+
+On Windows, identifying foreign process owners can require Administrator privileges.
+If repair requests elevation, use the same Windows account and preserve the failed
+update's profile and state overrides. Unknown ownership remains unverified.
+
+When no rollback step is recorded, repair uses ordinary current-installation
+finalization and records a handoff settlement in update history before releasing
+ownership. It preserves retained artifacts and does not invent an owner-death
+time or previous Gateway state. Unresolved state restoration keeps its existing
+recovery safeguards. A failed repair retains its original evidence, bound to the
+new lease generation, for a later explicit repair.
+Each repair attempt records its own run before starting finalization work, so a
+later repair also checks for descendants of interrupted repair attempts.
+
+An unfinished package or configuration rollback keeps the handoff and its artifacts
+intact. Inspect `openclaw update status --json` and complete the recorded restoration
+before retrying repair. Verified completed rollback and settlement receipts permit
+repair, including installations without a running Gateway. Skipped rollback steps
+and diagnostic warnings alone do not prevent repair.
+
 When update, post-core continuation, or repair runs under Bun, its OpenClaw
 maintenance children use that same Bun executable, including fresh Doctor,
 config validation, readiness, completion, and non-interactive failure diagnostics.

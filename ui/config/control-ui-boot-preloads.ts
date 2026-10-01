@@ -37,10 +37,18 @@ export function controlUiBootPreloadsPlugin(): Plugin {
         const templates = (["chat", "new"] as const).map((route) => {
           const assets = new Set(initial);
           for (const chunk of chunks) {
-            const owner = chunk.facadeModuleId
-              ? controlUiBootEntryRoute(chunk.facadeModuleId)
-              : undefined;
-            if (owner === "shared" || owner === route) {
+            // Optimized dynamic imports call their initializer inside a shared
+            // chunk, which has no single facadeModuleId. Keep those entries in
+            // the first request wave too.
+            const entries = chunk.facadeModuleId
+              ? [chunk.facadeModuleId]
+              : Object.keys(chunk.modules);
+            if (
+              entries.some((id) => {
+                const owner = controlUiBootEntryRoute(id);
+                return owner === "shared" || owner === route;
+              })
+            ) {
               collect(chunk.fileName, assets);
             }
           }

@@ -276,13 +276,13 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return try OpenClawChatGatewayPayloadCodec.decodeSessionsList(res, agentID: agentID)
     }
 
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
         try await self.listChildSessions(parentKey: parentKey, ifCurrentRoute: nil)
     }
 
     private func listChildSessions(
         parentKey: String,
-        ifCurrentRoute route: GatewayNodeSessionRoute?) async throws -> [OpenClawChatSessionEntry]
+        ifCurrentRoute route: GatewayNodeSessionRoute?) async throws -> OpenClawChatChildSessionsResult
     {
         try await OpenClawChatChildSessionPager.collect { offset in
             let request = OpenClawChatGatewayRequests.sessionsList(
@@ -492,6 +492,24 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
             data,
             agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
+    }
+
+    func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
+        guard let route = await self.currentSessionMutationRoute(),
+              let facts = await self.gateway.currentReactionAccess(ifCurrentRoute: route)
+        else { return nil }
+        return self.reactionsRouteLease(
+            routeID: facts.routeID,
+            access: OpenClawChatReactionAccess(
+                role: facts.role,
+                scopes: facts.scopes,
+                sessionCap: facts.sessionCap,
+                methods: facts.methods,
+                userID: facts.userID),
+            isCurrent: { await self.gateway.currentRoute() == route },
+            request: { request in
+                try await self.gateway.request(request, ifCurrentRoute: route)
+            })
     }
 
     func resolveInlineWidgetResource(

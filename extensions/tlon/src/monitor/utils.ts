@@ -251,7 +251,6 @@ export function extractMessageText(content: unknown): string {
         return "";
       }
 
-      // Handle inline content (text, ships, links, etc.)
       if (Array.isArray(verseRecord.inline)) {
         return verseRecord.inline
           .map((item) =>
@@ -264,12 +263,10 @@ export function extractMessageText(content: unknown): string {
           .join("");
       }
 
-      // Handle block content (images, code blocks, etc.)
       const block = asNullableRecord(verseRecord.block);
       if (block) {
         const image = asNullableRecord(block.image);
 
-        // Image blocks
         if (image) {
           const imageSrc = readStringField(image, "src");
           if (imageSrc) {
@@ -279,7 +276,6 @@ export function extractMessageText(content: unknown): string {
           }
         }
 
-        // Code blocks
         const codeBlock = asNullableRecord(block.code);
         if (codeBlock) {
           const lang = readStringField(codeBlock, "lang") ?? "";
@@ -287,7 +283,6 @@ export function extractMessageText(content: unknown): string {
           return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
         }
 
-        // Header blocks
         const header = asNullableRecord(block.header);
         if (header) {
           const headerContent = Array.isArray(header.content) ? header.content : [];
@@ -296,7 +291,6 @@ export function extractMessageText(content: unknown): string {
           return `\n## ${text}\n`;
         }
 
-        // Cite/quote blocks - parse the reference structure
         const cite = asNullableRecord(block.cite);
         if (cite) {
           const chanCite = asNullableRecord(cite.chan);

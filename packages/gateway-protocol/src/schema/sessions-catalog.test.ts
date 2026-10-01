@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   SessionCatalogShareRouteSchema,
   SessionsCatalogHostEventSchema,
+  SessionsCatalogImportParamsSchema,
+  SessionsCatalogImportResultSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
   SessionsCatalogStartTerminalParamsSchema,
@@ -120,6 +122,56 @@ describe("SessionsCatalogStartTerminal schemas", () => {
     expect(
       Value.Check(SessionsCatalogStartTerminalResultSchema, { ...result, unexpected: true }),
     ).toBe(false);
+  });
+});
+
+describe("SessionsCatalogImport schemas", () => {
+  it("accepts a locator and closed import counts, including incomplete and unchanged results", () => {
+    const params = {
+      catalogId: "claude",
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      sourceHomeId: "home-1",
+      agentId: "research",
+    };
+    const result = {
+      sessionKey: "agent:research:imported-session",
+      importedItems: 0,
+      totalItems: 20,
+      complete: false,
+      created: false,
+    };
+
+    expect(Value.Check(SessionsCatalogImportParamsSchema, params)).toBe(true);
+    for (const displayName of ["Imported native session", "x".repeat(500)]) {
+      expect(Value.Check(SessionsCatalogImportParamsSchema, { ...params, displayName })).toBe(true);
+    }
+    for (const displayName of ["", "x".repeat(501)]) {
+      expect(Value.Check(SessionsCatalogImportParamsSchema, { ...params, displayName })).toBe(
+        false,
+      );
+    }
+    expect(Value.Check(SessionsCatalogImportParamsSchema, { ...params, fork: true })).toBe(false);
+    expect(Value.Check(SessionsCatalogImportResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogImportResultSchema, {
+        ...result,
+        importedItems: 20,
+        complete: true,
+        created: true,
+      }),
+    ).toBe(true);
+    for (const invalid of [
+      { importedItems: -1 },
+      { importedItems: 0.5 },
+      { totalItems: -1 },
+      { totalItems: 0.5 },
+      { complete: "false" },
+      { created: "false" },
+      { unexpected: true },
+    ]) {
+      expect(Value.Check(SessionsCatalogImportResultSchema, { ...result, ...invalid })).toBe(false);
+    }
   });
 });
 

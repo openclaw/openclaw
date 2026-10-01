@@ -9,6 +9,7 @@ import { Format } from "typebox/format";
 import { Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   applyJsonSchemaDefaults,
@@ -16,7 +17,6 @@ import {
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { PluginLruCache } from "./plugin-lru-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type CachedValidator = {
@@ -32,7 +32,7 @@ type CachedValidator = {
  */
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
-const schemaCache = new PluginLruCache<CachedValidator>(512);
+const schemaCache = new LruCache<CachedValidator>(512);
 const annotationOnlyFormats = [
   "date-time",
   "date",
