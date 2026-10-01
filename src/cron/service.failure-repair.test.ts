@@ -211,7 +211,7 @@ describe("CronService failure repair", () => {
       payload,
       owner: { agentId: "main", sessionKey: ownerSessionKey },
       failureAlert: { after: 2, cooldownMs: 0, channel: "telegram", to: "19098680" },
-      state: { consecutiveErrors: 2, nextRunAtMs: nowMs + 60_000 },
+      state: { consecutiveErrors: 2 },
     } as CronJob;
     const deferredNotifications: DeferredCronNotifications = [];
     maybeEmitFailureAlert(state, {
