@@ -4,13 +4,13 @@ import { createCronOwnerWriteRefusalError } from "../../../config/io.cron-owner-
 import { migratePersistedImplicitMainRoster } from "../../../config/legacy.roster.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
-import { repairLegacyCronJobOwnersForDoctor } from "../../../cron/store/doctor.js";
 import { resolveCronJobsStorePathFromConfig } from "../../../cron/store/paths.js";
 import { tryParseJsonObject } from "../../../cron/store/scalar-codec.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { loadLegacyCronRepairState } from "./legacy-repair.js";
+import { repairLegacyCronJobOwnersForDoctor } from "./store-repair.js";
 
 /** Runs under Doctor's config lock before retiring the source roster's owner marker. */
 export async function repairLegacyCronOwnersBeforeConfigWrite(params: {

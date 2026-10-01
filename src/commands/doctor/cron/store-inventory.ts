@@ -1,10 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
-import { getCronStoreKysely } from "./schema.js";
+import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
+import { getCronStoreKysely } from "../../../cron/store/schema.js";
+import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
+import { tableExists } from "../../../state/openclaw-state-db-schema-helpers.js";
 
 /** SQL ownership is independently authoritative when legacy JSON omits it. */
 export function inspectCronOwnerRowsForDoctor(db: DatabaseSync, storeKey: string) {

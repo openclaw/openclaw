@@ -2,34 +2,34 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
-import { createVerifiedSqliteSnapshot } from "../../infra/sqlite-snapshot.js";
-import type { PluginDoctorRepairAuthority } from "../../infra/state-migrations.types.js";
-import type {
-  PluginDoctorCronChange,
-  PluginDoctorCronInventory,
-  PluginDoctorCronJob,
-} from "../../plugins/doctor-contract-module.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { sanitizeOpenClawStateLeaseRows } from "../../state/openclaw-state-snapshot-sanitizer.js";
-import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { noteCronJobsStoreCommit } from "../store.js";
-import { inspectCronOwnerRowsForDoctor, inspectCronRowsForDoctor } from "./doctor-inventory.js";
-import { cronStoreKey } from "./key.js";
-import { inspectCronJobsReadOnly } from "./read-only.js";
+import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
+import { noteCronJobsStoreCommit } from "../../../cron/store.js";
+import { cronStoreKey } from "../../../cron/store/key.js";
+import { inspectCronJobsReadOnly } from "../../../cron/store/read-only.js";
 import {
   deleteCronJobRowInDatabase,
   loadCronRows,
   resolveCronJobGrantDefinitionGenerationFloor,
   rowToCronJob,
   upsertCronJobRow,
-} from "./row-codec.js";
-import { tryParseJsonObject } from "./scalar-codec.js";
-import { getCronStoreKysely } from "./schema.js";
+} from "../../../cron/store/row-codec.js";
+import { tryParseJsonObject } from "../../../cron/store/scalar-codec.js";
+import { getCronStoreKysely } from "../../../cron/store/schema.js";
+import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
+import { createVerifiedSqliteSnapshot } from "../../../infra/sqlite-snapshot.js";
+import type { PluginDoctorRepairAuthority } from "../../../infra/state-migrations.types.js";
+import type {
+  PluginDoctorCronChange,
+  PluginDoctorCronInventory,
+  PluginDoctorCronJob,
+} from "../../../plugins/doctor-contract-module.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../../../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { sanitizeOpenClawStateLeaseRows } from "../../../state/openclaw-state-snapshot-sanitizer.js";
+import { inspectCronOwnerRowsForDoctor, inspectCronRowsForDoctor } from "./store-inventory.js";
 
 type DoctorCronScope = { env: NodeJS.ProcessEnv };
 

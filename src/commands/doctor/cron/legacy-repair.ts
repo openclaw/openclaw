@@ -23,11 +23,6 @@ import {
   type CronQuarantinedJob,
   type QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
-import { inspectCronOwnerRowsForDoctor } from "../../../cron/store/doctor-inventory.js";
-import {
-  backupCronStoreForDoctor,
-  inspectCronJobOwnersForDoctor,
-} from "../../../cron/store/doctor.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { fingerprintCronJobRows } from "../../../cron/store/row-codec.js";
 import type { CronJob } from "../../../cron/types.js";
@@ -75,6 +70,7 @@ import {
   assertCronStateSchemaSupportedAsync,
   rethrowSqliteSchemaVersionError,
 } from "./schema-safety.js";
+import { inspectCronOwnerRowsForDoctor } from "./store-inventory.js";
 import {
   canRepairCronDeliveryForDoctor,
   collectStoredCronCodexRuntimePolicyTargets,
@@ -83,6 +79,7 @@ import {
   recoverValidQuarantinedCronScheduleJobs,
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
+import { backupCronStoreForDoctor, inspectCronJobOwnersForDoctor } from "./store-repair.js";
 
 export type CronOwnerProjection =
   | { kind: "explicit"; agentId: string }
