@@ -26,7 +26,7 @@ import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import { markServiceCronJobActive } from "./run-receipts.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { type CronServiceState, emit } from "./state.js";
-import { captureCronServiceMutationSource, ensureLoaded } from "./store.js";
+import { captureCronServiceMutationSource, ensureLoaded, ensureRowsLoaded } from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { isRunnableJob } from "./timer-runnable.js";
@@ -348,7 +348,9 @@ export async function persistQueuedCronRunReservations(params: {
         return committedReservations;
       }
       // A failed refresh cannot orphan committed markers before local ownership.
-      await ensureLoaded(params.state, { forceReload: true }).catch(() =>
+      // Only these committed rows are consumed below, so the wave pays for them alone.
+      const committedJobIds = committedJobs.map((job) => job.id);
+      await ensureRowsLoaded(params.state, committedJobIds).catch(() =>
         applyCronRuntimeRowsToState(params.state, committedJobs),
       );
       const receiptByJobId = new Map(
@@ -496,7 +498,9 @@ export async function executeQueuedCronRun(params: {
   const { state } = params;
   const executeAdmitted = async () => {
     const started = await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true });
+      // This job's row is the only freshness fact admission needs, so a due wave
+      // decodes its own row instead of re-reading the partition once per job.
+      await ensureRowsLoaded(state, [params.jobId]);
       if (params.isUnavailable?.() || state.stopped) {
         params.onUnavailable?.();
         return undefined;

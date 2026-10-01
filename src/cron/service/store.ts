@@ -13,6 +13,7 @@ import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
   getCronJobsStoreRevision,
   noteCronJobsStoreCommit,
+  loadCronJobsStoreRowsByIds,
   loadCronJobsStoreWithConfigJobs,
   saveCronJobsStoreWithRevision,
   saveCronJobsStoreChangesWithRevision,
@@ -34,7 +35,10 @@ import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
 import { dispatchCronNotification } from "./notification-dispatch.js";
 import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
-import { publishDurableNextRunChanges } from "./runtime-publication.js";
+import {
+  applyCronRuntimeRowsToState,
+  publishDurableNextRunChanges,
+} from "./runtime-publication.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<
@@ -125,8 +129,10 @@ function validateCronStoreLoad(params: {
   loaded: LoadedCronStore;
   loadNowMs: number;
   previousJobsById: Map<string, CronJob>;
+  /** Rows come from a job-id narrowed read, so `sourceIndex` is subset-relative. */
+  narrowed?: boolean;
 }) {
-  const { state, loaded, loadNowMs, previousJobsById } = params;
+  const { state, loaded, loadNowMs, previousJobsById, narrowed } = params;
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
@@ -186,7 +192,11 @@ function validateCronStoreLoad(params: {
         quarantineEntry.scheduleIdentity = runtimeEntry.scheduleIdentity;
       }
       quarantinedConfigJobs.push(quarantineEntry);
-      warnInvalidPersistedCronJob({ state, raw, index: sourceIndex, reason: invalidReason });
+      // A narrowed read only needs the quarantine count to decide on its full-pass
+      // fallback; its row indexes are subset-relative, so the full pass does the warning.
+      if (!narrowed) {
+        warnInvalidPersistedCronJob({ state, raw, index: sourceIndex, reason: invalidReason });
+      }
       continue;
     }
     // Validated above, so the raw record is now a trusted CronJob.
@@ -275,6 +285,61 @@ export async function ensureLoaded(
       );
     }
   }
+}
+
+/** Refreshes only the listed rows so a due wave does not decode the whole partition.
+ *  Anything a narrowed read cannot certify falls back to the existing full reload. */
+export async function ensureRowsLoaded(
+  state: CronServiceState,
+  jobIds: readonly string[],
+): Promise<void> {
+  if (!state.store || jobIds.length === 0) {
+    // Row publication is a no-op without a resident snapshot, and an empty id set
+    // certifies nothing about the rows it left out.
+    await ensureLoaded(state, { forceReload: true });
+    return;
+  }
+  let narrowedLoad: LoadedCronStore | null = null;
+  try {
+    narrowedLoad = await loadCronJobsStoreRowsByIds(state.deps.storePath, jobIds);
+  } catch {
+    // loadCronJobsStoreRowsByIds commits nothing, so a failed narrowed read leaves
+    // the partition exactly as it was and the full pass below settles freshness.
+  }
+  if (!narrowedLoad) {
+    await ensureLoaded(state, { forceReload: true });
+    return;
+  }
+  const previousJobsById = new Map<string, CronJob>();
+  for (const job of state.store.jobs) {
+    previousJobsById.set(job.id, job);
+  }
+  const { jobs, durableNextRunAtMsByJobId, quarantinedConfigJobs } = validateCronStoreLoad({
+    state,
+    loaded: narrowedLoad,
+    loadNowMs: state.deps.nowMs(),
+    previousJobsById,
+    narrowed: true,
+  });
+  if (quarantinedConfigJobs.length > 0) {
+    // Quarantine is operator-visible and ordered by durable row index, so only
+    // the full pass may record and persist it.
+    await ensureLoaded(state, { forceReload: true });
+    return;
+  }
+  const loadedJobIds = new Set(jobs.map((job) => job.id));
+  const deletedJobIds = jobIds.filter((jobId) => !loadedJobIds.has(jobId));
+  // Publishing stays off: a full reload emits nothing either, and the durable map
+  // below is what tells a later save which rows actually changed in SQLite.
+  applyCronRuntimeRowsToState(state, jobs, deletedJobIds, { publish: false });
+  for (const [jobId, nextRunAtMs] of durableNextRunAtMsByJobId) {
+    state.durableNextRunAtMsByJobId.set(jobId, nextRunAtMs);
+  }
+  for (const jobId of deletedJobIds) {
+    state.durableNextRunAtMsByJobId.delete(jobId);
+  }
+  // storeLoadedAtMs and the loaded revision stay untouched: this read certifies the
+  // listed rows, so it must not claim the whole snapshot was re-read.
 }
 
 /** Loads authoritative passive state without discarding enabled-scheduler transients. */
