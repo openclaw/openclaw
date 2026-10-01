@@ -571,11 +571,12 @@ export async function buildAnthropicRequest(
 
 /** Apply caller payload edits before restoring required request contracts and beta headers. */
 export async function prepareAnthropicRequest(
-  params: MessageCreateParamsStreaming,
+  initialParams: MessageCreateParamsStreaming,
   model: Model<"anthropic-messages">,
   options: AnthropicOptions | undefined,
   directApiKeyBetaHeader: string | undefined,
 ) {
+  let params = initialParams;
   applyAnthropicContextManagementToRequest(params, model, options, directApiKeyBetaHeader);
   const nextParams = await options?.onPayload?.(params, model);
   if (nextParams !== undefined) {

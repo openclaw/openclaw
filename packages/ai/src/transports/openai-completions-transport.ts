@@ -226,7 +226,7 @@ function createDirectCompletionsEventStream(
   };
   return {
     stream: eventStream,
-    beforeContentBlock(nextType: "text" | "thinking" | "toolCall") {
+    beforeContentBlock: (nextType: "text" | "thinking" | "toolCall") => {
       if (openThinkingBlock) {
         finishBlock(openThinkingBlock);
       }
