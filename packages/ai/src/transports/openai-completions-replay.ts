@@ -1,9 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  isGoogleGemini3FlashModel,
-  isGoogleGemini3ProModel,
-} from "../internal/google-model-family.js";
+import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
@@ -18,10 +15,6 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex"
   );
-}
-
-function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
-  return isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id);
 }
 
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
@@ -43,7 +36,7 @@ function injectToolCallThoughtSignatures(
     return;
   }
   const sigById = new Map<string, string>();
-  const fallbackSig = requiresGoogleCompatToolCallThoughtSignature(model)
+  const fallbackSig = isGoogleGemini3ThinkingLevelModel(model.id)
     ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
     : undefined;
   for (const msg of context.messages ?? []) {

@@ -15,9 +15,12 @@ type CameraStage = "closed" | "requesting" | "live" | "capturing" | "review" | "
 export class OpenClawChatCameraCapture extends OpenClawLitElement {
   @property({ type: Boolean }) disabled = false;
   @property({ attribute: false }) readSignal?: AbortSignal;
-  @property({ attribute: false }) onCapture?: (file: File) => void;
-  @property({ attribute: false }) onUpload?: (source: HTMLElement) => void;
-  @property({ attribute: false }) onNativeCapture?: (source: HTMLElement) => void;
+  // show() snapshots destinations; callback replacement alone has no rendered state.
+  @property({ attribute: false, hasChanged: () => false }) onCapture?: (file: File) => void;
+  @property({ attribute: false, hasChanged: () => false }) onUpload?: (source: HTMLElement) => void;
+  @property({ attribute: false, hasChanged: () => false }) onNativeCapture?: (
+    source: HTMLElement,
+  ) => void;
   @state() private nativeFallback = false;
   @state() private stage: CameraStage = "closed";
   @state() private error = "";

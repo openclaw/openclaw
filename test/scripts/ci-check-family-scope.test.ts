@@ -70,6 +70,7 @@ describe("narrow PR check families", () => {
     "src/agents/session.test-support.ts",
     "scripts/lib/source-file-scan-cache.mts",
     "config/knip.all-exports.config.ts",
+    "config/test-timeout-race-baseline.txt",
     "extensions/telegram/tsconfig.json",
     "extensions/telegram/package.json",
     "pnpm-lock.yaml",

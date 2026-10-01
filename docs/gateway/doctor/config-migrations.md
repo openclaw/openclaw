@@ -9,6 +9,48 @@ read_when:
 Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
+## Runtime config migration
+
+Runtime config reads require per-model context budgets and current GitHub Copilot
+settings. Doctor migrates retired provider-level `contextTokens` and
+`contextWindow` values into explicit model entries, preserves existing per-model
+values, and reports agent-level caps that cannot be represented per model. Doctor
+also removes `plugins.entries.github-copilot.config.discovery.enabled`; configured
+Copilot access refreshes its catalog automatically.
+
+Run `openclaw doctor --fix` before starting with these retired keys. Updates apply
+the same transforms before candidate config validation, through the existing
+backup and include-aware write flow. Ordinary reads leave the authored values
+untouched so Doctor can report and persist the repair.
+
+## Retention policy
+
+Doctor uses a six-month migration retention window. The current retirement cutoff
+is `v2026.3.1`: retain a transform whenever any release from that version onward
+can still write its input format. A supported release that preserves a legacy
+format when rewriting existing data also counts as a writer. A format last
+written before the cutoff may be retired only with a clear refusal naming an
+intermediate release to upgrade through before retrying. Retirement must never
+silently discard persisted data.
+
+Legacy normalization belongs to Doctor and migration owners, with the existing
+backup and verification flow. Runtime readers consume canonical state.
+
+Doctor refuses these retired inputs:
+
+- `agents.defaults.llm`.
+- Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
+- `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
+  and the retired `channels.webchat` section.
+- `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
+  including per-account settings.
+
+Configs containing these keys must be repaired before current validation can
+succeed. Doctor preserves the config and stops with recovery guidance instead
+of stripping these settings or replacing them with a backup. For an older installation,
+[upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+and run its Doctor migrations before installing the latest version.
+
 ## Channel ownership during an update
 
 When Doctor migrates a legacy `agents.list` roster without a `default: true` marker
@@ -25,6 +67,19 @@ account-wide ownership. If the original roster is unavailable, Doctor reports
 the account's bindings unchanged. An unresolved account stays blocked
 with that reason while the Gateway and other accounts continue running; it does
 not enter a restart loop. Add the reported binding and restart the Gateway.
+
+## Sender tool policies
+
+Doctor migrates unprefixed `toolsBySender` keys to `id:` entries before config
+validation, including the update-time Doctor pass. It preserves the previous
+matching behavior: a leading `@` on an unprefixed key is removed, IDs match
+without regard to case, and the first configured policy wins when multiple keys
+normalize to the same ID. Doctor reports shadowed entries and preserves their
+original values in the normal config backup before saving the repair.
+
+Runtime config requires typed sender keys or `"*"`. After replacing the binary
+directly, run `openclaw doctor --fix` before starting the Gateway. Explicit
+`id:@user:server` policies and incoming sender-ID matching remain supported.
 
 ## Channel webhook listeners
 
@@ -314,36 +369,20 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters and legacy default markers already honored by the runtime need no owner repair and produce no missing-owner advice. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
 
     <Note>
-      Doctor only carries automatic migrations for roughly two months after a
-      key is retired. Older legacy keys (for example the original
-      `routing.queue`, `routing.bindings`, `routing.agents`/`defaultAgentId`,
-      `routing.transcribeAudio`, top-level `agent.*`, or top-level `identity`
-      from the pre-multi-agent config shape) no longer have a migration path;
-      config using them now fails validation instead of being rewritten. Fix
-      those keys by hand against the current
-      [configuration reference](/gateway/configuration-reference) before doctor
-      can proceed.
+      Migration retention follows the six-month
+      [retention policy](/gateway/doctor/config-migrations#retention-policy), based
+      on which supported releases can still write the format. For a retired
+      format, follow Doctor's intermediate-upgrade instructions before retrying.
     </Note>
-
-    Doctor no longer repairs these pre-June keys:
-
-    - Agent `embeddedHarness`, `embeddedPi`, `sandbox.perSession`, and `agents.defaults.llm`.
-    - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
-    - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
-      and retired `channels.webchat` / `gateway.webchat` sections.
-    - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
-      including per-account settings.
-
-    Configs containing these keys must be repaired before current validation can
-    succeed. Doctor preserves the config and stops with recovery guidance instead
-    of stripping these settings or replacing them with a backup. For an older installation,
-    [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
-    and run its Doctor migrations before installing the latest version.
 
     Active migrations:
 
     | Legacy key                                                                                    | Current key                                                                 |
     | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+    | Agent `sandbox.perSession`                                                                      | `sandbox.scope`: `true` → `"session"`, `false` → `"shared"`; an existing explicit scope, including an inherited default, wins |
+    | Agent `embeddedPi` object                                                                       | `embeddedAgent` at the same config scope; missing fields are filled and explicit canonical values win |
+    | Agent `embeddedHarness` object                                                                  | removed (ignored runtime configuration for the whole agent) |
+    | `gateway.webchat`                                                                               | removed (other Gateway settings are preserved) |
     | `tools.toolSearch.mode: "code"` | `tools.toolSearch.mode: "tools"` (structured Tool Search) |
     | `tools.toolSearch.codeTimeoutMs` | removed (Tool Search activation is preserved) |
     | `tools.codeMode.runtime: "quickjs-wasi"` (global and per-agent)                                | `tools.codeMode.executor: "quickjs"` (an existing executor selection wins) |
@@ -371,7 +410,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | `browser.ssrfPolicy.allowPrivateNetwork`                                                         | `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`                          |
     | `browser.profiles.*.driver: "extension"` with a stale `cdpUrl`                                  | driver preserved; stale relay URL removed                                     |
     | `browser.relayBindHost`                                                                          | removed (legacy Chrome extension relay setting)                             |
-    | `mcp.servers.*.type` (CLI-native aliases)                                                        | `mcp.servers.*.transport`                                                    |
+    | `mcp.servers.*.type`, `nodeHost.mcp.servers.*.type` (CLI-native aliases)                           | corresponding `transport` field                                            |
     | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
     | MCP timeout aliases `connectTimeout`/`connect_timeout`/`timeout`                                 | `connectionTimeoutMs`/`requestTimeoutMs`                                    |
     | MCP snake-case server fields                                                                     | camelCase MCP server fields                                                   |
@@ -413,6 +452,8 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | `session.maintenance.rotateBytes`, `session.parentForkMaxTokens`                                 | removed (deprecated)                                                        |
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
+
+    Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
 

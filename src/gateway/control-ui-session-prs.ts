@@ -55,6 +55,7 @@ type PullListItem = {
  * checkout filters them against its own default at resolve time.
  */
 type BranchPullRequestsSnapshot = ControlUiSessionPullRequests & {
+  publicationCandidates: ControlUiSessionPullRequest[];
   mergedHeads: MergedPullHead[];
   workingBranchHasLivePullRequest: boolean;
 };
@@ -67,7 +68,11 @@ type CacheEntry = {
   // chips instead of clearing the row.
   lastGood?: Pick<
     BranchPullRequestsSnapshot,
-    "pullRequests" | "mergedHeads" | "repository" | "workingBranchHasLivePullRequest"
+    | "pullRequests"
+    | "publicationCandidates"
+    | "mergedHeads"
+    | "repository"
+    | "workingBranchHasLivePullRequest"
   >;
 };
 
@@ -345,9 +350,12 @@ async function fetchBranchPullRequests(
     .toSorted((left, right) => Number(isActive(right)) - Number(isActive(left)))
     .slice(0, MAX_PULL_REQUESTS);
   const branchOf = (item: PullListItem) => item.branch ?? context.branch ?? "";
+  // The display cap must not discard evidence needed by publication recovery.
+  const publicationCandidates = items.map((item) => stateOnlyPullRequestChip(item, branchOf(item)));
   const stateOnlySnapshot = () => ({
     pullRequests: capped.map((item) => stateOnlyPullRequestChip(item, branchOf(item))),
     rateLimited: true,
+    publicationCandidates,
     mergedHeads,
     workingBranchHasLivePullRequest,
   });
@@ -358,6 +366,7 @@ async function fetchBranchPullRequests(
     return {
       pullRequests,
       rateLimited: false,
+      publicationCandidates,
       mergedHeads,
       workingBranchHasLivePullRequest,
     };
@@ -409,6 +418,7 @@ async function refreshBranchPullRequests(
     // expiry makes the next window retry full detail.
     entry.lastGood = {
       pullRequests: result.pullRequests,
+      publicationCandidates: result.publicationCandidates,
       mergedHeads: result.mergedHeads,
       workingBranchHasLivePullRequest: result.workingBranchHasLivePullRequest,
       repository,
@@ -421,6 +431,7 @@ async function refreshBranchPullRequests(
     if (rateLimited) {
       return {
         pullRequests: [],
+        publicationCandidates: [],
         mergedHeads: [],
         workingBranchHasLivePullRequest: false,
         ...entry.lastGood,
@@ -439,7 +450,7 @@ export async function loadControlUiSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
 ): Promise<ControlUiSessionPullRequests> {
-  const { target, assertCurrent } = deps.read;
+  const { target, assertCurrent, projection } = deps.read;
   try {
     assertCurrent();
     const request = { ...params, ...target.params };
@@ -485,13 +496,16 @@ export async function loadControlUiSessionPullRequests(
         status: "unavailable",
       };
     }
-    const { mergedHeads, workingBranchHasLivePullRequest, ...snapshot } = result;
-    const branch = workingBranchHasLivePullRequest
-      ? undefined
-      : await resolveSessionBranch(context, mergedHeads, deps, request.refresh === true);
+    const { publicationCandidates, mergedHeads, workingBranchHasLivePullRequest, ...snapshot } =
+      result;
+    const branch =
+      projection === "publication" || workingBranchHasLivePullRequest
+        ? undefined
+        : await resolveSessionBranch(context, mergedHeads, deps, request.refresh === true);
     assertCurrent();
     return {
       ...snapshot,
+      pullRequests: projection === "publication" ? publicationCandidates : snapshot.pullRequests,
       ...(branch ? { branch } : {}),
     };
   } catch (error) {
@@ -569,6 +583,7 @@ async function cachedBranchPullRequests(
     expiresAt: 0,
     promise: Promise.resolve({
       pullRequests: [],
+      publicationCandidates: [],
       rateLimited: false,
       mergedHeads: [],
       workingBranchHasLivePullRequest: false,

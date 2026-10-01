@@ -21,7 +21,7 @@ export function createCodexSqliteTestBindingStateStore(
     "codex",
     options,
   );
-  return { ...state, withCurrent: mutations.withCurrent.bind(mutations) };
+  return { ...state, asyncReads: mutations, withCurrent: mutations.withCurrent.bind(mutations) };
 }
 
 /** The calling host fixture owns the runtime's isolated state scope and cleanup. */
@@ -34,5 +34,5 @@ export function createCodexRuntimeTestBindingStateStore(
   if (!mutations.withCurrent) {
     throw new Error("Codex binding fixtures require action-bound plugin-state mutations");
   }
-  return { ...state, withCurrent: mutations.withCurrent.bind(mutations) };
+  return { ...state, asyncReads: mutations, withCurrent: mutations.withCurrent.bind(mutations) };
 }

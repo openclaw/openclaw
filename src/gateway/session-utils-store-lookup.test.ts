@@ -481,6 +481,7 @@ describe("global session lookup ownership", () => {
             sessionId: agentId + "-global",
           }),
           undefined,
+          expect.any(Function),
         );
       }
     });

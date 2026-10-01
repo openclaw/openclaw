@@ -263,7 +263,11 @@ it.each(["a changed snapshot", "missing current update history"] as const)(
       await fixture.close();
       const assertUnchanged = await unchangedFiles(fixture);
       if (failure === "a changed snapshot") {
-        await fs.appendFile(fixture.backup.databases[1]!.snapshotPath, "corrupt");
+        const snapshotPath = fixture.backup.databases[1]!.snapshotPath;
+        const corrupted = await fs.readFile(snapshotPath);
+        const offset = corrupted.length - 1;
+        corrupted.writeUInt8(corrupted.readUInt8(offset) ^ 1, offset);
+        await fs.writeFile(snapshotPath, corrupted);
       }
       await expect(fixture.restore()).rejects.toThrow(
         failure === "a changed snapshot"

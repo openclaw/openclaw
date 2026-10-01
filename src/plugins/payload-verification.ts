@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -244,10 +245,13 @@ async function readPackagePayloadManifest(
     return { status: "unreadable", error: err instanceof Error ? err.message : String(err) };
   }
   try {
+    const manifest: unknown = JSON.parse(packageJson);
+    if (!isRecord(manifest)) {
+      return { status: "invalid", error: "package.json must be an object" };
+    }
     return {
       status: "present",
-      // SAFETY: Package manifest consumers below validate every field they read from parsed JSON.
-      manifest: JSON.parse(packageJson) as PackagePayloadManifest,
+      manifest,
     };
   } catch (err) {
     return { status: "invalid", error: err instanceof Error ? err.message : String(err) };

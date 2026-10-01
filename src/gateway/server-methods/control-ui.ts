@@ -34,7 +34,7 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { loadSessionEntriesForTarget } from "./sessions-shared.js";
+import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -223,9 +223,10 @@ function loadControlUiSessionPreview(
   if (!requestedAgent.ok) {
     return null;
   }
-  const { target, storePath, store, entry } = loadSessionEntriesForTarget({
+  const { target, storePath, store, entry } = loadAccessorSessionEntryForGatewayTarget({
     key: sessionKey,
     cfg,
+    clone: false,
     ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
   });
   if (!entry) {
@@ -297,9 +298,10 @@ async function prepareCheckDetailsSession(
     if (!requested.ok) {
       return undefined;
     }
-    const { target, entry, storePath } = loadSessionEntriesForTarget({
+    const { target, entry, storePath } = loadAccessorSessionEntryForGatewayTarget({
       key: sessionKey,
       cfg,
+      clone: false,
       agentId: requested.agentId,
     });
     const entryFilter = createSessionListEntryFilter({ client, cfg });

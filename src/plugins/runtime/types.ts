@@ -148,6 +148,10 @@ export type PluginRuntime = PluginRuntimeCore & {
     readSessionFacts: (params: {
       sessionKeys: readonly string[];
     }) => Promise<RuntimeSessionFactsResult>;
+    withUserProfileIdentity?: <T>(
+      params: { profileId: string; emails: readonly string[] },
+      run: (assertCurrent: () => void) => Promise<T>,
+    ) => Promise<T>;
   };
   subagent: {
     /** Fresh, tool-free background inference under the existing subagent model policy. */

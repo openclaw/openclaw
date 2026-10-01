@@ -45,7 +45,10 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
-import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
+import {
+  preserveGatewayAuthTokenForService,
+  resolveGatewayAuthTokenForService,
+} from "./doctor-gateway-auth-token.js";
 import {
   assertGatewayServiceInstallationRepairAllowed,
   canRepairRunningGatewayDefinition,
@@ -546,15 +549,24 @@ export async function maybeRepairGatewayServiceConfig(
   const needsConfigWrite =
     !tokenRefConfigured && !configuredGatewayToken && Boolean(gatewayTokenForRepair);
   const repair = await prompter.confirmRuntimeRepair({
-    message: needsAggressive
-      ? "Overwrite gateway service config with current defaults now?"
-      : "Update gateway service config to the recommended defaults now?",
-    initialValue: needsAggressive ? prompter.shouldForce : true,
+    message: needsConfigWrite
+      ? "Preserve the Gateway token in the secret store, write its SecretRef to config, and reinstall the service now?"
+      : needsAggressive
+        ? "Overwrite gateway service config with current defaults now?"
+        : "Update gateway service config to the recommended defaults now?",
+    initialValue: needsConfigWrite ? false : needsAggressive ? prompter.shouldForce : true,
     requiresInteractiveConfirmation:
-      !(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
-      !(definitionRepair && !needsConfigWrite && isServiceDefinitionOnlyRepair(audit)),
+      needsConfigWrite ||
+      (!(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
+        !(definitionRepair && isServiceDefinitionOnlyRepair(audit))),
   });
   if (!repair) {
+    if (needsConfigWrite) {
+      note(
+        "Skipped Gateway token preservation and service repair. Rerun `openclaw doctor --fix` in an interactive terminal to approve saving a store SecretRef in gateway.auth.token.",
+        "Gateway service config",
+      );
+    }
     if (sourceCheckoutWarningToShow === null) {
       note(
         "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
@@ -582,24 +594,30 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
   let cfgForServiceInstall = cfg;
-  if (needsConfigWrite) {
-    const nextCfg: OpenClawConfig = {
-      ...cfg,
-      gateway: {
-        ...cfg.gateway,
-        auth: {
-          ...cfg.gateway?.auth,
-          mode: cfg.gateway?.auth?.mode ?? "token",
-          token: gatewayTokenForRepair,
-        },
-      },
-    };
+  if (needsConfigWrite && gatewayTokenForRepair) {
     try {
-      cfgForServiceInstall = await options.writeConfig(nextCfg);
+      const { ref, reused, backupPath } = await preserveGatewayAuthTokenForService({
+        cfg,
+        env: serviceInstallEnv,
+        token: gatewayTokenForRepair,
+        assertCurrent: options.serviceMaintenance?.assertCurrent,
+      });
       note(
-        expectedGatewayToken
-          ? "Persisted gateway.auth.token from environment before reinstalling service."
-          : "Persisted gateway.auth.token from existing service definition before reinstalling service.",
+        reused
+          ? `Gateway token already exists in secret store entry "${ref.id}"; the store was left unchanged.`
+          : `Saved Gateway token in secret store entry "${ref.id}".${backupPath ? ` Backup: ${backupPath}` : ""} If config publication fails, the entry is retained and reused on the next repair.`,
+        "Gateway",
+      );
+      options.serviceMaintenance?.assertCurrent();
+      cfgForServiceInstall = await options.writeConfig({
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          auth: { ...cfg.gateway?.auth, mode: cfg.gateway?.auth?.mode ?? "token", token: ref },
+        },
+      });
+      note(
+        "Configured gateway.auth.token as a store SecretRef before reinstalling service.",
         "Gateway",
       );
     } catch (err) {

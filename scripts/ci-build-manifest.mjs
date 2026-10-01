@@ -530,6 +530,8 @@ if (releaseGate) {
 const includeReleaseOnlyRuntimeTests =
   !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
 const includePrExemptRuntimeTests = !runtimePullRequest;
+const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
+const nodeSelectionReasons = [];
 let selectedTestTargets;
 if (runtimePullRequest && runNodeFull) {
   if (changedPaths === null) {
@@ -542,6 +544,8 @@ if (runtimePullRequest && runNodeFull) {
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
     includeReleaseOnlyRuntimeTests,
     includePrExemptRuntimeTests,
+    selectionMode: nodeSelectionMode,
+    onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
 const uiOwnerScope = {
@@ -550,6 +554,15 @@ const uiOwnerScope = {
   browser: runBrowserExtensionE2e,
   realGateway: runUiRealGateway,
 };
+const forceFullUiE2e =
+  !runtimePullRequest || releaseGate || parseCiEnvFlag(process.env.OPENCLAW_CI_UI_E2E_FULL);
+const uiE2eSelection =
+  runControlUiE2e &&
+  !compatibilityTarget &&
+  (!frozenTarget || releaseGate) &&
+  typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
+    ? nodeTestPlan.resolveUiE2ePrTestSelection(changedPaths, { forceFull: forceFullUiE2e })
+    : null;
 let uiTestGroups =
   (runUiTests || runUiE2e || runUiRealGateway || selectedTestTargets) &&
   !compatibilityTarget &&
@@ -559,8 +572,12 @@ let uiTestGroups =
         // Preserve the ordinary owner-family inventory. Protected or directly
         // selected files opt into the existing release-only UI tier below.
         includeReleaseOnlyTests: includeReleaseOnlyUiTests,
+        ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
+          ? { includeReleaseOnlyE2eTests: forceFullUiE2e }
+          : {}),
         includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
         changedPaths: selectedTestTargets ?? changedPaths ?? [],
+        ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
 let uiTestShardCount = compatibilityTarget ? 1 : 3;
@@ -573,23 +590,33 @@ if (selectedTestTargets) {
     fromTarget("./test/vitest/vitest.ui-paths.mjs")
   );
   const realGatewayTargets = new Set(uiE2eRealGatewayTestFiles);
-  const narrowGroups = (groups, ownsFile, retainsOwner) =>
+  const selectedControlUiFiles = new Set(uiE2eSelection?.files);
+  const narrowGroups = (groups, ownsFile, retainsFile) =>
     groups
       .map((group) => ({
         ...group,
         includePatterns: (group.includePatterns ?? selectedTestTargets.filter(ownsFile)).filter(
-          (file) => retainsOwner(file) || selected.has(file),
+          retainsFile,
         ),
       }))
       .filter((group) => group.includePatterns.length > 0);
   uiTestGroups = {
-    ui: narrowGroups(uiTestGroups.ui, isUiTestTarget, () => uiOwnerScope.unit),
+    ui: narrowGroups(
+      uiTestGroups.ui,
+      isUiTestTarget,
+      (file) => uiOwnerScope.unit || selected.has(file),
+    ),
     e2e: narrowGroups(
       uiTestGroups.e2e,
       (file) =>
         realGatewayTargets.has(file) ||
         controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
-      (file) => (realGatewayTargets.has(file) ? uiOwnerScope.realGateway : uiOwnerScope.mocked),
+      (file) =>
+        realGatewayTargets.has(file)
+          ? uiOwnerScope.realGateway || selected.has(file)
+          : uiE2eSelection
+            ? selectedControlUiFiles.has(file)
+            : uiOwnerScope.mocked || selected.has(file),
     ),
   };
   const uiTargets = uiTestGroups.ui.flatMap((group) => group.includePatterns);
@@ -605,6 +632,17 @@ if (selectedTestTargets) {
   uiTestShardCount = Math.min(3, uiTargets.length);
   // Keep the existing worker/row cap; omit empty file partitions.
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
+}
+if (uiE2eSelection) {
+  // Selection also applies to UI-only plans without a Node target inventory.
+  runControlUiE2e = uiE2eSelection.files.length > 0;
+  runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
+  // Narrow PR selections share a runner instead of repeating setup across eight rows.
+  const controlUiRows =
+    uiE2eSelection.mode === "owners"
+      ? Math.ceil(uiE2eSelection.files.length / 30)
+      : uiE2eSelection.files.length;
+  uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlUiRows) + 1;
 }
 if (selectedTestTargets && runWindows && !windowsTestPlan) {
   throw new Error("Current PR CI requires a target-owned Windows planner");
@@ -1554,8 +1592,8 @@ const hybridHostedOffload =
   hybridHostedEligible &&
   hybridHostedBaseRows <= HYBRID_HOSTED_BASE_ROW_LIMIT &&
   hybridHostedBaseRows + hybridHostedOffloadRows <= HYBRID_HOSTED_ROW_LIMIT;
-// The measured check rows consume only remaining hosted capacity.
-// Keep the original UI/security decision and all test-runner labels intact.
+// Reserve the previous check-row budget so retaining the boundary on Blacksmith
+// does not expand admission for other hosted checks. Report only actual rows below.
 const hybridHostedCheckRows =
   (manifest.run_check && checkTasks.some(({ task }) => task === "dependencies") ? 1 : 0) +
   (manifest.run_check &&
@@ -1570,6 +1608,11 @@ const hybridHostedCheckRows =
         ),
       ).length
     : 0);
+const retainedBoundaryRows = manifest.run_check_additional
+  ? manifest.check_additional_matrix.include.filter(
+      (row) => row.group === "extension-package-boundary",
+    ).length
+  : 0;
 const hybridHostedExistingRows =
   hybridHostedBaseRows + (hybridHostedOffload ? hybridHostedOffloadRows : 0);
 // R1's slowest admitted hosted check took 496s including setup. A full
@@ -1605,7 +1648,9 @@ Object.assign(manifest, {
   hybrid_hosted_main_checks: hybridHostedMainChecks,
   hybrid_hosted_base_rows: hybridHostedBaseRows,
   hybrid_hosted_total_rows:
-    hybridHostedRowsWithChecks + (hybridHostedMainChecks ? hybridHostedMainCheckRows : 0),
+    hybridHostedRowsWithChecks -
+    (hybridHostedChecks ? retainedBoundaryRows : 0) +
+    (hybridHostedMainChecks ? hybridHostedMainCheckRows : 0),
 });
 if (runCheckPlan) {
   console.log(
@@ -1715,6 +1760,63 @@ if (releaseFastLane) {
   }
 }
 if (process.env.GITHUB_STEP_SUMMARY) {
+  if (uiE2eSelection) {
+    const escapeSummaryCell = (value) =>
+      String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replace(/[\\`*_{}[\]()#+.!|]/gu, "\\$&")
+        .replace(/[\r\n]/gu, " ");
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      "### Control UI E2E selection\n\n" +
+        `- Mode: ${uiE2eSelection.mode}.\n` +
+        `- Selected files: ${uiE2eSelection.files.length}.\n` +
+        (parseCiEnvFlag(process.env.OPENCLAW_CI_UI_E2E_FULL)
+          ? "- Full PR coverage requested by `OPENCLAW_CI_UI_E2E_FULL`.\n"
+          : "") +
+        "\n| File | Reasons |\n| --- | --- |\n" +
+        uiE2eSelection.files
+          .map(
+            (file) =>
+              `| ${escapeSummaryCell(file)} | ${(uiE2eSelection.reasons[file] ?? [])
+                .map(escapeSummaryCell)
+                .join("; ")} |\n`,
+          )
+          .join("") +
+        "\n",
+    );
+  }
+  if (selectedTestTargets) {
+    /** @type {Map<string, Set<string>>} */
+    const reasons = new Map();
+    for (const { rule, targets } of nodeSelectionReasons) {
+      for (const file of targets) {
+        const rules = reasons.get(file) ?? new Set();
+        rules.add(rule);
+        reasons.set(file, rules);
+      }
+    }
+    // Paths are diff-controlled; render them as escaped HTML text, never Markdown.
+    const escape = (value) =>
+      value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### PR Node test selection (${nodeSelectionMode})\n\n` +
+        `Selected ${selectedTestTargets.length} files; ${changedNodeTestShards?.filter((shard) => !shard.requiresDist).length ?? 0} Node rows. ` +
+        "Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous selection.\n\n" +
+        "<details><summary>Selected files and selection rules</summary>\n<pre>" +
+        selectedTestTargets
+          .map((file) =>
+            escape(
+              `${file}\t${[...(reasons.get(file) ?? [])].toSorted((left, right) => left.localeCompare(right)).join(", ")}`,
+            ),
+          )
+          .join("\n") +
+        "</pre>\n</details>\n\n",
+    );
+  }
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
     `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +

@@ -123,8 +123,9 @@ export async function backupNpmPackageRoot(
   destination: string,
   assertCaller: (() => void) | undefined,
   warnings: string[],
+  platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
-  if (process.platform !== "win32") {
+  if (platform !== "win32") {
     await fs.rename(source, destination);
     return;
   }

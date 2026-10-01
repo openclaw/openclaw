@@ -17,7 +17,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables, FormatCapabilityProfile } from "openclaw/plugin-sdk/text-chunking";
-import { getMattermostRuntime } from "../runtime.js";
+import { getMattermostRuntime, getOptionalMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -119,20 +119,6 @@ function resolveMattermostReceiptKind(params: {
     return "card";
   }
   return "text";
-}
-
-function recordMattermostOutboundActivity(accountId: string): void {
-  try {
-    getMattermostRuntime().channel.activity.record({
-      channel: "mattermost",
-      accountId,
-      direction: "outbound",
-    });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "Mattermost runtime not initialized") {
-      throw error;
-    }
-  }
 }
 
 function cacheKey(baseUrl: string, token: string): string {
@@ -461,7 +447,11 @@ export async function sendMessageMattermost(
     // Core must learn the provider identity before local bookkeeping can fail;
     // preserve the receipt if either post-send step rejects to prevent a duplicate retry.
     await opts.onDeliveryResult?.(result);
-    recordMattermostOutboundActivity(accountId);
+    getOptionalMattermostRuntime()?.channel.activity.record({
+      channel: "mattermost",
+      accountId,
+      direction: "outbound",
+    });
   } catch (error: unknown) {
     // The provider post is already durable. Preserve its identity so callers do not
     // retry and duplicate the visible message when local bookkeeping fails afterward.

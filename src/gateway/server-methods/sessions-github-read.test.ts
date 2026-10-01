@@ -12,12 +12,14 @@ import {
 } from "../../state/user-github-connections.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as prRead from "../control-ui-session-pr-read.js";
 import {
   createPersonalGitHubOAuthLifecycle,
   personalGitHubStatus,
   type PersonalGitHubAction,
 } from "../github-personal-oauth.js";
 import * as publicationAvailability from "../github-publication-availability.js";
+import * as relevance from "../github-publication-relevance.js";
 import { sessionsGitHubHandlers } from "./sessions-github.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -103,9 +105,11 @@ function createFixture(profile?: ReturnType<typeof ensureProfileForEmail>) {
     personalGitHubStatus(action),
   );
   const requestForSession = vi.fn();
+  const pullRequests = { subscribe: vi.fn(), unsubscribe: vi.fn(), read: vi.fn(), stop: vi.fn() };
   // Only these services belong to the read handler; the authorization helpers stay real.
   const context = {
     getRuntimeConfig,
+    controlUiSessionPullRequests: pullRequests,
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
       new Set(connected && (!filter || filter(client)) ? [client.connId] : []),
     githubPublicationService: {
@@ -151,6 +155,7 @@ function createFixture(profile?: ReturnType<typeof ensureProfileForEmail>) {
     personalLifecycle,
     personalConnectionStatus,
     requestForSession,
+    pullRequests,
     disconnect: () => {
       connected = false;
     },
@@ -227,6 +232,77 @@ describe("publication receipt reads", () => {
     });
   });
 
+  it.each([false, true])(
+    "reconciles published coverage with current read authority (revoked=%s)",
+    async (revoked) => {
+      await withReadFixture(async (fixture) => {
+        const snapshot = {
+          repository: "owner/repo",
+          branch: "feature",
+          source_head_commit: "1".repeat(40),
+          workspace_tree: "2".repeat(40),
+        };
+        const target = {
+          params: { sessionKey, agentId: "main" },
+          identity: "pr-source",
+          readSource: { agentId: "main", path: "/fixture" },
+          source: { owner: "owner", repo: "repo", branch: "feature" },
+          assertCurrent: vi.fn(),
+        };
+        vi.spyOn(prRead, "prepareControlUiSessionPrRead").mockResolvedValue(async () => target);
+        const prs = [
+          {
+            owner: "owner",
+            repo: "repo",
+            number: 1,
+            title: "Published work",
+            url: "https://github.com/owner/repo/pull/1",
+            branch: "feature",
+            headSha: "3".repeat(40),
+            state: "merged",
+          },
+        ];
+        fixture.pullRequests.read.mockImplementation(async () => {
+          if (revoked) {
+            fixture.disconnect();
+          }
+          return { pullRequests: prs, status: "ready", rateLimited: false };
+        });
+        const covered = vi
+          .spyOn(relevance, "isGitHubPublicationSuperseded")
+          .mockResolvedValue(true);
+        fixture.latestShared.mockImplementation(async (_session, _key, isSuperseded) =>
+          (await isSuperseded(snapshot)) ? null : receipt,
+        );
+        const respond = await fixture.invoke("sessions.github.options", { sessionKey });
+        if (revoked) {
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "FORBIDDEN" }),
+          );
+          expect(covered).not.toHaveBeenCalled();
+        } else {
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ latestShared: null }),
+          );
+          expect(covered).toHaveBeenCalledWith(
+            snapshot,
+            prs,
+            expect.objectContaining({ assertCurrent: expect.any(Function) }),
+          );
+        }
+        expect(fixture.pullRequests.read).toHaveBeenCalledWith(
+          target,
+          expect.any(Function),
+          "publication",
+        );
+        expect(fixture.requestForSession).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("discovers the shared receipt and can restrict recovery to the exact invocation key", async () => {
     await withReadFixture(async (fixture) => {
       const respond = await fixture.invoke("sessions.github.options", {
@@ -242,6 +318,7 @@ describe("publication receipt reads", () => {
       expect(fixture.latestShared).toHaveBeenCalledWith(
         expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
         "owned-unknown-attempt",
+        expect.any(Function),
       );
       expect(fixture.personalPending).not.toHaveBeenCalled();
       expect(fixture.requestForSession).not.toHaveBeenCalled();

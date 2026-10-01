@@ -60,41 +60,27 @@ export async function prepareInternalSessionEffectsSession(params: {
   cwd?: string;
   runId: string;
   source?: InternalSessionEffectsSource;
-  requireSource?: boolean;
   commitGuard?: () => void;
   storePath: string;
 }): Promise<InternalSessionEffectsTarget> {
-  const assertCurrent = () => {
-    params.commitGuard?.();
-    if (
-      params.requireSource &&
-      (!params.source ||
-        loadExactSessionEntry(params.source)?.entry.sessionId !== params.source.sessionId)
-    ) {
-      throw new Error("Required internal-effects source session is unavailable");
-    }
-  };
-  assertCurrent();
+  params.commitGuard?.();
   const scope = resolveInternalSessionEffectsTarget(params);
   const existing = loadExactSessionEntry(scope)?.entry;
   if (existing?.sessionId === scope.sessionId) {
     return toInternalSessionEffectsTarget(scope, existing);
   }
 
-  const fork = params.source
-    ? await forkSessionFromParentTranscript({
-        agentId: params.source.agentId,
-        parentEntry: { sessionId: params.source.sessionId, updatedAt: Date.now() },
-        parentSessionKey: params.source.sessionKey,
-        sessionKey: scope.sessionKey,
-        storePath: params.source.storePath,
-        targetSessionId: scope.sessionId,
-        targetStorePath: params.storePath,
-        commitGuard: assertCurrent,
-      })
-    : undefined;
-  if (params.requireSource && fork?.status !== "created") {
-    throw new Error(`Required internal-effects transcript could not be copied: ${fork?.status}`);
+  if (params.source) {
+    await forkSessionFromParentTranscript({
+      agentId: params.source.agentId,
+      parentEntry: { sessionId: params.source.sessionId, updatedAt: Date.now() },
+      parentSessionKey: params.source.sessionKey,
+      sessionKey: scope.sessionKey,
+      storePath: params.source.storePath,
+      targetSessionId: scope.sessionId,
+      targetStorePath: params.storePath,
+      commitGuard: params.commitGuard,
+    });
   }
   const now = Date.now();
   const created = await createSessionEntryWithTranscript(
@@ -112,7 +98,7 @@ export async function prepareInternalSessionEffectsSession(params: {
         updatedAt: now,
       },
     }),
-    { cwd: params.cwd, commitGuard: assertCurrent },
+    { cwd: params.cwd, commitGuard: params.commitGuard },
   );
   if (!created.ok) {
     throw new Error(`Failed to create internal SQLite session for run ${params.runId}`);

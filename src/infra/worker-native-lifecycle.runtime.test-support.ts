@@ -56,7 +56,12 @@ export async function runNativeResourceLifecycle(
   serviceUntil: (label: string, service: () => void, done: () => boolean) => void,
   supervisorLoss = false,
   closeBeforeLoss = false,
-  edge?: "late-attachment" | "owner-reply-loss",
+  edge?:
+    | "late-attachment"
+    | "owner-reply-loss"
+    | "auto-close-success"
+    | "auto-close-failure"
+    | "auto-close-refusal",
 ) {
   // The compiler imports the entrypoint descriptors without a runtime TypeScript loader.
   const [{ isRecord }, { createDeferredCore }, { resolveRuntimeWorkerUrl }] = await Promise.all([
@@ -68,8 +73,11 @@ export async function runNativeResourceLifecycle(
     await import("./worker-native-lifecycle.js");
   const { SpawnBrokerHost } = await import("../process/spawn-broker/host.js");
   const { drainGlobalSingletonLifecycleState } = await import("../shared/global-singleton.js");
+  const autoCloseEdge =
+    edge === "auto-close-success" || edge === "auto-close-failure" || edge === "auto-close-refusal";
   const shutdown = !supervisorLoss && !edge;
-  const brokerCloses = shutdown ? mock.method(SpawnBrokerHost.prototype, "close") : undefined;
+  const brokerCloses =
+    shutdown || supervisorLoss ? mock.method(SpawnBrokerHost.prototype, "close") : undefined;
   const databasePath = path.join(directory, "native-child.sqlite");
   const createControl = () => {
     const channel = new MessageChannel();
@@ -200,7 +208,7 @@ export async function runNativeResourceLifecycle(
     port.postMessage({ open: true }, []);`;
   const registrations = mock.method(Worker.prototype, "on");
   const captures =
-    edge === "owner-reply-loss"
+    edge === "owner-reply-loss" || autoCloseEdge
       ? mock.method(SpawnBrokerHost.prototype, "captureNativeResource")
       : undefined;
   const observed = (() => {
@@ -216,17 +224,63 @@ export async function runNativeResourceLifecycle(
         .find((value) => value instanceof Worker);
       assert.ok(supervisor instanceof Worker);
       const lease = captures?.mock.calls[0]?.result;
+      const broker = captures?.mock.calls[0]?.this;
       if (captures) {
         assert.ok(lease);
+        assert.ok(broker instanceof SpawnBrokerHost);
       }
-      return { target, supervisor, lease };
+      return { target, supervisor, lease, broker };
     } finally {
       registrations.mock.restore();
       captures?.mock.restore();
     }
   })();
   const { target, supervisor } = observed;
-  const ownerDeliveries = observed.lease ? mock.method(observed.lease, "ownerMessage") : undefined;
+  const ownerDeliveries =
+    edge === "owner-reply-loss" && observed.lease
+      ? mock.method(observed.lease, "ownerMessage")
+      : undefined;
+  const closeProof = autoCloseEdge
+    ? (() => {
+        const broker = observed.broker;
+        assert.ok(broker instanceof SpawnBrokerHost);
+        const originalClose = broker.close.bind(broker);
+        const started = createDeferredCore();
+        const permitted = createDeferredCore();
+        const sentinel = new Error("original automatic broker close failure");
+        let memo: Promise<void> | undefined;
+        let refused = false;
+        const calls = mock.method(broker, "close", () => {
+          started.resolve();
+          if (edge === "auto-close-refusal" && !refused) {
+            refused = true;
+            const refusedAttempt = Promise.reject(sentinel);
+            void refusedAttempt.catch(() => undefined);
+            return refusedAttempt;
+          }
+          if (!memo) {
+            memo = (async () => {
+              await permitted.promise;
+              await originalClose();
+              assert.throws(() => process.kill(facts.brokerPid, 0), { code: "ESRCH" });
+              if (edge === "auto-close-failure") {
+                throw sentinel;
+              }
+            })();
+            void memo.catch(() => undefined);
+          }
+          return memo;
+        });
+        return {
+          started,
+          permitted,
+          sentinel,
+          calls,
+          joinOriginal: originalClose,
+          broker,
+        };
+      })()
+    : undefined;
   const replies: unknown[] = [];
   const errors: Error[] = [];
   const joined = createDeferredCore();
@@ -251,6 +305,7 @@ export async function runNativeResourceLifecycle(
     joined.resolve();
   });
   let database: DatabaseSync | undefined;
+  let nativeBrokerCloses = 0;
   try {
     serviceUntil(
       "native SQLite child ready",
@@ -521,11 +576,56 @@ export async function runNativeResourceLifecycle(
       assert.throws(() => process.kill(facts.brokerPid, 0), { code: "ESRCH" });
       assert.notEqual(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
     }
-    if (supervisorLoss) {
+    if (closeProof) {
+      await closeProof.started.promise;
+      const originalAttempt = closeProof.calls.mock.calls[0]?.result;
+      assert.ok(originalAttempt instanceof Promise);
+      if (edge === "auto-close-success") {
+        assert.ok(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }) === source);
+        process.kill(facts.brokerPid, 0);
+      }
+      closeProof.permitted.resolve();
+      if (edge === "auto-close-success") {
+        await originalAttempt;
+        await drainGlobalSingletonLifecycleState();
+      } else {
+        await assert.rejects(originalAttempt, (error: unknown) => error === closeProof.sentinel);
+        await assert.rejects(drainGlobalSingletonLifecycleState(), (error: unknown) => {
+          const failures: unknown[] = [error];
+          const originalFailures: unknown[] = [];
+          for (const failure of failures) {
+            if (failure instanceof AggregateError) {
+              failures.push(...failure.errors);
+            } else {
+              originalFailures.push(failure);
+            }
+          }
+          assert.equal(originalFailures.length, 1);
+          assert.equal(originalFailures[0], closeProof.sentinel);
+          return true;
+        });
+      }
+      assert.ok(brokerCloses);
+      nativeBrokerCloses = brokerCloses.mock.calls.filter(
+        (call) => call.this === closeProof.broker,
+      ).length;
+      assert.equal(nativeBrokerCloses, 1);
+      assert.throws(() => process.kill(facts.brokerPid, 0), { code: "ESRCH" });
+      assert.equal(
+        captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }) === source,
+        edge === "auto-close-failure",
+      );
+    } else if (supervisorLoss) {
+      assert.ok(brokerCloses);
+      for (const call of brokerCloses.mock.calls) {
+        assert.ok(call.result instanceof Promise);
+        await call.result;
+      }
+      await drainGlobalSingletonLifecycleState();
       assert.notEqual(
         captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }),
         source,
-        "the source can retire only after its native child has closed",
+        "the source can retire only after its original broker has closed",
       );
     }
     assert.deepEqual(target.stop().read(), { status: "fulfilled", value: undefined });
@@ -536,8 +636,9 @@ export async function runNativeResourceLifecycle(
     observer.exec("ROLLBACK");
     console.log(
       JSON.stringify({
-        ending:
-          edge === "late-attachment"
+        ending: autoCloseEdge
+          ? `resource-${edge}`
+          : edge === "late-attachment"
             ? "resource-late-attachment"
             : edge === "owner-reply-loss"
               ? "resource-owner-reply-loss"
@@ -567,9 +668,20 @@ export async function runNativeResourceLifecycle(
         childClosedBeforeStopped: true,
         sqliteReusable: true,
         ...(shutdown ? { shutdownRefused: true, lateNativeJoin: true } : {}),
+        ...(closeProof
+          ? {
+              originalBrokerJoined: true,
+              nativeBrokerCloses,
+              ...(edge === "auto-close-success"
+                ? { rotatedAfterBrokerClose: true }
+                : { originalFailureOccurrences: 1 }),
+            }
+          : {}),
       }),
     );
   } finally {
+    closeProof?.permitted.resolve();
+    closeProof?.calls.mock.restore();
     brokerCloses?.mock.restore();
     ownerDeliveries?.mock.restore();
     if (!control.disposed) {
@@ -584,6 +696,7 @@ export async function runNativeResourceLifecycle(
     }
     await supervisor.terminate();
     await nextTurn();
+    await closeProof?.joinOriginal().catch(() => undefined);
     channel.port1.close();
     channel.port2.close();
   }

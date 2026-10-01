@@ -1,6 +1,7 @@
 /**
  * Server channel lifecycle tests.
  */
+import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -51,7 +52,6 @@ import {
 } from "../secrets/runtime-degraded-state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { evaluateChannelHealth } from "./channel-health-policy.js";
 import {
   channelBlockedPatch,
   channelReadyPatch,
@@ -745,14 +745,7 @@ describe("server-channels auto restart", () => {
     const account = readAccount(manager);
     expect(account?.running).toBe(true);
     expect(account).not.toHaveProperty("connected");
-    expect(
-      evaluateChannelHealth(account ?? {}, {
-        channelId: "discord",
-        now: Date.now() + 60 * 60_000,
-        channelConnectGraceMs: 120_000,
-        staleEventThresholdMs: 30 * 60_000,
-      }),
-    ).toEqual({ healthy: true, reason: "healthy" });
+    expect(healthOf(account)).toEqual({ healthy: true, reason: "healthy" });
   });
 
   it("settles every account before surfacing a stop hook failure", async () => {
@@ -3262,7 +3255,9 @@ describe("server-channels auto restart", () => {
     const nativeApprovalRuntime = {
       current: undefined as GatewayNativeApprovalRuntime | undefined,
     };
+    let observerCount: number | undefined;
     const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      observerCount = getEventListeners(ctx.abortSignal, "abort").length;
       const approvalRuntime =
         ctx.channelRuntime?.runtimeContexts.get<ApprovalGatewayRequestRuntime>({
           channelId: "discord",
@@ -3292,6 +3287,7 @@ describe("server-channels auto restart", () => {
     releaseAccountStart();
     await flushMicrotasks();
 
+    expect(observerCount).toBe(1); // Approval disposal owns the remaining listener.
     expect(request).toHaveBeenCalledWith(
       "approval.resolve",
       { id: "approval-1", kind: "exec", decision: "deny" },

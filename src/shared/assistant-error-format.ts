@@ -46,14 +46,20 @@ type ApiErrorInfo = {
   requestId?: string;
 };
 
-export function formatProviderRefusalText(message: { diagnostics?: unknown }): string | undefined {
+export function formatProviderRefusalText(message: {
+  diagnostics?: unknown;
+  errorCode?: unknown;
+}): string | undefined {
   const refusal = Array.isArray(message.diagnostics)
     ? message.diagnostics.find(
         (diagnostic) => asOptionalRecord(diagnostic)?.type === "provider_refusal",
       )
     : undefined;
   if (!refusal) {
-    return undefined;
+    // Older transcripts retain the code but have no review findings or continuation state.
+    return message.errorCode === "misalignment_policy_violation"
+      ? "The provider stopped this request as a safety precaution (misalignment)."
+      : undefined;
   }
   const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
   const safeCategory =
