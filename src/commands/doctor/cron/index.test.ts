@@ -17,11 +17,7 @@ import { cronStoreKey } from "../../../cron/store/key.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
-import {
-  collectLegacyCronStoreHealthFindings,
-  maybeRepairLegacyCronStore,
-  noteLegacyWhatsAppCrontabHealthCheck,
-} from "./index.js";
+import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 
 type StoredJob = Record<string, unknown>;
 const WEBHOOK = "https://example.invalid/cron-finished";
@@ -1184,29 +1180,4 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 });
 
-it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
-  await noteLegacyWhatsAppCrontabHealthCheck({
-    platform: "linux",
-    readCrontab: async () => ({
-      stdout: [
-        "# keep comments ignored",
-        "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh >> ~/.openclaw/logs/whatsapp-health.log 2>&1",
-        "0 9 * * * /usr/bin/true",
-        "",
-      ].join("\n"),
-    }),
-  });
-
-  expectNoteContaining("Legacy WhatsApp crontab health check detected");
-  expectNoteContaining("systemd user bus environment is missing");
-  expectNoteContaining("Matched 1 entry");
-});
-
-it("ignores a missing crontab", async () => {
-  await noteLegacyWhatsAppCrontabHealthCheck({
-    platform: "linux",
-    readCrontab: () => Promise.reject(createFsError("ENOENT", "crontab missing")),
-  });
-  expect(noteMock).not.toHaveBeenCalled();
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
