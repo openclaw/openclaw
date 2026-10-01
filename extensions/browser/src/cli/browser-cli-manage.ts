@@ -41,21 +41,13 @@ function sanitizeTableCell(value: string): string {
   return value.replace(/\p{Cc}/gu, " ");
 }
 
-async function fetchBrowserStatus(
+async function fetchBrowserManagement<T>(
   parent: BrowserParentOpts,
-  profile?: string,
-): Promise<BrowserStatus> {
-  return await callBrowserRequest<BrowserStatus>(
-    parent,
-    {
-      method: "GET",
-      path: "/",
-      query: resolveProfileQuery(profile),
-    },
-    {
-      timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
-    },
-  );
+  path: string,
+  query?: Parameters<typeof callBrowserRequest>[1]["query"],
+  timeoutMs = BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  return await callBrowserRequest<T>(parent, { method: "GET", path, query }, { timeoutMs });
 }
 
 async function runBrowserToggle(
@@ -71,7 +63,11 @@ async function runBrowserToggle(
     path: params.path,
     query: resolveProfileQuery(params.profile, params.query),
   });
-  const status = await fetchBrowserStatus(parent, params.profile);
+  const status = await fetchBrowserManagement<BrowserStatus>(
+    parent,
+    "/",
+    resolveProfileQuery(params.profile),
+  );
   if (printJsonResult(parent, status)) {
     return;
   }
@@ -108,22 +104,15 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
   return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
-function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const errorRecord = error as Error & { code?: unknown };
-  return (
-    errorRecord.name === "GatewaySecretRefUnavailableError" ||
-    errorRecord.code === "GATEWAY_SECRET_REF_UNAVAILABLE"
-  );
-}
-
 function formatBrowserDoctorGatewayError(error: unknown): string {
-  if (!isGatewaySecretRefUnavailableErrorShape(error)) {
-    return String(error);
+  if (
+    error instanceof Error &&
+    (error.name === "GatewaySecretRefUnavailableError" ||
+      (error as Error & { code?: unknown }).code === "GATEWAY_SECRET_REF_UNAVAILABLE")
+  ) {
+    return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
   }
-  return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
+  return String(error);
 }
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
@@ -138,14 +127,10 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   let report: BrowserDoctorReport;
 
   try {
-    report = await callBrowserRequest<BrowserDoctorReport>(
+    report = await fetchBrowserManagement<BrowserDoctorReport>(
       parent,
-      {
-        method: "GET",
-        path: "/doctor",
-        query: resolveProfileQuery(profile),
-      },
-      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+      "/doctor",
+      resolveProfileQuery(profile),
     );
     checks.push({
       name: "gateway",
@@ -199,10 +184,9 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   }
 
   await probe("profiles", async () => {
-    const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
+    const profiles = await fetchBrowserManagement<{ profiles: ProfileStatus[] }>(
       parent,
-      { method: "GET", path: "/profiles" },
-      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+      "/profiles",
     );
     return {
       ok: true,
@@ -212,14 +196,10 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
 
   if (status.running) {
     await probe("tabs", async () => {
-      const result = await callBrowserRequest<{ running: boolean; tabs: BrowserTab[] }>(
+      const result = await fetchBrowserManagement<{ running: boolean; tabs: BrowserTab[] }>(
         parent,
-        {
-          method: "GET",
-          path: "/tabs",
-          query: resolveProfileQuery(profile),
-        },
-        { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+        "/tabs",
+        resolveProfileQuery(profile),
       );
       const tabs = result.tabs ?? [];
       return {
@@ -231,18 +211,10 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
 
   if (deep && status.running) {
     await probe("live-snapshot", async () => {
-      const result = await callBrowserRequest<
+      const result = await fetchBrowserManagement<
         | { ok: true; format: "aria"; nodes?: unknown[] }
         | { ok: true; format: "ai"; snapshot?: string }
-      >(
-        parent,
-        {
-          method: "GET",
-          path: "/snapshot",
-          query: resolveProfileQuery(profile, { format: "aria", limit: 25 }),
-        },
-        { timeoutMs: 10_000 },
-      );
+      >(parent, "/snapshot", resolveProfileQuery(profile, { format: "aria", limit: 25 }), 10_000);
       const count =
         result.format === "aria"
           ? Array.isArray(result.nodes)
@@ -298,7 +270,11 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
-        const status = await fetchBrowserStatus(parent, parent?.browserProfile);
+        const status = await fetchBrowserManagement<BrowserStatus>(
+          parent,
+          "/",
+          resolveProfileQuery(parent?.browserProfile),
+        );
         if (printJsonResult(parent, status)) {
           return;
         }

@@ -175,7 +175,10 @@ export function isUnacknowledgedPackageOwnerRefusal(record: UpdateRunRecord): bo
     record.steps.every(
       (step) =>
         step.step === "requested" ||
-        (step.step === "driver:adopted" && step.status === "completed") ||
+        (step.status === "completed" &&
+          (step.step === "driver:adopted" ||
+            step.step === "original-state-capture" ||
+            /^warning:original-state-capture:[1-9]\d*$/u.test(step.step))) ||
         (step.step === "installation-inspection" && step.status === "skipped"),
     ) &&
     ((record.status === "skipped" &&

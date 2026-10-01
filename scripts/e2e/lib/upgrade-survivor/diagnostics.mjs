@@ -50,6 +50,10 @@ const nativeAssignmentLogs = [
   "native-assignment-eligibility.json",
   "native-assignment-baseline.json",
   "native-assignment-first-hop.json",
+  "native-assignment-inventory-after-first-hop.json",
+  "native-assignment-inventory-before-recovery.json",
+  "native-assignment-inventory-after-recovery.json",
+  "native-assignment-inventory-live-final.json",
   "native-assignment-proof.json",
   "native-assignment-messages.jsonl",
   "native-assignment-server.log",
@@ -116,6 +120,7 @@ const logNames = [
   "legacy-operator-post-update-cron-history.json",
   "legacy-operator-candidate-cron-history.json",
   "dreaming-cron-proof.json",
+  "cron-owner-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
@@ -1818,6 +1823,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
             ]
           : []),
         ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
+        ...(snapshot.scenario === "cron-owner-doctor" ? ["cron-owner-proof.json"] : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)

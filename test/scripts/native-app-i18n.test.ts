@@ -46,6 +46,40 @@ function hasSite(
 }
 
 describe("native app i18n inventory", () => {
+  it("keeps live tool-display translations inventoried after UI call sites disappear", () => {
+    const entries = collectNativeI18nEntriesFromSources([
+      {
+        repoPath: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+        surface: "android",
+        source: JSON.stringify({
+          tools: { read: { title: "Read", actions: [{ label: "open", icon: "ignored" }] } },
+        }),
+      },
+    ]);
+    expect(entries.map(({ source, surface, sites }) => ({ source, surface, sites }))).toEqual([
+      {
+        source: "Read",
+        surface: "android",
+        sites: [
+          {
+            kind: "tool-display",
+            path: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+          },
+        ],
+      },
+      {
+        source: "open",
+        surface: "android",
+        sites: [
+          {
+            kind: "tool-display",
+            path: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("serializes each complete entry on one line", () => {
     const entries = [
       {
@@ -631,7 +665,9 @@ describe("native app i18n inventory", () => {
               site.path.startsWith("apps/android/app/src/main/") ||
               site.path.startsWith("apps/android/app/src/play/") ||
               site.path.startsWith("apps/android/app/src/thirdParty/") ||
-              site.path === "apps/android/wear/src/main/res/values/strings.xml",
+              site.path === "apps/android/wear/src/main/res/values/strings.xml" ||
+              site.path ===
+                "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
           ),
         ),
     ).toBe(true);

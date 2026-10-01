@@ -9,10 +9,8 @@ import {
   isSameGatewayLockIdentity,
   readActiveGatewayLockIdentity,
 } from "../../infra/gateway-lock.js";
-import {
-  readGatewayOwnerLease,
-  type GatewayOwnerLeaseIdentity,
-} from "../../infra/gateway-owner-lease.js";
+import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../../infra/gateway-owner-lease.types.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,

@@ -180,19 +180,19 @@ export function deferred<T>() {
 }
 
 export function memoryWorkspaceJournal(
-  onCommit?: (manifestRef: string) => void,
+  onCommit?: (manifestRef: string) => void | Promise<void>,
 ): WorkerWorkspaceReconciliationJournalAdapter {
   let pending: WorkerWorkspaceReconciliationJournal | undefined;
   return {
-    load: () => pending,
-    begin: (journal) => {
+    load: async () => pending,
+    begin: async (journal) => {
       pending = journal;
     },
-    commit: (manifestRef) => {
-      onCommit?.(manifestRef);
+    commit: async (manifestRef) => {
+      await onCommit?.(manifestRef);
       pending = undefined;
     },
-    abort: () => {
+    abort: async () => {
       pending = undefined;
     },
   };

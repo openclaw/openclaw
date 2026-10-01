@@ -3,7 +3,11 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import {
   mutateConfigFileWithRetry,
@@ -482,9 +486,9 @@ it("does not create an agent after delegated authority closes while awaiting the
   }
 });
 
-it.each(["workspace", "workspace-write", "config"] as const)(
+it.for(["workspace", "workspace-write", "config"] as const)(
   "stops delegated creation after authority closes during %s preparation",
-  async (phase) => {
+  async (phase, { signal }) => {
     const state = await createOpenClawTestState({
       scenario: "minimal",
       label: `agent-create-${phase}-authority`,
@@ -561,8 +565,16 @@ it.each(["workspace", "workspace-write", "config"] as const)(
       (error: unknown) => ({ error }),
     );
     try {
+      // The finally block restores process-wide spies and env; a stalled wait must still reach it.
       expect(
-        await withTestTimeout(entered.promise, 10_000, "creation did not reach preparation pause"),
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            creation,
+            "creation settled before its preparation pause",
+          ),
+          signal,
+        ),
       ).toBe(phase);
       expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
       resume.resolve();

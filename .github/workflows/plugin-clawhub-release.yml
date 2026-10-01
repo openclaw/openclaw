@@ -369,7 +369,7 @@ jobs:
             node .release-tooling/scripts/clawhub-prepared-artifact.mjs resolve \
               --descriptor .local/clawhub-prepared-descriptor.json \
               --output .local/clawhub-matrix.json
-            jq '{all: ., candidates: map(select(.alreadyPublished | not)), bootstrapCandidates: [], missingTrustedPublisher: [], skippedPublished: map(select(.alreadyPublished))}' \
+            jq '{all: ., candidates: map(select(.publication.state == "absent")), bootstrapCandidates: [], missingTrustedPublisher: [], skippedPublished: map(select(.alreadyPublished)), pendingPublication: map(select(.publication.state == "pending")), failedPublication: map(select(.publication.state == "failed")), warnings: []}' \
               .local/clawhub-matrix.json > .local/plugin-clawhub-release-plan.json
           elif [[ -n "${PUBLISH_SCOPE}" ]]; then
             plan_args=(--selection-mode "${PUBLISH_SCOPE}")
@@ -390,11 +390,39 @@ jobs:
 
           cat .local/plugin-clawhub-release-plan.json
           jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          import { formatClawHubRecoveryCommand } from "./.release-tooling/scripts/plugin-clawhub-recovery.mjs";
+          const plan = JSON.parse(readFileSync(".local/plugin-clawhub-release-plan.json", "utf8"));
+          for (const [heading, entries] of [["Pending publications", plan.pendingPublication], ["Failed publications", plan.failedPublication]]) {
+            if (!entries?.length) continue;
+            const lines = [`\n### ${heading}\n`];
+            for (const entry of entries) {
+              const publication = entry.publication;
+              const detail = publication.state === "pending"
+                ? `waiting at ${publication.stage}; skipped without republishing`
+                : publication.recoverable
+                  ? "operator recovery required with a human publisher token"
+                  : "operator action required: use a new version or ask the ClawHub operator to discard the attempt";
+              const message = `${entry.packageName}@${entry.version}: ${detail}${publication.attemptId ? ` (attempt ${publication.attemptId})` : ""}.`;
+              console.log(`::warning::${message}`);
+              lines.push(`- ${message}`);
+              if (publication.state === "failed" && publication.recoverable) {
+                lines.push(publication.attemptId
+                  ? `\nEdit the pinned checkout and recovery reason placeholders before running:\n\n\`\`\`sh\n${formatClawHubRecoveryCommand({ attemptId: publication.attemptId, clawhubSource: "<PINNED_CLAWHUB_CHECKOUT>", reason: "<EDIT_RECOVERY_REASON>" })}\n\`\`\`\n`
+                  : "  Locate the bound attempt with the ClawHub operator before recovery.");
+              }
+            }
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          }
+          NODE
 
           # Preparation freezes every selected package. Registry presence may
           # change before promotion; existing versions require byte readback.
-          if [[ "${DRY_RUN}" == "true" || -n "${PREPARED_ARTIFACT}" ]]; then
+          if [[ "${DRY_RUN}" == "true" ]]; then
             jq '.all' .local/plugin-clawhub-release-plan.json > .local/clawhub-matrix.json
+          elif [[ -n "${PREPARED_ARTIFACT}" ]]; then
+            jq '.candidates + .skippedPublished' .local/plugin-clawhub-release-plan.json > .local/clawhub-matrix.json
           else
             jq '.candidates' .local/plugin-clawhub-release-plan.json > .local/clawhub-matrix.json
           fi
@@ -420,7 +448,7 @@ jobs:
             has_missing_trusted_publisher="true"
           fi
           matrix_json="$(jq -c '.' .local/clawhub-matrix.json)"
-          publish_matrix_json="$(jq -c --arg dry_run "${DRY_RUN}" 'map(select($dry_run == "true" or (.alreadyPublished | not)) | del(.prepared))' .local/clawhub-matrix.json)"
+          publish_matrix_json="$(jq -c --arg dry_run "${DRY_RUN}" 'map(select($dry_run == "true" or .publication.state == "absent") | del(.prepared))' .local/clawhub-matrix.json)"
           has_publish_candidates="$(jq 'length > 0' <<<"${publish_matrix_json}")"
           bootstrap_matrix_json="$(jq -c '.bootstrapCandidates' .local/plugin-clawhub-release-plan.json)"
           missing_trusted_publisher_matrix_json="$(jq -c '.missingTrustedPublisher' .local/plugin-clawhub-release-plan.json)"
@@ -865,7 +893,7 @@ jobs:
         approve_plugins_clawhub_release,
       ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@d5a3688fb21a283460f362e57028601801961c85 # reviewed parent receipt contract
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@7e2aa3cec5d35c91bb6163aa6676541d795876c5 # reviewed parent receipt contract; CLI honors Retry-After
     permissions:
       actions: read
       contents: read

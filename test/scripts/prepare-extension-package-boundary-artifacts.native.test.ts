@@ -49,6 +49,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     "scripts/compile-extension-boundary.mts",
     "scripts/run-tsgo.mjs",
     "scripts/run-tsgo.mts",
+    "scripts/generate-kysely-types.mts",
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",
@@ -104,12 +105,13 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
       signal.removeEventListener("abort", abort);
     }
   };
-  const run = (declared = root, pwd = declared) =>
+  const run = (declared = root, pwd = declared, extensionIds?: string[]) =>
     step(
       "native-fixture",
       [
         path.join(declared, "scripts/prepare-extension-package-boundary-artifacts.mts"),
-        `--mode=${mode}`,
+        `--mode=${extensionIds ? "all" : mode}`,
+        ...(extensionIds ? [`--extensions=${JSON.stringify(extensionIds)}`] : []),
       ],
       undefined,
       { PWD: pwd },
@@ -117,7 +119,238 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   return { ancestor, root, native, write, plugins, recordPath, output, step, run };
 }
 
+function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
+  for (const file of [
+    "scripts/check-file-utils.ts",
+    "src/plugins/package-entrypoints.ts",
+    "src/shared/non-packaged-plugin-dirs.ts",
+  ]) {
+    const target = path.join(f.root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(path.resolve(file), target);
+  }
+  f.write(
+    "packages/plugin-sdk/tsconfig.json",
+    JSON.stringify({
+      extends: "../../tsconfig.json",
+      include: ["../../src/plugin-sdk/**/*.ts", "../../src/**/*.d.ts"],
+    }),
+  );
+  const sourceAliases = {
+    "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+    "@openclaw/memory-core/api.js": ["./extensions/memory-core/api.ts"],
+    "@openclaw/qa-channel/api.js": ["./extensions/qa-channel/api.ts"],
+  };
+  f.write(
+    "tsconfig.json",
+    JSON.stringify({
+      compilerOptions: {
+        target: "es2023",
+        module: "nodenext",
+        skipLibCheck: true,
+        types: [],
+        paths: sourceAliases,
+      },
+    }),
+  );
+  f.write(
+    "extensions/tsconfig.package-boundary.base.json",
+    JSON.stringify({
+      extends: "../tsconfig.json",
+      compilerOptions: {
+        paths: {
+          "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
+          "@openclaw/memory-core/api.js": [
+            "../.artifacts/extension-package-boundary/plugins/memory-core/api.d.ts",
+          ],
+          "@openclaw/qa-channel/api.js": [
+            "../.artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts",
+          ],
+        },
+      },
+    }),
+  );
+  f.write(
+    "extensions/chosen/package.json",
+    JSON.stringify({
+      name: "@openclaw/chosen",
+      type: "module",
+      openclaw: { extensions: ["./index.ts"] },
+    }),
+  );
+  f.write("extensions/chosen/openclaw.plugin.json", '{"id":"chosen"}');
+  f.write(
+    "extensions/chosen/tsconfig.json",
+    JSON.stringify({
+      extends: "../tsconfig.package-boundary.base.json",
+      compilerOptions: { rootDir: "." },
+      include: ["index.ts"],
+      exclude: ["excluded/**"],
+    }),
+  );
+  f.write("extensions/chosen/index.ts", 'export { value } from "./excluded/helper.js";');
+  f.write(
+    "extensions/chosen/excluded/helper.ts",
+    'export { value } from "openclaw/plugin-sdk/core";',
+  );
+}
+
 describe("native declaration preparation", () => {
+  it(
+    "narrows SDK roots without weakening imports, ambient types, or full receipts",
+    { timeout: 30_000 },
+    ({ signal }) =>
+      fixture.run(async () => {
+        const f = createPreparationFixture("package-boundary", signal);
+        writeSelectedConsumer(f);
+        f.write("src/ambient.d.ts", "declare const fixtureAmbient: 'kept';");
+        f.write("src/nested.ts", "export const value = fixtureAmbient;");
+        f.write("src/plugin-sdk/unused.ts", "export const broken = ;");
+        f.write("scripts/lib/plugin-sdk-entrypoints.json", '["core", "unused"]');
+        const narrow = () => f.run(f.root, f.root, ["chosen"]);
+        await narrow();
+        const receipt = readArtifactRecord(f.recordPath)!;
+        expect(receipt.inputs).toContain("src/nested.ts");
+        expect(receipt.inputs).toContain("src/ambient.d.ts");
+        expect(receipt.inputs).not.toContain("src/plugin-sdk/unused.ts");
+        expect(fs.readFileSync(path.join(f.root, f.output, "src/nested.d.ts"), "utf8")).toContain(
+          'value: "kept"',
+        );
+        const coldStamp = fs.statSync(f.recordPath).mtimeMs;
+        await narrow();
+        expect(fs.statSync(f.recordPath).mtimeMs).toBe(coldStamp);
+
+        f.write("src/plugin-sdk/added.ts", "export const added = 2;");
+        f.write(
+          "extensions/chosen/excluded/helper.ts",
+          'export { value } from "openclaw/plugin-sdk/core"; export { added } from "openclaw/plugin-sdk/added";',
+        );
+        await narrow();
+        expect(readArtifactRecord(f.recordPath)?.inputs).toContain("src/plugin-sdk/added.ts");
+        expect(fs.existsSync(path.join(f.root, f.output, "src/plugin-sdk/added.d.ts"))).toBe(true);
+
+        await expect(f.run()).rejects.toThrow("failed with exit code 1");
+        expect(fs.existsSync(f.recordPath)).toBe(false);
+        f.write("src/plugin-sdk/unused.ts", "export const unused = 3;");
+        await f.run();
+        expect(fs.existsSync(path.join(f.root, f.output, "src/plugin-sdk/unused.d.ts"))).toBe(true);
+        const fullReceipt = fs.readFileSync(f.recordPath);
+        const fullStamp = fs.statSync(f.recordPath).mtimeMs;
+        await narrow();
+        expect(fs.readFileSync(f.recordPath)).toEqual(fullReceipt);
+        expect(fs.statSync(f.recordPath).mtimeMs).toBe(fullStamp);
+
+        f.write(
+          "extensions/chosen/index.ts",
+          'import { value } from "./excluded/helper.js"; export const wrong: number = value;',
+        );
+        const checked = spawnSync(
+          f.native,
+          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
+          { cwd: f.root, encoding: "utf8", timeout: 20_000 },
+        );
+        expect(checked.error).toBeUndefined();
+        expect(checked.status, checked.stdout + checked.stderr).toBe(2);
+        expect(checked.stdout).toContain("Type 'string' is not assignable to type 'number'");
+      }),
+  );
+
+  it(
+    "prepares transitive producers reached only through emitted SDK declarations",
+    { timeout: 30_000 },
+    ({ signal }) =>
+      fixture.run(async () => {
+        const f = createPreparationFixture("package-boundary", signal);
+        writeSelectedConsumer(f);
+        f.write(
+          "src/plugin-sdk/core.ts",
+          'export type { MemoryValue } from "@openclaw/memory-core/api.js";',
+        );
+        f.write(
+          "extensions/chosen/excluded/helper.ts",
+          'export type { MemoryValue } from "openclaw/plugin-sdk/core";',
+        );
+        f.write(
+          "extensions/chosen/index.ts",
+          'export type { MemoryValue } from "./excluded/helper.js";',
+        );
+        for (const id of ["memory-core", "qa-channel"]) {
+          f.write(
+            `extensions/${id}/tsconfig.json`,
+            JSON.stringify({
+              extends: "../tsconfig.package-boundary.base.json",
+              files: ["api.ts"],
+              include: [],
+            }),
+          );
+        }
+        f.write(
+          "extensions/memory-core/api.ts",
+          'import type { ChannelValue } from "@openclaw/qa-channel/api.js"; export type MemoryValue = { channel: ChannelValue };',
+        );
+        f.write("extensions/qa-channel/api.ts", "export type ChannelValue = { text: string };");
+        const narrow = () => f.run(f.root, f.root, ["chosen"]);
+        await narrow();
+        const outputs = ["memory-core", "qa-channel"].map((id) => {
+          const record = path.join(f.root, `.artifacts/extension-package-boundary/${id}.json`);
+          expect(readArtifactRecord(record)).toBeDefined();
+          expect(
+            fs.existsSync(
+              path.join(f.root, `.artifacts/extension-package-boundary/plugins/${id}/api.d.ts`),
+            ),
+          ).toBe(true);
+          return { record, bytes: fs.readFileSync(record), mtimeMs: fs.statSync(record).mtimeMs };
+        });
+        const checked = spawnSync(
+          f.native,
+          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
+          { cwd: f.root, encoding: "utf8", timeout: 20_000 },
+        );
+        expect(checked.error).toBeUndefined();
+        expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+        await narrow();
+        for (const output of outputs) {
+          expect(fs.readFileSync(output.record)).toEqual(output.bytes);
+          expect(fs.statSync(output.record).mtimeMs).toBe(output.mtimeMs);
+        }
+      }),
+  );
+
+  it("publishes generated schema types for an isolated SDK consumer", ({ signal }) =>
+    fixture.run(async () => {
+      const f = createPreparationFixture("package-boundary", signal);
+      for (const name of ["state", "agent"]) {
+        f.write(
+          `src/state/openclaw-${name}-schema.sql`,
+          "CREATE TABLE records (title TEXT NOT NULL);",
+        );
+      }
+      f.write(
+        "src/state/openclaw-state-db.generated.ts",
+        fs.readFileSync("src/state/openclaw-state-db.generated.ts", "utf8"),
+      );
+      f.write(
+        "src/plugin-sdk/core.ts",
+        'export type { DB } from "../state/openclaw-state-db.generated.js";',
+      );
+      fs.cpSync(fs.realpathSync("node_modules/kysely"), path.join(f.root, "node_modules/kysely"), {
+        recursive: true,
+      });
+      await f.run();
+      f.write(
+        "consumer.ts",
+        'import type { DB } from "fixture-sdk"; declare const row: DB["records"]; const wrong: number = row.title;',
+      );
+      const result = spawnSync(
+        f.native,
+        ["--ignoreConfig", "--module", "nodenext", "--noEmit", "--skipLibCheck", "consumer.ts"],
+        { cwd: f.root, encoding: "utf8", timeout: 20_000 },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(2);
+      expect(result.stdout).toContain("Type 'string' is not assignable to type 'number'");
+    }));
+
   it.for([
     { name: "Windows 8.3 short entry", entry: true, workspace: false },
     { name: "Windows 8.3 workspace junction", entry: false, workspace: true },

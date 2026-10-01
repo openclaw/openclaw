@@ -26,7 +26,7 @@ import {
   renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
-import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
+import { ISSUE_TABS, type IssueTab } from "./sidebar-issues-tabs.ts";
 import { renderSidebarOutboxItem } from "./sidebar-outbox-item.ts";
 import "./menu-surface.ts";
 
@@ -211,7 +211,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           active: params.selectedTab,
           tabs: ISSUE_TABS.map((tab) => ({
             value: tab,
-            label: issueTabLabel(tab),
+            label: t(`attention.tabs.${tab}`),
             // A zero count is the tab's resting state, not information — show
             // the badge only when the tab actually holds items.
             count: tabCounts[tab] > 0 ? tabCounts[tab] : null,

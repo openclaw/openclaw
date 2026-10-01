@@ -56,11 +56,8 @@ function normalizePathname(pathname: string): string {
 }
 
 function splitPathSuffix(value: string): { pathname: string; suffix: string } {
-  const queryIndex = value.indexOf("?");
-  const hashIndex = value.indexOf("#");
-  const suffixIndex = [queryIndex, hashIndex]
-    .filter((index) => index >= 0)
-    .reduce((first, index) => Math.min(first, index), value.length);
+  const delimiter = value.search(/[?#]/u);
+  const suffixIndex = delimiter < 0 ? value.length : delimiter;
   return { pathname: value.slice(0, suffixIndex), suffix: value.slice(suffixIndex) };
 }
 
@@ -126,14 +123,7 @@ export function inferControlUiFocusBasePath(pathname: string): string | null {
         (rest[selectorIndex] === "source" || rest[selectorIndex] === "session"))
     );
   };
-  let focusIndex = focusIndexes.at(-1) ?? 0;
-  for (let index = focusIndexes.length - 1; index >= 0; index -= 1) {
-    const candidate = focusIndexes[index];
-    if (candidate !== undefined && supportsSuffix(candidate)) {
-      focusIndex = candidate;
-      break;
-    }
-  }
+  const focusIndex = focusIndexes.findLast(supportsSuffix) ?? focusIndexes.at(-1) ?? 0;
   return normalizeControlUiBasePath(segments.slice(0, focusIndex).join("/"));
 }
 

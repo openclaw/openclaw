@@ -44,12 +44,6 @@ import {
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
 
-function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
-  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
-  // (avoids reading Undici's non-public `.options` field)
-  return fromParams !== undefined ? fromParams : globalUndiciStreamTimeoutMs;
-}
-
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export const GUARDED_FETCH_MODE = {
@@ -82,6 +76,8 @@ export type GuardedFetchOptions = {
    * Defaults to false.
    */
   allowCrossOriginUnsafeRedirectReplay?: boolean;
+  /** Reject cross-origin redirects that would replay an unsafe body. Mutually exclusive with allow. */
+  rejectCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   requireHttps?: boolean;
@@ -290,12 +286,6 @@ function isAmbientGlobalFetch(params: {
   );
 }
 
-export function retainSafeHeadersForCrossOriginRedirectHeaders(
-  headers?: HeadersInit,
-): Record<string, string> | undefined {
-  return retainSafeRedirectHeaders(headers);
-}
-
 async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl: FetchLike) {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return { fetchImpl };
@@ -400,8 +390,6 @@ function rewriteRedirectInit(params: {
   };
 }
 
-export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
-
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =
     params as GuardedFetchOptions & {
@@ -427,6 +415,12 @@ async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
   const assertCurrent = captureGuardedFetchRequestAuthority();
+  if (
+    params.allowCrossOriginUnsafeRedirectReplay === true &&
+    params.rejectCrossOriginUnsafeRedirectReplay === true
+  ) {
+    throw new TypeError("Cross-origin unsafe redirect replay cannot be both allowed and rejected");
+  }
   const globalFetch = globalThis.fetch;
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
   if (!defaultFetch) {
@@ -548,7 +542,8 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+      const timeoutMs =
+        params.timeoutMs !== undefined ? params.timeoutMs : globalUndiciStreamTimeoutMs;
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -694,8 +689,28 @@ async function fetchWithSsrFGuardInternal(
           hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
         });
         const crossOrigin = nextParsedUrl.origin !== parsedUrl.origin;
-        currentInit = rewriteRedirectInit({
+        const methodRedirectInit = rewriteRedirectInit({
           init: currentInit,
+          status: response.status,
+          crossOrigin: false,
+          allowUnsafeReplay: true,
+        });
+        if (crossOrigin) {
+          const redirectedMethod = methodRedirectInit?.method?.toUpperCase() ?? "GET";
+          const redirectedBody = methodRedirectInit?.body;
+          if (
+            params.rejectCrossOriginUnsafeRedirectReplay === true &&
+            redirectedMethod !== "GET" &&
+            redirectedMethod !== "HEAD" &&
+            redirectedBody != null
+          ) {
+            throw new Error(
+              `Refusing to follow cross-origin redirect for ${redirectedMethod} request body (${parsedUrl.origin} -> ${nextParsedUrl.origin})`,
+            );
+          }
+        }
+        currentInit = rewriteRedirectInit({
+          init: methodRedirectInit,
           status: response.status,
           crossOrigin,
           allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,

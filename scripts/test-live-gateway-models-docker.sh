@@ -54,11 +54,7 @@ tmp_dir="$(mktemp -d)"
 trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
 source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_mounted_auth
-openclaw_live_stage_source_tree "$tmp_dir"
-openclaw_live_stage_node_modules "$tmp_dir"
-openclaw_live_link_runtime_tree "$tmp_dir"
-openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
-openclaw_live_prepare_staged_config
+openclaw_live_stage_workspace "$tmp_dir"
 cd "$tmp_dir"
 openclaw_live_prepare_cli_backend_docker_packages \
   "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" \

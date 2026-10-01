@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect } from "vitest";
+import { expect, onTestFinished } from "vitest";
 import { acquireGatewayTestClient } from "../../../../test/helpers/gateway-client.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../../test/helpers/qa-gateway-cleanup.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -16,9 +17,12 @@ import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state
 import { getFreePort } from "../../../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../utils/message-channel.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { listDescendantRunsForRequesterFromRuns } from "../registry/subagent-registry-queries.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
+import {
+  countPendingDescendantRunsFromRuns,
+  listDescendantRunsForRequesterFromRuns,
+} from "../registry/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../registry/subagent-registry-state.js";
-import { countPendingDescendantRuns } from "../registry/subagent-registry.test-helpers.js";
 import { createExternalGates } from "./subagent-external-gate.test-support.js";
 
 const WAIT_MS = 8 * 60_000;
@@ -238,6 +242,7 @@ type LiveSubagentContext = {
     timeoutMs?: number,
   ) => Promise<LiveStatusReport>;
   waitForFinal: (sessionKey: string, marker: string, expected: string) => Promise<number>;
+  waitForDescendantSettlement: (sessionKey: string) => Promise<void>;
 };
 
 export async function runWithLiveSubagentGateway(
@@ -442,6 +447,40 @@ export async function runWithLiveSubagentGateway(
         record("interrogation", { sessionKey, report });
         return report;
       };
+      const waitForDescendantSettlement = async (sessionKey: string) => {
+        const completed = createDeferred();
+        const inspect = () => {
+          try {
+            const runs = getSubagentRunsSnapshotForRead(subagentRuns);
+            // Cleanup precedes the requester's durable delivery acknowledgement.
+            if (
+              countPendingDescendantRunsFromRuns(runs, sessionKey) === 0 &&
+              listDescendantRunsForRequesterFromRuns(runs, sessionKey).every(
+                (run) =>
+                  !run.requesterSettleWake ||
+                  run.delivery?.status === "failed" ||
+                  run.delivery?.status === "discarded" ||
+                  run.delivery?.status === "suspended",
+              )
+            ) {
+              completed.resolve();
+            }
+          } catch (error) {
+            completed.reject(error);
+          }
+        };
+        const unsubscribe = subscribeSubagentRunChanges("persistence", inspect);
+        onTestFinished(() => {
+          unsubscribe();
+          completed.reject(new Error(`Test ended before descendant settlement for ${sessionKey}`));
+        });
+        try {
+          inspect();
+          await completed.promise;
+        } finally {
+          unsubscribe();
+        }
+      };
       const waitForFinal = async (sessionKey: string, marker: string, expected: string) => {
         const taskFinals = (messages: Record<string, unknown>[]) =>
           finalReplies(messages, "").filter(
@@ -453,9 +492,7 @@ export async function runWithLiveSubagentGateway(
         );
         record("parent-final-observed", { sessionKey, expectedMarker: marker, reply: firstFinal });
         expect(firstFinal, `first parent completion for ${marker}`).toBe(expected);
-        await until("descendant settlement", () =>
-          countPendingDescendantRuns(sessionKey) === 0 ? true : undefined,
-        );
+        await waitForDescendantSettlement(sessionKey);
         const messages = await history(sessionKey);
         expect(
           messages.some(
@@ -494,6 +531,7 @@ export async function runWithLiveSubagentGateway(
         sessionsSendCliArgs,
         interrogate,
         waitForFinal,
+        waitForDescendantSettlement,
       });
     },
     async () => {

@@ -1,16 +1,16 @@
 import { expect, it, vi, type Mock } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TemplateContext } from "../templating.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import {
-  clearSessionQueues,
-  enqueueFollowupRun,
-  parkSteerCandidate,
-  type FollowupRun,
-} from "./queue.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { enqueueFollowupRun, parkSteerCandidate, type FollowupRun } from "./queue.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -98,13 +98,16 @@ export function registerSteeringReceiptCases({
         expect(replyState.admission).toEqual({ status: "skipped", reason: "queue-cap" });
         expect(getExistingFollowupQueue("main")?.items).toEqual([retained]);
       } finally {
-        clearSessionQueues(["main"]);
+        clearFollowupQueue("main");
+        clearFollowupDrainCallback("main");
         active.complete();
       }
     },
   );
 
-  it("queues a waiting steer when its predecessor outlives terminal delivery", async () => {
+  it("queues a waiting steer when its predecessor outlives terminal delivery", async ({
+    signal,
+  }) => {
     const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
     vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
@@ -161,9 +164,23 @@ export function registerSteeringReceiptCases({
     const firstRun = first.run();
     let secondRun: Promise<unknown> | undefined;
     try {
-      await withTestTimeout(firstEntered.promise, 5_000, "first steer never reached its backend");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          firstEntered.promise,
+          firstRun,
+          "first steer settled before reaching its backend",
+        ),
+        signal,
+      );
       secondRun = second.run();
-      await withTestTimeout(secondParked.promise, 5_000, "second steer was not parked");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          secondParked.promise,
+          secondRun,
+          "second steer settled before parking",
+        ),
+        signal,
+      );
       await replaceSessionEntry(
         { storePath, sessionKey: "main" },
         {
@@ -187,7 +204,8 @@ export function registerSteeringReceiptCases({
     } finally {
       firstAcceptance.resolve(true);
       await Promise.allSettled([firstRun, ...(secondRun ? [secondRun] : [])]);
-      clearSessionQueues(["main"]);
+      clearFollowupQueue("main");
+      clearFollowupDrainCallback("main");
       active.complete();
     }
   });

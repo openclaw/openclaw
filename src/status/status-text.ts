@@ -234,7 +234,7 @@ function resolveStatusRuntimeProvider(params: {
 async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
     const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
-    return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
+    return formatCompactPluginHealthLine(await collectRuntimePluginHealthSnapshot());
   } catch {
     return "⚠️ Plugins: health unavailable";
   }
@@ -477,8 +477,8 @@ export async function buildStatusReplyParts(
 
   let subagentsLine: string | undefined;
   if (sessionKey) {
-    const { mainKey, alias } = resolveMainSessionAlias(cfg);
-    const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+    const { alias } = resolveMainSessionAlias(cfg);
+    const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias });
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
     const subagentReadContext = await buildControlledSubagentRunsReadContext(

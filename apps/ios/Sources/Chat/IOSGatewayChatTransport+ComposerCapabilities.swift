@@ -366,16 +366,7 @@ private struct ComposerRuntimeConfig: Decodable {
 }
 
 private struct ComposerMCPConfig: Decodable {
-    let servers: [String: ComposerMCPServer]
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.servers = try container.decodeIfPresent(
-            [String: ComposerMCPServer].self,
-            forKey: .servers) ?? [:]
-    }
-
-    private enum CodingKeys: String, CodingKey { case servers }
+    let servers: [String: ComposerMCPServer]?
 }
 
 private struct ComposerMCPServer: Decodable {

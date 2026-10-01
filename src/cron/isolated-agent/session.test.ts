@@ -221,6 +221,84 @@ describe("resolveCronSession", () => {
 
   // New tests for session reuse behavior (#18027)
   describe("session reuse for webhooks/cron", () => {
+    it.each([
+      { name: "forced rollover", fresh: true, forceNew: true },
+      { name: "stale reset", fresh: false, forceNew: false },
+    ])("retains prior usage instances across $name", ({ fresh, forceNew }) => {
+      const sessionKey = "agent:main:cron:usage-history";
+      const entry = {
+        sessionId: "previous-run",
+        updatedAt: NOW_MS - 1_000,
+        usageFamilyKey: sessionKey,
+        usageFamilySessionIds: ["first-run", "previous-run"],
+        createdVia: "cron" as const,
+        createdActor: { type: "system" as const },
+      };
+      const result = resolveWithStoredEntry({ sessionKey, entry, fresh, forceNew });
+
+      expect(result.sessionEntry.usageFamilyKey).toBe(sessionKey);
+      expect(result.sessionEntry.usageFamilySessionIds).toEqual([
+        ...entry.usageFamilySessionIds,
+        ...(forceNew ? [result.sessionEntry.sessionId] : []),
+      ]);
+      expect(result.sessionEntry.createdActor).toEqual(entry.createdActor);
+      expect(entry.usageFamilySessionIds).toEqual(["first-run", "previous-run"]);
+    });
+
+    it.each([true, false])(
+      "keeps a different source's usage history out of a fresh target (forceNew=%s)",
+      (forceNew) => {
+        const result = resolveWithStoredEntry({
+          sessionKey: "agent:main:cron:separate-target",
+          sourceSessionKey: "agent:main:chat",
+          entry: {
+            sessionId: "source-instance",
+            updatedAt: NOW_MS,
+            usageFamilyKey: "agent:main:chat",
+            usageFamilySessionIds: ["source-old", "source-instance"],
+          },
+          forceNew,
+        });
+
+        expect(result.sessionEntry.usageFamilyKey).toBeUndefined();
+        expect(result.sessionEntry.usageFamilySessionIds).toBeUndefined();
+      },
+    );
+
+    it("extends the target's history rather than a different preference source's history", () => {
+      const sessionKey = "agent:main:cron:existing-target";
+      const sourceSessionKey = "agent:main:chat";
+      const result = resolveCronSession({
+        cfg: {},
+        sessionKey,
+        sourceSessionKey,
+        agentId: "main",
+        nowMs: NOW_MS,
+        forceNew: true,
+        lifecycleTimestamps: {},
+        store: {
+          [sessionKey]: {
+            sessionId: "target-last",
+            updatedAt: NOW_MS,
+            usageFamilySessionIds: ["target-first", "target-last"],
+          },
+          [sourceSessionKey]: {
+            sessionId: "source-last",
+            updatedAt: NOW_MS,
+            usageFamilySessionIds: ["source-first", "source-last"],
+          },
+        },
+      });
+
+      expect(result.sessionEntry.usageFamilyKey).toBe(sessionKey);
+      expect(result.sessionEntry.usageFamilySessionIds).toEqual([
+        "target-first",
+        "target-last",
+        result.sessionEntry.sessionId,
+      ]);
+      expect(result.sessionEntry.createdActor).toBeUndefined();
+    });
+
     it("reuses existing sessionId when session is fresh", () => {
       const lastInteractionAt = NOW_MS - 30 * 60_000;
       const result = resolveWithStoredEntry({

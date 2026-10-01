@@ -784,6 +784,45 @@ describe("chat attachment read failures", () => {
 });
 
 describe("attachment removal names", () => {
+  it("removes only the chosen pasted-text card without changing the draft", async () => {
+    const pasted = ["first", "second"].map((id): ChatAttachment => ({
+      id,
+      mimeType: "text/plain",
+      fileName: "pasted-text-123.txt",
+      origin: "paste",
+    }));
+    let attachments = [...pasted];
+    const onDraftChange = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const redraw = () =>
+      render(
+        renderAttachmentPreview({
+          attachments,
+          getAttachments: () => attachments,
+          draft: "Keep this draft",
+          onDraftChange,
+          onAttachmentsChange: (next) => {
+            attachments = next;
+            redraw();
+          },
+        }),
+        container,
+      );
+    onTestFinished(() => {
+      render(null, container);
+      container.remove();
+    });
+    redraw();
+    const first = container.querySelector<HTMLElement>("openclaw-chat-pasted-text");
+    await (first as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+    const remove = first?.querySelector<HTMLButtonElement>(".chat-attachment-remove");
+    expect(remove?.getAttribute("aria-label")).toBe("Remove pasted-text-123.txt");
+    remove?.click();
+    expect(attachments).toEqual([pasted[1]]);
+    expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
   it("names full filenames and removes only the activated ID, including duplicate names", () => {
     const names = [
       "budget.csv",

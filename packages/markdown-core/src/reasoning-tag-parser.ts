@@ -569,15 +569,9 @@ export function reduceReasoningText(
   const scan = scanReasoningTags(text.slice(start), options.final);
   const tags: ReasoningTagMatch[] = [];
   for (const scannedTag of scan.tags) {
-    const tag = {
-      index: scannedTag.index + start,
-      isClose: scannedTag.isClose,
-      isSelfClosing: scannedTag.isSelfClosing,
-      isPrivate: scannedTag.isPrivate,
-      text: scannedTag.text,
-    };
-    if (!isInsideCode(tag.index, codeSpans)) {
-      tags.push(tag);
+    const index = scannedTag.index + start;
+    if (!isInsideCode(index, codeSpans)) {
+      tags.push({ ...scannedTag, index });
     }
   }
   const mustParseRemainder: boolean[] = [];
@@ -591,11 +585,7 @@ export function reduceReasoningText(
   }
   let cursor = start;
 
-  for (let tagIndex = 0; tagIndex < tags.length; tagIndex += 1) {
-    const tag = tags[tagIndex];
-    if (!tag) {
-      continue;
-    }
+  for (const [tagIndex, tag] of tags.entries()) {
     const beforeTag = text.slice(cursor, tag.index);
     append(beforeTag);
     const tagEnd = tag.index + tag.text.length;

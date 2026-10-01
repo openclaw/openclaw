@@ -1,6 +1,7 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
@@ -22,7 +23,7 @@ import type { SessionChangedRowResult } from "../../lib/sessions/session-row-rec
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { invalidateChatBranches, loadChatBranches } from "./chat-history-branches.ts";
 import { sleep } from "./chat-history-retry.ts";
-import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { chatScopedEventSessionMatches, getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
@@ -140,6 +141,14 @@ function handleSessionMessageEvent(
     readSessionMessageIdentity(asNullableRecord(payload)?.message)?.role === "user";
   if (matchesChat) {
     invalidateChatBranches(state);
+    // A pre-commit snapshot can erase even an admitted live reply when its leaf advances.
+    // Fence it before run settlement, while retaining the loader's single queued refresh.
+    if (getChatHistoryLoadState(state).phase === "in-flight") {
+      void loadChatHistory(state, {
+        deferBranches: !presentation(),
+        supersedeInFlight: true,
+      }).finally(() => state.requestUpdate?.());
+    }
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
     // replaces it in place instead of appending below the newer user turn.
@@ -195,7 +204,6 @@ function handleSessionMessageEvent(
     state.pendingSessionMessageReloadSessionKey = null;
     void loadChatHistory(state, {
       deferBranches: !presentation(),
-      supersedeInFlight: isUserMessage && event.hasActiveRun === true,
     }).finally(() => state.requestUpdate?.());
   }
   return matchesChat;
@@ -276,13 +284,7 @@ function claimTerminalRecovery(state: ChatPageHost, ownership: TerminalRecoveryO
   }
   claims.delete(key);
   claims.set(key, ownership.client);
-  while (claims.size > MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS) {
-    const oldest = claims.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    claims.delete(oldest);
-  }
+  pruneMapToMaxSize(claims, MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS);
   return true;
 }
 
@@ -369,6 +371,9 @@ function handleSessionsChangedEvent(
   if (resetsSelectedSession || changesBranchTopology) {
     retirePullRequestRefreshes(state);
   }
+  if (matchesChat && source?.reason === "project") {
+    retireSessionWorkspaceCheckout(state);
+  }
   if (resetsSelectedSession) {
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the
@@ -424,10 +429,11 @@ function handleSessionsChangedEvent(
   ) {
     invalidateChatBranches(state);
     // Legacy multi-message writes cannot prove individual message cursors.
-    // One scoped authoritative snapshot recovers them without ending a run.
-    void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
-      state.requestUpdate?.(),
-    );
+    // A snapshot begun before this invalidation cannot recover the committed rows.
+    void loadChatHistory(state, {
+      deferBranches: !presented,
+      supersedeInFlight: true,
+    }).finally(() => state.requestUpdate?.());
     return true;
   }
   if (
@@ -456,31 +462,7 @@ function handleSessionsChangedEvent(
   return matchesChat;
 }
 
-function terminalOwnsActiveChatStream(
-  state: ChatPageHost,
-  payload: ChatEventPayload | undefined,
-): boolean {
-  return typeof payload?.runId === "string" && payload.runId === state.chatRunId;
-}
-
 function finalAssistantReplyHasPullRequestLink(
-  state: ChatPageHost,
-  payload: ChatEventPayload | undefined,
-): boolean {
-  if (payload?.state !== "final") {
-    return false;
-  }
-  const texts = [extractText(payload.message)];
-  if (terminalOwnsActiveChatStream(state, payload)) {
-    texts.push(
-      state.chatStream,
-      ...(state.chatStreamSegments ?? []).map((segment) => segment.text),
-    );
-  }
-  return texts.some((text) => pullRequestLinksIn(text).length > 0);
-}
-
-function hasVisibleFinalAssistantReply(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
 ): boolean {
@@ -491,23 +473,16 @@ function hasVisibleFinalAssistantReply(
     return false;
   }
   const finalText = extractText(payload.message);
-  if (
-    typeof finalText === "string" &&
-    finalText.trim().length > 0 &&
-    !isHiddenAssistantStreamText(finalText) &&
-    !shouldHideAssistantChatMessage(payload.message)
-  ) {
-    return true;
-  }
-  if (!terminalOwnsActiveChatStream(state, payload)) {
-    return false;
-  }
-  return [
-    state.chatStream,
-    ...(state.chatStreamSegments ?? []).map((segment) => segment.text),
-  ].some(
-    (text) =>
-      typeof text === "string" && text.trim().length > 0 && !isHiddenAssistantStreamText(text),
+  const streamTexts =
+    typeof payload.runId === "string" && payload.runId === state.chatRunId
+      ? [state.chatStream, ...(state.chatStreamSegments ?? []).map((segment) => segment.text)]
+      : [];
+  const isVisible = (text: string | null | undefined) =>
+    typeof text === "string" && text.trim().length > 0 && !isHiddenAssistantStreamText(text);
+  return (
+    ((isVisible(finalText) && !shouldHideAssistantChatMessage(payload.message)) ||
+      streamTexts.some(isVisible)) &&
+    [finalText, ...streamTexts].some((text) => pullRequestLinksIn(text).length > 0)
   );
 }
 
@@ -585,9 +560,7 @@ export function handlePageGatewayEvent(
       if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
         refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
-      const shouldRefreshPullRequests =
-        hasVisibleFinalAssistantReply(state, payload) &&
-        finalAssistantReplyHasPullRequestLink(state, payload);
+      const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
       handleChatGatewayEvent(state, payload);
       if (terminalPayload && sessionMatches) {
         clearPendingQueueItemsForRun(state, terminalPayload.runId);

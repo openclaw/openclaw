@@ -23,7 +23,7 @@ import {
   runProviderChannelLoginFlow,
   type ProviderChannelLoginChoice,
 } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
@@ -130,15 +130,12 @@ async function emitLoginMessage(params: HandleCommandsParams, text: string): Pro
 async function switchLoginSessionProfile(params: {
   commandParams: HandleCommandsParams;
   loginProvider: string;
-  nextProfileId: string | undefined;
+  nextProfileId: string;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<"unchanged" | "updated" | "failed"> {
   const { commandParams, loginProvider, nextProfileId } = params;
   const currentEntry = commandParams.sessionEntry;
-  if (!nextProfileId) {
-    return "failed";
-  }
   if (!currentEntry) {
     return "unchanged";
   }
@@ -230,8 +227,6 @@ async function switchLoginSessionProfile(params: {
 async function runChannelProviderLogin(params: {
   commandParams: HandleCommandsParams;
   choice: ProviderChannelLoginChoice;
-  agentId: string;
-  runtime?: RuntimeEnv;
 }): Promise<ReplyPayload> {
   const flowKey = buildProviderLoginFlowKey(params.commandParams);
   const sendReply = params.commandParams.opts?.onBlockReply;
@@ -264,10 +259,10 @@ async function runChannelProviderLogin(params: {
   try {
     const loginResult = await runProviderChannelLoginFlow({
       choice: params.choice,
-      agentId: params.agentId,
+      agentId: params.commandParams.agentId,
       config: params.commandParams.cfg,
       readConfig,
-      runtime: params.runtime ?? defaultRuntime,
+      runtime: defaultRuntime,
       signal: flowSignal,
       assertCurrent,
       sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
@@ -374,7 +369,6 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
   const reply = await runChannelProviderLogin({
     commandParams: params,
     choice: prepared.choice,
-    agentId: params.agentId,
   });
   return { shouldContinue: false, reply };
 };

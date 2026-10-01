@@ -176,7 +176,6 @@ print(json.dumps({"ok": True, "authorized": True, "testDc": True, "tdlibVersion"
               ],
               options,
             ),
-          startProxy: async () => ({ apiRoot: "http://127.0.0.1:1", async close() {} }),
           fetchImpl: async () =>
             Response.json({ ok: true, result: { id: 100, username: "sut_bot" } }),
         }),

@@ -25,7 +25,6 @@ const HOOK_SOURCE_PRECEDENCE: Record<HookSource, number> = {
   "openclaw-workspace": 40,
 };
 
-/** Resolve explicit per-hook config by hook key. */
 export function resolveHookConfig(
   config: OpenClawConfig | undefined,
   hookKey: string,

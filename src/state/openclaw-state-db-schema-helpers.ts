@@ -19,7 +19,7 @@ export function tableHasColumns(
 }
 
 function readTableColumns(db: DatabaseSync, tableName: string): Set<string> {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }
 
@@ -49,10 +49,7 @@ export function classifySqliteTableReadError(
 }
 
 export function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return rows
     .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
     .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))

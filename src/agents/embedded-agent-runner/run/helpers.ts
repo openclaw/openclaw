@@ -71,20 +71,14 @@ export function resolveReportedModelRef(params: {
 } {
   const assistantProvider = params.assistant?.provider?.trim();
   const assistantModel = params.assistant?.model?.trim();
-  if (!assistantProvider) {
-    return {
-      provider: params.provider,
-      model: assistantModel || params.model,
-    };
-  }
-  if (assistantProvider.toLowerCase() === "openclaw") {
+  if (assistantProvider?.toLowerCase() === "openclaw") {
     return {
       provider: params.provider,
       model: params.model,
     };
   }
   return {
-    provider: assistantProvider,
+    provider: assistantProvider || params.provider,
     model: assistantModel || params.model,
   };
 }

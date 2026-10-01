@@ -86,7 +86,6 @@ export async function discoverAllSessions(params: {
     }
   }
 
-  // Sort by mtime descending (most recent first)
   const sessions = Array.from(discovered.values());
   sessions.sort((a, b) => b.mtime - a.mtime);
   return sessions;
@@ -307,12 +306,10 @@ export async function loadSessionLogs(params: {
         contentParts.push("[Tool Result]");
       }
 
-      // Extract content
       const rawContent = message.content;
       if (typeof rawContent === "string") {
         contentParts.push(rawContent);
       } else if (Array.isArray(rawContent)) {
-        // Handle content blocks (text, tool_use, etc.)
         const contentText = rawContent
           .map((block: unknown) => {
             if (typeof block === "string") {
@@ -366,7 +363,6 @@ export async function loadSessionLogs(params: {
         continue;
       }
 
-      // Truncate very long content.
       const maxLen = 2000;
       if (content.length > maxLen) {
         content = truncateUtf16Safe(content, maxLen) + "…";

@@ -16,7 +16,6 @@ import {
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
 import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 
-/** Reclaim free pages from one agent session SQLite database. */
 export async function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
   options: { env?: NodeJS.ProcessEnv; operation?: "import-finalize" } = {},

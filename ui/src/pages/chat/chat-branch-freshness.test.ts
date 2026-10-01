@@ -2,13 +2,55 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionBranch } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { loadChatBranches } from "./chat-history-branches.ts";
+import {
+  invalidateChatBranches,
+  loadChatBranches,
+  retireChatBranchRequests,
+} from "./chat-history-branches.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 describe("chat branch freshness", () => {
+  it.each([
+    ["invalidation", invalidateChatBranches],
+    ["retirement", retireChatBranchRequests],
+  ] as const)("shares an initial branch read until %s retires it", async (_reason, retire) => {
+    const first = createDeferred<{ branches: SessionBranch[] }>();
+    const replacement = createDeferred<{ branches: SessionBranch[] }>();
+    const listBranches = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(replacement.promise);
+    const state = makeChatHost({
+      sessionKey: "agent:main:main",
+      connectionEpoch: 1,
+      requestHandlers: { "sessions.branches.list": listBranches },
+    });
+    const initial = loadChatBranches(state);
+    const joined = loadChatBranches(state);
+    expect(listBranches).toHaveBeenCalledOnce();
+
+    retire(state);
+    const refreshed = loadChatBranches(state);
+    const refreshedJoin = loadChatBranches(state);
+    expect(listBranches).toHaveBeenCalledTimes(2);
+    const current = {
+      leafEntryId: "current",
+      headline: "Current reply",
+      messageCount: 2,
+      active: true,
+    };
+    replacement.resolve({ branches: [current] });
+    await Promise.all([refreshed, refreshedJoin]);
+    first.resolve({ branches: [] });
+    await Promise.all([initial, joined]);
+    expect(state.chatBranches).toEqual([current]);
+    expect(state.chatBranchesConnectionEpoch).toBe(1);
+    expect(state.chatBranchesSessionKey).toBe("agent:main:main");
+  });
+
   function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     const request = vi.fn().mockResolvedValue({
       messages: [],

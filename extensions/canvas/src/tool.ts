@@ -43,7 +43,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
         // Preserve the node lookup budget while letting Gateway outlive node execution.
         const transportTimeoutMs =
           addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs;
-        const result = await callGatewayTool(
+        await callGatewayTool(
           "node.invoke",
           { ...gatewayOpts, timeoutMs: transportTimeoutMs },
           {
@@ -55,7 +55,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
           },
         );
-        return { node: nodeId, result };
+        return nodeId;
       };
 
       switch (action) {
@@ -76,18 +76,18 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           if (Object.values(placement).some(Number.isFinite)) {
             invokeParams.placement = placement;
           }
-          const { node } = await invoke(CANVAS_PRESENT_COMMAND, invokeParams);
+          const node = await invoke(CANVAS_PRESENT_COMMAND, invokeParams);
           return jsonResult({ ok: true, node, ...(presentTarget ? { url: presentTarget } : {}) });
         }
         case "hide": {
-          const { node } = await invoke("canvas.hide", undefined);
+          const node = await invoke("canvas.hide");
           return jsonResult({ ok: true, node });
         }
         case "navigate": {
           const url =
             readStringParam(params, "url", { trim: true }) ??
             readStringParam(params, "target", { required: true, trim: true, label: "url" });
-          const { node } = await invoke("canvas.navigate", { url });
+          const node = await invoke("canvas.navigate", { url });
           return jsonResult({ ok: true, node, url });
         }
         default:

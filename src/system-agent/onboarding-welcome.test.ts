@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 
@@ -67,12 +67,45 @@ function createWelcomeEngine(
 }
 
 describe("buildOnboardingWelcome", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     mocks.sourceConfig.agents.defaults.workspace = "/existing/workspace";
     mocks.sourceConfig.wizard = undefined;
     mocks.sourceConfig.gateway = undefined;
     mocks.readLocalOnboardingState.mockReset().mockReturnValue(undefined);
   });
+
+  it.each([
+    ["zh-CN", "你好，我是 OpenClaw", "是的 — 开始设置", "推理已就绪", "和我的智能体聊天"],
+    ["zh-TW", "你好，我是 OpenClaw", "是的 — 開始設定", "推理已就緒", "與我的智慧代理聊天"],
+  ] as const)(
+    "localizes setup and ready welcomes in %s without translating command replies",
+    async (locale, intro, setupLabel, readyTitle, readyLabel) => {
+      vi.stubEnv("OPENCLAW_LOCALE", "en");
+      const engine = createWelcomeEngine("example/verified-model", undefined, {
+        reachable: true,
+        url: "ws://127.0.0.1:19431",
+      });
+      const setup = await buildOnboardingWelcome({ engine: engine as never, locale });
+      expect(setup.text).toContain(intro);
+      expect(setup.text).toContain("example/verified-model");
+      expect(setup.text).toContain("/existing/workspace");
+      expect(setup.question.options[0]).toMatchObject({ label: setupLabel, reply: "yes" });
+
+      mocks.sourceConfig.wizard = { securityAcknowledgedAt: "2026-09-30T00:00:00.000Z" };
+      const ready = await buildOnboardingWelcome({ engine: engine as never, locale });
+      expect(ready.text).toContain(readyTitle);
+      expect(ready.text).toContain("ws://127.0.0.1:19431");
+      expect(ready.question.options[0]).toMatchObject({
+        label: readyLabel,
+        reply: "talk to agent",
+      });
+      expect(ready.question.skipAction).toBe("exit");
+    },
+  );
 
   it("preserves an authored workspace in a partial setup", async () => {
     mocks.sourceConfig.agents.defaults.workspace = "/existing/workspace";

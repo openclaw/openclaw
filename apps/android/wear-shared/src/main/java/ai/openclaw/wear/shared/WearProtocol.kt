@@ -2,7 +2,6 @@ package ai.openclaw.wear.shared
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -299,8 +298,6 @@ object WearProtocolCodec {
     val root =
       try {
         json.parseToJsonElement(text).jsonObject
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       } catch (_: IllegalArgumentException) {
         return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       }
@@ -313,8 +310,6 @@ object WearProtocolCodec {
     val message =
       try {
         json.decodeFromJsonElement(WearMessage.serializer(), root)
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       } catch (_: IllegalArgumentException) {
         return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       }

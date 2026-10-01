@@ -416,17 +416,18 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       const sendSingleTextMessage =
         resolved.context.deps?.sendSingleTextMessage ?? sendSingleTextMessageMatrix;
       const reactMessage = resolved.context.deps?.reactMessage ?? reactMatrixMessage;
+      const sendOptions = {
+        cfg: cfg as CoreConfig,
+        accountId: resolved.accountId,
+        client: resolved.context.client,
+        threadId: preparedTarget.threadId,
+        extraContent: pendingPayload.extraContent,
+      };
       let result;
       try {
         result = await retryMatrixApprovalDelivery(
           async () =>
-            await sendSingleTextMessage(preparedTarget.to, pendingPayload.text, {
-              cfg: cfg as CoreConfig,
-              accountId: resolved.accountId,
-              client: resolved.context.client,
-              threadId: preparedTarget.threadId,
-              extraContent: pendingPayload.extraContent,
-            }),
+            await sendSingleTextMessage(preparedTarget.to, pendingPayload.text, sendOptions),
           { shouldRetry: (error) => !isSingleMatrixMessageLimitError(error) },
         );
       } catch (error) {
@@ -435,14 +436,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         }
         const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
         result = await retryMatrixApprovalDelivery(
-          async () =>
-            await sendMessage(preparedTarget.to, pendingPayload.text, {
-              cfg: cfg as CoreConfig,
-              accountId: resolved.accountId,
-              client: resolved.context.client,
-              threadId: preparedTarget.threadId,
-              extraContent: pendingPayload.extraContent,
-            }),
+          async () => await sendMessage(preparedTarget.to, pendingPayload.text, sendOptions),
         );
       }
       const receiptMessageIds = listMessageReceiptPlatformIds(result.receipt);

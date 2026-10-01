@@ -60,9 +60,8 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
 
   constructor() {
     super();
-    void new SubscriptionsController(this).watch(
+    void new SubscriptionsController(this).watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       () => {
         if (this.binding && !this.isCurrent(this.binding)) {
           this.clearView();

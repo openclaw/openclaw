@@ -41,17 +41,9 @@ type ReleaseConfiguredPluginIds = {
   channelIds: string[];
 };
 
-function isPluginsGloballyDisabled(cfg: OpenClawConfig): boolean {
-  return cfg.plugins?.enabled === false;
-}
-
 function isDenied(cfg: OpenClawConfig, pluginId: string): boolean {
   const deny = cfg.plugins?.deny;
   return Array.isArray(deny) && deny.includes(pluginId);
-}
-
-function collectBlockedPluginIds(cfg: OpenClawConfig): string[] {
-  return [...collectBlockedPluginIdSet(cfg)].toSorted((left, right) => left.localeCompare(right));
 }
 
 function isPluginEntryDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -134,48 +126,39 @@ function collectAgentHarnessRuntimePluginIds(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function collectWebSearchPluginIds(cfg: OpenClawConfig): string[] {
+function collectWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
   if (cfg.tools?.web?.search?.enabled === false) {
     return [];
   }
   const providerId = cfg.tools?.web?.search?.provider;
-  if (typeof providerId !== "string") {
-    return [];
-  }
-  const entry = resolveWebSearchInstallCatalogEntry({ providerId });
-  return entry?.pluginId ? [entry.pluginId] : [];
+  const entry =
+    typeof providerId === "string"
+      ? resolveWebSearchInstallCatalogEntry({ providerId })
+      : undefined;
+  return [
+    ...(entry?.pluginId ? [entry.pluginId] : []),
+    ...resolveWebSearchInstallCatalogEntriesForEnv(env).map((candidate) => candidate.pluginId),
+  ];
 }
 
-function collectEnvWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  if (cfg.tools?.web?.search?.enabled === false) {
-    return [];
-  }
-  return resolveWebSearchInstallCatalogEntriesForEnv(env).map((entry) => entry.pluginId);
-}
-
-function collectWebFetchPluginIds(cfg: OpenClawConfig): string[] {
+function collectWebFetchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
   const webFetch = cfg.tools?.web?.fetch;
   if (webFetch?.enabled === false) {
     return [];
   }
   const providerId = normalizeId(webFetch?.provider)?.toLowerCase();
-  if (!providerId) {
-    return [];
-  }
-  return resolveOfficialExternalProviderContractPluginIds({
-    contract: "webFetchProviders",
-    providerIds: new Set([providerId]),
-  });
-}
-
-function collectEnvWebFetchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  if (cfg.tools?.web?.fetch?.enabled === false) {
-    return [];
-  }
-  return resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-    contract: "webFetchProviders",
-    env,
-  });
+  return [
+    ...(providerId
+      ? resolveOfficialExternalProviderContractPluginIds({
+          contract: "webFetchProviders",
+          providerIds: new Set([providerId]),
+        })
+      : []),
+    ...resolveOfficialExternalWebProviderContractPluginIdsForEnv({
+      contract: "webFetchProviders",
+      env,
+    }),
+  ];
 }
 
 function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
@@ -254,7 +237,7 @@ function collectReleaseConfiguredPluginIds(params: {
   const env = params.env ?? process.env;
   const pluginIds = new Set<string>();
   const channelIds = new Set<string>();
-  if (isPluginsGloballyDisabled(params.cfg)) {
+  if (params.cfg.plugins?.enabled === false) {
     return { pluginIds: [], channelIds: [] };
   }
 
@@ -269,10 +252,8 @@ function collectReleaseConfiguredPluginIds(params: {
     ...collectSlotPluginIds(params.cfg),
     ...collectConfiguredProviderPluginIds({ cfg: params.cfg, env }),
     ...collectAgentHarnessRuntimePluginIds(params.cfg, env),
-    ...collectWebSearchPluginIds(params.cfg),
-    ...collectEnvWebSearchPluginIds(params.cfg, env),
-    ...collectWebFetchPluginIds(params.cfg),
-    ...collectEnvWebFetchPluginIds(params.cfg, env),
+    ...collectWebSearchPluginIds(params.cfg, env),
+    ...collectWebFetchPluginIds(params.cfg, env),
     ...collectSpeechPluginIds(params.cfg),
     ...collectAcpRuntimePluginIds(params.cfg),
     ...collectAllowOnlyOfficialPluginIds(params.cfg),
@@ -326,16 +307,17 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     cfg: params.cfg,
     pluginIds: configured.pluginIds,
     channelIds: configured.channelIds,
-    blockedPluginIds: collectBlockedPluginIds(params.cfg),
+    blockedPluginIds: [...collectBlockedPluginIdSet(params.cfg)].toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
     env,
   });
   const completed = repaired.warnings.length === 0 && (!shouldRunReleaseStep || !updateInProgress);
   const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
-  const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
-    updateInProgress,
-    details: repaired.deferredRepairDetails ?? [],
-    warnings: repaired.warnings,
-  });
+  const postInstallDoctorResult =
+    updateInProgress && repaired.warnings.length === 0 && repaired.deferredRepairDetails?.length
+      ? createDeferredConfiguredPluginRepairDoctorResult(repaired.deferredRepairDetails)
+      : undefined;
   return {
     changes: repaired.changes,
     warnings,
@@ -344,15 +326,4 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
     ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
   };
-}
-
-function createPostInstallDoctorResultForDeferredRepair(params: {
-  updateInProgress: boolean;
-  details: readonly string[];
-  warnings: readonly string[];
-}): UpdatePostInstallDoctorResult | undefined {
-  if (!params.updateInProgress || params.warnings.length > 0 || params.details.length === 0) {
-    return undefined;
-  }
-  return createDeferredConfiguredPluginRepairDoctorResult(params.details);
 }

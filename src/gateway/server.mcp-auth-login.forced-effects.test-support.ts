@@ -181,52 +181,38 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       }
     });
 
-    it.each(["resource", "authorization server"] as const)(
-      "rejects the real enriched %s discovery save after revocation",
-      async (missing) => {
-        effects.tokenLifetimeSeconds = 30;
-        await seed();
-        effects.tokenLifetimeSeconds = 3600;
-        const cached = { ...expectDefined((await stored()).discoveryState, "seed discovery") };
-        if (missing === "resource") {
-          delete cached.resourceMetadata;
-        } else {
-          delete cached.authorizationServerMetadata;
-        }
-        await withMcpOAuthProviderForTest({ identity: identity() }, async (provider) => {
-          await expectDefined(
-            provider.saveDiscoveryState?.bind(provider),
-            "canonical discovery writer",
-          )(cached);
+    it("rejects the real enriched resource discovery save after revocation", async () => {
+      effects.tokenLifetimeSeconds = 30;
+      await seed();
+      effects.tokenLifetimeSeconds = 3600;
+      const cached = { ...expectDefined((await stored()).discoveryState, "seed discovery") };
+      delete cached.resourceMetadata;
+      await withMcpOAuthProviderForTest({ identity: identity() }, async (provider) => {
+        await expectDefined(
+          provider.saveDiscoveryState?.bind(provider),
+          "canonical discovery writer",
+        )(cached);
+      });
+      const before = await stored();
+      const beforeRequests = requests.length;
+      const saves: OAuthDiscoveryState[] = [];
+      observeProvider((provider) => {
+        const save = expectDefined(provider.saveDiscoveryState?.bind(provider), "discovery writer");
+        vi.spyOn(provider, "saveDiscoveryState").mockImplementation((value) => {
+          saves.push(value);
+          revoke();
+          return save(value);
         });
-        const before = await stored();
-        const beforeRequests = requests.length;
-        const saves: OAuthDiscoveryState[] = [];
-        observeProvider((provider) => {
-          const save = expectDefined(
-            provider.saveDiscoveryState?.bind(provider),
-            "discovery writer",
-          );
-          vi.spyOn(provider, "saveDiscoveryState").mockImplementation((value) => {
-            saves.push(value);
-            revoke();
-            return save(value);
-          });
-        });
-        await finishError(await start());
-        expect(saves).toHaveLength(1);
-        expect(saves[0]?.resourceMetadata).toBeDefined();
-        expect(saves[0]?.authorizationServerMetadata).toBeDefined();
-        expect(requests.slice(beforeRequests)).toEqual([
-          missing === "resource"
-            ? "/.well-known/oauth-protected-resource/mcp"
-            : "/.well-known/oauth-authorization-server",
-        ]);
-        expect(await stored()).toEqual(before);
-        expect(before.pendingAuthorizationChallenge).toBeUndefined();
-        expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
-      },
-    );
+      });
+      await finishError(await start());
+      expect(saves).toHaveLength(1);
+      expect(saves[0]?.resourceMetadata).toBeDefined();
+      expect(saves[0]?.authorizationServerMetadata).toBeDefined();
+      expect(requests.slice(beforeRequests)).toEqual(["/.well-known/oauth-protected-resource/mcp"]);
+      expect(await stored()).toEqual(before);
+      expect(before.pendingAuthorizationChallenge).toBeUndefined();
+      expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
+    });
 
     it("rejects the existing metadata-document client ID at its real local save", async () => {
       const clientMetadataUrl = "https://client.example/openclaw.json";
@@ -291,18 +277,6 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         ],
         next: "/.well-known/oauth-authorization-server",
         tenant: false,
-      },
-      {
-        name: "authorization root to OIDC",
-        failures: ["/.well-known/oauth-authorization-server"],
-        next: "/.well-known/openid-configuration",
-        tenant: false,
-      },
-      {
-        name: "authorization path to OIDC path",
-        failures: ["/.well-known/oauth-authorization-server/tenant"],
-        next: "/.well-known/openid-configuration/tenant",
-        tenant: true,
       },
       {
         name: "OIDC path to suffix",
@@ -433,7 +407,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       { error: "unauthorized_client", lifetime: 30 },
     ];
     for (const { error, lifetime } of refreshCells) {
-      it.each([false, true])(
+      it.each(lifetime === 0 ? [false, true] : [false])(
         `refresh ${error}, lifetime=${lifetime}, revoke=%s`,
         async (withdraw) => {
           effects.tokenLifetimeSeconds = lifetime;

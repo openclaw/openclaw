@@ -152,7 +152,7 @@ describe("protected historical session cancellation", () => {
           },
         );
       }
-      const reclamation = await import("./session-accessor.sqlite-reclamation.js");
+      const reclamation = await import("./session-accessor.sqlite-reclamation-run.js");
       const reclaim = reclamation.runSqliteSessionReclamation;
       const reclaimedHistories: Array<{ sessionId: string; deleted: boolean }> = [];
       const reclaimedEntries: Array<{ sessionKey: string; deleted: boolean }> = [];

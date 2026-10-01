@@ -7,7 +7,7 @@ function registerTransportTtsCommand<T>(
   command: Command,
   defaultTransport: "local" | "gateway",
   run: (opts: Record<string, unknown>, transport: "local" | "gateway") => Promise<T>,
-  formatText: (value: T) => string = (value) => JSON.stringify(value, null, 2),
+  formatText?: (value: T) => string,
 ): void {
   command
     .option("--local", "Force local execution", false)
@@ -42,7 +42,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       .option("--output <path>", "Output path"),
     "local",
     async (opts, transport) => {
-      const { resolveModelRefOverride } = await import("./shared.js");
+      const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
       const { runTtsConvert } = await import("./tts-runtime.js");
       const modelRef = resolveModelRefOverride(opts.model as string | undefined);
       if (opts.model && !modelRef.provider) {

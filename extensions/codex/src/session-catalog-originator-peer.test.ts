@@ -12,7 +12,10 @@ import { createCodexTestBindingStore } from "./app-server/session-binding.test-h
 import { clearSharedCodexAppServerClientAndWait } from "./app-server/shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { createCodexSessionCatalogControl } from "./session-catalog-control.js";
-import { listCodexSessionCatalog } from "./session-catalog-list-operation.js";
+import {
+  createCodexSessionCatalogListOperation,
+  runCatalogListInline,
+} from "./session-catalog-list-operation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -128,21 +131,23 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
       localHomes: [source],
       query: { hostIds: [source.hostId], limitPerHost: 1 },
       sessionEntries: { entriesForAgent: () => [], entriesForCatalog: () => [] },
-    } satisfies Parameters<typeof listCodexSessionCatalog>[0];
-    const result = await listCodexSessionCatalog(listParams);
+    } satisfies Parameters<typeof createCodexSessionCatalogListOperation>[0];
+    const result = await runCatalogListInline(createCodexSessionCatalogListOperation(listParams));
     const openedRollouts = opening.mock.calls.filter(
       ([file]) => typeof file === "string" && rolloutPaths.has(file),
     );
-    expect(result.hosts).toHaveLength(1);
-    expect(result.hosts[0]).toMatchObject({ connected: true, sessions: [] });
-    expect(result.hosts[0]).not.toHaveProperty("nextCursor");
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ connected: true, sessions: [] });
+    expect(result[0]).not.toHaveProperty("nextCursor");
     expect(cursors).toEqual(
       Array.from({ length: 20 }, (_, index) => (index === 0 ? undefined : String(index))),
     );
     expect(openedRollouts).toHaveLength(0);
     const nativeRequests = [...methods];
     opening.mockClear();
-    expect(await listCodexSessionCatalog(listParams)).toEqual(result);
+    expect(await runCatalogListInline(createCodexSessionCatalogListOperation(listParams))).toEqual(
+      result,
+    );
     expect(methods).toEqual(nativeRequests);
     expect(
       opening.mock.calls.filter(([file]) => typeof file === "string" && rolloutPaths.has(file)),

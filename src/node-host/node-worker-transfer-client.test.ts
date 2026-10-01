@@ -53,6 +53,50 @@ function observeDrainListeners(emitter: EventEmitter): DrainProbe {
 }
 
 describe("node worker transfer client", () => {
+  it.skipIf(process.platform === "win32")(
+    "reports unsafe ancestry without mutating the workspace",
+    async () => {
+      const root = tempDirs.make("node-worker-transfer-permissions-");
+      const workspaceDir = path.join(root, "workspace");
+      await fs.mkdir(workspaceDir, { mode: 0o700 });
+      await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "keep me");
+      const rawManifest = serializeWorkerWorkspaceManifest({
+        version: 1,
+        baseCommit: null,
+        entries: [],
+      });
+      const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+      const server = createHttpServer((_req, res) => res.writeHead(200).end(rawManifest));
+      const gatewayUrl = await listen(server);
+      await fs.chmod(root, 0o770);
+      const canonicalRoot = await fs.realpath(root);
+      try {
+        await expect(
+          runNodeWorkerWorkspaceTransfer({
+            gatewayUrl,
+            environmentId: "environment-permissions",
+            workspaceDir,
+            manifestHome: root,
+            transfer: { direction: "download", token: "test-token", manifestRef },
+          }),
+        ).rejects.toMatchObject({
+          operation: "download",
+          stage: "materialize",
+          cause: {
+            message: expect.stringContaining(
+              `State directory ${canonicalRoot} is group-writable without sticky protection; run chmod go-w`,
+            ),
+          },
+        });
+        expect(await fs.readFile(path.join(workspaceDir, "sentinel.txt"), "utf8")).toBe("keep me");
+        expect((await fs.stat(root)).mode & 0o777).toBe(0o770);
+      } finally {
+        await fs.chmod(root, 0o700);
+        await closeServer(server);
+      }
+    },
+  );
+
   it.runIf(process.platform === "win32")(
     "preserves foreign executable modes through Windows workspace downloads and uploads",
     async () => {

@@ -6,6 +6,7 @@ import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-code
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  resolveCanonicalNodeTestConfig,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import {
@@ -15,6 +16,25 @@ import {
 } from "./ci-changed-node-test-plan.test-support.js";
 
 describe("CI changed Node test plan", () => {
+  it.each([
+    "src/tui/tui-pty-local-test-support.test.ts",
+    "src/tui/tui-pty-test-support.test.ts",
+    "src/tui/tui-pty-harness-assertion-test-support.test.ts",
+  ])("keeps the TUI support unit owner without a fallback for %s", (target) => {
+    const reasons: string[] = [];
+    const shards = createChangedNodeTestShards([target], {
+      dedicatedBuildArtifacts: false,
+      onFallback: (reason) => reasons.push(reason),
+    });
+    expect(reasons).toEqual([]);
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards).filter((file) => file === target)).toEqual([target]);
+    const config = "test/vitest/vitest.tui.config.ts";
+    expect(buildVitestRunPlans([target])[0]?.config).toBe(config);
+    expect(resolveCanonicalNodeTestConfig(target, config)).toBe(config);
+    expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
+  });
+
   it.each(["blacksmith", "github", "hybrid"])(
     "retains the complete paired tooling descriptor and job metadata (%s)",
     (runnerBackend) => {
@@ -179,7 +199,6 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(shards)).toEqual(
       expect.arrayContaining([
         "test/vitest-projects-config.test.ts",
-        "test/vitest-scoped-config.test.ts",
         "test/scripts/ci-node-test-plan.commands.test.ts",
       ]),
     );

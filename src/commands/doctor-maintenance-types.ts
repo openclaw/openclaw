@@ -1,3 +1,4 @@
+import type { ManagedGatewayUpdateVerdict } from "../cli/update-cli/update-command-service-context-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   UpdateDatabaseGenerations,
@@ -16,12 +17,15 @@ export type DoctorMaintenanceParams = {
   runId?: string;
   assertCurrent?: () => void;
   databaseGenerations?: UpdateDatabaseGenerations;
+  beforeStateMutation?: (context: { env: NodeJS.ProcessEnv; signal: AbortSignal }) => Promise<void>;
 };
 
 export type DoctorMaintenance = {
   run<T>(operation: () => T): T;
   signal: AbortSignal;
   releaseState(): Promise<void>;
+  repairSqliteNoCow(paths: readonly string[]): Promise<void>;
+  cleanupRetainedRuntimes(): Promise<void>;
   release(): Promise<void>;
   finish(
     cfg: OpenClawConfig | undefined,
@@ -31,4 +35,5 @@ export type DoctorMaintenance = {
   warnings?: string[];
   failureFacts?: UpdateFailureFact[];
   readonly databaseWrites?: UpdateDatabaseWriteReceipt;
+  readonly serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
 };

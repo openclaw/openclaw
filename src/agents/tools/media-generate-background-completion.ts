@@ -139,7 +139,6 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   result: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
-  statsLine?: string;
   eventSource: AgentInternalEvent["source"];
   announceType: string;
   toolName: string;
@@ -223,16 +222,13 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       result: params.result,
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
       ...(mediaUrls.length ? { mediaUrls } : {}),
-      ...(params.statsLine?.trim() ? { statsLine: params.statsLine } : {}),
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,
         completionLabel: params.completionLabel,
       }),
     },
   ];
-  const triggerMessage =
-    formatAgentInternalEventsForPrompt(internalEvents) ||
-    `A ${params.completionLabel} generation task finished. Process the completion update now.`;
+  const triggerMessage = formatAgentInternalEventsForPrompt(internalEvents);
   const delivery = await deliverSubagentAnnouncement({
     isSourceSessionAdmissionAllowed: isSourceCurrent,
     isSourceSessionEffectsAllowed: isSourceCurrent,
@@ -241,7 +237,6 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     targetRequesterSessionKey: target.sessionKey,
     preparedRequester: { binding: requesterBinding, entry: requesterEntry },
     triggerMessage,
-    steerMessage: triggerMessage,
     internalEvents,
     requesterSessionOrigin: handle.requesterOrigin,
     completionDirectOrigin: handle.requesterOrigin,

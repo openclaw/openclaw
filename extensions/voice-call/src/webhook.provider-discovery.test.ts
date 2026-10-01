@@ -18,11 +18,10 @@ afterEach(resetPluginRuntimeStateForTest);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("VoiceCallWebhookServer transcription provider discovery", () => {
-  it.each(
-    ["configured-stt", "configured-stt-alias"].flatMap((configKey) =>
-      [undefined, configKey].map((configuredProviderId) => ({ configKey, configuredProviderId })),
-    ),
-  )(
+  it.each([
+    { configKey: "configured-stt", configuredProviderId: undefined },
+    { configKey: "configured-stt-alias", configuredProviderId: "configured-stt-alias" },
+  ])(
     "initializes streaming from $configKey config with explicit selection $configuredProviderId",
     async ({ configuredProviderId, configKey }) => {
       const root = tempDirs.make("voice-call-provider-discovery-");

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createLazyRuntimeMethodBinder } from "openclaw/plugin-sdk/lazy-runtime";
 import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 type DriverClickButton = import("@trycua/cua-driver").ClickButton;
@@ -403,48 +404,18 @@ class LazyCuaDriverSession implements CuaDriverSession {
     }
   }
 
-  async getDesktopState(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getDesktopState(signal);
-  }
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).callTool(name, args, signal);
-  }
-  async getCursorPosition(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getCursorPosition(signal);
-  }
-  async getSessionState(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getSessionState(signal);
-  }
-  async getScreenSize(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getScreenSize(signal);
-  }
-  async click(
-    input: { x: number; y: number; button: ClickButton; count: number },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).click(input, signal);
-  }
-  async drag(
-    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).drag(input, signal);
-  }
-  async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).moveCursor(input, signal);
-  }
-  async scroll(
-    input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).scroll(input, signal);
-  }
-  async typeText(text: string, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).typeText(text, signal);
-  }
-  async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).pressKey(input, signal);
-  }
+  private readonly bindRuntime = createLazyRuntimeMethodBinder(() => this.requireRuntime());
+  getDesktopState = this.bindRuntime((runtime) => runtime.getDesktopState.bind(runtime));
+  callTool = this.bindRuntime((runtime) => runtime.callTool.bind(runtime));
+  getCursorPosition = this.bindRuntime((runtime) => runtime.getCursorPosition.bind(runtime));
+  getSessionState = this.bindRuntime((runtime) => runtime.getSessionState.bind(runtime));
+  getScreenSize = this.bindRuntime((runtime) => runtime.getScreenSize.bind(runtime));
+  click = this.bindRuntime((runtime) => runtime.click.bind(runtime));
+  drag = this.bindRuntime((runtime) => runtime.drag.bind(runtime));
+  moveCursor = this.bindRuntime((runtime) => runtime.moveCursor.bind(runtime));
+  scroll = this.bindRuntime((runtime) => runtime.scroll.bind(runtime));
+  typeText = this.bindRuntime((runtime) => runtime.typeText.bind(runtime));
+  pressKey = this.bindRuntime((runtime) => runtime.pressKey.bind(runtime));
 
   async dispose(): Promise<void> {
     if (this.disposed) {

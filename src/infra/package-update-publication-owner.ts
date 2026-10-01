@@ -29,6 +29,8 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
+  packageIntegrityDifferences,
+  PackageIntegrityMismatchError,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
 import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
@@ -160,7 +162,10 @@ export function createPublicationOwner(
     }
     const observed = await createPackageIntegrityReader().tree(file, logical);
     if (!isDeepStrictEqual(observed, expected)) {
-      throw new Error(`Package publication object changed: ${file}`);
+      throw new PackageIntegrityMismatchError(
+        `Package publication object changed: ${file}`,
+        packageIntegrityDifferences(expected, observed),
+      );
     }
     return true;
   };
@@ -238,34 +243,37 @@ export function createPublicationOwner(
     }
     assertCurrent();
   };
+  const assertActionAllowed = (action: "repair" | "retire") => {
+    const allowed =
+      action === "repair"
+        ? ["preparing", "prepared", "publishing", "publication-complete"]
+        : ["publication-complete", "rolled-back", "aborted", "retiring", "anchor-retired"];
+    if (!allowed.includes(record.phase)) {
+      const refusal =
+        action === "repair"
+          ? "Forward publication is disarmed"
+          : "Package evidence cannot be retired";
+      throw new Error(`${refusal} (${record.phase}).`);
+    }
+  };
+  const selectedRetirementGeneration = () =>
+    record.intent?.kind === "remove" ||
+    record.intent?.kind === "retire" ||
+    record.intent?.kind === "remove-anchor" ||
+    record.intent?.kind === "unlink-helper"
+      ? record.intent.selected
+      : record.phase === "publication-complete"
+        ? "candidate"
+        : "previous";
   const preflight = async (action: "repair" | "retire") => {
-    if (
-      action === "repair" &&
-      !["preparing", "prepared", "publishing", "publication-complete"].includes(record.phase)
-    ) {
-      throw new Error(`Forward publication is disarmed (${record.phase}).`);
-    }
-    if (
-      action === "retire" &&
-      !["publication-complete", "rolled-back", "aborted", "retiring", "anchor-retired"].includes(
-        record.phase,
-      )
-    ) {
-      throw new Error(`Package evidence cannot be retired (${record.phase}).`);
-    }
+    assertActionAllowed(action);
     await verifyClosure();
     if (record.phase === "preparing") {
       inspectPackageActivationCustody(anchor, record);
     } else if (action === "repair" || record.phase === "publication-complete") {
       await inspect();
     } else {
-      const selected =
-        record.intent?.kind === "remove" ||
-        record.intent?.kind === "retire" ||
-        record.intent?.kind === "remove-anchor" ||
-        record.intent?.kind === "unlink-helper"
-          ? record.intent.selected
-          : "previous";
+      const selected = selectedRetirementGeneration();
       if (
         !(await matches(
           live,
@@ -309,9 +317,7 @@ export function createPublicationOwner(
   };
   const publish = async (resume: boolean, onDisplaced?: () => void | Promise<void>) => {
     await verifyClosure();
-    if (!["preparing", "prepared", "publishing", "publication-complete"].includes(record.phase)) {
-      throw new Error(`Forward publication is disarmed (${record.phase}).`);
-    }
+    assertActionAllowed("repair");
     if (record.phase === "preparing") {
       await completePackageActivationCustody(anchor, journal, assertion);
       record = journal.read();
@@ -435,22 +441,8 @@ export function createPublicationOwner(
   };
   const retire = async () => {
     await verifyClosure();
-    if (
-      !["publication-complete", "rolled-back", "aborted", "retiring", "anchor-retired"].includes(
-        record.phase,
-      )
-    ) {
-      throw new Error(`Package evidence cannot be retired (${record.phase}).`);
-    }
-    const selected =
-      record.intent?.kind === "remove" ||
-      record.intent?.kind === "retire" ||
-      record.intent?.kind === "remove-anchor" ||
-      record.intent?.kind === "unlink-helper"
-        ? record.intent.selected
-        : record.phase === "publication-complete"
-          ? "candidate"
-          : "previous";
+    assertActionAllowed("retire");
+    const selected = selectedRetirementGeneration();
     await matches(
       live,
       descriptor[selected],

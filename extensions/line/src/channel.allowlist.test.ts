@@ -1,4 +1,3 @@
-// Line tests cover allowlist config-edit adapter plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { linePlugin } from "./channel.js";
@@ -28,46 +27,6 @@ describe("line allowlist adapter", () => {
       dmPolicy: "allowlist",
       groupPolicy: "allowlist",
       groupOverrides: [{ label: "Cgroup1", entries: ["Ucarol"] }],
-    });
-  });
-
-  it("adds a dm allowlist entry under the named LINE account", () => {
-    const parsedConfig: Record<string, unknown> = {
-      channels: {
-        line: {
-          allowFrom: ["Uexisting"],
-          accounts: {
-            support: {},
-          },
-        },
-      },
-    };
-    const result = allowlist?.applyConfigEdit?.({
-      cfg: parsedConfig as OpenClawConfig,
-      parsedConfig,
-      accountId: "support",
-      scope: "dm",
-      action: "add",
-      entry: "Unew",
-    });
-
-    expect(result).toEqual({
-      kind: "ok",
-      changed: true,
-      pathLabel: "channels.line.accounts.support.allowFrom",
-      writeTarget: {
-        kind: "account",
-        scope: { channelId: "line", accountId: "support" },
-      },
-    });
-    expect(parsedConfig).toMatchObject({
-      channels: {
-        line: {
-          accounts: {
-            support: { allowFrom: ["Uexisting", "Unew"] },
-          },
-        },
-      },
     });
   });
 

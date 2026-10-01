@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/** ACP stdio server that bridges Agent Client Protocol clients to the OpenClaw Gateway. */
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
@@ -95,7 +94,6 @@ function createStartupInputMonitor(input: ReadableStream<Uint8Array>): {
   };
 }
 
-/** Starts the ACP Gateway bridge and serves AgentSideConnection over stdio. */
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   routeLogsToStderr();
   const cfg = getRuntimeConfig();
@@ -190,9 +188,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       agent?.handleGatewayDisconnect(`${code}: ${reason}`);
     },
   });
-  // Construct the sole stdin reader before waiting for Gateway hello. The raw
-  // monitor branch actively detects EOF while the bounded replay branch retains
-  // every byte until the SDK is ready to consume it.
+  // Monitor EOF before Gateway hello while retaining bounded input for the SDK.
   const rawInput = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const startupInput = createStartupInputMonitor(rawInput);
 
@@ -269,11 +265,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const output = Writable.toWeb(process.stdout);
   const stream = ndJsonStream(output, bufferedInput);
   const sessionNewOrdering = new AcpSessionNewOrdering();
-  // The ordering boundary mirrors session identity so it can tell an established
-  // session from a pending one. Idle reaping and capacity eviction remove sessions
-  // without any ACP request the boundary could observe, so the store reports every
-  // removal back to it; the boundary stays in step with the store's own lifecycle
-  // rather than only with the close requests a client chooses to send.
+  // Store-owned reaping and eviction must retire ordering state, just like session/close.
   sessionStore = createInMemorySessionStore({
     onSessionRemoved: (sessionId) => sessionNewOrdering.forget(sessionId),
   });
@@ -290,10 +282,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       sessionNewOrdering.transformOutbound(message, controller);
     },
   });
-  // pipeTo rejects when the NDJSON writer or stdout fails. Discarding that promise
-  // would strand the bridge: the ACP client is already unreachable, but the Gateway
-  // connection and shared state database would stay open. Route it through the same
-  // idempotent shutdown owner as EOF and SIGTERM.
+  // Writer failure must close the Gateway and database, just like EOF and SIGTERM.
   void orderedOutbound.readable
     .pipeTo(stream.writable)
     .catch(async (err: unknown) => {
@@ -317,8 +306,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     },
     { writable: orderedOutbound.writable, readable },
   );
-  // The SDK closes the connection when stdin reaches EOF. Reuse the normal
-  // shutdown path so the Gateway and shared database cannot keep the bridge alive.
+  // SDK EOF must also close the Gateway and database.
   void connection.closed.then(shutdown, shutdown).catch(onCloseFailed);
 
   return closed;
@@ -356,15 +344,31 @@ function parseArgs(args: string[]): AcpServerOptions {
   const opts: AcpServerOptions = {};
   let tokenFile: string | undefined;
   let passwordFile: string | undefined;
+  const stringOptions = new Map<
+    string,
+    keyof Pick<
+      AcpServerOptions,
+      | "gatewayUrl"
+      | "gatewayToken"
+      | "gatewayPassword"
+      | "defaultSessionKey"
+      | "defaultSessionLabel"
+    >
+  >([
+    ["--url", "gatewayUrl"],
+    ["--gateway-url", "gatewayUrl"],
+    ["--token", "gatewayToken"],
+    ["--gateway-token", "gatewayToken"],
+    ["--password", "gatewayPassword"],
+    ["--gateway-password", "gatewayPassword"],
+    ["--session", "defaultSessionKey"],
+    ["--session-label", "defaultSessionLabel"],
+  ]);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === "--url" || arg === "--gateway-url") {
-      opts.gatewayUrl = args[i + 1];
-      i += 1;
-      continue;
-    }
-    if (arg === "--token" || arg === "--gateway-token") {
-      opts.gatewayToken = args[i + 1];
+    const field = arg === undefined ? undefined : stringOptions.get(arg);
+    if (field) {
+      opts[field] = args[i + 1];
       i += 1;
       continue;
     }
@@ -373,23 +377,8 @@ function parseArgs(args: string[]): AcpServerOptions {
       i += 1;
       continue;
     }
-    if (arg === "--password" || arg === "--gateway-password") {
-      opts.gatewayPassword = args[i + 1];
-      i += 1;
-      continue;
-    }
     if (arg === "--password-file" || arg === "--gateway-password-file") {
       passwordFile = args[i + 1];
-      i += 1;
-      continue;
-    }
-    if (arg === "--session") {
-      opts.defaultSessionKey = args[i + 1];
-      i += 1;
-      continue;
-    }
-    if (arg === "--session-label") {
-      opts.defaultSessionLabel = args[i + 1];
       i += 1;
       continue;
     }

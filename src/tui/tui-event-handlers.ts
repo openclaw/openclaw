@@ -731,10 +731,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       scope: readTuiSessionProjectionScope(state),
     });
     const { runIds, displayedRunIds } = runCoordinator.collectTrackedSessionRunIds();
-    if (runIds.size === 0) {
-      void runCoordinator.queueHistoryReload();
-      return;
-    }
     // A dropped final cannot distinguish a finished run from a still-streaming
     // one; authoritative history must either finalize it or restore it.
     runCoordinator.queueGapHistoryReload(runIds, displayedRunIds);

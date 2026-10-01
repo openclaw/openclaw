@@ -171,7 +171,7 @@ async function main() {
     hasA2uiPackage = false;
   }
   if (!hasA2uiPackage || !hasAppDir) {
-    if (hasOutputFile) {
+    if (hasOutputFile && hasV09OutputFile) {
       console.log("A2UI package missing; keeping prebuilt bundle.");
       return;
     }
@@ -181,7 +181,9 @@ async function main() {
       );
       return;
     }
-    fail(`A2UI package missing and no prebuilt bundle found at: ${outputFile}`);
+    fail(
+      `A2UI package missing and no complete prebuilt bundle found at: ${outputFile}, ${outputV09File}`,
+    );
   }
 
   const currentHash = await computeHash();

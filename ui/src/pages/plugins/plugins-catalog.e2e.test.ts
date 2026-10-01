@@ -58,6 +58,8 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
       });
       try {
         await page.goto(`${server.baseUrl}chat`);
+        // Navigation can finish before the shell installs its palette shortcut.
+        await page.locator(".agent-chat__composer-combobox textarea:visible").waitFor();
         await page.keyboard.press("ControlOrMeta+K");
         await page.locator(".cmd-palette__input").fill("Matrix");
         const result = page

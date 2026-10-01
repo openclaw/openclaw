@@ -266,7 +266,9 @@ describe("SQLite transcript archive worker", () => {
     const result = await deletion(target.sessionKey);
     expect(result.deleted).toBe(true);
     const archivePath = result.archivedTranscripts[0]?.archivedPath ?? "";
-    expect(path.dirname(archivePath)).toBe(path.join(tempDir, "backup", "sessions"));
+    expect(fs.realpathSync.native(path.dirname(archivePath))).toBe(
+      fs.realpathSync.native(path.join(tempDir, "backup", "sessions")),
+    );
     expect(archiveLines(archivePath)).toEqual([JSON.stringify(transcript)]);
     const bytes = fs.statSync(archivePath).size;
     for (const selector of [storePath, resolveSqliteTargetFromSessionStorePath(storePath).path]) {

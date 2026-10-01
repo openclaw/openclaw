@@ -27,10 +27,8 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
-import {
-  createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import { createLifecycleArtifactReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import {
   deferPhysicalBudgetForCheckpoint,

@@ -287,7 +287,7 @@ it.for(cases)(
         runId: "abandoned-run",
         owner: { kind: "worker", environmentId, ownerEpoch: 1 },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       placements.markWorkspaceResultPending(claim);
       expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
       if (persisted) {

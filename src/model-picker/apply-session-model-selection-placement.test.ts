@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import {
   loadSessionEntryReadOnly,
@@ -12,6 +11,7 @@ import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
 
 const runtimeChoiceMocks = vi.hoisted(() => ({
@@ -39,7 +39,7 @@ const { effects, placementMocks, factories, resetMocks } = await vi.hoisted(asyn
   return createModelSelectionMocks();
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-model-picker-runtime-race-");
 let lifecycleEvents: SessionLifecycleEvent[];
 let unsubscribeLifecycle: () => void;
 
@@ -153,7 +153,7 @@ describe("applySessionModelSelection — placement guard", () => {
   });
 
   it("rejects runtime availability revoked while waiting for the session writer", async () => {
-    const tempRoot = tempDirs.make("openclaw-model-picker-runtime-race-");
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionKey = "agent:main:dm:runtime-race";
     const sessionEntry = createEntry({ sessionId: "runtime-race-1" });
@@ -211,7 +211,7 @@ describe("applySessionModelSelection — placement guard", () => {
   });
 
   it("rejects a model selection when placement activates between the pre-write read and the durable commit", async () => {
-    const tempRoot = tempDirs.make("openclaw-model-picker-placement-race-");
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionKey = "agent:main:dm:placement-race";
     const sessionEntry = createEntry({ sessionId: "placement-race-1" });

@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
@@ -19,6 +18,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawValue } from "./digest.js";
 import type { ClawReferencedCleanup } from "./package-remove.js";
 import type { ClawAddPlan, ClawMcpServer } from "./types.js";
 
@@ -111,8 +111,7 @@ function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
 }
 
 export function digestClawMcpServer(server: Record<string, unknown>): string {
-  const canonical = canonicalizeConfiguredMcpServer(server);
-  return `sha256:${createHash("sha256").update(stableStringify(canonical)).digest("hex")}`;
+  return digestClawValue(canonicalizeConfiguredMcpServer(server));
 }
 
 function persistPendingRef(
@@ -121,7 +120,7 @@ function persistPendingRef(
   server: ClawMcpServer,
   ownership: Pick<PersistedClawMcpServerRef, "relationship" | "origin" | "independentOwner">,
   options: OpenClawStateDatabaseOptions & { nowMs?: number },
-): { ref: PersistedClawMcpServerRef; existing: boolean } {
+): PersistedClawMcpServerRef {
   const nowMs = options.nowMs ?? Date.now();
   const configDigest = digestClawMcpServer(server);
   const database = openOpenClawStateDatabase(options);
@@ -153,7 +152,7 @@ function persistPendingRef(
         [ref],
       );
     }
-    return { ref, existing: true };
+    return ref;
   }
   const ref: PersistedClawMcpServerRef = {
     schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
@@ -171,7 +170,7 @@ function persistPendingRef(
       getNodeSqliteKysely<McpDatabase>(db).insertInto("claw_mcp_server_refs").values(refToRow(ref)),
     );
   }, options);
-  return { ref, existing: false };
+  return ref;
 }
 
 function updateRef(
@@ -252,8 +251,7 @@ export async function installClawMcpServers(
             origin: "claw-introduced" as const,
             independentOwner: false,
           };
-      const pendingResult = persistPendingRef(plan, action.id, server, ownership, options);
-      let pending = pendingResult.ref;
+      let pending = persistPendingRef(plan, action.id, server, ownership, options);
       refs.push(pending);
       if (pending.status === "complete") {
         if (configured) {
@@ -276,17 +274,6 @@ export async function installClawMcpServers(
         }
         pending = updateRef(pending, { status: "pending" }, options);
         refs[refs.length - 1] = pending;
-      }
-      if (pendingResult.existing && configured) {
-        if (digestClawMcpServer(configured) !== pending.configDigest) {
-          throw new ClawMcpInstallError(
-            "mcp_reconcile_conflict",
-            `MCP server ${JSON.stringify(action.id)} changed after an ambiguous write.`,
-            refs,
-          );
-        }
-        refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);
-        return;
       }
       if (configured) {
         refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);

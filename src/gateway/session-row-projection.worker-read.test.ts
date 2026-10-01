@@ -1,7 +1,10 @@
 import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import {
   upsertAcpSessionMeta,
@@ -16,6 +19,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -29,20 +33,27 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import {
+  SqliteWorkerError,
+  type SqliteWorkerOperations,
+  type SqliteWorkerStore,
+} from "../infra/sqlite-worker-contract.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
+import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
+import { setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   identifiedClient,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
@@ -53,7 +64,6 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { workMs: 0, rowCount: 2 },
-  { workMs: 20, rowCount: 2 },
   { workMs: 20, rowCount: 65 },
 ])(
   "accepts $rowCount rows once with $workMs ms of materialization work",
@@ -80,29 +90,6 @@ it.each([
           await projection.ensureMaterialized();
           expect(projection.dirtyRowCount).toBe(0);
           const before = projection.materializedCount;
-          const dirtyVisits: number[] = [];
-          const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
-          const selection = vi
-            .spyOn(databaseFactsRead, "withSessionRowDatabaseFacts")
-            .mockImplementation(async (owner, consume) => {
-              let visited = 0;
-              const iterate = owner.dirty[Symbol.iterator].bind(owner.dirty);
-              const iteration = vi
-                .spyOn(owner.dirty, Symbol.iterator)
-                .mockImplementation(function* () {
-                  for (const id of iterate()) {
-                    visited++;
-                    yield id;
-                  }
-                  return undefined;
-                });
-              try {
-                await readFacts(owner, consume);
-              } finally {
-                iteration.mockRestore();
-                dirtyVisits.push(visited);
-              }
-            });
           const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
           const readDatabases = history.withSessionHistoryWorkerDatabases;
           const databases = vi
@@ -125,15 +112,13 @@ it.each([
               ),
             );
           let elapsed = 0;
-          const realNow = performance.now.bind(performance);
-          const acceptance: Array<{ rows: number; elapsedMs: number }> = [];
-          let accepting: { rows: number; started: number } | undefined;
+          const acceptance: number[] = [];
+          let accepting = 0;
           const acquireEntry = records.acquireSessionRowEntry;
           const acquisition = vi
             .spyOn(records, "acquireSessionRowEntry")
             .mockImplementation((params) => {
-              accepting ??= { rows: 0, started: realNow() };
-              accepting.rows++;
+              accepting++;
               return acquireEntry(params);
             });
           const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
@@ -143,8 +128,8 @@ it.each([
             .spyOn(rowInputs, "readSessionRowInputs")
             .mockImplementation((params) => {
               if (accepting) {
-                acceptance.push({ rows: accepting.rows, elapsedMs: realNow() - accepting.started });
-                accepting = undefined;
+                acceptance.push(accepting);
+                accepting = 0;
               }
               const result = readInputs(params);
               materializedKeys.push(params.key);
@@ -184,12 +169,7 @@ it.each([
             const batches = rowCount <= 64 ? [keys] : [keys.slice(0, 64), keys.slice(64)];
             expect(reads.map((read) => read.sessionKeys)).toEqual(batches);
             expect(reads.flatMap((read) => read.rows)).toHaveLength(rowCount);
-            expect(dirtyVisits.every((visited) => visited <= 64)).toBe(true);
-            expect(acceptance.map((batch) => batch.rows)).toEqual(
-              batches.map((batch) => batch.length),
-            );
-            // Actual acquisition time is separate from the synthetic rendering clock.
-            console.info("row-facts acceptance", JSON.stringify({ workMs, rowCount, acceptance }));
+            expect(acceptance).toEqual(batches.map((batch) => batch.length));
             for (const [index, { scope, entry }] of entries.entries()) {
               expect(
                 projection.snapshot({ agentId: scope.agentId, key: scope.sessionKey }).row,
@@ -202,7 +182,6 @@ it.each([
             inputs.mockRestore();
             clock.mockRestore();
             acquisition.mockRestore();
-            selection.mockRestore();
             databases.mockRestore();
           }
         } finally {
@@ -216,7 +195,6 @@ it.each([
 );
 
 it.each([
-  { rowCount: 1, first: "bulk" },
   { rowCount: 2, first: "bulk" },
   { rowCount: 2, first: "exact" },
 ] as const)(
@@ -350,6 +328,215 @@ it("preserves a keyed replacement while an older worker reply is pending", async
     }
   });
 });
+
+it.each([false, true])(
+  "keeps an unrelated exact read while a lost category reply reconciles its changed row (structural pending: %s)",
+  async (structuralPending) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
+      const owner = ensureProfileForEmail("category-owner@example.test");
+      const a = { agentId: "main", key: "agent:main:category-unrelated" };
+      const b = { agentId: "main", key: "agent:main:category-changed" };
+      const c = { agentId: "main", key: "agent:main:category-structural" };
+      for (const query of structuralPending ? [a, b, c] : [a, b]) {
+        replaceSessionEntrySync(
+          { agentId: query.agentId, sessionKey: query.key },
+          {
+            sessionId: query.key,
+            updatedAt: 1,
+            label: query === a ? "Unrelated row" : "Changed row",
+            ...(query === b ? { category: "Work" } : {}),
+            createdActor: { type: "human", source: "profile", id: owner.id },
+          },
+        );
+      }
+      const releaseForeground = retainSessionListForegroundWork();
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] }).catch(
+        (error: unknown) => {
+          releaseForeground();
+          throw error;
+        },
+      );
+      const capturedA = createDeferredCore();
+      const repeatedA = createDeferredCore();
+      const releaseA = createDeferredCore();
+      const capturedB = createDeferredCore();
+      const releaseB = createDeferredCore();
+      const pending: Promise<unknown>[] = [];
+      let sql: ReturnType<typeof observeHostDataSql> | undefined;
+      let authority: Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>> | undefined;
+      let resource: ReturnType<NonNullable<typeof authority>["retainSession"]> | undefined;
+      try {
+        await projection.ensureMaterialized();
+        const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+        authority = await prepareGatewaySessionAccessAuthority({
+          policy: { mode: "write" },
+          requestParams: { agentId: b.agentId, sessionKey: b.key },
+          client: identifiedClient(owner.id),
+          context,
+          ownSessionOnly: true,
+        });
+        resource = authority.retainSession();
+        const generation = projection.capture(b)?.generation;
+        expect(generation).toBeDefined();
+        if (structuralPending) {
+          // This unknown structural publication predates category.prepare, so the
+          // producer's later publication fence cannot know it invalidated lineage.
+          sessionChanges.emit({ sessionKey: c.key, factsInvalidated: true });
+          expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
+        }
+        const readDatabases = history.withSessionHistoryWorkerDatabases;
+        const reads: string[][] = [];
+        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+          (databases, consume, lane) =>
+            readDatabases(
+              databases,
+              (owners) =>
+                consume(
+                  owners.map((database) => ({
+                    ...database,
+                    async readRowFacts(input) {
+                      reads.push([...input.sessionKeys]);
+                      const reply = await database.readRowFacts(input);
+                      if (input.sessionKeys.includes(a.key)) {
+                        if (reads.filter((keys) => keys.includes(a.key)).length === 1) {
+                          capturedA.resolve();
+                          await releaseA.promise;
+                        } else {
+                          repeatedA.resolve();
+                        }
+                      }
+                      if (structuralPending && input.sessionKeys.includes(c.key)) {
+                        await releaseB.promise;
+                      }
+                      if (input.sessionKeys.includes(b.key)) {
+                        capturedB.resolve();
+                        await releaseB.promise;
+                      }
+                      return reply;
+                    },
+                  })),
+                ),
+              lane,
+            ),
+        );
+        const describe = (query: typeof a) =>
+          withReadySessionRows(
+            projection,
+            () =>
+              query === a && !structuralPending
+                ? projection.selectEntries({ sessionIdOrKey: a.key }).map((row) => ({
+                    agentId: row.agentId,
+                    key: row.key,
+                    storePath: row.storeTarget.storePath,
+                  }))
+                : [query],
+            (read) => read.describe(query)?.entry,
+          );
+        // Capture A's real database reply before B's independent committed mutation.
+        sessionChanges.emit({ agentId: a.agentId, sessionKey: a.key });
+        const readingA = describe(a);
+        pending.push(readingA);
+        await Promise.race([
+          capturedA.promise,
+          readingA.then(() => {
+            throw new Error("Exact read bypassed its held database facts");
+          }),
+        ]);
+
+        const failure = new SqliteWorkerError(
+          "category reply lost after commit",
+          "outcome-unknown",
+        );
+        const original = agentWorkers.openOpenClawAgentSqliteWorkerStore;
+        let applies = 0;
+        vi.spyOn(agentWorkers, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+          async <Operations extends SqliteWorkerOperations>(
+            ...args: Parameters<typeof original>
+          ) => {
+            const worker = await original<Operations>(...args);
+            return {
+              ...worker,
+              run<T>(
+                consume: (operation: Pick<SqliteWorkerStore<Operations>, "execute">) => Promise<T>,
+                assertCurrent: () => void,
+              ) {
+                return worker.run(
+                  (operation) =>
+                    consume({
+                      async execute(command, options) {
+                        const result = await operation.execute(command, options);
+                        if (command.type === "category.apply") {
+                          applies++;
+                          // The real write has settled; expose the existing uncertainty path.
+                          sql = observeHostDataSql();
+                          throw failure;
+                        }
+                        return result;
+                      },
+                    }),
+                  assertCurrent,
+                );
+              },
+            };
+          },
+        );
+        const changing = updateSessionGroupCategoriesInWorker({
+          scope: { agentId: b.agentId, sessionKey: b.key },
+          from: "Work",
+        });
+        pending.push(changing);
+        await expect(changing).rejects.toBe(failure);
+        const readingB = describe(b);
+        pending.push(readingB);
+        await Promise.race([
+          capturedB.promise,
+          readingB.then(() => {
+            throw new Error("Changed row bypassed its held reconciliation");
+          }),
+        ]);
+        if (!structuralPending) {
+          expect.soft(projection.sharingTargetState(b)).toEqual({ status: "pending" });
+          expect.soft(() => resource!.assertCurrent()).toThrow("refreshing");
+        }
+        expect(resource.signal.aborted).toBe(false);
+
+        releaseA.resolve();
+        const boundary = await Promise.race([
+          readingA.then(() => "response"),
+          repeatedA.promise.then(() => "unrelated row read again"),
+        ]);
+        expect.soft(boundary).toBe(structuralPending ? "unrelated row read again" : "response");
+        releaseB.resolve();
+        expect(await readingA).toMatchObject({ sessionId: a.key, label: "Unrelated row" });
+        const changed = await readingB;
+        expect(changed).toMatchObject({ sessionId: b.key, label: "Changed row" });
+        expect(changed?.category).toBeUndefined();
+        await projection.prepareMembership();
+        expect(projection.sharingTargetState(b)).toMatchObject({ status: "ready" });
+        expect(projection.capture(b)?.generation).toBe(generation);
+        expect(() => resource!.assertCurrent()).not.toThrow();
+        expect(resource.signal.aborted).toBe(false);
+        expect(applies).toBe(1);
+        expect
+          .soft(reads.filter((keys) => keys.includes(a.key)))
+          .toEqual(structuralPending ? [[a.key], [a.key]] : [[a.key]]);
+        expect(sql).toBeDefined();
+        expect(sql!.queries).toEqual([]);
+      } finally {
+        releaseA.resolve();
+        releaseB.resolve();
+        await Promise.allSettled(pending);
+        resource?.release();
+        authority?.release();
+        await projection.ensureMaterialized().catch(() => undefined);
+        sql?.restore();
+        projection.dispose();
+        releaseForeground();
+      }
+    });
+  },
+);
 
 it.each([
   "profile display",

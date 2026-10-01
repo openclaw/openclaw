@@ -257,20 +257,31 @@ function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean
   return isLegacyTreeSymlinkMirror(legacyDir, realTargetDir);
 }
 
+/** Default relocation names remain useful for locating retained pre-migration evidence. */
+export function resolveLegacyStateDirMigrationCandidates(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): Array<{ source: string; target: string }> {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  if (env.OPENCLAW_STATE_DIR?.trim()) {
+    return [];
+  }
+  const target = resolveNewStateDir(homedir);
+  return resolveLegacyStateDirs(homedir).map((source) => ({ source, target }));
+}
+
 export function resolvePendingLegacyStateDirMigrationPaths(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): { source: string; target: string } | undefined {
-  const env = params.env ?? process.env;
-  const homedir = params.homedir ?? os.homedir;
-  if (env.OPENCLAW_STATE_DIR?.trim()) {
+  const selected = resolveLegacyStateDirMigrationCandidates(params).find(({ source }) =>
+    fs.existsSync(source),
+  );
+  if (!selected) {
     return undefined;
   }
-  const target = resolveNewStateDir(homedir);
-  const source = resolveLegacyStateDirs(homedir).find((dir) => fs.existsSync(dir));
-  if (!source) {
-    return undefined;
-  }
+  const { source, target } = selected;
   const sourceTarget = resolveSymlinkTarget(source);
   if (
     (sourceTarget && path.resolve(sourceTarget) === path.resolve(target)) ||

@@ -1,3 +1,4 @@
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mocks,
@@ -235,6 +236,7 @@ describe("FaceTime talk driver consult delivery", () => {
   ])(
     "settles $settlement delivery correctly after $transition",
     async ({ settlement, transition }) => {
+      const deliveryStarted = Promise.withResolvers<void>();
       let finishDelivery = () => {};
       mocks.consult
         .mockReset()
@@ -245,12 +247,16 @@ describe("FaceTime talk driver consult delivery", () => {
           new Promise<void>((resolve, reject) => {
             finishDelivery = () =>
               settlement === "accepted" ? resolve() : reject(new Error("late failure"));
+            deliveryStarted.resolve();
           }),
       );
       const onFailure = vi.fn(async () => true);
       const driver = await startReadyFaceTimeTalkDriver(startParams({ onFailure }));
       void consult("item-delivery", "call-delivery", "Check my calendar.");
-      await vi.waitFor(() => expect(mocks.bridge.submitToolResult).toHaveBeenCalledOnce());
+      await withTimeout(deliveryStarted.promise, 1_000, {
+        message: "Consult delivery did not start",
+      });
+      expect(mocks.bridge.submitToolResult).toHaveBeenCalledOnce();
       if (transition === "close") {
         await driver.close("carrier-ended");
       } else {

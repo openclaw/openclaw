@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   type AgentsFilesGetParams,
   ErrorCodes,
@@ -9,7 +9,7 @@ import {
   validateAgentsFilesListParams,
   validateAgentsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { buildIdentityMarkdownForWrite } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
@@ -24,7 +24,7 @@ import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
-import { normalizeAgentIdStrict } from "../../routing/session-key.js";
+import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
@@ -47,23 +47,6 @@ const CORE_FILE_NAMES_POST_ONBOARDING = CORE_FILE_NAMES.filter(
 // still writable for clients that manage it directly.
 const ALLOWED_FILE_NAMES = new Set<string>(WORKSPACE_BOOTSTRAP_FILENAMES);
 
-function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
-  const normalized = normalizeAgentIdStrict(agentIdRaw);
-  if (!normalized.ok) {
-    return null;
-  }
-  const agentId = normalized.value;
-  const allowed = new Set(listAgentIds(cfg));
-  if (!allowed.has(agentId)) {
-    return null;
-  }
-  return agentId;
-}
-
-function respondAgentNotFound(respond: RespondFn, agentId: string): void {
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
-}
-
 function resolveAgentWorkspaceFileOrRespondError(
   params: AgentsFilesGetParams,
   respond: RespondFn,
@@ -73,9 +56,8 @@ function resolveAgentWorkspaceFileOrRespondError(
   workspaceDir: string;
   name: string;
 } | null {
-  const agentId = resolveAgentIdOrError(params.agentId, cfg);
+  const agentId = resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
   if (!agentId) {
-    respondAgentNotFound(respond, params.agentId);
     return null;
   }
   const name = params.name.trim();
@@ -134,10 +116,6 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
       );
     }),
   );
-}
-
-function hashWorkspaceFileContent(content: Buffer | string): string {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
@@ -270,7 +248,7 @@ async function readWorkspaceFileHash(
       hardlinks: "reject",
       nonBlockingRead: true,
     });
-    return hashWorkspaceFileContent(safeRead.buffer);
+    return sha256Hex(safeRead.buffer);
   } catch (err) {
     if (isMissingPathError(err)) {
       return undefined;
@@ -306,9 +284,8 @@ export const agentFileHandlers: Pick<
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const agentId = resolveAgentIdOrError(params.agentId, cfg);
+    const agentId = resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
     if (!agentId) {
-      respondAgentNotFound(respond, params.agentId);
       return;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -359,7 +336,7 @@ export const agentFileHandlers: Pick<
       file = {
         size: data.length,
         updatedAtMs: Math.floor(stat.mtimeMs),
-        hash: hashWorkspaceFileContent(data),
+        hash: sha256Hex(data),
         content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data),
       };
     } else {
@@ -384,7 +361,7 @@ export const agentFileHandlers: Pick<
       file = {
         size: safeRead.stat.size,
         updatedAtMs: Math.floor(safeRead.stat.mtimeMs),
-        hash: hashWorkspaceFileContent(safeRead.buffer),
+        hash: sha256Hex(safeRead.buffer),
         content: safeRead.buffer.toString("utf-8"),
       };
     }
@@ -467,7 +444,7 @@ export const agentFileHandlers: Pick<
             if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
               throw new Error("Workspace document exceeds its read bound");
             }
-            currentHash = hashWorkspaceFileContent(data);
+            currentHash = sha256Hex(data);
           }
           if (currentHash !== expectedHash) {
             return { currentHash };
@@ -533,7 +510,7 @@ export const agentFileHandlers: Pick<
           missing: false,
           size: meta?.size,
           ...(!access ? { updatedAtMs: meta?.updatedAtMs } : {}),
-          hash: hashWorkspaceFileContent(content),
+          hash: sha256Hex(content),
           content,
         },
       },

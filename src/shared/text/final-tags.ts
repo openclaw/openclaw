@@ -1,4 +1,3 @@
-// Final tag helpers detect final-answer tag regions in assistant text.
 import { findCodeRegions } from "./code-regions.js";
 
 type FinalTagMatch = {

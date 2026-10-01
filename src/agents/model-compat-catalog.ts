@@ -6,6 +6,16 @@ type ModelTransportRoute = {
   baseUrl?: unknown;
 };
 
+export function isVllmQwenThinkingCompat(
+  providerId: string,
+  compat?: { thinkingFormat?: unknown } | null,
+): boolean {
+  return (
+    providerId === "vllm" &&
+    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
+  );
+}
+
 export function normalizeModelTransportBaseUrl(api: string, baseUrl: string): string {
   return api === "anthropic-messages" ? baseUrl.replace(/\/v1\/?$/, "") : baseUrl;
 }

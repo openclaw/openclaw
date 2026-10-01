@@ -8,10 +8,10 @@ export const SessionsListParamsSchema = closedObject({
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Activity age for sortBy: "activity"; otherwise metadata update age. */
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
-  /** Epoch ms of the caller's local midnight; returns an hourly activity pulse from that instant. */
-  activityPulseSince: Type.Optional(Type.Number({ minimum: 0 })),
-  /** Epoch ms of the caller's next local midnight; bounds `activityPulse` to the civil day. */
-  activityPulseUntil: Type.Optional(Type.Number({ minimum: 0 })),
+  /** Strictly ascending epoch-ms bucket boundaries in the caller's local time zone. */
+  activityPulseBoundaries: Type.Optional(
+    Type.Array(Type.Number({ minimum: 0 }), { minItems: 2, maxItems: 64 }),
+  ),
   /** Select sessions with current direct running or queued work before pagination. */
   activeOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */

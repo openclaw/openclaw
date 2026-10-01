@@ -1,4 +1,3 @@
-// Gateway hook server wiring translates external hook requests into wake events or isolated agent runs.
 import { randomUUID } from "node:crypto";
 import {
   resolveDateTimestampMs,
@@ -48,11 +47,6 @@ import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
-/**
- * Gateway hook HTTP handler factory.
- *
- * Hooks can either enqueue wake events or spawn isolated agent turns.
- */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const HOOK_AGENT_START_ADMISSION_TIMEOUT_MS = 15_000;
@@ -95,18 +89,6 @@ function resolveHookEventTarget(params: {
     eventSessionKey,
     heartbeatTarget: { agentId: params.resolvedAgentId, sessionKey: eventSessionKey },
   };
-}
-
-function shouldAnnounceHookRunResult(params: {
-  deliver: boolean;
-  result: RunCronAgentTurnResult;
-}): boolean {
-  if (params.result.status !== "ok") {
-    return true;
-  }
-  return (
-    params.deliver && params.result.delivered !== true && params.result.deliveryAttempted !== true
-  );
 }
 
 function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
@@ -459,23 +441,28 @@ export function createGatewayHookDispatcher(params: {
       mainKey: dispatchCfg.session?.mainKey,
       cfg: dispatchCfg,
     });
-    let settleAdmission!: (result: HookAgentDispatchResult) => void;
+    const admission = createDeferredCore<HookAgentDispatchResult>();
     let admissionSettled = false;
     let admissionTimedOut = false;
     let admissionTimer: ReturnType<typeof setTimeout> | undefined;
-    const admission = new Promise<HookAgentDispatchResult>((resolve) => {
-      settleAdmission = (result) => {
-        if (admissionSettled) {
-          return;
-        }
-        admissionSettled = true;
-        if (admissionTimer) {
-          clearTimeout(admissionTimer);
-          admissionTimer = undefined;
-        }
-        resolve(result);
-      };
-    });
+    const settleAdmission = (result: HookAgentDispatchResult) => {
+      if (admissionSettled) {
+        return;
+      }
+      admissionSettled = true;
+      if (admissionTimer) {
+        clearTimeout(admissionTimer);
+        admissionTimer = undefined;
+      }
+      admission.resolve(result);
+    };
+    const failAdmission = (err: unknown) => {
+      if (admissionTimedOut) {
+        return;
+      }
+      settleAdmission(createHookAdmissionFailure({ runId }));
+      reportHookFailure(err);
+    };
     const admissionTimeoutError = new Error(HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR);
     const startupAbortController = new AbortController();
     const settleSuccessfulAdmission = () => {
@@ -543,6 +530,7 @@ export function createGatewayHookDispatcher(params: {
                 cfg,
                 deps,
                 job,
+                deliveryAttemptFence: null,
                 message: acceptedValue.message,
                 sessionKey,
                 // Isolated runs derive their lifecycle key from random jobId (or an
@@ -593,7 +581,9 @@ export function createGatewayHookDispatcher(params: {
             }
             const prefix =
               result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
-            const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+            const shouldAnnounce =
+              result.status !== "ok" ||
+              (value.deliver && result.delivered !== true && result.deliveryAttempted !== true);
             completion.resolve(logHookRunTerminal(result));
             if (shouldAnnounce) {
               announceHookEvent(
@@ -604,23 +594,13 @@ export function createGatewayHookDispatcher(params: {
               );
             }
           } catch (err) {
-            if (admissionTimedOut) {
-              return;
-            }
-            settleAdmission(createHookAdmissionFailure({ runId }));
-            reportHookFailure(err);
+            failAdmission(err);
           }
         }),
       "hooks:agent-dispatch",
-    ).catch((err: unknown) => {
-      if (admissionTimedOut) {
-        return;
-      }
-      settleAdmission(createHookAdmissionFailure({ runId }));
-      reportHookFailure(err);
-    });
+    ).catch(failAdmission);
 
-    return await admission;
+    return await admission.promise;
   };
 
   const pluginHookReplays = new Map<

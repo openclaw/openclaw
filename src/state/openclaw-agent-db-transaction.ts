@@ -1,5 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   runSqliteImmediateTransaction,
@@ -49,7 +49,7 @@ export async function runOpenClawAgentWriteWithYieldingAdmission<T>(
       },
       {
         ...transactionOptions,
-        busyTimeoutMs: 0,
+        busyTimeoutMs: readSqliteBusyTimeout(database.db),
         databaseLabel: database.path,
         operationLabel: transactionOptions.operationLabel ?? "agent.write",
         withCommit: getAgentDeletionDatabaseCleanup(captured)?.withCommit,
@@ -58,10 +58,8 @@ export async function runOpenClawAgentWriteWithYieldingAdmission<T>(
         if (getOpenClawAgentDatabaseIfOpen(captured) !== database) {
           throw new Error(`Agent database closed or replaced before write: ${database.path}`);
         }
-        // Keep zero native wait through COMMIT too; the helper retains the original BEGIN budget.
-        return runWithSqliteBusyTimeout(database.db, 0, () =>
-          withSqlitePostCommitPublications(database.db, write),
-        );
+        // BEGIN yields; admitted writes retain the connection's bounded COMMIT wait for readers.
+        return withSqlitePostCommitPublications(database.db, write);
       },
     );
   } finally {

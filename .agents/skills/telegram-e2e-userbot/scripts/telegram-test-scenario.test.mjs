@@ -11,7 +11,6 @@ function fixture() {
   let released = 0;
   let healthy = true;
   let revoke;
-  let proxyClosed = false;
   const credential = {
     driverEnv: {},
     groupId: "-1001",
@@ -61,12 +60,6 @@ function fixture() {
               },
       ),
     }),
-    startProxy: async () => ({
-      apiRoot: "http://127.0.0.1:1",
-      close: async () => {
-        proxyClosed = true;
-      },
-    }),
     fetchImpl: async (url) =>
       new URL(url).pathname.endsWith("/getChat")
         ? Response.json(
@@ -84,7 +77,6 @@ function fixture() {
     credential,
     options,
     releaseCount: () => released,
-    proxyClosed: () => proxyClosed,
     revoke() {
       healthy = false;
       revoke(new Error("lease revoked"));
@@ -235,7 +227,6 @@ test("scenario provisions a fresh group when the stored group is unusable and re
     driveScenario: async (_args, _root, credential) => {
       assert.equal(credential, f.credential);
       credential.assertLeaseHealthy();
-      assert.equal(f.proxyClosed(), true);
       assert.equal(credential.groupId, "-2042");
       assert.equal(credential.driverEnv.TELEGRAM_USER_DRIVER_CHAT_ID, "-2042");
       assert.equal(groupExists, true);
@@ -557,7 +548,6 @@ test("strict membership prevents product delivery and cleans up the created grou
     /not an active member/u,
   );
   assert.equal(delivered, false);
-  assert.equal(f.proxyClosed(), true);
   assert.equal(f.releaseCount(), 1);
   assert.equal(f.credential.testGroup.cleanup.status, "deleted");
 });
@@ -639,11 +629,10 @@ test("cancellation interrupts pending readiness HTTP and closes before release",
   controller.abort(new Error("cancelled HTTP"));
   await assert.rejects(run, /cancelled HTTP/u);
   assert.equal(delivered, false);
-  assert.equal(f.proxyClosed(), true);
   assert.equal(f.releaseCount(), 1);
 });
 
-test("SIGTERM during CLI readiness closes its proxy before the sole lease release", async (context) => {
+test("SIGTERM during CLI readiness settles its check before the sole lease release", async (context) => {
   const { spawn } = await import("node:child_process");
   const { once } = await import("node:events");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-signal-owner-"));
@@ -667,7 +656,7 @@ test("SIGTERM during CLI readiness closes its proxy before the sole lease releas
       } finally {
         await new Promise(resolve=>setImmediate(resolve));
         clearInterval(keepAlive);
-        fs.appendFileSync(${JSON.stringify(trace)}, 'proxy closed\\n');
+        fs.appendFileSync(${JSON.stringify(trace)}, 'readiness settled\\n');
       }
     }`;
   fs.writeFileSync(
@@ -707,7 +696,7 @@ test("SIGTERM during CLI readiness closes its proxy before the sole lease releas
   const [code, signal] = await completion;
   assert.equal(code, 143);
   assert.equal(signal, null);
-  assert.equal(fs.readFileSync(trace, "utf8"), "proxy closed\nrelease\n");
+  assert.equal(fs.readFileSync(trace, "utf8"), "readiness settled\nrelease\n");
 });
 
 test("scenario cancellation aborts a pending request in the real drive path", async (context) => {
@@ -758,49 +747,42 @@ test("scenario cancellation aborts a pending request in the real drive path", as
 });
 
 for (const event of ["caller cancellation", "lease loss"]) {
-  test(`${event} during readiness proxy cleanup rejects the completed doctor result`, async () => {
+  test(`${event} during readiness response consumption stops and releases`, async () => {
     const { runTelegramTestDoctor } = await import("./telegram-test-doctor.mjs");
     const f = fixture();
     const closing = Promise.withResolvers();
     const finish = Promise.withResolvers();
     const controller = new AbortController();
-    const start = f.options.startProxy;
-    f.options.startProxy = async () => {
-      const proxy = await start();
+    f.options.fetchImpl = async (url) => {
+      assert.equal(url, "https://api.telegram.org/botsynthetic-token/test/getMe");
       return {
-        ...proxy,
-        close: async () => {
+        ok: true,
+        json: async () => {
           closing.resolve();
           await finish.promise;
-          await proxy.close();
+          return { ok: true, result: { id: 42, username: "sut_bot" } };
         },
       };
     };
     const run = runTelegramTestDoctor({
       acquireCredential: async () => f.credential,
-      dm: false,
+      dm: true,
       signal: controller.signal,
       ...f.options,
     });
     await closing.promise;
     if (event === "caller cancellation") {
-      controller.abort(new Error("cancelled during proxy close"));
+      controller.abort(new Error("cancelled during response"));
     } else {
       f.revoke();
     }
     finish.resolve();
     await assert.rejects(
       run,
-      event === "lease loss"
-        ? (error) => error instanceof AggregateError && error.errors[0].message === "lease revoked"
-        : /cancelled during proxy close/u,
+      event === "lease loss" ? /lease revoked/u : /cancelled during response/u,
     );
-    assert.equal(f.proxyClosed(), true);
-    assert.equal(f.releaseCount(), event === "lease loss" ? 0 : 1);
-    assert.equal(
-      f.credential.testGroup.cleanup.status,
-      event === "lease loss" ? "failed" : "deleted",
-    );
+    assert.equal(f.releaseCount(), 1);
+    assert.equal(f.credential.testGroup, undefined);
   });
 
   test(`${event} during final release cannot become a successful scenario`, async () => {
