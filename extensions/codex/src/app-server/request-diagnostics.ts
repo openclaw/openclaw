@@ -81,7 +81,7 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
         if (!areDiagnosticsEnabledForProcess() || !embeddedAgentLog.isEnabled("warn")) {
           return;
         }
-        const methods = [...attempt.methods].sort(([a], [b]) => a.localeCompare(b));
+        const methods = [...attempt.methods].toSorted(([a], [b]) => a.localeCompare(b));
         embeddedAgentLog.warn("codex app-server scope timed out", {
           phase:
             attempt.phase === "callback" && attempt.pending > 0 ? "client-request" : attempt.phase,
