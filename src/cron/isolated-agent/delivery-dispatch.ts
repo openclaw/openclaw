@@ -61,7 +61,7 @@ import {
   appendCronRunInspectionLink,
   normalizeDirectCronDeliveryPayloads,
 } from "./delivery-payload-normalization.js";
-import { pickSummaryFromOutput } from "./helpers.js";
+import { pickSummaryFromOutput, readAutomationFailedReport } from "./helpers.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
@@ -83,6 +83,17 @@ export async function dispatchCronDelivery(
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
+  let agentReportedFailure: string | undefined;
+  // A settled descendant answer is the run's terminal answer; classify it like the parent's
+  // own reply so a reported failure is recorded as one and never delivered as a token.
+  const adoptSettledChildReply = (childReply: string) => {
+    agentReportedFailure = readAutomationFailedReport(childReply);
+    const reply = agentReportedFailure ?? childReply;
+    outputText = reply;
+    summary = pickSummaryFromOutput(reply) ?? summary;
+    synthesizedText = reply;
+    deliveryPayloads = [{ text: reply }];
+  };
 
   const deliveryState: CronResolvedDeliveryState = {
     status: params.deliveryRequested ? "not-delivered" : "not-requested",
@@ -106,16 +117,17 @@ export async function dispatchCronDelivery(
   let deliveryAttempted = verifiedMessageToolDelivery;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = async (disposition?: CronDeliveryDisposition) => {
+    const executionFailed = disposition?.kind === "error" || agentReportedFailure !== undefined;
     const completion = resolveAdmittedCronCompletionStatus(
       params.job,
-      disposition?.kind === "error" ? "error" : params.undeliveredRunStatus,
+      executionFailed ? "error" : params.undeliveredRunStatus,
       deliveryState.status,
       deliveryState.deliverySuppressionReason,
     );
     // Quiet/best-effort successes retire with their jobs; failed executions retain evidence.
     if (
       deliveryState.status === "delivered" ||
-      (deliveryState.status === "not-requested" && disposition?.kind !== "error") ||
+      (deliveryState.status === "not-requested" && !executionFailed) ||
       completion === "succeeded"
     ) {
       await cleanupDirectCronSessionIfNeeded();
@@ -132,6 +144,7 @@ export async function dispatchCronDelivery(
       outputText,
       synthesizedText,
       deliveryPayloads,
+      ...(agentReportedFailure ? { agentReportedFailure } : {}),
     };
   };
   const formatDeliveryTargetError = (error: string) =>
@@ -556,10 +569,7 @@ export async function dispatchCronDelivery(
         abortSignal: params.abortSignal,
       });
     if (finalReply) {
-      outputText = finalReply;
-      summary = pickSummaryFromOutput(finalReply) ?? summary;
-      synthesizedText = finalReply;
-      deliveryPayloads = [{ text: finalReply }];
+      adoptSettledChildReply(finalReply);
     }
     if (spawnOnlyHandoff && !synthesizedText?.trim()) {
       // An accepted spawn is the turn's only completion; retiring it without
@@ -724,10 +734,7 @@ export async function dispatchCronDelivery(
       });
     }
     if (!isSilentReplyText(settled.reply, SILENT_REPLY_TOKEN)) {
-      outputText = settled.reply;
-      summary = pickSummaryFromOutput(settled.reply) ?? summary;
-      synthesizedText = settled.reply;
-      deliveryPayloads = [{ text: settled.reply }];
+      adoptSettledChildReply(settled.reply);
     }
   }
 

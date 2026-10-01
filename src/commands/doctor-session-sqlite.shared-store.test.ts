@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { readSqliteTranscriptPayload } from "../../scripts/lib/sqlite-transcript-payload.mjs";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   lookupSessionGoalOperation,
   type SessionGoalOperation,
@@ -36,17 +35,13 @@ import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-par
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-canonical-store-");
 
 async function createStore() {
-  const root = fs.realpathSync.native(tempDirs.make("openclaw-doctor-canonical-store-"));
+  const root = sessionDirs.make();
   const stateDir = path.join(root, "state");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const storePath = path.join(root, "custom", "shared.sqlite");

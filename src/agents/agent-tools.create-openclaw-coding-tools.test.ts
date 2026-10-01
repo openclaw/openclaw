@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -25,6 +25,7 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -59,6 +60,7 @@ const tinyPngBuffer = Buffer.from(
 );
 const avifHeaderBuffer = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant-");
 const openClawOnlyPlan = {
   includeBaseCodingTools: false,
   includeShellTools: false,
@@ -680,7 +682,7 @@ describe("createOpenClawCodingTools", () => {
       expected: false,
     },
   ])("limits $name to the source only for verified completion delivery", async (testCase) => {
-    const storeDir = tempDirs.make("openclaw-completion-grant-");
+    const storeDir = sessionDirs.make();
     const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
     const requesterSessionKey = "agent:main:discord:direct:alice";
     const requesterSessionId = "requester-session";
@@ -1000,7 +1002,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("removes message from persisted visible child sessions on every turn", async () => {
-    const storeDir = tempDirs.make("openclaw-visible-subagent-message-");
+    const storeDir = sessionDirs.make();
     const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
     const agentId = "visible-subagent-message";
     const childSessionKey = `agent:${agentId}:dashboard:child`;
@@ -1121,7 +1123,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("applies subagent tool policy to ACP children spawned under a subagent envelope", async () => {
-    const tmpDir = tempDirs.make("openclaw-acp-subagent-policy-");
+    const tmpDir = sessionDirs.make();
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     await writeSessionStore(storeTemplate, "main", {
       "agent:main:acp:child": {

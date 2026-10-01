@@ -733,6 +733,22 @@ describe("dispatchCronDelivery", () => {
     expect(state.deliveryError).toBe("cron descendants completed without a final reply");
   });
 
+  it("classifies a settled child's AUTOMATION_FAILED answer and delivers only its explanation", async () => {
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
+      "AUTOMATION_FAILED\nNo shell tool is available in this run.",
+    );
+
+    const state = await dispatchCronDelivery(emptyParams(true));
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, { payloads: [{ text: "No shell tool is available in this run." }] });
+    expect(state).toMatchObject({
+      delivered: true,
+      agentReportedFailure: "No shell tool is available in this run.",
+      summary: "No shell tool is available in this run.",
+    });
+  });
+
   it.each([
     ["active threaded best-effort", true, "42", true],
     ["completed direct", false, undefined, false],
@@ -889,6 +905,27 @@ describe("dispatchCronDelivery", () => {
       expect(state.summary).toBeUndefined();
       expect(deliverOutboundPayloads).not.toHaveBeenCalled();
       expectSessionDeleted();
+    });
+
+    it("records a child's AUTOMATION_FAILED report as a failure and keeps the transcript", async () => {
+      const params = spawnOnlyJob({ mode: "none" });
+      childSettlesAt(1_000, {
+        disposition: "visible",
+        text: "AUTOMATION_FAILED\nNo shell tool is available in this run.",
+      });
+
+      const state = await dispatchUntilWatchdog(params);
+
+      expect(state).toMatchObject({
+        agentReportedFailure: "No shell tool is available in this run.",
+        outputText: "No shell tool is available in this run.",
+        summary: "No shell tool is available in this run.",
+        deliveryState: { status: "not-requested" },
+      });
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
     });
 
     it.each([

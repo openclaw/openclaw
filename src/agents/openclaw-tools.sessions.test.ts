@@ -5,7 +5,6 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
@@ -31,9 +30,9 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import * as embeddedRuns from "./embedded-agent-runner/runs.js";
 import {
@@ -59,7 +58,7 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const { callGatewayMock } = await import("./openclaw-tools.sessions.mocks.test-support.js");
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-scoped-session-send-");
 const continuations = observeSessionSendContinuations();
 
 const TEST_CONFIG = {
@@ -576,7 +575,7 @@ describe("sessions tools", () => {
   });
 
   it("keeps scoped sends from creating post-return work or durable watches", async () => {
-    const tmpDir = tempDirs.make("openclaw-scoped-session-send-");
+    const tmpDir = sessionDirs.make();
     const storePath = path.join(tmpDir, "sessions.json");
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";
@@ -660,13 +659,11 @@ describe("sessions tools", () => {
     } finally {
       clearDecisionSink();
       unregister();
-      await closeOpenClawAgentDatabasesAsync(tmpDir);
     }
   });
 
   registerSessionsSendParticipantTests({
     config: TEST_CONFIG,
-    makeTempDir: (prefix) => tempDirs.make(prefix),
     callGatewayMock,
   });
 
@@ -1071,7 +1068,7 @@ describe("sessions tools", () => {
     const requesterKey = "agent:main:cron:source-job:run:source-run";
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const durableCronCallerKey = "agent:leasing-ops:cron:monthly-utility";
-    const dir = tempDirs.make("openclaw-cron-fallback-stores-");
+    const dir = sessionDirs.make();
     const parentScope = {
       agentId: "leasing-ops",
       sessionKey: durableCronCallerKey,
@@ -1149,64 +1146,60 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send never reroutes an exact-incarnation grant to a Cron parent", async () => {
-    const tmpDir = tempDirs.make("openclaw-exact-cron-send-");
+    const tmpDir = sessionDirs.make();
     const storePath = path.join(tmpDir, "sessions.json");
     const requesterKey = "agent:main:main";
     const runScopedTargetKey = "agent:leasing-ops:cron:monthly-utility:run:run-exact";
     const targetSessionId = "exact-cron-run-incarnation";
-    try {
-      await upsertSessionEntryCore(
-        { agentId: "leasing-ops", sessionKey: runScopedTargetKey, storePath },
-        { sessionId: targetSessionId, updatedAt: 1 },
-      );
-      const queueMessage = activeRun(runScopedTargetKey, {
-        sessionId: targetSessionId,
-        streaming: false,
-      });
-      const calls: GatewayCall[] = [];
-      callGatewayMock.mockImplementation(async (opts: unknown) => {
-        const request = opts as GatewayCall;
-        calls.push(request);
-        if (request.method === "sessions.list") {
-          return {
-            path: storePath,
-            sessions: [{ key: runScopedTargetKey, kind: "direct" }],
-          };
-        }
-        if (request.method === "agent") {
-          throw new Error("exact target must not fall back to the durable Cron session");
-        }
-        return {};
-      });
-      const tool = createSessionsSendTool({
-        agentSessionKey: requesterKey,
-        expectedTargetSessionId: targetSessionId,
-        idempotencyKey: "worker-session-send:exact-cron-operation",
-        config: {
-          ...cloneTestConfig(),
-          session: {
-            ...cloneTestConfig().session,
-            store: storePath,
-          },
+    await upsertSessionEntryCore(
+      { agentId: "leasing-ops", sessionKey: runScopedTargetKey, storePath },
+      { sessionId: targetSessionId, updatedAt: 1 },
+    );
+    const queueMessage = activeRun(runScopedTargetKey, {
+      sessionId: targetSessionId,
+      streaming: false,
+    });
+    const calls: GatewayCall[] = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      calls.push(request);
+      if (request.method === "sessions.list") {
+        return {
+          path: storePath,
+          sessions: [{ key: runScopedTargetKey, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        throw new Error("exact target must not fall back to the durable Cron session");
+      }
+      return {};
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: requesterKey,
+      expectedTargetSessionId: targetSessionId,
+      idempotencyKey: "worker-session-send:exact-cron-operation",
+      config: {
+        ...cloneTestConfig(),
+        session: {
+          ...cloneTestConfig().session,
+          store: storePath,
         },
-        callGateway: callGatewayMock,
-      });
+      },
+      callGateway: callGatewayMock,
+    });
 
-      const result = await tool.execute("exact-cron-send", {
-        sessionKey: runScopedTargetKey,
-        message: "do not reroute this exact message",
-        timeoutSeconds: 0,
-      });
+    const result = await tool.execute("exact-cron-send", {
+      sessionKey: runScopedTargetKey,
+      message: "do not reroute this exact message",
+      timeoutSeconds: 0,
+    });
 
-      expect(result.details).toMatchObject({
-        status: "error",
-        sessionKey: runScopedTargetKey,
-      });
-      expect(queueMessage).not.toHaveBeenCalled();
-      expect(calls.some((call) => call.method === "agent")).toBe(false);
-    } finally {
-      await closeOpenClawAgentDatabasesAsync(tmpDir);
-    }
+    expect(result.details).toMatchObject({
+      status: "error",
+      sessionKey: runScopedTargetKey,
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 
   registerSessionsSendTimeoutTests({ getSessionTool, callGatewayMock });

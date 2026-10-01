@@ -1,6 +1,5 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   cleanupRuntimeToolFixtureTempRoots,
   makeEnv,
@@ -11,11 +10,10 @@ import {
   writeRuntimeToolTranscripts,
 } from "../test/runtime-tool-fixture-helpers.js";
 
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await cleanupRuntimeToolFixtureTempRoots();
+afterEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
 });
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture transcript evidence", () => {
   it("requires live runtime tool fixtures to produce transcript tool output", async () => {
