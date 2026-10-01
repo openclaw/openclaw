@@ -319,12 +319,12 @@ export async function repairDoctorSqliteNoCow(params: {
         );
       }
       params.assertCurrent();
-      const currentIdentity = fs.statSync(directory, { bigint: true });
       const observedFiles = fs
         .readdirSync(directory, { recursive: true, withFileTypes: true })
         .map((entry) => path.join(entry.parentPath, entry.name));
       assertNoOpenFiles(observedFiles.filter((pathname) => fs.lstatSync(pathname).isFile()));
       // A file can appear while fuser checks the previously observed inventory.
+      const currentIdentity = fs.statSync(directory, { bigint: true });
       const currentFiles = fs
         .readdirSync(directory, { recursive: true, withFileTypes: true })
         .map((entry) => path.join(entry.parentPath, entry.name))
@@ -373,6 +373,7 @@ export async function repairDoctorSqliteNoCow(params: {
       }
       const original = fs.statSync(directory);
       const replacement = fs.statSync(backup);
+      params.assertCurrent();
       exchangeAttempted = true;
       const exchange = spawnSync("mv", ["--exchange", "--no-copy", "-T", "--", backup, directory], {
         encoding: "utf8",
