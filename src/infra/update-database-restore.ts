@@ -14,6 +14,7 @@ import {
   publishFileExclusive,
   sha256File,
 } from "./directory-durability.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
@@ -22,7 +23,7 @@ import {
   releaseSnapshotTempDirectory,
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
-import { publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import { prepareVerifiedSqliteFile } from "./sqlite-snapshot.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -145,6 +146,8 @@ export async function restoreUpdateDatabaseBackup(params: {
   const displaced: string[] = [];
   let preparedCopy: ReturnType<typeof adoptPreparedLocation> | undefined;
   let retainPreparedCopy = false;
+  let restoreFailure: unknown;
+  const outputs: Array<Awaited<ReturnType<typeof prepareVerifiedSqliteFile>>> = [];
   try {
     const result = await withDatabaseExclusion(
       params.env,
@@ -243,6 +246,36 @@ export async function restoreUpdateDatabaseBackup(params: {
             }
           }
         }
+        // Allocate every final writable image before moving any current family.
+        // The shared source contains the actual current history, not its baseline size.
+        for (const entry of sources) {
+          assertOwned();
+          const sourceIdentity = await fs.lstat(entry.snapshotPath);
+          assertOwned();
+          outputs.push(
+            await prepareVerifiedSqliteFile({
+              sourcePath: entry.snapshotPath,
+              sourceIdentity,
+              targetPath: entry.path,
+              expectedContent: { sha256: entry.sha256, sizeBytes: entry.sizeBytes },
+              requireAtomicPublication: true,
+              beforeByteCopy: (sizeBytes) => {
+                const directory = path.dirname(entry.path);
+                const space = tryReadDiskSpace(directory);
+                const requiredBytes = sizeBytes + 64 * 1024 * 1024;
+                if (!space || space.availableBytes < requiredBytes) {
+                  throw new Error(
+                    `Database rollback needs ${formatDiskSpaceBytes(requiredBytes)} near ${directory} for a writable copy; ${space ? `${formatDiskSpaceBytes(space.availableBytes)} is available` : "available space could not be measured"}. Current databases have not been moved.`,
+                  );
+                }
+                assertOwned();
+              },
+              beforePublish: assertOwned,
+              afterPublish: (guard) => guard.assertTargetMatchesExpectedContent(assertOwned),
+            }),
+          );
+          assertOwned();
+        }
         for (const move of moves) {
           assertOwned();
           try {
@@ -262,19 +295,10 @@ export async function restoreUpdateDatabaseBackup(params: {
           displaced.push(move.target);
           assertOwned();
         }
-        for (const entry of sources) {
+        for (const output of outputs) {
           assertOwned();
-          const sourceIdentity = await fs.lstat(entry.snapshotPath);
           retainPreparedCopy = true;
-          await publishVerifiedSqliteFile({
-            sourcePath: entry.snapshotPath,
-            sourceIdentity,
-            targetPath: entry.path,
-            expectedContent: { sha256: entry.sha256, sizeBytes: entry.sizeBytes },
-            requireAtomicPublication: true,
-            beforePublish: assertOwned,
-            afterPublish: (guard) => guard.assertTargetMatchesExpectedContent(assertOwned),
-          });
+          await output.publish();
           assertOwned();
         }
         return displaced;
@@ -283,16 +307,30 @@ export async function restoreUpdateDatabaseBackup(params: {
     retainPreparedCopy = false;
     return result;
   } catch (error) {
+    restoreFailure = error;
     retainPreparedCopy ||= hasCommandProcessCleanupError(error);
     throw error;
   } finally {
-    if (preparedCopy) {
-      if (retainPreparedCopy) {
+    if (retainPreparedCopy) {
+      if (preparedCopy) {
         // Unfinished publication or child settlement retains its prepared bytes for recovery.
         releaseSnapshotTempDirectory(path.dirname(preparedCopy.location));
-      } else {
-        // Completed work and settled refusals before publication no longer need this private copy.
-        await preparedCopy.cleanupAsync();
+      }
+    } else {
+      // Join all cleanup even if one output cannot be retired.
+      const cleanup = await Promise.allSettled([
+        ...outputs.map((output) => output.cleanup()),
+        ...(preparedCopy ? [preparedCopy.cleanupAsync()] : []),
+      ]);
+      const failures = cleanup.filter((outcome) => outcome.status === "rejected");
+      if (failures.length > 0) {
+        throw new AggregateError(
+          [
+            ...(restoreFailure === undefined ? [] : [restoreFailure]),
+            ...failures.map((outcome) => outcome.reason),
+          ],
+          "Database rollback output cleanup failed",
+        );
       }
     }
   }

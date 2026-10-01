@@ -26,6 +26,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
 import {
@@ -80,6 +81,8 @@ type PublishVerifiedSqliteFileOptions = {
   validatePublished?: (publishedPath: string) => void | Promise<void>;
   /** Runs last. Call the supplied guard after any caller-specific checks. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
+  /** Admit a destination byte copy only when actual native cloning is unavailable. */
+  beforeByteCopy?: (sizeBytes: number) => void | Promise<void>;
 };
 
 type VerifiedSqliteSnapshot = SqliteFileContent & {
@@ -116,12 +119,18 @@ async function copyFileExclusive(
   source: FileHandle,
   sourcePath: string,
   targetPath: string,
+  beforeByteCopy?: PublishVerifiedSqliteFileOptions["beforeByteCopy"],
 ): Promise<{ content: SqliteFileContent; identity: BigIntStats }> {
   const sourceFingerprint = await source.stat({ bigint: true });
   let target: Awaited<ReturnType<typeof fs.open>> | undefined;
   let targetIdentity: BigIntStats | undefined;
   try {
-    const publication = await copySqliteFile(sourcePath, targetPath, sourceFingerprint);
+    const publication = await copySqliteFile(
+      sourcePath,
+      targetPath,
+      sourceFingerprint,
+      beforeByteCopy,
+    );
     target = await fs.open(targetPath, "r+");
     // Native receipts retain exact Windows file IDs beyond Number precision.
     const openedIdentity = await target.stat({ bigint: true });
@@ -355,9 +364,58 @@ export async function publishVerifiedSqliteFile(
   return publishSqliteFile(options, false);
 }
 
+/** Prepare an independent writable image beside its destination before replacing current state. */
+export async function prepareVerifiedSqliteFile(options: PublishVerifiedSqliteFileOptions) {
+  const directory = await createPrivateSqliteTempDirectory(
+    path.dirname(options.targetPath),
+    ".sqlite-publish-prepared-",
+  );
+  const directoryIdentity = await fs.lstat(directory);
+  const sourcePath = path.join(directory, "database.sqlite");
+  const cleanup = () => removePublicationStagingDirectory(directory, directoryIdentity);
+  try {
+    let sourceIdentity: Stats | undefined;
+    await publishVerifiedSqliteFile({
+      ...options,
+      targetPath: sourcePath,
+      afterPublish: (guard) => {
+        assertSynchronousCallbackResult(
+          options.afterPublish?.(guard),
+          "SQLite after-publication guard",
+        );
+        sourceIdentity = fsSync.lstatSync(sourcePath);
+        guard.assertTargetUnchanged();
+      },
+    });
+    if (!sourceIdentity) {
+      throw new Error(`SQLite prepared image was not published: ${sourcePath}`);
+    }
+    const preparedIdentity = sourceIdentity;
+    return {
+      path: sourcePath,
+      cleanup,
+      // The caller retains this image on publication failure. This path cannot
+      // fall back to another image allocation after current state is displaced.
+      publish: () =>
+        publishSqliteFile({ ...options, sourcePath, sourceIdentity: preparedIdentity }, "prepared"),
+    };
+  } catch (error) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite output preparation and cleanup both failed",
+        error,
+      );
+    }
+    throw error;
+  }
+}
+
 async function publishSqliteFile(
   options: PublishVerifiedSqliteFileOptions,
-  consumeOwnedSource: boolean,
+  consumeOwnedSource: boolean | "prepared",
 ): Promise<void> {
   await assertTargetAbsent(options.targetPath);
   const targetDirectory = path.resolve(path.dirname(options.targetPath));
@@ -367,10 +425,13 @@ async function publishSqliteFile(
   const targetDirectoryReceipt = targetDirectoryPin.receipt;
   let stagingDir: string;
   try {
-    stagingDir = await createPrivateSqliteTempDirectory(
-      targetDirectory,
-      `.sqlite-publish-${randomUUID()}-`,
-    );
+    stagingDir =
+      consumeOwnedSource === "prepared"
+        ? path.dirname(options.sourcePath)
+        : await createPrivateSqliteTempDirectory(
+            targetDirectory,
+            `.sqlite-publish-${randomUUID()}-`,
+          );
   } catch (error) {
     await targetDirectoryPin.close().catch(() => undefined);
     throw error;
@@ -390,7 +451,20 @@ async function publishSqliteFile(
     // publication custody instead of allocating another database-sized file.
     // Public callers retain their independently mutable source and still copy it.
     let staged: { content: SqliteFileContent; identity: Stats | BigIntStats };
-    if (
+    if (consumeOwnedSource === "prepared") {
+      if (
+        options.sourcePath !== stagedPath ||
+        options.sourceIdentity.dev !== targetDirectoryReceipt.identity.dev
+      ) {
+        throw new Error(
+          `SQLite prepared image is not on its publication volume: ${options.sourcePath}`,
+        );
+      }
+      staged = {
+        content: await hashOpenPublishedFile(source, options.sourcePath, options.sourceIdentity),
+        identity: await source.stat({ bigint: true }),
+      };
+    } else if (
       consumeOwnedSource &&
       options.sourceIdentity.dev !== 0 &&
       options.sourceIdentity.ino !== 0 &&
@@ -425,7 +499,12 @@ async function publishSqliteFile(
       }
       staged = { content, identity };
     } else {
-      staged = await copyFileExclusive(source, options.sourcePath, stagedPath);
+      staged = await copyFileExclusive(
+        source,
+        options.sourcePath,
+        stagedPath,
+        options.beforeByteCopy,
+      );
     }
     const expectedContent = options.expectedContent;
     assertExpectedContent(staged.content, expectedContent, options.targetPath);
@@ -447,7 +526,10 @@ async function publishSqliteFile(
         sourcePath: stagedPath,
         targetPath: options.targetPath,
         expectedSourceIdentity: currentStagedIdentity,
-        strategy: options.requireAtomicPublication ? "link-required" : "link-or-copy",
+        strategy:
+          options.requireAtomicPublication || consumeOwnedSource === "prepared"
+            ? "link-required"
+            : "link-or-copy",
       });
       publishedIdentity = publication.identity;
       // Keep the successful receipt before our durability policy can reject it;
@@ -538,7 +620,7 @@ async function publishSqliteFile(
         publishedIdentity = openedIdentity;
       }
     }
-    if (publishedIdentity) {
+    if (publishedIdentity && consumeOwnedSource !== "prepared") {
       // Windows can reuse a deleted file's identity while our old handle is still pinned.
       // Require the full fingerprint so cleanup never unlinks a caller replacement.
       const removed = removePublishedTargetIfOwned(options.targetPath, publishedIdentity, true);
@@ -546,10 +628,14 @@ async function publishSqliteFile(
         await syncDirectory(targetDirectoryReceipt).catch(() => undefined);
       }
     }
-    if (stagingIdentity) {
-      await removePublicationStagingDirectory(stagingDir, stagingIdentity).catch(() => undefined);
-    } else {
-      await fs.rmdir(stagingDir).catch(() => undefined);
+    // Recovery owns prepared bytes after displacement, even if publication or
+    // its later metadata checks failed. Never remove their remaining name.
+    if (consumeOwnedSource !== "prepared") {
+      if (stagingIdentity) {
+        await removePublicationStagingDirectory(stagingDir, stagingIdentity).catch(() => undefined);
+      } else {
+        await fs.rmdir(stagingDir).catch(() => undefined);
+      }
     }
     throw error;
   } finally {
