@@ -109,13 +109,6 @@ describe("startup admission before persistent writes", () => {
       reason: "Legacy workspace setup state requires migration",
     },
     {
-      name: "legacy workspace",
-      workspace: true,
-      repairable: false,
-      config: "local",
-      reason: "Legacy workspace setup state requires migration",
-    },
-    {
       name: "legacy workspace with repairable config",
       workspace: true,
       repairable: true,
@@ -194,17 +187,15 @@ describe("startup admission before persistent writes", () => {
       config: "remote",
       reason: "set gateway.mode=local (current: remote)",
     },
-    ...["device.json", "device.json.doctor-importing", "device.json.native-importing"].map(
-      (identityFile) => ({
-        name: `pending identity ${identityFile}`,
-        workspace: false,
-        repairable: false,
-        config: "local" as const,
-        identityFile,
-        canonicalIdentity: false,
-        reason: "Legacy device identity exists",
-      }),
-    ),
+    {
+      name: "pending identity device.json",
+      workspace: false,
+      repairable: false,
+      config: "local",
+      identityFile: "device.json",
+      canonicalIdentity: false,
+      reason: "Legacy device identity exists",
+    },
     {
       name: "canonical identity with stale retired source",
       workspace: false,

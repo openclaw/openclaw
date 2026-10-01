@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { SpawnResult } from "../process/exec.js";
 import { NodeWorkerWorkspaceTransferInputSchema } from "./node-workspace-transfer-protocol.js";
 import {
+  decodeWorkerRequest,
   WorkerGatewayNamespace,
   workerProtocolIdentifier as identifier,
   workerProtocolObject,
@@ -24,6 +25,29 @@ const ARGV_MAX_ITEMS = 128;
 const ARG_MAX_BYTES = 128 * 1024;
 const TIMEOUT_MAX_MS = 10 * 60 * 1000;
 export const NODE_WORKSPACE_DRAIN_COMMAND = "openclaw-internal-workspace-drain";
+export const NODE_WORKSPACE_QUIESCENCE_COMMAND = "openclaw-internal-workspace-quiescence";
+
+const QuiescenceNonce = z.string().regex(/^[a-f0-9]{32}$/u);
+const QuiescenceTimeout = z
+  .number()
+  .int()
+  .min(1)
+  .max(12 * 60 * 1000);
+const WorkspaceQuiescence = z.union([
+  workerProtocolObject({
+    action: z.literal("acquire"),
+    nonce: QuiescenceNonce,
+    timeoutMs: QuiescenceTimeout,
+  }),
+  workerProtocolObject({
+    action: z.literal("renew"),
+    nonce: QuiescenceNonce,
+    timeoutMs: QuiescenceTimeout,
+    validationMode: z.enum(["heartbeat", "final"]),
+  }),
+  workerProtocolObject({ action: z.literal("release"), nonce: QuiescenceNonce }),
+]);
+export type NodeWorkerWorkspaceQuiescenceInput = z.infer<typeof WorkspaceQuiescence>;
 
 const SeedKey = z.string().regex(/^[a-f0-9]{64}$/u);
 const WorkspaceProcessId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
@@ -93,6 +117,8 @@ const WorkspaceInput = workerProtocolObject({
   transfer: NodeWorkerWorkspaceTransferInputSchema.optional(),
   seed: SeedInput.optional(),
   process: WorkspaceProcess.optional(),
+  quiescence: WorkspaceQuiescence.optional(),
+  nativeProcessOwner: z.literal(true).optional(),
 });
 export type NodeWorkerWorkspaceSeedInput = z.infer<typeof SeedInput>;
 export type NodeWorkerWorkspaceExecInput = z.infer<typeof WorkspaceInput>;
@@ -102,21 +128,14 @@ export type NodeWorkerWorkspaceExecResult = SpawnResult & {
   process?: NodeWorkerWorkspaceProcessResult;
 };
 
-function parseJson(raw?: string | null): unknown {
-  if (!raw || Buffer.byteLength(raw, "utf8") > WORKSPACE_INSPECTION_MAX_BYTES * 2) {
-    throw new Error("INVALID_REQUEST: invalid node worker workspace request");
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("INVALID_REQUEST: malformed node worker workspace request");
-  }
-}
-
 export function parseNodeWorkerWorkspaceExecInput(
   raw?: string | null,
 ): NodeWorkerWorkspaceExecInput {
-  const value = parseJson(raw);
+  const value = decodeWorkerRequest(
+    raw,
+    WORKSPACE_INSPECTION_MAX_BYTES * 2,
+    "node worker workspace",
+  );
   const parsed = WorkspaceInput.safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -140,6 +159,24 @@ export function parseNodeWorkerWorkspaceExecInput(
     );
   }
   const input = parsed.data;
+  if (input.quiescence || input.argv[0] === NODE_WORKSPACE_QUIESCENCE_COMMAND) {
+    if (
+      !input.quiescence ||
+      input.argv[0] !== NODE_WORKSPACE_QUIESCENCE_COMMAND ||
+      input.argv.length !== 2 ||
+      input.input !== undefined ||
+      input.transfer ||
+      input.seed ||
+      input.process ||
+      input.resetWorkspace !== undefined ||
+      input.nativeProcessOwner
+    ) {
+      throw new Error("INVALID_REQUEST: workspace quiescence owns its operation");
+    }
+  }
+  if (input.nativeProcessOwner && (input.process || input.seed || input.transfer)) {
+    throw new Error("INVALID_REQUEST: native process ownership requires a foreground command");
+  }
   if (input.process && (input.seed || input.transfer || input.resetWorkspace !== undefined)) {
     throw new Error("INVALID_REQUEST: workspace process owns its operation");
   }

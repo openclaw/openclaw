@@ -210,7 +210,7 @@ struct QuickChatView: View {
                     String(format: String(localized: "Attach text from %@"), self.model.frontmostAppName),
                     systemImage: "doc.text")
             }
-            .disabled(!self.model.canCaptureTextContext)
+            .disabled(!self.model.canCaptureWindow)
             Button(action: self.onShowCaptureMenu) {
                 Label("Capture a screenshot", systemImage: "camera.viewfinder")
             }
@@ -245,7 +245,7 @@ struct QuickChatView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .disabled(!self.model.canSelectRecentSession)
+        .disabled(!self.model.canCaptureWindow)
         .help("Continue a recent conversation")
         .accessibilityLabel("Continue a recent conversation")
     }

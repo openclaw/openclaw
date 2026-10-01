@@ -53,14 +53,12 @@ function fingerprintProviderUsageCredentials(params: {
   providerIds: readonly UsageProviderId[];
   store: AuthProfileStore;
 }): string {
-  const profiles = Object.entries(params.store.profiles)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([profileId, credential]) => {
-      const fingerprint =
-        fingerprintAuthProfileCredential({ profileId, credential }) ??
-        fingerprintAuthProfileOwnerShape({ profileId, credential });
-      return fingerprint ?? `${profileId}:${credential.type}:${credential.provider}`;
-    });
+  const profiles = sortedRecordEntries(params.store.profiles).map(([profileId, credential]) => {
+    const fingerprint =
+      fingerprintAuthProfileCredential({ profileId, credential }) ??
+      fingerprintAuthProfileOwnerShape({ profileId, credential });
+    return fingerprint ?? `${profileId}:${credential.type}:${credential.provider}`;
+  });
   const direct = [...params.directApiKeys]
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([provider, resolved]) => [

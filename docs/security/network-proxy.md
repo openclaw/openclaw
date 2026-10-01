@@ -102,6 +102,11 @@ without activating it.
 
 The implicit bypass covers `localhost` and literal loopback IP URLs. LAN, tailnet, private-network, and public hosts continue through the managed proxy. Application-level SSRF checks still apply to untrusted destinations.
 
+Local Gateway HTTP health probes follow this policy too, including HTTPS probes
+used by Doctor and restart checks. HTTPS probes verify the configured Gateway
+certificate fingerprint on each connection; enabling a proxy does not disable
+that verification.
+
 Update canary `/startupz` and `/readyz` probes use the same loopback routing policy. If a running canary never answers within the validation budget, the update records the observed failure as a warning, including the next troubleshooting step, and continues best effort.
 
 Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These environment bypass lists do not override managed proxy policy.

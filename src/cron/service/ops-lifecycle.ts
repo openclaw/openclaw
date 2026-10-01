@@ -1,5 +1,4 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
 import type { CronRunRecoveryResult, InterruptedStartupRun } from "../store/run-recovery.types.js";
 import {
@@ -187,22 +186,6 @@ export async function start(state: CronServiceState): Promise<void> {
   await locked(state, async () => {
     const interruptedRuns: InterruptedStartupRun[] = [];
     await ensureLoaded(state);
-    if (state.stopped || state.lifecycleGeneration !== generation) {
-      return;
-    }
-    if (state.deps.legacyDefaultAgentId) {
-      const rewritten = await materializeLegacyDefaultCronJobOwners({
-        storePath: state.deps.storePath,
-        legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
-      });
-      if (rewritten > 0) {
-        state.deps.log.info(
-          { storePath: state.deps.storePath, rewritten },
-          "cron: assigned legacy jobs to the retained owner",
-        );
-        await ensureLoaded(state, { forceReload: true });
-      }
-    }
     if (state.stopped || state.lifecycleGeneration !== generation) {
       return;
     }

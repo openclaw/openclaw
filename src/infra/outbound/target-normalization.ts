@@ -56,16 +56,12 @@ export function resolveReservedTargetLiteral(params: {
   if (!stripped || /^[@#]/.test(stripped) || /^(channel|group|user):/i.test(stripped)) {
     return undefined;
   }
-  const normalized = normalizeOptionalLowercaseString(stripped);
-  if (!normalized) {
-    return undefined;
-  }
-  const reserved = new Set(
-    reservedLiterals
-      .map(normalizeOptionalLowercaseString)
-      .filter((literal): literal is string => Boolean(literal)),
-  );
-  return reserved.has(normalized) ? normalized : undefined;
+  const normalized = stripped.toLowerCase();
+  return reservedLiterals.some(
+    (literal) => normalizeOptionalLowercaseString(literal) === normalized,
+  )
+    ? normalized
+    : undefined;
 }
 
 function resolveTargetNormalizer(
@@ -106,12 +102,9 @@ function resolvePreparedPluginSignatureId(plugin: ChannelPlugin): number {
  */
 export function normalizeTargetForProvider(
   provider: string,
-  raw?: string,
+  raw = "",
   plugin?: ChannelPlugin,
 ): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
   const fallback = normalizeOptionalString(raw);
   if (!fallback) {
     return undefined;

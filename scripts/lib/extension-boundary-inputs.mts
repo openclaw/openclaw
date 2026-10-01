@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import {
@@ -8,6 +8,10 @@ import {
 } from "./build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
 import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
+import {
+  replayDeclarationLookups,
+  type DeclarationLookup,
+} from "./native-declaration-filesystem.mts";
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 
 export const LOCAL_SDK_ROOT = "packages/plugin-sdk/dist";
@@ -61,6 +65,7 @@ const GENERATOR_INPUTS = [
 /** Successful bounded compiler membership feeds the shared snapshot policy. */
 export class BoundaryInputSnapshot extends CompilerInputSnapshot {
   private readonly boundary: ReturnType<typeof createDeclarationInputBoundary>;
+  private readonly lookupFacts = new Map<string, DeclarationLookup>();
 
   constructor(rootDir: string, generatorInputs: string[] = []) {
     const boundary = createDeclarationInputBoundary(rootDir);
@@ -76,6 +81,160 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     this.boundary = boundary;
   }
 
+  private readReceipt(inputReceipt: string) {
+    const receipt = this.boundary.assert(inputReceipt);
+    const info: unknown = JSON.parse(this.readText(receipt));
+    if (
+      !info ||
+      typeof info !== "object" ||
+      Array.isArray(info) ||
+      Object.keys(info).length !== 2 ||
+      !("inputs" in info) ||
+      !("lookups" in info) ||
+      !Array.isArray(info.inputs) ||
+      info.inputs.length === 0 ||
+      !Array.isArray(info.lookups) ||
+      info.lookups.length === 0
+    ) {
+      throw new Error(`Invalid bounded compiler input receipt: ${receipt}`);
+    }
+    const normalizedPath = (file: unknown): string => {
+      if (typeof file !== "string" || !file || path.isAbsolute(file)) {
+        throw new Error(`Invalid bounded compiler lookup path: ${receipt}`);
+      }
+      const normalized = portableRelativePath(this.rootDir, this.boundary.assert(file)) || ".";
+      if (normalized !== file) {
+        throw new Error(`Invalid bounded compiler lookup path: ${receipt}`);
+      }
+      return file;
+    };
+    const names = (value: unknown): value is string[] =>
+      Array.isArray(value) &&
+      value.every(
+        (name) =>
+          typeof name === "string" &&
+          name.length > 0 &&
+          name !== "." &&
+          name !== ".." &&
+          path.basename(name) === name,
+      ) &&
+      new Set(value).size === value.length;
+    const lookups = info.lookups.map((value: unknown): DeclarationLookup => {
+      if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value) ||
+        Object.keys(value).length !== 3 ||
+        !("kind" in value) ||
+        !("path" in value) ||
+        !("result" in value)
+      ) {
+        throw new Error(`Invalid bounded compiler lookup: ${receipt}`);
+      }
+      const file = normalizedPath(value.path);
+      if (
+        (value.kind === "readFile" ||
+          value.kind === "fileExists" ||
+          value.kind === "directoryExists") &&
+        typeof value.result === "boolean"
+      ) {
+        return { kind: value.kind, path: file, result: value.result };
+      }
+      if (value.kind === "realpath") {
+        return { kind: value.kind, path: file, result: normalizedPath(value.result) };
+      }
+      if (
+        value.kind === "getAccessibleEntries" &&
+        value.result &&
+        typeof value.result === "object" &&
+        !Array.isArray(value.result) &&
+        Object.keys(value.result).length === 2 &&
+        "files" in value.result &&
+        "directories" in value.result &&
+        names(value.result.files) &&
+        names(value.result.directories)
+      ) {
+        const { files, directories } = value.result;
+        if (files.every((name) => !directories.includes(name))) {
+          return { kind: value.kind, path: file, result: { files, directories } };
+        }
+      }
+      throw new Error(`Invalid bounded compiler lookup result: ${receipt}`);
+    });
+    const inputs = info.inputs.map(normalizedPath);
+    const keys = lookups.map(({ kind, path: file }) => `${kind}\0${file}`);
+    const reads = lookups
+      .filter((lookup) => lookup.kind === "readFile" && lookup.result)
+      .map((lookup) => lookup.path)
+      .toSorted();
+    if (
+      new Set(keys).size !== keys.length ||
+      JSON.stringify(keys) !== JSON.stringify(keys.toSorted()) ||
+      JSON.stringify(inputs) !== JSON.stringify(reads)
+    ) {
+      throw new Error(`Incomplete or ambiguous bounded compiler input receipt: ${receipt}`);
+    }
+    return { inputs, lookups };
+  }
+
+  private resolutionFingerprint(lookups: DeclarationLookup[]) {
+    const expected = JSON.stringify(lookups);
+    const pending = lookups.filter(
+      (lookup) => !this.lookupFacts.has(`${lookup.kind}\0${lookup.path}`),
+    );
+    // Match byte/topology snapshot lifetime; a new before/after owner probes again.
+    if (pending.length) {
+      const observed = replayDeclarationLookups(
+        this.rootDir,
+        (file) => this.boundary.assert(file),
+        pending,
+        this.readText,
+      );
+      for (const lookup of observed) {
+        this.lookupFacts.set(`${lookup.kind}\0${lookup.path}`, lookup);
+      }
+    }
+    const current = lookups.map((lookup) => this.lookupFacts.get(`${lookup.kind}\0${lookup.path}`));
+    if (JSON.stringify(current) !== expected) {
+      throw new Error("Bounded compiler resolution lookups changed");
+    }
+    return createHash("sha256").update(expected).digest("hex");
+  }
+
+  matchesReceipt(
+    record: ArtifactRecord | undefined,
+    config: string,
+    args: string[],
+    required: string[],
+    inputReceipt: string,
+    outputRoot?: string,
+  ) {
+    try {
+      const receiptPath = portableRelativePath(this.rootDir, this.boundary.assert(inputReceipt));
+      if (
+        !record ||
+        !required.includes(receiptPath) ||
+        record.outputs[receiptPath] !== this.hash(receiptPath)
+      ) {
+        return false;
+      }
+      const receipt = this.readReceipt(inputReceipt);
+      if (JSON.stringify(receipt.inputs) !== JSON.stringify(record.inputs)) {
+        return false;
+      }
+      return this.matches(
+        record,
+        config,
+        args,
+        required,
+        outputRoot,
+        this.resolutionFingerprint(receipt.lookups),
+      );
+    } catch {
+      return false;
+    }
+  }
+
   record(
     config: string,
     args: string[],
@@ -85,35 +244,17 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     startedAt: number,
     outputRoot?: string,
   ): ArtifactRecord {
-    const receipt = this.boundary.assert(inputReceipt);
-    const info: unknown = JSON.parse(fs.readFileSync(receipt, "utf8"));
-    if (
-      !info ||
-      typeof info !== "object" ||
-      Array.isArray(info) ||
-      Object.keys(info).length !== 1 ||
-      !("inputs" in info) ||
-      !Array.isArray(info.inputs) ||
-      info.inputs.length === 0 ||
-      !info.inputs.every(
-        (file): file is string =>
-          typeof file === "string" && file.length > 0 && !path.isAbsolute(file),
-      )
-    ) {
-      throw new Error(`Invalid bounded compiler input receipt: ${receipt}`);
+    const { inputs, lookups } = this.readReceipt(inputReceipt);
+    if (!outputs.includes(portableRelativePath(this.rootDir, this.boundary.assert(inputReceipt)))) {
+      throw new Error("Bounded compiler receipt is absent from its output inventory");
     }
-    const inputs = [...new Set(info.inputs)]
-      .map((file) => {
-        const normalized = portableRelativePath(this.rootDir, this.boundary.assert(file));
-        if (normalized !== file) {
-          throw new Error(`Invalid bounded compiler input path: ${file}`);
-        }
-        return normalized;
-      })
-      .toSorted();
+    // Fresh compilation still seals the entire namespace before narrowing reuse.
+    const sealed = this.seal(config, args, inputs, before, startedAt, outputRoot);
+    const fingerprint = this.resolutionFingerprint(lookups);
     return {
       version: ARTIFACT_CACHE_VERSION,
-      ...this.seal(config, args, inputs, before, startedAt, outputRoot),
+      ...sealed,
+      signature: this.signature(config, args, inputs, outputRoot, fingerprint),
       outputs: Object.fromEntries(outputs.map((file) => [file, this.hash(file)])),
     };
   }

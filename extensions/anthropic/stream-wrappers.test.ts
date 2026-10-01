@@ -339,8 +339,9 @@ describe("anthropic stream wrappers", () => {
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 
-  it("ignores unresolved auto fast mode at the provider boundary", () => {
+  it("leaves auto unresolved and falls back from Ultrafast to Fast at the provider boundary", () => {
     expect(resolveAnthropicFastMode({ fastMode: "auto" })).toBeUndefined();
+    expect(resolveAnthropicFastMode({ fastMode: "ultrafast" })).toBe(true);
   });
 
   it("uses native fast mode and premium pricing for Claude Opus 5", () => {

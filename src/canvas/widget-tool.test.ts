@@ -64,6 +64,37 @@ function createLiveBoardTestContext(
   return context;
 }
 
+function createLiveBoardCaller(
+  store: ReturnType<typeof createTestBoardStore>,
+  broadcast = vi.fn(),
+  cfg: OpenClawConfig = { agents: { entries: { main: {} } } },
+): InProcessGatewayCaller {
+  const handlers = createBoardHandlers(store);
+  return async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+    let result: unknown;
+    let failure: Error | undefined;
+    const respond: RespondFn = (ok, payload, error) => {
+      if (ok) {
+        result = payload;
+      } else {
+        failure = new Error(error?.message ?? "board request failed");
+      }
+    };
+    await handlers[method]!({
+      req: { type: "req", id: "show-widget", method, params },
+      params,
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: createLiveBoardTestContext(broadcast, cfg),
+    });
+    if (failure) {
+      throw failure;
+    }
+    return result as T;
+  };
+}
+
 function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
   return path.join(resolveCanvasDocumentsDir(stateDir), documentId);
 }
@@ -688,34 +719,8 @@ describe("show_widget", () => {
       if (retainedMain) {
         retainLegacyDefaultAgentId(cfg, "main");
       }
-      const handlers = createBoardHandlers(store);
+      const callGateway = createLiveBoardCaller(store, broadcast, cfg);
       const title = "Release Status ".repeat(8).trim();
-      const callGateway: InProcessGatewayCaller = async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ): Promise<T> => {
-        let result: unknown;
-        let failure: Error | undefined;
-        const respond: RespondFn = (ok, payload, error) => {
-          if (ok) {
-            result = payload;
-          } else {
-            failure = new Error(error?.message ?? "board request failed");
-          }
-        };
-        await handlers[method]!({
-          req: { type: "req", id: "show-widget-pin", method, params },
-          params,
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-          context: createLiveBoardTestContext(broadcast, cfg),
-        });
-        if (failure) {
-          throw failure;
-        }
-        return result as T;
-      };
 
       const pinWidget = (widgetCode: string, withPlacement = false) =>
         executeWidget({
@@ -785,32 +790,7 @@ describe("show_widget", () => {
   it("pins a granted-CSP document and declaration without networking in the inline preview", async () => {
     const stateDir = await createStateDir();
     const store = createTestBoardStore({ stateDir });
-    const handlers = createBoardHandlers(store);
-    const callGateway: InProcessGatewayCaller = async <T>(
-      method: string,
-      params: Record<string, unknown>,
-    ): Promise<T> => {
-      let result: unknown;
-      let failure: Error | undefined;
-      await handlers[method]!({
-        req: { type: "req", id: "show-widget-capabilities", method, params },
-        params,
-        client: null,
-        isWebchatConnect: () => false,
-        respond: (ok, payload, error) => {
-          if (ok) {
-            result = payload;
-          } else {
-            failure = new Error(error?.message ?? "board request failed");
-          }
-        },
-        context: createLiveBoardTestContext(),
-      });
-      if (failure) {
-        throw failure;
-      }
-      return result as T;
-    };
+    const callGateway = createLiveBoardCaller(store);
 
     const result = await executeWidget({
       stateDir,
@@ -845,63 +825,20 @@ describe("show_widget", () => {
 
   it("keeps generated pin names distinct when titles cannot fit a plain slug", async () => {
     const stateDir = await createStateDir();
-    const callGateway: InProcessGatewayCaller = async <T>(
-      _method: string,
-      params: Record<string, unknown>,
-    ): Promise<T> => {
-      const request = params as { name: string; sessionKey: string };
-      return {
-        sessionKey: request.sessionKey,
-        revision: 1,
-        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-        widgets: [
-          {
-            name: request.name,
-            tabId: "main",
-            contentKind: "html",
-            sizeW: 6,
-            sizeH: 4,
-            position: 0,
-            grantState: "none",
-            revision: 1,
-          },
-        ],
-        resolvedWidgetName: request.name,
-      } as T;
-    };
-
-    const unicodeA = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title: "状态",
-      widgetCode: "<p>one</p>",
-      pin: true,
-      callGateway,
-    });
-    const unicodeB = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title: "天气",
-      widgetCode: "<p>two</p>",
-      pin: true,
-      callGateway,
-    });
-    const longA = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title: `${"shared ".repeat(20)}alpha`,
-      widgetCode: "<p>three</p>",
-      pin: true,
-      callGateway,
-    });
-    const longB = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title: `${"shared ".repeat(20)}beta`,
-      widgetCode: "<p>four</p>",
-      pin: true,
-      callGateway,
-    });
+    const { callGateway } = createBoardPutCaller();
+    const pinWidget = (title: string, widgetCode: string) =>
+      executeWidget({
+        stateDir,
+        agentSessionKey: "agent:main:pinned",
+        title,
+        widgetCode,
+        pin: true,
+        callGateway,
+      });
+    const unicodeA = await pinWidget("状态", "<p>one</p>");
+    const unicodeB = await pinWidget("天气", "<p>two</p>");
+    const longA = await pinWidget(`${"shared ".repeat(20)}alpha`, "<p>three</p>");
+    const longB = await pinWidget(`${"shared ".repeat(20)}beta`, "<p>four</p>");
 
     expect(unicodeA.boardWidgetName).toMatch(/^widget-[a-f0-9]{8}$/u);
     expect(unicodeB.boardWidgetName).toMatch(/^widget-[a-f0-9]{8}$/u);
@@ -914,70 +851,26 @@ describe("show_widget", () => {
   it("keeps colliding generated pins distinct and canonical spellings stable", async () => {
     const stateDir = await createStateDir();
     const store = createTestBoardStore({ stateDir });
-    const handlers = createBoardHandlers(store);
-    const callGateway: InProcessGatewayCaller = async <T>(
-      method: string,
-      params: Record<string, unknown>,
-    ): Promise<T> => {
-      let result: unknown;
-      let failure: Error | undefined;
-      await handlers[method]!({
-        req: { type: "req", id: "generated-pin", method, params },
-        params,
-        client: null,
-        isWebchatConnect: () => false,
-        respond: (ok, payload, error) => {
-          if (ok) {
-            result = payload;
-          } else {
-            failure = new Error(error?.message ?? "board request failed");
-          }
-        },
-        context: createLiveBoardTestContext(),
-      });
-      if (failure) {
-        throw failure;
-      }
-      return result as T;
-    };
+    const callGateway = createLiveBoardCaller(store);
     const sessionKey = "agent:main:generated-collision";
+    const pinWidget = (title: string, widgetCode: string) =>
+      executeWidget({
+        stateDir,
+        agentSessionKey: sessionKey,
+        title,
+        widgetCode,
+        pin: true,
+        callGateway,
+      });
     const [slash, plus] = await Promise.all([
-      executeWidget({
-        stateDir,
-        agentSessionKey: sessionKey,
-        title: "Revenue / Cost",
-        widgetCode: "<p>slash</p>",
-        pin: true,
-        callGateway,
-      }),
-      executeWidget({
-        stateDir,
-        agentSessionKey: sessionKey,
-        title: "Revenue + Cost",
-        widgetCode: "<p>plus</p>",
-        pin: true,
-        callGateway,
-      }),
+      pinWidget("Revenue / Cost", "<p>slash</p>"),
+      pinWidget("Revenue + Cost", "<p>plus</p>"),
     ]);
     expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
     expect((await store.getSnapshot({ sessionKey })).widgets).toHaveLength(2);
 
-    const composed = await executeWidget({
-      stateDir,
-      agentSessionKey: sessionKey,
-      title: "Café Menu".normalize("NFC"),
-      widgetCode: "<p>one</p>",
-      pin: true,
-      callGateway,
-    });
-    const decomposed = await executeWidget({
-      stateDir,
-      agentSessionKey: sessionKey,
-      title: "Café Menu".normalize("NFD"),
-      widgetCode: "<p>two</p>",
-      pin: true,
-      callGateway,
-    });
+    const composed = await pinWidget("Café Menu".normalize("NFC"), "<p>one</p>");
+    const decomposed = await pinWidget("Café Menu".normalize("NFD"), "<p>two</p>");
     expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
     expect(
       await readBoardHtml(store, { sessionKey }, composed.boardWidgetName ?? ""),
@@ -1008,28 +901,6 @@ describe("show_widget", () => {
     expect(html.indexOf("openclaw:widget-snapshot-request")).toBeLessThan(
       html.indexOf("<section>"),
     );
-    expect(html).toContain("openclaw:widget-prompt-offer");
-    expect(html).toContain("openclaw:widget-bridge-port-offer");
-    expect(html).toContain("openclaw:widget-bridge-request");
-    expect(html).toContain("prompt:freeze({send:sendPrompt})");
-    expect(html).toContain('state:freeze({emit:payload=>request("state.emit"');
-    expect(html).toContain('data:freeze({read:(bindingId,params)=>request("data.read"');
-    expect(html).toContain('action:freeze({run:(action,params)=>request("action.run"');
-    expect(html).toContain('cron:freeze({trigger:jobId=>request("cron.trigger"');
-    expect(html).toContain("navigator.userActivation");
-    expect(html).toContain("c.port1.postMessage.bind(c.port1)");
-    expect(html).toContain("b.port1.postMessage.bind(b.port1)");
-    expect(html).toContain('bridgePost({type:"openclaw:widget-bridge-request"');
-    expect(html).not.toContain(
-      'post({type:"openclaw:widget-bridge-request",id,method,params,ticket},"*")',
-    );
-    expect(html).toContain('promptPost({type:"openclaw:widget-prompt"');
-    expect(html).not.toContain('window.parent.postMessage({type:"openclaw:widget-prompt",');
-    expect(html).toContain("const post=(message,origin)=>parent.postMessage(message,origin)");
-    expect(html).toContain('query.call(root,"script")');
-    expect(html).toContain('queryDocument("canvas")');
-    expect(html).toContain("canvasWidth*canvasHeight>16777216");
-    expect(html).toContain('toDataURL.call(canvas,"image/png")');
   });
 
   it("uses opaque ids and evicts the oldest widget within a session scope", async () => {

@@ -1,5 +1,6 @@
 // Covers reply-type plugin actions: outbound text hygiene (citation control
 // markers) and current-source delivery marking for implicit reply routes.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";

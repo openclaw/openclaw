@@ -1,4 +1,5 @@
 // Legacy cron JSONL run-log migration into the cron-owned history store.
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,8 +8,7 @@ import type { CronRunLogEntry } from "../../../cron/run-log-types.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../../../infra/state-migrations.cron-run-logs.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
-
-const LEGACY_CRON_RUN_LOG_ARCHIVE_SUFFIX = ".migrated";
+import { archiveLegacyCronFile } from "./legacy-store-migration.js";
 
 async function listLegacyCronRunLogFiles(storePath: string): Promise<string[]> {
   const runsDir = path.resolve(path.dirname(path.resolve(storePath)), "runs");
@@ -40,28 +40,19 @@ function parseCronRunLogEntriesFromJsonl(
   return entries;
 }
 
-function archiveLegacyCronRunLogSync(filePath: string): void {
-  const archivePath = `${filePath}${LEGACY_CRON_RUN_LOG_ARCHIVE_SUFFIX}`;
-  if (!fsSync.existsSync(filePath) || fsSync.existsSync(archivePath)) {
-    return;
-  }
-  try {
-    fsSync.renameSync(filePath, archivePath);
-  } catch {
-    // Best-effort cleanup after durable cron-history import.
-  }
-}
-
 /** Import legacy per-job JSONL run logs into existing Cron history rows in task_runs and archive migrated files. */
 export async function migrateLegacyCronRunLogsToSqlite(
   storePath: string,
-): Promise<{ importedFiles: number }> {
+): Promise<{ importedFiles: number; warnings?: string[] }> {
   const resolvedStorePath = path.resolve(storePath);
   const jsonlFiles = await listLegacyCronRunLogFiles(resolvedStorePath);
+  const warnings: string[] = [];
 
   for (const filePath of jsonlFiles) {
     const jobId = path.basename(filePath, ".jsonl");
-    const entries = parseCronRunLogEntriesFromJsonl(fsSync.readFileSync(filePath, "utf-8"), {
+    const raw = fsSync.readFileSync(filePath);
+    const sourceSha256 = createHash("sha256").update(raw).digest("hex");
+    const entries = parseCronRunLogEntriesFromJsonl(raw.toString("utf-8"), {
       jobId,
     });
 
@@ -88,12 +79,16 @@ export async function migrateLegacyCronRunLogsToSqlite(
       }
       migrateLegacyCronRunLogsToTaskRuns(db);
     });
-    archiveLegacyCronRunLogSync(filePath);
+    const archive = await archiveLegacyCronFile(filePath, sourceSha256);
+    if (!archive.ok && archive.deferred) {
+      warnings.push(archive.reason);
+    } else if (!archive.ok) {
+      throw new Error(`Cron history imported but could not archive ${filePath}: ${archive.reason}`);
+    }
   }
-  return { importedFiles: jsonlFiles.length };
+  return { importedFiles: jsonlFiles.length, ...(warnings.length > 0 ? { warnings } : {}) };
 }
 
-/** Return true when legacy cron JSONL run log files exist next to a store path. */
 export async function legacyCronRunLogFilesExist(storePath: string): Promise<boolean> {
   return (await listLegacyCronRunLogFiles(storePath)).length > 0;
 }

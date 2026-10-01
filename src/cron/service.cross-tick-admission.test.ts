@@ -29,7 +29,10 @@ import { onTimer } from "./service/timer.test-support.js";
 import * as cronStoreModule from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { finishCronRunReceipt, prepareCronRunReceiptClaim } from "./store/run-receipt-store.js";
+import {
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
+} from "./store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
@@ -205,7 +208,7 @@ describe("cron service cross-tick admission", () => {
       expect(state.timer).not.toBeNull();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
 
-      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       await onTimer(state);
 
       // The resumed tick rechecks capacity to run the second due job.
@@ -219,7 +222,7 @@ describe("cron service cross-tick admission", () => {
       ).toBe(true);
     } finally {
       unrelated!.release();
-      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       stop(state);
     }
   });
@@ -286,7 +289,7 @@ describe("cron service cross-tick admission", () => {
       ).toMatchObject({ lastRunStatus: "ok" });
     } finally {
       if (foreignReceipt) {
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: foreignReceipt,
           status: "interrupted",
           finishedAtMs: t0 + 2,
@@ -439,6 +442,7 @@ describe("cron service cross-tick admission", () => {
       blocked.release(directA);
       // The capacity wake still observes active receipts before admitting pending work.
       await pendingStarted.promise;
+      await blocked.started(pending);
       expect(blocked.run.mock.calls.filter(([{ job }]) => job.id === pending.id)).toHaveLength(1);
       await directRunA;
 

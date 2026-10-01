@@ -54,7 +54,6 @@ vi.mock("./audit.nondeep.runtime.js", () => ({
   collectHooksHardeningFindings: collectNoFindings,
   collectLikelyMultiUserSetupFindings: collectNoFindings,
   collectMinimalProfileOverrideFindings: collectNoFindings,
-  collectModelHygieneFindings: collectNoFindings,
   collectNodeDangerousAllowCommandFindings: collectNoFindings,
   collectNodeDenyCommandPatternFindings: collectNoFindings,
   collectSandboxDangerousConfigFindings: collectNoFindings,

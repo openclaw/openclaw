@@ -30,6 +30,11 @@ export const agentProcessTestEntrypoints = {
     sourceWorkerName: "sessions/settings-storage",
     distWorkerPath: "agents/sessions/settings-storage.js",
   },
+  settingsManager: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "sessions/settings-manager",
+    distWorkerPath: "agents/sessions/settings-manager.js",
+  },
   readRetention: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "sessions/tools/read.retention.test-support",

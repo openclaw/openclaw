@@ -13,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
-import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
 import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
@@ -92,31 +91,6 @@ export type GoogleMeetExportWarning = {
   message: string;
 };
 
-export type GoogleMeetExportManifest = {
-  generatedAt: string;
-  request?: GoogleMeetExportRequest;
-  tokenSource?: "cached-access-token" | "refresh-token";
-  calendarEvent?: GoogleMeetCalendarLookupResult;
-  inputs: {
-    artifacts?: string;
-    attendance?: string;
-  };
-  counts: {
-    conferenceRecords: number;
-    artifacts: number;
-    attendanceRows: number;
-    recordings: number;
-    transcripts: number;
-    transcriptEntries: number;
-    smartNotes: number;
-    warnings: number;
-  };
-  conferenceRecords: string[];
-  files: string[];
-  zipFile?: string;
-  warnings: GoogleMeetExportWarning[];
-};
-
 export type SetupOptions = {
   json?: boolean;
   mode?: string;
@@ -179,6 +153,18 @@ export function parseGoogleMeetTransport(
     return value;
   }
   throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
+}
+
+export function resolveCliJoinRequest(url: string, options: JoinOptions) {
+  return {
+    url,
+    transport: parseGoogleMeetTransport(options.transport),
+    mode: parseGoogleMeetMode(options.mode),
+    message: options.message,
+    dialInNumber: options.dialInNumber,
+    pin: options.pin,
+    dtmfSequence: options.dtmfSequence,
+  };
 }
 
 export function parseGoogleMeetBrowserTransport(

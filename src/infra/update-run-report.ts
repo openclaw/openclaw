@@ -28,6 +28,18 @@ import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
 
 const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
+const FAILURE_RECOVERY_HINTS: Readonly<Record<string, string>> = {
+  "preflight-insufficient-space":
+    "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
+  "pnpm-corepack-missing":
+    "This pnpm checkout could not auto-enable pnpm because corepack is missing. Install pnpm manually or install Node with corepack available, then rerun the update command.",
+  "pnpm-corepack-enable-failed":
+    "Run corepack enable manually or install pnpm manually, then rerun the update command.",
+  "pnpm-npm-bootstrap-failed":
+    "This pnpm checkout could not bootstrap pnpm from npm automatically. Install pnpm manually, then rerun the update command.",
+  "preferred-manager-unavailable":
+    "Install the checkout's declared package manager manually, then rerun the update command.",
+};
 
 /** Recognizes pending projections written by this renderer, including shipped reports. */
 export function isUpdateRunReportInProgress(markdown: string): boolean {
@@ -197,28 +209,11 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
     return nextAction ? [] : [`Next step: ${UPDATE_DESTINATION_RECOVERY}`];
   }
-  const hints: string[] = [];
-  if (run.reason === "preflight-insufficient-space") {
-    hints.push(
-      "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
-    );
-  } else if (run.reason === "pnpm-corepack-missing") {
-    hints.push(
-      "This pnpm checkout could not auto-enable pnpm because corepack is missing. Install pnpm manually or install Node with corepack available, then rerun the update command.",
-    );
-  } else if (run.reason === "pnpm-corepack-enable-failed") {
-    hints.push(
-      "Run corepack enable manually or install pnpm manually, then rerun the update command.",
-    );
-  } else if (run.reason === "pnpm-npm-bootstrap-failed") {
-    hints.push(
-      "This pnpm checkout could not bootstrap pnpm from npm automatically. Install pnpm manually, then rerun the update command.",
-    );
-  } else if (run.reason === "preferred-manager-unavailable") {
-    hints.push(
-      "Install the checkout's declared package manager manually, then rerun the update command.",
-    );
-  }
+  const hint =
+    run.reason && Object.hasOwn(FAILURE_RECOVERY_HINTS, run.reason)
+      ? FAILURE_RECOVERY_HINTS[run.reason]
+      : undefined;
+  const hints = hint ? [hint] : [];
   if (!nextAction) {
     hints.push("Run openclaw triage to diagnose and repair the failed update.");
   }

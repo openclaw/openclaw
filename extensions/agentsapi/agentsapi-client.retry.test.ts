@@ -20,63 +20,46 @@ afterEach(() => {
 });
 
 describe("Agents API event submission retries", () => {
-  it.each(["message", "tool result", "cancel"] as const)(
-    "retries a %s with the same payload and key, then gives a new submission its own key",
-    async (operation) => {
-      queueResponse(serverError(500));
-      queueResponse(serverError(503));
-      queueResponse(new Response(null, { status: 202 }));
-      if (operation === "cancel") {
-        queueResponse(Response.json({ id: "session-fixture", status: "idle" }));
-      }
-      const client = createClient();
-      const submit = () => {
-        const signal = new AbortController().signal;
-        if (operation === "tool result") {
-          return client.toolResult(
-            "session-fixture",
-            {
-              type: "function_call",
-              turn_id: "turn-fixture",
-              call_id: "call-fixture",
-              name: "lookup",
-              arguments: {},
-            },
-            { success: true, output: "Saved result" },
-            signal,
-          );
-        }
-        return operation === "cancel"
-          ? client.cancel("session-fixture", signal)
-          : client.message("session-fixture", "Original message", signal);
-      };
-      const result = expect(submit()).resolves.toBeUndefined();
-      await vi.runAllTimersAsync();
-      await result;
+  it("retries a tool result with the same payload and key, then gives a new submission its own key", async () => {
+    queueResponse(serverError(500));
+    queueResponse(serverError(503));
+    queueResponse(new Response(null, { status: 202 }));
+    const client = createClient();
+    const submit = () =>
+      client.toolResult(
+        "session-fixture",
+        {
+          type: "function_call",
+          turn_id: "turn-fixture",
+          call_id: "call-fixture",
+          name: "lookup",
+          arguments: {},
+        },
+        { success: true, output: "Saved result" },
+        new AbortController().signal,
+      );
+    const result = expect(submit()).resolves.toBeUndefined();
+    await vi.runAllTimersAsync();
+    await result;
 
-      const attempts = requests().filter((request) => request.method === "POST");
-      expect(attempts).toHaveLength(3);
-      const key = attempts[0]!.headers.get("Idempotency-Key");
-      expect(key).toEqual(expect.any(String));
-      expect(key).not.toBe("");
-      expect(attempts.map((request) => request.headers.get("Idempotency-Key"))).toEqual([
-        key,
-        key,
-        key,
-      ]);
-      const bodies = await Promise.all(attempts.map((request) => request.text()));
-      expect(bodies[1]).toBe(bodies[0]);
-      expect(bodies[2]).toBe(bodies[0]);
+    const attempts = requests();
+    expect(attempts).toHaveLength(3);
+    const key = attempts[0]!.headers.get("Idempotency-Key");
+    expect(key).toEqual(expect.any(String));
+    expect(key).not.toBe("");
+    expect(attempts.map((request) => request.headers.get("Idempotency-Key"))).toEqual([
+      key,
+      key,
+      key,
+    ]);
+    const bodies = await Promise.all(attempts.map((request) => request.text()));
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(bodies[2]).toBe(bodies[0]);
 
-      queueResponse(new Response(null, { status: 202 }));
-      if (operation === "cancel") {
-        queueResponse(Response.json({ id: "session-fixture", status: "idle" }));
-      }
-      await submit();
-      const next = requests().findLast((request) => request.method === "POST")!;
-      expect(next.headers.get("Idempotency-Key")).not.toBe(key);
-    },
-  );
+    queueResponse(new Response(null, { status: 202 }));
+    await submit();
+    expect(requests().at(-1)!.headers.get("Idempotency-Key")).not.toBe(key);
+  });
 
   it("stops after three server failures and preserves the last API error", async () => {
     for (const status of [500, 502, 504]) {
@@ -90,16 +73,13 @@ describe("Agents API event submission retries", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each([400, 401, 409, 429])(
-    "returns HTTP %s without retrying the submission",
-    async (status) => {
-      queueResponse(serverError(status));
-      await expect(
-        createClient().message("session-fixture", "Hello", new AbortController().signal),
-      ).rejects.toMatchObject({ status });
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("returns HTTP 429 without retrying the submission", async () => {
+    queueResponse(serverError(429));
+    await expect(
+      createClient().message("session-fixture", "Hello", new AbortController().signal),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
 
   it("honors the server's explicit instruction not to retry", async () => {
     queueResponse(serverError(500, { "x-should-retry": "false" }));

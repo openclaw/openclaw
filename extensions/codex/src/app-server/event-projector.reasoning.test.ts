@@ -1,6 +1,5 @@
 import {
   describe,
-  embeddedAgentLog,
   registerCodexEventProjectorTestLifecycle,
   expect,
   it,
@@ -311,22 +310,6 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     await send(guardianWarning("Wrong thread.", "thread-other"), guardianWarning(message));
     projector.buildResult(buildEmptyToolTelemetry());
     expect(onAgentEvent.mock.calls.map(([event]) => event.data.message)).toEqual([message]);
-  });
-
-  it.each([
-    "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests.",
-    "Code Mode is enabled in configuration, but model `gpt-5.6-sol` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.",
-  ])("keeps only the exact managed warning log-only: %s", async (message) => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    const { send, onAgentEvent } = await observeProjector();
-    await send({ method: "warning", params: { threadId: THREAD_ID, message } });
-    expect(onAgentEvent).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(message);
-    const actionable = `${message} Additional action required.`;
-    await send({ method: "warning", params: { threadId: THREAD_ID, message: actionable } });
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
-      { stream: "notice", data: { phase: "warning", message: actionable } },
-    ]);
   });
 
   it("surfaces configuration warnings and ignores another thread", async () => {

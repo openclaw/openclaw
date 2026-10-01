@@ -50,10 +50,8 @@ export class FaceTimeCallInstance {
     action: () => Promise<T>;
   }): Promise<T> {
     const previous = this.#commandTail;
-    let release = () => {};
-    this.#commandTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise, resolve: release } = createDeferred<void>();
+    this.#commandTail = promise;
     await previous;
     try {
       this.assertCurrent(params.generation, params.allowClosing);

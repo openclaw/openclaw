@@ -198,6 +198,10 @@ describe("fleet backup runtime", () => {
     const outside = path.join(root, "outside-secret");
     await fs.writeFile(outside, "must-not-archive");
     await fs.symlink(outside, path.join(record.dataDir, "outside-link"));
+    await fs.link(
+      path.join(record.dataDir, "state.txt"),
+      path.join(record.dataDir, "state-copy.txt"),
+    );
     const containers = containerMock();
     const publicationMethods: string[] = [];
     __setFsSafeTestHooksForTest({
@@ -218,16 +222,30 @@ describe("fleet backup runtime", () => {
     expect(result.skippedSymlinks).toBe(1);
     const entries: string[] = [];
     const contents: string[] = [];
+    const stateFiles = new Map<string, string>();
     await tar.t({
       file: result.archivePath,
       onentry: (entry) => {
         entries.push(entry.path);
+        if (entry.path === "data/state.txt" || entry.path === "data/state-copy.txt") {
+          expect(entry.type).toBe("File");
+          entry.on("data", (chunk) => {
+            stateFiles.set(entry.path, (stateFiles.get(entry.path) ?? "") + String(chunk));
+          });
+        }
         entry.on("data", (chunk) => contents.push(String(chunk)));
       },
     });
     expect(entries).toEqual(
-      expect.arrayContaining(["manifest.json", "data/state.txt", "auth/secret.txt"]),
+      expect.arrayContaining([
+        "manifest.json",
+        "data/state.txt",
+        "data/state-copy.txt",
+        "auth/secret.txt",
+      ]),
     );
+    expect(stateFiles.get("data/state.txt")).toBe("state");
+    expect(stateFiles.get("data/state-copy.txt")).toBe("state");
     expect(entries).not.toContain("data/outside-link");
     expect(contents.join("")).not.toContain("must-not-archive");
     const leftovers = (await fs.readdir(path.dirname(result.archivePath))).filter((name) =>

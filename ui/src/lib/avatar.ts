@@ -19,15 +19,9 @@ export function resolveAgentAvatarUrl(
     normalizeOptionalString(agent.identity?.avatarUrl),
     normalizeOptionalString(agent.identity?.avatar),
   ];
-  for (const candidate of candidates) {
-    if (!candidate) {
-      continue;
-    }
-    if (isRenderableControlUiAvatarUrl(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
+  return (
+    candidates.find((candidate) => candidate && isRenderableControlUiAvatarUrl(candidate)) ?? null
+  );
 }
 
 // Chat-render variant: accept blob URLs produced by authenticated avatar fetches.

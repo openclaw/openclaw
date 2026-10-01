@@ -51,24 +51,21 @@ export function applyLegacyCompatibilityStep(params: {
     authoredConfig: params.snapshot.parsed,
     resolvedConfig: params.snapshot.sourceConfig,
   });
-  if (otelOwnership) {
-    const ownership = otelOwnership;
-    if (ownership.kind === "manual") {
-      const otelPath = "diagnostics.otel.protocol";
-      const targets =
-        ownership.targetPaths.length > 0
-          ? ` Inspect these candidate source files and remove or replace ${otelPath} = "grpc" from every definition: ${ownership.targetPaths.join(", ")}.`
-          : ` Remove or replace ${otelPath} = "grpc" in the owning $include directive or included file.`;
-      return {
-        state: params.state,
-        issueLines: [
-          ...issueLines,
-          `- ${otelPath}: Doctor cannot safely rewrite this $include ownership.${targets} No config files were changed.`,
-        ],
-        changeLines: [],
-        blocksWrite: true,
-      };
-    }
+  if (otelOwnership?.kind === "manual") {
+    const otelPath = "diagnostics.otel.protocol";
+    const targets =
+      otelOwnership.targetPaths.length > 0
+        ? ` Inspect these candidate source files and remove or replace ${otelPath} = "grpc" from every definition: ${otelOwnership.targetPaths.join(", ")}.`
+        : ` Remove or replace ${otelPath} = "grpc" in the owning $include directive or included file.`;
+    return {
+      state: params.state,
+      issueLines: [
+        ...issueLines,
+        `- ${otelPath}: Doctor cannot safely rewrite this $include ownership.${targets} No config files were changed.`,
+      ],
+      changeLines: [],
+      blocksWrite: true,
+    };
   }
   const hasAuthoredIncludes = containsAuthoredInclude(params.snapshot.parsed);
   // State repairs must inspect resolved paths, not literal env templates.

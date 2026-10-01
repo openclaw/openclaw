@@ -271,6 +271,11 @@ function writeLedger(params: {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<LedgerDatabase>(db);
+      const completion = {
+        finished_at: params.now,
+        status: "completed",
+        report_json: reportJson,
+      };
       executeSqliteQuerySync(
         db,
         kysely
@@ -278,18 +283,20 @@ function writeLedger(params: {
           .values({
             id: runId,
             started_at: params.now,
-            finished_at: params.now,
-            status: "completed",
-            report_json: reportJson,
+            ...completion,
           })
-          .onConflict((conflict) =>
-            conflict.column("id").doUpdateSet({
-              finished_at: params.now,
-              status: "completed",
-              report_json: reportJson,
-            }),
-          ),
+          .onConflict((conflict) => conflict.column("id").doUpdateSet(completion)),
       );
+      const sourceCompletion = {
+        source_path: params.stateDir,
+        source_sha256: identityHash,
+        source_record_count: params.outcomes.length,
+        last_run_id: runId,
+        status: "completed",
+        imported_at: params.now,
+        removed_source: 1,
+        report_json: reportJson,
+      };
       executeSqliteQuerySync(
         db,
         kysely
@@ -297,29 +304,11 @@ function writeLedger(params: {
           .values({
             source_key: SOURCE_KEY,
             migration_kind: MIGRATION_KIND,
-            source_path: params.stateDir,
             target_table: "session_nodes",
-            source_sha256: identityHash,
             source_size_bytes: null,
-            source_record_count: params.outcomes.length,
-            last_run_id: runId,
-            status: "completed",
-            imported_at: params.now,
-            removed_source: 1,
-            report_json: reportJson,
+            ...sourceCompletion,
           })
-          .onConflict((conflict) =>
-            conflict.column("source_key").doUpdateSet({
-              source_path: params.stateDir,
-              source_sha256: identityHash,
-              source_record_count: params.outcomes.length,
-              last_run_id: runId,
-              status: "completed",
-              imported_at: params.now,
-              removed_source: 1,
-              report_json: reportJson,
-            }),
-          ),
+          .onConflict((conflict) => conflict.column("source_key").doUpdateSet(sourceCompletion)),
       );
     },
     { env: params.env },

@@ -1,4 +1,3 @@
-// Provider-neutral live inference ladder for OpenClaw sessions.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { listAgentIds } from "../agents/agent-scope.js";

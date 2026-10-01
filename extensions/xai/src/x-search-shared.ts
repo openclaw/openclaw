@@ -1,3 +1,4 @@
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
@@ -6,7 +7,6 @@ import {
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import {
-  coerceXaiToolConfig,
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
@@ -25,13 +25,6 @@ export type XaiXSearchOptions = {
   enableVideoUnderstanding?: boolean;
 };
 
-type XaiXSearchResult = {
-  content: string;
-  citations: string[];
-  inlineCitations?: XaiWebSearchResponse["inline_citations"];
-  truncated?: true;
-};
-
 export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
   return resolveNormalizedXaiToolModel({
     config,
@@ -40,11 +33,11 @@ export function resolveXaiXSearchModel(config?: Record<string, unknown>): string
 }
 
 export function resolveXaiXSearchEndpoint(config?: Record<string, unknown>): string {
-  return resolveXaiResponsesEndpoint(coerceXaiToolConfig(config).baseUrl);
+  return resolveXaiResponsesEndpoint(asNonArrayRecord(config).baseUrl);
 }
 
 export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown>): boolean {
-  return coerceXaiToolConfig(config).inlineCitations === true;
+  return asNonArrayRecord(config).inlineCitations === true;
 }
 
 export function resolveXaiXSearchMaxTurns(config?: Record<string, unknown>): number | undefined {
@@ -97,7 +90,7 @@ export async function requestXaiXSearch(params: {
   maxTurns?: number;
   options: XaiXSearchOptions;
   signal?: AbortSignal;
-}): Promise<XaiXSearchResult> {
+}) {
   params.signal?.throwIfAborted();
   return await requestXaiResponsesTool(
     {

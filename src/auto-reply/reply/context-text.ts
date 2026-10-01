@@ -1,4 +1,3 @@
-// Formats finalized message context into prompt-visible text.
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 
 /** Resolves normalized text for slash/bang command parsing. */

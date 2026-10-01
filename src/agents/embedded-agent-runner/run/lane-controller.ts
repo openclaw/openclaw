@@ -227,6 +227,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       {
         ...opts,
         taskIdentity,
+        sessionTarget: {
+          agentId: options.getParams().agentId,
+          sessionKey: options.getParams().sessionKey,
+          sessionId: options.getParams().sessionId,
+        },
         abortSignal,
         // Only the outer session lease may count queued global admission as
         // progress; an admitted global task must still time out when it stalls.

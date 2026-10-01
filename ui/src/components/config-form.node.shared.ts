@@ -69,6 +69,21 @@ export type ConfigNodeRenderer = (
   params: ConfigNodeRenderParams,
 ) => TemplateResult | typeof nothing;
 
+export function configChildRenderOptions(params: ConfigNodeRenderParams) {
+  return {
+    hints: params.hints,
+    rawAvailable: params.rawAvailable,
+    maskSensitive: params.maskSensitive,
+    unsupported: params.unsupported,
+    disabled: params.disabled,
+    compact: params.compact,
+    commitOnBlur: params.commitOnBlur,
+    revealSensitive: params.revealSensitive,
+    isSensitivePathRevealed: params.isSensitivePathRevealed,
+    onToggleSensitivePath: params.onToggleSensitivePath,
+  };
+}
+
 export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
   const { label, help } = resolveConfigFieldMeta(params.path, params.schema, params.hints);
   const showLabel = params.showLabel ?? true;

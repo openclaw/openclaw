@@ -385,7 +385,7 @@ describe("worker desktop tunnels", () => {
     expect(fake.starts).toHaveLength(0);
   });
 
-  it("does not cancel a same-epoch retry when its retained predecessor exits", async () => {
+  it("retries the same epoch after explicit recovery of a failed stop", async () => {
     const fake = readyRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
     await acquire(manager, 1, { protocol: "rfb", port: 5900 });
@@ -394,6 +394,8 @@ describe("worker desktop tunnels", () => {
     try {
       await expect(manager.stop("worker:one", 1)).rejects.toBe(failure);
       stop.mockRestore();
+      await expect(acquire(manager, 1, { protocol: "rfb", port: 5900 })).rejects.toBe(failure);
+      await manager.stop("worker:one", 1);
       await expect(acquire(manager, 1, { protocol: "rfb", port: 5900 })).resolves.toMatchObject({
         attachment: { kind: "unix-socket" },
       });

@@ -113,23 +113,13 @@ export function renderWhatsAppCard(params: {
           : nothing
       }
       ${renderChannelActionRow(html`
-        ${
-          linked
-            ? html`<button
-                class="btn"
-                ?disabled=${props.channels.whatsappBusy}
-                @click=${() => props.onWhatsAppStart(true)}
-              >
-                ${t("common.relink")}
-              </button>`
-            : html`<button
-                class="btn primary"
-                ?disabled=${props.channels.whatsappBusy}
-                @click=${() => props.onWhatsAppStart(false)}
-              >
-                ${props.channels.whatsappBusy ? t("common.working") : t("common.showQr")}
-              </button>`
-        }
+        <button
+          class=${linked ? "btn" : "btn primary"}
+          ?disabled=${props.channels.whatsappBusy}
+          @click=${() => props.onWhatsAppStart(linked)}
+        >
+          ${t(linked ? "common.relink" : props.channels.whatsappBusy ? "common.working" : "common.showQr")}
+        </button>
         ${
           hasQr
             ? html`<button

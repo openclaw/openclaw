@@ -299,9 +299,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
   const configuredIds = listConfiguredSessionStoreAgentIds(cfg);
   const configuredAgentIds = new Set(configuredIds);
   const incognitoTargets = includeIncognito ? listOpenIncognitoAgentDatabases() : [];
-  const incognitoTargetKeys = new Set(
-    incognitoTargets.map((target) => `${target.agentId}\0${target.storePath}`),
-  );
+  const incognitoTargetKeys = new Set(incognitoTargets.map(storeTargetKey));
   const diagnostics: string[] = [];
   const { physicalTargets, onResolvedTarget } = capturePhysicalStoreTargets();
   let sharedStoreRowOwner: ResolvedGatewaySessionStoreTargets["sharedStoreRowOwner"];
@@ -330,7 +328,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
     },
   );
   const durableTargets = candidates.filter(
-    (target) => !incognitoTargetKeys.has(`${target.agentId}\0${target.storePath}`),
+    (target) => !incognitoTargetKeys.has(storeTargetKey(target)),
   );
   const resolved = Object.freeze({
     configuredAgentIds,
@@ -340,7 +338,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
     durableTargets: Object.freeze(durableTargets.map((target) => Object.freeze({ ...target }))),
     incognitoTargets: Object.freeze(
       candidates
-        .filter((target) => incognitoTargetKeys.has(`${target.agentId}\0${target.storePath}`))
+        .filter((target) => incognitoTargetKeys.has(storeTargetKey(target)))
         .map((target) => Object.freeze({ ...target })),
     ),
     sharedStoreRowOwner,

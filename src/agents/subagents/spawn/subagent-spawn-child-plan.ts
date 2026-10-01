@@ -16,7 +16,7 @@ import type {
   SpawnSubagentParams,
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import { resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
+import { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import {
   readRequesterFastMode,
   readRequesterPreferences,
@@ -26,21 +26,6 @@ import {
   resolveAgentConfig,
   resolveSandboxRuntimeStatus,
 } from "./subagent-spawn.runtime.js";
-
-function buildResolvedSubagentModelMetadata(resolvedModel?: string): {
-  resolvedModel?: string;
-  resolvedProvider?: string;
-} {
-  const modelRef = resolvedModel?.trim();
-  if (!modelRef) {
-    return {};
-  }
-  const { provider } = splitModelRef(modelRef);
-  return {
-    resolvedModel: modelRef,
-    ...(provider ? { resolvedProvider: provider } : {}),
-  };
-}
 
 export async function resolveSubagentChildPlan(params: {
   request: SpawnSubagentParams;
@@ -188,7 +173,7 @@ export async function resolveSubagentChildPlan(params: {
   }
   const { resolvedModel } = modelPlan;
   if (params.swarmEnabled && params.request.fastMode === undefined) {
-    modelPlan.initialSessionPatch.fastMode = await readRequesterFastMode({
+    const fastMode = await readRequesterFastMode({
       cfg: params.cfg,
       requesterInternalKey: params.requesterInternalKey,
       requesterAgentId: params.requesterAgentId,
@@ -197,17 +182,13 @@ export async function resolveSubagentChildPlan(params: {
       assertActive: params.ctx.assertActive,
     });
     params.ctx.assertActive?.();
+    if (fastMode !== undefined) {
+      modelPlan.initialSessionPatch.fastMode = fastMode;
+    }
   }
-  const resolvedLaunchModel = splitModelRef(resolvedModel);
-  const launchAuthorization: SubagentLaunchAuthorization | undefined =
-    params.request.model?.trim() && resolvedLaunchModel.model
-      ? {
-          modelOverride: {
-            ...(resolvedLaunchModel.provider ? { provider: resolvedLaunchModel.provider } : {}),
-            model: resolvedLaunchModel.model,
-          },
-        }
-      : undefined;
+  const launchAuthorization: SubagentLaunchAuthorization | undefined = params.request.model?.trim()
+    ? { modelOverride: modelPlan.modelRef }
+    : undefined;
   return {
     ok: true as const,
     resolved: {
@@ -223,7 +204,10 @@ export async function resolveSubagentChildPlan(params: {
       targetAgentDir,
       modelPlan,
       launchAuthorization,
-      resolvedModelMetadata: buildResolvedSubagentModelMetadata(resolvedModel),
+      resolvedModelMetadata: {
+        resolvedModel,
+        resolvedProvider: modelPlan.modelRef.provider,
+      },
     },
   };
 }

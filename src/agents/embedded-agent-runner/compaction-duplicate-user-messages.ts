@@ -1,6 +1,3 @@
-/**
- * Removes short-window duplicate user turns from compaction summaries.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 
@@ -27,10 +24,7 @@ function normalizeUserMessageContent(content: unknown): string | undefined {
   }
   const textParts: string[] = [];
   for (const block of content) {
-    if (!isRecord(block)) {
-      return undefined;
-    }
-    if (block.type === "image") {
+    if (!isRecord(block) || block.type === "image") {
       return undefined;
     }
     if (block.type === "text" && typeof block.text === "string") {

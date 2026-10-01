@@ -1,4 +1,3 @@
-// Control UI view renders debug screen content.
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { repeat } from "lit/directives/repeat.js";

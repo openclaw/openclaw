@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import type {
   SessionPlacementDiskSpace,
+  SessionPlacementWorkerRuntimeInstall,
   SessionSharingRole,
   SessionSuggestion,
   SessionSuggestionResolution,
@@ -18,7 +19,11 @@ import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatSelectionSource,
+} from "../../lib/chat/chat-types.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -30,6 +35,7 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
+import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   buildPendingInputQueueItems,
@@ -55,8 +61,9 @@ import {
   renderComposerQuestionDock,
   resolveComposerQuestionPanel,
 } from "./components/chat-composer-question.ts";
-import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
+import { renderChatComposerQueue } from "./components/chat-composer-view.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
@@ -96,12 +103,14 @@ export type ChatProps = Omit<
   | "commentAttachments"
   | "commentsDisabled"
   | "onAddToChat"
+  | "onCompanionSelection"
   | "onOpenSession"
   | "onSend"
 > &
   Omit<ChatComposerProps, "notices" | "footerContent" | "disabled" | "onOpenImage"> &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
+    onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
     transcript: ChatTranscriptController;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
@@ -118,6 +127,7 @@ export type ChatProps = Omit<
     providerReviewNotice?: TemplateResult | typeof nothing;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
+    workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
     inlineApproval?: ExecApprovalRequest | null;
     approvalBusy?: boolean;
     approvalCanGrant: boolean;
@@ -129,12 +139,10 @@ export type ChatProps = Omit<
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
     swarm?: Parameters<typeof renderChatSwarmProgress>[0];
-    focusMode?: boolean;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
     onRefresh: () => void;
-    onToggleFocusMode?: () => void;
     onDismissError?: () => void;
     agentsList: {
       agents: Array<{
@@ -145,8 +153,6 @@ export type ChatProps = Omit<
       defaultId?: string;
     } | null;
     onSessionSelect?: (sessionKey: string) => void;
-    onRevealWorkspaceFile?: (path: string) => void;
-    header?: TemplateResult | typeof nothing;
     sessionSuggestions?: readonly SessionSuggestion[];
     sessionSuggestionRole?: SessionSharingRole;
     sessionSuggestionBusyIds?: ReadonlySet<string>;
@@ -158,6 +164,7 @@ export type ChatProps = Omit<
     ) => void;
     pullRequests?: ControlUiSessionPullRequest[];
     pullRequestsGateway?: ApplicationGateway;
+    pullRequestsSessionId?: string;
     pullRequestsBranch?: ControlUiSessionBranch;
     pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
     onOpenSessionDiff?: () => void;
@@ -185,6 +192,51 @@ export function renderChat(props: ChatProps) {
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const focusComposer = () =>
+    props.transcript.scrollElement
+      ?.closest(".chat")
+      ?.querySelector<HTMLElement>(".agent-chat__composer-combobox > textarea")
+      ?.focus({ preventScroll: true });
+  const openSelectionComment = (
+    selection: ChatSelectionSource,
+    anchorRect: DOMRect,
+    stage: (attachment: ChatAttachment) => boolean,
+    onCancel?: () => void,
+    selectionContextOnly = false,
+  ) => {
+    showChatAnnotationEditor({
+      paneId: props.paneId,
+      anchorRect,
+      sourceRange: props.transcript.scrollElement
+        ? resolveChatCommentAnchor(props.transcript.scrollElement, selection)?.range
+        : undefined,
+      comment: "",
+      readSignal: props.readSignal,
+      onCancel,
+      onSave: (comment): boolean => {
+        if (props.readSignal?.aborted) {
+          return true;
+        }
+        if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
+          showToast({ message: uploadsDisabledMessage() });
+          return false;
+        }
+        const attachment = createChatSelectionAttachment(
+          { ...selection, comment, sessionKey: props.sessionKey },
+          { attachmentLimits: props.attachmentLimits, selectionContextOnly },
+          stagedAttachmentBytes(props),
+        );
+        if (!attachment) {
+          return false;
+        }
+        if (!stage(attachment)) {
+          releaseChatAttachmentPayloads([attachment]);
+          return false;
+        }
+        return true;
+      },
+    });
+  };
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);
   const asyncQuestions = createAsyncQuestionPresentation(questionState, {
@@ -256,45 +308,28 @@ export function renderChat(props: ChatProps) {
           : undefined,
         onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
         onDiscardQueuedMessage: props.onQueueRemove,
-        onCompanionPrefill:
-          props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
+        onCompanionSelection:
+          props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
+            ? (selection, anchorRect) =>
+                openSelectionComment(
+                  selection,
+                  anchorRect,
+                  (attachment) =>
+                    props.onCompanionStageAttachment?.(attachment, props.sessionKey) ?? false,
+                  undefined,
+                  true,
+                )
+            : undefined,
         commentAttachments: props.suggestionComposer ? undefined : props.attachments,
         commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
         onAddToChat:
           props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
-            ? (selection, anchorRect) => {
-                const focusComposer = () =>
-                  props.transcript.scrollElement
-                    ?.closest(".chat")
-                    ?.querySelector<HTMLElement>(".agent-chat__composer-combobox > textarea")
-                    ?.focus({ preventScroll: true });
-                showChatAnnotationEditor({
-                  paneId: props.paneId,
+            ? (selection, anchorRect) =>
+                openSelectionComment(
+                  selection,
                   anchorRect,
-                  sourceRange: props.transcript.scrollElement
-                    ? resolveChatCommentAnchor(props.transcript.scrollElement, selection)?.range
-                    : undefined,
-                  comment: "",
-                  readSignal: props.readSignal,
-                  onCancel: focusComposer,
-                  onSave: (comment): boolean => {
-                    if (props.readSignal?.aborted || !props.onAttachmentsChange) {
-                      return true;
-                    }
-                    if (!uploadsEnabled(props.uploadConfig)) {
-                      showToast({ message: uploadsDisabledMessage() });
-                      return false;
-                    }
-                    const attachment = createChatSelectionAttachment(
-                      {
-                        ...selection,
-                        comment,
-                        sessionKey: props.sessionKey,
-                      },
-                      props.attachmentLimits,
-                      stagedAttachmentBytes(props),
-                    );
-                    if (!attachment) {
+                  (attachment) => {
+                    if (!props.onAttachmentsChange) {
                       return false;
                     }
                     props.onAttachmentsChange([
@@ -305,8 +340,8 @@ export function renderChat(props: ChatProps) {
                     focusComposer();
                     return true;
                   },
-                });
-              }
+                  focusComposer,
+                )
             : undefined,
         onOpenSession: props.onSessionSelect,
         // Portaled menus can outlive a render; resolve focus from the current session owner.
@@ -376,6 +411,8 @@ export function renderChat(props: ChatProps) {
     ${renderChatPullRequests({
       pullRequests: props.pullRequests ?? [],
       gateway: props.pullRequestsGateway,
+      sessionId: props.pullRequestsSessionId,
+      basePath: props.basePath,
       sessionKey: scopedSessionArtifactKey(props.sessionKey, props.currentAgentId ?? undefined),
       presented: props.presented ?? true,
       branch: props.pullRequestsBranch,
@@ -411,13 +448,15 @@ export function renderChat(props: ChatProps) {
     props.queue,
     displayedPendingInputs ?? [],
   );
+  const displayQueue = [
+    ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
+    ...inputDisplay.queue,
+  ];
+  const composerProps = { ...props, displayQueue };
   const defaultComposer = renderChatComposer({
     ...props,
     asyncQuestions,
-    displayQueue: [
-      ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
-      ...inputDisplay.queue,
-    ],
+    displayQueue,
     footerContent,
     notices,
     onRequestUpdate: requestUpdate,
@@ -448,6 +487,10 @@ export function renderChat(props: ChatProps) {
           getChatComposerState(props.paneId),
           requestUpdate,
         ),
+      )}
+      ${renderChatComposerQueue(
+        composerProps,
+        Boolean(props.canAbort && props.onAbort) && !hasTerminalRunStatus(props.runStatus),
       )}
       ${
         props.suggestionComposer
@@ -568,7 +611,8 @@ export function renderChat(props: ChatProps) {
           ? nothing
           : html`<openclaw-chat-comment-controller
               .paneId=${props.paneId}
-              .props=${{ ...props, disabled: !canCompose }}
+              .props=${props}
+              .disabled=${!canCompose}
               .sessionKey=${props.sessionKey}
               .presented=${props.presented ?? true}
             ></openclaw-chat-comment-controller>`
@@ -578,7 +622,7 @@ export function renderChat(props: ChatProps) {
           <div class="chat-split-container">
             <div class="chat-main">
               <div class="chat-main__conversation-column">
-                ${props.header ?? nothing} ${renderChatTopbarNotices(props)}
+                ${renderChatTopbarNotices(props)}
                 <openclaw-plugin-contributions
                   .kind=${"header"}
                   .sessionKey=${props.sessionKey}

@@ -3,7 +3,8 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {

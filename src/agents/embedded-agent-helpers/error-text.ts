@@ -19,6 +19,7 @@ import {
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
 } from "../failover/assistant-request-failure-copy.js";
+import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
@@ -95,12 +96,7 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
   return {
     provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
     model: opts?.model ?? msg.model,
-    reason:
-      classification?.kind === "reason"
-        ? classification.reason
-        : classification
-          ? ("context_overflow" as const)
-          : null,
+    reason: failoverReasonFromClassification(classification),
     status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),

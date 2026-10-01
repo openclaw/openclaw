@@ -1,4 +1,3 @@
-// Shared option/contribution contracts for setup, onboarding, and doctor flow UIs.
 type FlowDocsLink = {
   path: string;
   label?: string;
@@ -38,7 +37,7 @@ export type FlowContribution<Value extends string = string> = {
 export function sortFlowContributionsByLabel<T extends FlowContribution>(
   contributions: readonly T[],
 ): T[] {
-  return [...contributions].toSorted(
+  return contributions.toSorted(
     (left, right) =>
       left.option.label.localeCompare(right.option.label) ||
       left.option.value.localeCompare(right.option.value),

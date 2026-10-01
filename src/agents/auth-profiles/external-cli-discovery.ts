@@ -46,7 +46,6 @@ type ProviderSetDiscoveryParams = {
   allowKeychainPrompt?: false;
 };
 
-/** Disables external CLI auth discovery. */
 function externalCliDiscoveryNone(params?: { config?: OpenClawConfig }): ExternalCliAuthDiscovery {
   return {
     mode: "none",

@@ -5,6 +5,7 @@ import {
   openFromForeground,
   scenario,
 } from "./command-palette.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -84,7 +85,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, mentionScenario());
       const heldModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       try {
         await page.goto(`${suite.server.baseUrl}chat`);

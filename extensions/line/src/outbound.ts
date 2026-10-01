@@ -66,20 +66,17 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       rawLineData.card && !rawLineData.flexMessage
         ? { ...rawLineData, flexMessage: renderLineCard(rawLineData.card) }
         : rawLineData;
-    const lineRuntime = runtime.channel.line;
     const location = lineData.location;
     const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
-    const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
-    const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
-    const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
-    const sendTemplate = lineRuntime?.pushTemplateMessage ?? outboundRuntime.pushTemplateMessage;
-    const sendLocation = lineRuntime?.pushLocationMessage ?? outboundRuntime.pushLocationMessage;
-    const sendQuickReplies =
-      lineRuntime?.pushTextMessageWithQuickReplies ??
-      outboundRuntime.pushTextMessageWithQuickReplies;
-    const buildTemplate =
-      lineRuntime?.buildTemplateMessageFromPayload ??
-      outboundRuntime.buildTemplateMessageFromPayload;
+    const {
+      pushMessageLine: sendText,
+      pushMessagesLine: sendBatch,
+      pushFlexMessage: sendFlex,
+      pushTemplateMessage: sendTemplate,
+      pushLocationMessage: sendLocation,
+      pushTextMessageWithQuickReplies: sendQuickReplies,
+      buildTemplateMessageFromPayload: buildTemplate,
+    } = outboundRuntime;
     const authorize = assertDirectAdapterHandoff
       ? () => {
           assertDirectAdapterHandoff();
@@ -127,9 +124,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const quickReply = quickReplyItems.length
       ? createLineQuickReply(quickReplyItems)
       : quickReplies.length
-        ? (lineRuntime?.createQuickReplyItems ?? outboundRuntime.createQuickReplyItems)(
-            quickReplies,
-          )
+        ? outboundRuntime.createQuickReplyItems(quickReplies)
         : undefined;
     const quickReplyLabels = quickReplyItems.length
       ? quickReplyItems.map((item) => item.label)
@@ -201,7 +196,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           continue;
         }
         await recordResult(
-          (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
+          outboundRuntime.sendMessageLine(to, "", {
             ...sendOptions,
             ...mediaOptions,
             mediaUrl: trimmed,

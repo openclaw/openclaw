@@ -377,6 +377,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                 ? renderSidebarFile(content, props.onViewRawText, props.fileView)
                 : content.kind === "session-diff"
                   ? html`<openclaw-session-diff
+                      .owner=${content.owner}
                       .loader=${content.load}
                       .loadFileText=${content.loadFileText ?? null}
                       .execNode=${props.fileView?.execNode ?? null}

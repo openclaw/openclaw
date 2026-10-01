@@ -21,12 +21,35 @@ describe("noteSourceInstallIssues", () => {
     vi.mocked(note).mockReset();
   });
 
+  it("reports the host owner instead of source package repair advice", async () => {
+    await withTestDir({ prefix: "openclaw-doctor-install-host-" }, async (root) => {
+      await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
+      await writeFile(
+        root,
+        "openclaw-install-owner.json",
+        JSON.stringify({
+          schemaVersion: 1,
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        }),
+      );
+
+      await noteSourceInstallIssues(root);
+
+      expect(note).toHaveBeenCalledExactlyOnceWith(
+        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+        "Install",
+      );
+    });
+  });
+
   it("does not treat a packaged workspace config as a source checkout", async () => {
     await withTestDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
       await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
       await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
 
-      noteSourceInstallIssues(root);
+      await noteSourceInstallIssues(root);
 
       expect(note).not.toHaveBeenCalled();
     });
@@ -38,7 +61,7 @@ describe("noteSourceInstallIssues", () => {
       await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
       await writeFile(root, "src/entry.ts", "export {};\n");
 
-      noteSourceInstallIssues(root);
+      await noteSourceInstallIssues(root);
 
       expect(note).toHaveBeenCalledWith(
         [
@@ -74,7 +97,7 @@ describe("source self-link recovery", () => {
   ])("recognizes valid %s overrides", async (_name, workspace) => {
     await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
       await writeSourceCheckout(root, workspace);
-      noteSourceInstallIssues(root);
+      await noteSourceInstallIssues(root);
       expect(note).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("pnpm-workspace.yaml contains a self-referential"),
         "Install",
@@ -98,7 +121,7 @@ describe("source self-link recovery", () => {
   ])("does not report a self-link for %s", async (_name, workspace) => {
     await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
       await writeSourceCheckout(root, workspace);
-      expect(() => noteSourceInstallIssues(root)).not.toThrow();
+      await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
       expect(note).not.toHaveBeenCalled();
     });
   });
@@ -113,7 +136,7 @@ describe("source self-link recovery", () => {
           "package.json",
           JSON.stringify({ [section]: { openclaw: "link:." } }),
         );
-        noteSourceInstallIssues(root);
+        await noteSourceInstallIssues(root);
         expect(note).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining("package.json has a self-referential"),
           "Install",
@@ -133,7 +156,7 @@ describe("source self-link recovery", () => {
       await fs.rm(path.join(root, "pnpm-workspace.yaml"));
       await fs.mkdir(path.join(root, "pnpm-workspace.yaml"));
       await writeFile(root, "package-lock.json", "{}");
-      expect(() => noteSourceInstallIssues(root)).not.toThrow();
+      await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
       expect(note).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("package-lock.json present"),
         "Install",
@@ -145,7 +168,7 @@ describe("source self-link recovery", () => {
     await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
       await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
       await writeFile(root, "package.json", "{");
-      expect(() => noteSourceInstallIssues(root)).not.toThrow();
+      await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
       expect(note).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("pnpm-workspace.yaml contains"),
         "Install",
@@ -154,7 +177,7 @@ describe("source self-link recovery", () => {
   });
 
   it("ignores healthy manifest values, absent roots, and packaged self-link lookalikes", async () => {
-    noteSourceInstallIssues(null);
+    await noteSourceInstallIssues(null);
     await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
       await writeSourceCheckout(root, "packages: ['.']\n");
       await writeFile(
@@ -165,7 +188,7 @@ describe("source self-link recovery", () => {
           devDependencies: { openclaw: null },
         }),
       );
-      noteSourceInstallIssues(root);
+      await noteSourceInstallIssues(root);
       await fs.rm(path.join(root, "src/entry.ts"));
       await writeFile(root, "pnpm-workspace.yaml", "overrides: {openclaw: 'link:.'}\n");
       await writeFile(
@@ -173,7 +196,7 @@ describe("source self-link recovery", () => {
         "package.json",
         JSON.stringify({ dependencies: { openclaw: "link:." } }),
       );
-      noteSourceInstallIssues(root);
+      await noteSourceInstallIssues(root);
       expect(note).not.toHaveBeenCalled();
     });
   });
@@ -192,7 +215,7 @@ describe("self-link target and diagnostic accuracy", () => {
           "package.json",
           JSON.stringify({ dependencies: { openclaw: link }, devDependencies: { openclaw: link } }),
         );
-        noteSourceInstallIssues(root);
+        await noteSourceInstallIssues(root);
         expect(note).not.toHaveBeenCalled();
       });
     },
@@ -214,7 +237,7 @@ describe("self-link target and diagnostic accuracy", () => {
         const link = `link:${target}`;
         await writeSourceCheckout(root, `overrides: {openclaw: '${link}'}\n`);
         await writeFile(root, "package.json", JSON.stringify({ dependencies: { openclaw: link } }));
-        noteSourceInstallIssues(root);
+        await noteSourceInstallIssues(root);
         expect(note).toHaveBeenCalledOnce();
         const warning = String(vi.mocked(note).mock.calls[0]?.[0]);
         expect(warning).toContain("package.json has a self-referential");

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { resolveRuntimeWorkerArgv } from "openclaw/plugin-sdk/process-runtime";
 import type { WorkerConfig } from "./config.js";
 import type { ClassificationInput, ClassificationResult } from "./models/types.js";
@@ -165,15 +166,13 @@ export class InferenceWorkerClient {
       windowsHide: true,
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
-    let resolveClosed!: () => void;
+    const { promise: closed, resolve: resolveClosed } = createDeferred();
     const worker: Worker = {
       child,
       ready: false,
       retiring: false,
-      closed: new Promise<void>((resolve) => {
-        resolveClosed = resolve;
-      }),
-      resolveClosed: () => resolveClosed(),
+      closed,
+      resolveClosed,
     };
     this.worker = worker;
     child.on("message", (message: unknown) => this.receive(worker, message));

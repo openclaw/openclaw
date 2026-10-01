@@ -1,3 +1,4 @@
+import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
 import {
@@ -111,6 +112,10 @@ class I18nManager {
     return this.locale;
   }
 
+  public getRequestedLocale(): Locale {
+    return this.pendingLocale ?? this.locale;
+  }
+
   public getSystemLocale(): Locale {
     const language =
       typeof globalThis.navigator?.language === "string" ? globalThis.navigator.language : null;
@@ -123,22 +128,6 @@ class I18nManager {
 
   public async useSystemLocale() {
     return this.applyLocale(this.getSystemLocale(), false, false);
-  }
-
-  private loadLocaleTranslationOnce(locale: Locale): Promise<TranslationMap | null> {
-    const existing = this.inFlightLocaleLoads.get(locale);
-    if (existing) {
-      return existing;
-    }
-    const load = this.loadLocaleTranslation(locale);
-    const clearSettledLoad = () => {
-      if (this.inFlightLocaleLoads.get(locale) === load) {
-        this.inFlightLocaleLoads.delete(locale);
-      }
-    };
-    this.inFlightLocaleLoads.set(locale, load);
-    void load.then(clearSettledLoad, clearSettledLoad);
-    return load;
   }
 
   private async applyLocale(locale: Locale, retrying: boolean, shouldPersist: boolean) {
@@ -161,7 +150,12 @@ class I18nManager {
       this.pendingLocale = locale;
       this.pendingLocaleShouldPersist = shouldPersist;
       try {
-        const translation = await this.loadLocaleTranslationOnce(locale);
+        const translation = await getOrCreatePromise(
+          this.inFlightLocaleLoads,
+          locale,
+          () => this.loadLocaleTranslation(locale),
+          { evictOnSettled: true },
+        );
         if (!translation) {
           return;
         }

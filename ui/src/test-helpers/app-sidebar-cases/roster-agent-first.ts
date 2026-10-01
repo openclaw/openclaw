@@ -295,7 +295,11 @@ describe("AppSidebar agent roster", () => {
       }),
     ]);
     sidebar.sidebarAgentsMode = "roster";
-    sidebar.hasSessionDraft = (sessionKey) => sessionKey === key("automation");
+    sidebar.storedOutboxes = {
+      total: 0,
+      attentionCountForSession: () => 0,
+      hasSessionDraft: (sessionKey) => sessionKey === key("automation"),
+    };
     sessions.sessions.setPullRequestSummary(key("open"), { numbers: [101], state: "open" });
     sessions.sessions.setPullRequestSummary(key("merged"), { numbers: [102], state: "merged" });
     await vi.waitFor(() => expect(sessionKeys(sidebar)).toHaveLength(7));
@@ -473,7 +477,7 @@ describe("AppSidebar agent roster", () => {
   });
 
   it("suspends all mounted sidebar consumers while hidden, retaining a visible Agents home", async () => {
-    const { sidebar, context, provider, request } = await mountRoster();
+    const { sidebar, context, provider, sessions } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     await vi.waitFor(() =>
@@ -482,7 +486,9 @@ describe("AppSidebar agent roster", () => {
     const store = rosterActivityStore(context);
     await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
     const listCount = () =>
-      request.mock.calls.filter(([method]) => method === "sessions.list").length;
+      sessions.list.mock.calls.filter(
+        ([query]) => query?.archivedFilter === "all" && !query.agentId && !query.spawnedBy,
+      ).length;
     const initial = listCount();
     sidebar.navigationVisible = false;
     await vi.waitFor(() => expect(store.snapshot.result).toBeNull());

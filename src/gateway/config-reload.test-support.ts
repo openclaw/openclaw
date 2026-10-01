@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import chokidar from "chokidar";
 import { assert, expect, onTestFinished, vi, type TestContext } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -18,7 +17,7 @@ import {
   type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
 } from "./config-reload.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 
 const activeReloaders = new Set<ReturnType<typeof startGatewayConfigReloaderImpl>>();
 let currentTest: { timeout: number; signal: AbortSignal } | undefined;
@@ -257,8 +256,7 @@ export function createReloaderHarness(
     onRestart?: Parameters<typeof startGatewayConfigReloader>[0]["onRestart"];
   } = {},
 ) {
-  const watcher = createWatcherMock();
-  vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+  const watcher = installWatcherMock();
   const onConfigChange = vi.fn(
     options.onConfigChange ?? (async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
   );

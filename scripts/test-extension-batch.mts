@@ -33,7 +33,7 @@ import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mts
 import type { VitestBatchRunParams } from "./lib/vitest-batch-runner.mts";
 import { prepareVitestRuntime } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
-import { resolveExplicitVitestMode } from "./lib/vitest-cli-mode.mts";
+import { collectVitestFileFilters, resolveExplicitVitestMode } from "./lib/vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { createVitestReportOwner, type VitestReportOutcome } from "./lib/vitest-report-owner.mts";
 import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
@@ -178,6 +178,7 @@ function preparePlanGroup(
   exactExcludePaths: Set<string>,
 ) {
   const targets = resolveGroupTargets(group, exactExcludePaths);
+  const hasFileFilters = collectVitestFileFilters(vitestArgs).length > 0;
   const targetChunks =
     targets.length === 0
       ? []
@@ -195,7 +196,11 @@ function preparePlanGroup(
         group,
         watchMode: resolveExplicitVitestMode(["run", ...vitestArgs]) === "watch",
       }),
-      targets: chunk.map((target) => relativizeExtensionVitestPath(target)),
+      targets: chunk.map((target) => {
+        const relative = relativizeExtensionVitestPath(target);
+        // Bound default discovery without widening an explicit CLI file selection.
+        return !hasFileFilters && group.extensionIds.includes(relative) ? `${relative}/` : relative;
+      }),
     }),
   );
   const bunInvocations: typeof invocations = [];
@@ -238,7 +243,12 @@ function combineSinglePluginGroups(
                 config,
                 args: relativizeExtensionVitestArgs(vitestArgs),
                 targets: targets.filter(
-                  (target) => !targets.some((root) => target.startsWith(`${root}/`)),
+                  (target) =>
+                    !targets.some(
+                      (root) =>
+                        root !== target &&
+                        target.startsWith(root.endsWith("/") ? root : `${root}/`),
+                    ),
                 ),
                 env: {
                   ...createGroupEnv({

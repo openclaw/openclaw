@@ -1,8 +1,3 @@
-/**
- * Spawn requester origin resolver.
- *
- * Normalizes delivery targets and route bindings so spawned runs can attribute the requesting account/channel.
- */
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
@@ -41,10 +36,6 @@ function normalizeChannelPrefix(channelId: string | undefined): string | undefin
   return normalized ? `${normalized}:` : undefined;
 }
 
-function shouldPeelRequesterPrefix(prefix: string, channelPrefix: string | undefined): boolean {
-  return Boolean(getKindForRequesterPrefix(prefix) || prefix === channelPrefix);
-}
-
 function inferPeerKindFromBareId(value: string): ChatType | undefined {
   if (value.startsWith("@")) {
     return "direct";
@@ -76,13 +67,11 @@ function extractRequesterPeer(
       break;
     }
     const prefix = match[0].toLowerCase();
-    if (!shouldPeelRequesterPrefix(prefix, channelPrefix)) {
+    const kindFromPrefix = getKindForRequesterPrefix(prefix);
+    if (!kindFromPrefix && prefix !== channelPrefix) {
       break;
     }
-    const kindFromPrefix = getKindForRequesterPrefix(prefix);
-    if (kindFromPrefix) {
-      inferredKind ??= kindFromPrefix;
-    }
+    inferredKind ??= kindFromPrefix;
     allowBareIdKindOverride ||= prefix === channelPrefix || prefix === "room:";
     value = value.slice(prefix.length).trim();
   }

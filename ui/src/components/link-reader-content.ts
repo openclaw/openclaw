@@ -3,6 +3,7 @@ import createDOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { i18n, t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { icons } from "./icons.ts";
@@ -10,7 +11,6 @@ import { linkReaderAuthorHref } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type ControlUiLinkReaderFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];
@@ -33,7 +33,7 @@ for (const kind of ["html_inline", "html_block"] as const) {
     const source = tokens[index]?.content ?? "";
     // Reader documents hide comment metadata; code examples never enter these HTML rules.
     if (source.trimStart().startsWith("<!--")) {
-      return escapeMarkdownHtml(source.replace(/<!--[\s\S]*?(?:-->|$)/gu, ""));
+      return escapeHtml(source.replace(/<!--[\s\S]*?(?:-->|$)/gu, ""));
     }
     return /^<img\s[^<>]*>\s*$/iu.test(source)
       ? source
@@ -179,7 +179,7 @@ function renderMarkdown(body: string, base: string, loadImage?: LoadImage) {
     try {
       rendered = markdown.render(body, documentOptions);
     } catch {
-      rendered = "<pre>" + escapeMarkdownHtml(body) + "</pre>";
+      rendered = "<pre>" + escapeHtml(body) + "</pre>";
     }
     const fragment = purifier.sanitize(rendered, {
       RETURN_DOM_FRAGMENT: true,

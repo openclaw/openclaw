@@ -149,19 +149,16 @@ function convertMessages<T extends GoogleApiType>(
 
   for (const message of messages) {
     if (message.role === "user") {
-      if (typeof message.content === "string") {
-        steps.push({
-          type: "user_input",
-          content: [{ type: "text", text: sanitizeSurrogates(message.content) || " " }],
-        });
-        continue;
-      }
-      const content: Extract<GoogleInteractionsStep, { type: "user_input" }>["content"] =
-        message.content.map((item) =>
+      const parts =
+        typeof message.content === "string"
+          ? [{ type: "text" as const, text: message.content }]
+          : message.content;
+      const content: Extract<GoogleInteractionsStep, { type: "user_input" }>["content"] = parts.map(
+        (item) =>
           item.type === "text"
             ? { type: "text", text: sanitizeSurrogates(item.text) || " " }
             : { type: "image", mime_type: item.mimeType, data: item.data },
-        );
+      );
       steps.push({
         type: "user_input",
         content: content.length > 0 ? content : [{ type: "text", text: " " }],

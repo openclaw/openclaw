@@ -1,6 +1,6 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -10,10 +10,10 @@ import {
 } from "./session-accessor.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-recovery-");
 
 async function createFixture() {
-  const root = tempDirs.make("openclaw-session-recovery-");
+  const root = sessionDirs.make();
   const storePath = path.join(root, "sessions.json");
   const sourceKey = "agent:main:dashboard:tombstoned";
   const successorKey = "agent:main:dashboard:recovered";

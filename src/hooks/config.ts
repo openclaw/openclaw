@@ -1,4 +1,3 @@
-// Hook config helpers read, normalize, and update hook configuration.
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import {
   evaluateRuntimeEligibility,

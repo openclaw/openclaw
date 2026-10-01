@@ -6,9 +6,12 @@ import { normalizeCapabilityProviderId } from "../plugins/provider-registry-shar
 import { truncateUtf16Safe } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { createTranscriptsStore, stopTranscriptCapture } from "./capture-operations.js";
-import { retainTranscriptStartRetry, TranscriptStartError } from "./capture-startup.js";
 import {
   activeSessions,
+  retainTranscriptStartRetry,
+  TranscriptStartError,
+} from "./capture-startup.js";
+import {
   createTranscriptSessionId,
   isTranscriptSessionStarting,
   resolveSourceProvider,

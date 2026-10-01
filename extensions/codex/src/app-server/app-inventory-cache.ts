@@ -117,11 +117,12 @@ export class CodexAppInventoryCache {
         : "fresh";
     const refreshScheduled =
       state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
+    const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...snapshot } = entry;
     return {
       state,
       key: params.key,
       revision: entry.revision,
-      snapshot: stripEntryState(entry),
+      snapshot,
       refreshScheduled,
       ...(entry.lastError ? { diagnostic: entry.lastError } : {}),
     };
@@ -173,10 +174,6 @@ export class CodexAppInventoryCache {
     this.refreshTokens.clear();
     this.diagnostics.clear();
     this.revision = 0;
-  }
-
-  getRevision(): number {
-    return this.revision;
   }
 
   private scheduleRefresh(params: RefreshParams): boolean {
@@ -270,14 +267,16 @@ export class CodexAppInventoryCache {
       }
       return snapshot;
     } catch (error) {
-      const diagnostic = {
-        message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        atMs: nowMs,
-      };
-      this.diagnostics.set(params.key, diagnostic);
-      const entry = this.entries.get(params.key);
-      if (entry) {
-        entry.lastError = diagnostic;
+      if (this.refreshTokens.get(params.key) === refreshToken) {
+        const diagnostic = {
+          message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
+          atMs: nowMs,
+        };
+        this.diagnostics.set(params.key, diagnostic);
+        const entry = this.entries.get(params.key);
+        if (entry) {
+          entry.lastError = diagnostic;
+        }
       }
       embeddedAgentLog.warn("codex app inventory refresh failed", {
         forceRefetch: params.forceRefetch === true,
@@ -484,11 +483,6 @@ async function readInstalledApps(
     }),
     installedApps: apps,
   };
-}
-
-function stripEntryState(entry: CacheEntry): CodexAppInventorySnapshot {
-  const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...snapshot } = entry;
-  return snapshot;
 }
 
 function fingerprintInventoryCacheKey(key: string): string {

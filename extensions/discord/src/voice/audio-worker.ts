@@ -76,7 +76,8 @@ export class DiscordAudioWorker {
   }
 
   async connect(): Promise<void> {
-    const deadline = Date.now() + this.options.connectTimeoutMs;
+    // Readiness and retries share an elapsed budget; native timeout delays require whole milliseconds.
+    const deadline = performance.now() + this.options.connectTimeoutMs;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (this.stopped) {
         return;
@@ -110,7 +111,7 @@ export class DiscordAudioWorker {
           this.sdk.VoiceConnectionStatus.Ready,
           AbortSignal.any([
             this.stopAbort.signal,
-            AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+            AbortSignal.timeout(Math.max(1, Math.floor(deadline - performance.now()))),
           ]),
         );
         if (this.stopped) {
@@ -140,7 +141,7 @@ export class DiscordAudioWorker {
         if (
           attempt === 0 &&
           !this.stopped &&
-          Date.now() < deadline &&
+          performance.now() < deadline &&
           error instanceof Error &&
           error.message.toLowerCase().includes("operation was aborted")
         ) {

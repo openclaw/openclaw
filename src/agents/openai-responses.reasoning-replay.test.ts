@@ -1,4 +1,5 @@
 // Verifies OpenAI Responses replay preserves reasoning and response item ids.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";

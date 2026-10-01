@@ -3,6 +3,7 @@ import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-con
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
   advancePreparedModelRuntimeConfig,
+  beginPreparedModelRuntimePluginDrain,
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
   type PreparedModelRuntimeReplacementGateId,
@@ -202,23 +203,40 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       };
       assertIrreversibleReloadPlanHasRecoveryOwner(remainingPlan, restartRecoveryAvailable);
       const previousConfig = getRuntimeConfig();
-      // Drain revokes plugin calls before commit; new and unfinished model preparation must wait.
-      preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
-        "prepared model runtime owner is stale before plugin drain",
-        { waitForReplacement: true, ...modelRuntimeRefreshScope },
-      );
-      return async () => {
-        await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
-          mrReload.refreshModelRuntimeAfterHotReload({
-            config: previousConfig,
-            agentIds: modelRuntimeAgentIds,
-            pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-            isPublicationCurrent: () =>
-              isCurrentGatewayReloadGeneration(myGeneration) &&
-              !isLifecycleReloadAborted() &&
-              !isRestartRetryStopped(),
-          }),
+      const drain = beginPreparedModelRuntimePluginDrain();
+      releasePreparedModelRuntimeDrain = drain.release;
+      const retire = () => {
+        if (preparedModelRuntimeReplacementGateId) {
+          return;
+        }
+        preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
+          "prepared model runtime owner is stale before plugin replacement",
+          { waitForReplacement: true, ...modelRuntimeRefreshScope },
         );
+        drain.release();
+      };
+      // Unfinished publication must cancel its acquisition before the plugin owner drains it.
+      if (drain.pendingPublication) {
+        retire();
+      }
+      return {
+        retire,
+        rollback: async () => {
+          if (!preparedModelRuntimeReplacementGateId) {
+            return;
+          }
+          await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+            mrReload.refreshModelRuntimeAfterHotReload({
+              config: previousConfig,
+              agentIds: modelRuntimeAgentIds,
+              pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
+              isPublicationCurrent: () =>
+                isCurrentGatewayReloadGeneration(myGeneration) &&
+                !isLifecycleReloadAborted() &&
+                !isRestartRetryStopped(),
+            }),
+          );
+        },
       };
     };
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
@@ -241,6 +259,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       isRestartRetryStopped() ||
       isLifecycleReloadAborted();
     let preparedModelRuntimeReplacementGateId: PreparedModelRuntimeReplacementGateId | undefined;
+    let releasePreparedModelRuntimeDrain: (() => void) | undefined;
     let recoveryRestartScheduled = false;
     const laneConcurrency = resolveGatewayLaneConcurrency(nextConfig);
     // Use one candidate env snapshot before publication and through later channel starts.
@@ -553,11 +572,49 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         scheduleRecoveryRestart("runtime commit", configCommitFailure?.error ?? error);
         return "applied-restart-required";
       }
-      // Model refresh has not taken ownership yet; a failed exit must release its waiting readers.
+      const canRepublishModels = () =>
+        isCurrentGatewayReloadGeneration(myGeneration) && !isPluginReloadAborted();
+      if (
+        runtimeCommitted &&
+        error instanceof PluginRuntimeApplicationError &&
+        error.details.committed &&
+        canRepublishModels()
+      ) {
+        // Failed activation leaves the committed registry authoritative. Restore its
+        // model/reply owners independently, without clearing the plugin failure.
+        try {
+          await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+            mrReload.refreshModelRuntimeAfterHotReload({
+              config: nextConfig,
+              agentIds: modelRuntimeAgentIds,
+              pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
+              isPublicationCurrent: canRepublishModels,
+            }),
+          );
+        } catch (refreshError) {
+          rejectPendingPreparedModelRuntimeReplacement(
+            preparedModelRuntimeReplacementGateId,
+            refreshError,
+          );
+          throw new PluginRuntimeApplicationError(
+            `Plugin model/reply recovery failed: ${formatErrorMessage(refreshError)}. Retry the plugin reload or restart the Gateway. Original failure: ${formatErrorMessage(error)}`,
+            error.details,
+            {
+              cause: new AggregateError(
+                [error, refreshError],
+                "Plugin model/reply recovery failed",
+              ),
+            },
+          );
+        }
+      }
+      // Release the original gate if recovery did not replace it with a fresh publication.
       if (preparedModelRuntimeReplacementGateId) {
         rejectPendingPreparedModelRuntimeReplacement(preparedModelRuntimeReplacementGateId, error);
       }
       throw error;
+    } finally {
+      releasePreparedModelRuntimeDrain?.();
     }
     try {
       await commitRuntime();

@@ -1,5 +1,6 @@
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   parseProviderUsageNonNegativeNumber,
   type ProviderUsageSnapshot,
@@ -43,12 +44,7 @@ export async function fetchVeniceUsage(params: {
       signal: AbortSignal.timeout(params.timeoutMs),
     });
   } catch {
-    return {
-      provider: "venice",
-      displayName: "Venice",
-      windows: [],
-      error: "Usage unavailable",
-    };
+    return buildUsageErrorSnapshot("venice", "Usage unavailable");
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
@@ -59,12 +55,7 @@ export async function fetchVeniceUsage(params: {
   try {
     data = await readPayload(response, params.timeoutMs);
   } catch {
-    return {
-      provider: "venice",
-      displayName: "Venice",
-      windows: [],
-      error: "Malformed usage response",
-    };
+    return buildUsageErrorSnapshot("venice", "Malformed usage response");
   }
 
   const diem = parseProviderUsageNonNegativeNumber(data.balances?.diem);

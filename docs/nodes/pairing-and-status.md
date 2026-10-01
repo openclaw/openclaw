@@ -19,10 +19,9 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Restart the installed node with `openclaw node restart`, or stop and rerun its
-foreground `openclaw node run` command. For an app node paused for manual pairing,
-restart node mode or the app. This reconnect creates a separate command-surface
-request. Back on the Gateway:
+Headless node hosts keep reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, the next reconnect
+creates a separate command-surface request. Back on the Gateway:
 
 ```bash
 openclaw nodes pending
@@ -30,6 +29,11 @@ openclaw nodes approve <nodeRequestId>
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once. For an app node paused for manual pairing,
+restart node mode or the app.
 
 The two request IDs are distinct. Use `openclaw devices reject <deviceRequestId>`
 to reject device admission instead of approving it. An initial unapproved surface

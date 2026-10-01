@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronFailureNotificationDelivery } from "../types.js";
@@ -92,6 +93,141 @@ describe("cron failure alert outcome write-back", () => {
       const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
       expect(persisted?.lastFailureNotificationDelivered).toBe(outcome.delivered);
       expect(persisted?.lastFailureNotificationDeliveryError).toBe(outcome.error);
+    },
+  );
+
+  it.each([
+    { name: "the original owner", initialOwner: "alpha" },
+    { name: "an unresolved owner", initialOwner: undefined },
+  ])(
+    "keeps $name for delayed failure fallback after the default changes",
+    async ({ initialOwner }) => {
+      const store = fixtures.makeStorePath();
+      const job = createAlertJob({ id: "alert-delayed-fallback-routing", dueAt });
+      job.wakeMode = "now";
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+      const delivery = createDeferred();
+      const send = vi.fn<SendCronFailureAlert>(async (params) => {
+        await delivery.promise;
+        await params.onDeliverySettled({ delivered: false, status: "not-delivered" });
+      });
+      let currentDefault = initialOwner;
+      const state = createAlertState({
+        storePath: store.storePath,
+        nowMs: () => endedAt,
+        sendCronFailureAlert: send,
+      });
+      state.deps.defaultAgentId = undefined;
+      state.deps.resolveDefaultAgentId = () => currentDefault;
+      await finalizeAlertOutcome({
+        state,
+        job,
+        status: "error",
+        error: "provider unavailable",
+        startedAt: dueAt,
+        endedAt,
+      });
+      expect(send).toHaveBeenCalledOnce();
+      currentDefault = "beta";
+      delivery.resolve();
+      const [settlement] = await Promise.allSettled([send.mock.results[0]?.value]);
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+        lastFailureAlertAtMs: endedAt,
+        lastFailureNotificationDelivered: false,
+        lastFailureNotificationDeliveryStatus: "not-delivered",
+      });
+      if (initialOwner) {
+        expect(settlement).toMatchObject({ status: "fulfilled" });
+        expect(state.deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          expect.objectContaining({ agentId: "alpha" }),
+        );
+        expect(state.deps.requestHeartbeat).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ agentId: "alpha" }),
+        );
+      } else {
+        expect(settlement).toMatchObject({
+          status: "rejected",
+          reason: new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE),
+        });
+        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["explicit transport owner", "queue session owner"] as const)(
+    "delivers to the %s when the default getter becomes unavailable after commit",
+    async (owner) => {
+      const store = fixtures.makeStorePath();
+      const job = createAlertJob({ id: "alert-owned-without-default", dueAt });
+      job.wakeMode = "now";
+      if (owner === "explicit transport owner") {
+        job.agentId = "alpha";
+      } else {
+        job.sessionTarget = "session:agent:session-owner:main";
+        job.sessionKey = "agent:creator-owner:main";
+      }
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+      const send = vi.fn<SendCronFailureAlert>(async (params) => {
+        await params.onDeliverySettled({ delivered: true, status: "delivered" });
+      });
+      const state = createAlertState({
+        storePath: store.storePath,
+        nowMs: () => endedAt,
+        sendCronFailureAlert: send,
+      });
+      if (owner === "queue session owner") {
+        state.deps.sendCronFailureAlert = undefined;
+      }
+      state.deps.resolveDefaultAgentId = () => "other";
+      const finished = vi.fn(() => {
+        state.deps.resolveDefaultAgentId = () => {
+          throw new Error("default routing unavailable");
+        };
+      });
+      state.deps.onEvent = (event) => {
+        if (event.action === "finished") {
+          finished();
+        }
+      };
+      await finalizeAlertOutcome({
+        state,
+        job,
+        status: "error",
+        error: "provider unavailable",
+        startedAt: dueAt,
+        endedAt,
+      });
+      expect(finished).toHaveBeenCalledOnce();
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+        lastRunStatus: "error",
+        lastFailureAlertAtMs: endedAt,
+      });
+      if (owner === "explicit transport owner") {
+        expect(send).toHaveBeenCalledOnce();
+        await send.mock.results[0]?.value;
+        expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+          lastFailureNotificationDelivered: true,
+          lastFailureNotificationDeliveryStatus: "delivered",
+        });
+        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      } else {
+        expect(send).not.toHaveBeenCalled();
+        expect(state.deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining('Automation "alert-owned-without-default" failed 1 times'),
+          expect.objectContaining({
+            agentId: "session-owner",
+            sessionKey: "agent:session-owner:main",
+          }),
+        );
+        expect(state.deps.requestHeartbeat).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            agentId: "session-owner",
+            sessionKey: "agent:session-owner:main",
+          }),
+        );
+      }
     },
   );
 

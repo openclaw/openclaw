@@ -4,7 +4,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
-import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -230,27 +230,51 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       string,
       Parameters<typeof runContextEngineMaintenance>[0]
     >();
+    const onCommitted = (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]): void => {
+      // Retain only maintenance inputs, not the committed transcript batches.
+      maintenanceBySession.set(turn.sessionId, {
+        contextEngine: params.lease.engine,
+        sessionId: turn.sessionId,
+        sessionKey: turn.sessionKey,
+        sessionTarget: turn.sessionTarget,
+        sessionFile: turn.admission.sessionKey,
+        reason: "turn",
+        runtimeContext: turn.runtimeContext,
+        config: params.config,
+        onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
+      });
+    };
     await drainContextEngineTurnOutbox({
       store,
       engine: params.lease.engine,
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
-      onCommitted: (turn) => {
-        // Retain only maintenance inputs, not the committed transcript batches.
-        maintenanceBySession.set(turn.sessionId, {
-          contextEngine: params.lease.engine,
-          sessionId: turn.sessionId,
-          sessionKey: turn.sessionKey,
-          sessionTarget: turn.sessionTarget,
-          sessionFile: turn.admission.sessionKey,
-          reason: "turn",
-          runtimeContext: turn.runtimeContext,
-          config: params.config,
-          onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
-        });
-      },
+      sessionId: admission.sessionId,
+      onCommitted,
       warn,
     });
+    // Prioritize the accepted session, then preserve one bounded retry opportunity per
+    // other pending session without immediately retrying a failed accepted-session row.
+    const retrySessionIds = await store.listPendingSessions({
+      engineId: params.lease.effectiveEngineId,
+      ownerPluginId: params.lease.effectiveEnginePluginId,
+      limit: 16,
+    });
+    for (const sessionId of retrySessionIds) {
+      if (sessionId === admission.sessionId) {
+        continue;
+      }
+      await drainContextEngineTurnOutbox({
+        store,
+        engine: params.lease.engine,
+        engineId: params.lease.effectiveEngineId,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+        sessionId,
+        limit: 1,
+        onCommitted,
+        warn,
+      });
+    }
     // Finish draining before maintenance can read engine state. Replayed rows use their own
     // target and latest model facts; one offer per session lets the scheduler own coalescing.
     for (const maintenance of maintenanceBySession.values()) {

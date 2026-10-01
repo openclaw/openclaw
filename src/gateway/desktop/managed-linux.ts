@@ -118,19 +118,14 @@ function chooseDisplayNumber(socketNames: readonly string[]): number {
 }
 
 function appendTail(current: string, chunk: string): string {
-  const next = current + chunk;
-  return next.length <= STDERR_TAIL_CHARS ? next : next.slice(-STDERR_TAIL_CHARS);
+  return (current + chunk).slice(-STDERR_TAIL_CHARS);
 }
 
 function lastStderrLine(stderr: string): string | undefined {
-  const lines = stderr.split(/\r?\n/u);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.trim();
-    if (line) {
-      return line;
-    }
-  }
-  return undefined;
+  return stderr
+    .split(/\r?\n/u)
+    .findLast((line) => line.trim())
+    ?.trim();
 }
 
 async function readDisplaySocketNames(socketDir: string): Promise<string[]> {

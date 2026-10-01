@@ -33,12 +33,11 @@ import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
 import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
-import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
+import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { checkGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type {
   AuthenticatedGatewayConnect,
@@ -182,6 +181,12 @@ export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  if (context.browserOrigin) {
+    const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
+    if (!originCheck.ok) {
+      return { kind: "origin", reason: originCheck.reason };
+    }
+  }
   if (!isGatewayAuthPolicyCurrent(state.authPolicy)) {
     return { kind: "auth" };
   }
@@ -192,12 +197,6 @@ export function resolveGatewayConnectPolicyFailure(
       context.handler.getRequiredSharedGatewaySessionGeneration()
   ) {
     return { kind: "auth" };
-  }
-  if (context.browserOrigin) {
-    const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
-    if (!originCheck.ok) {
-      return { kind: "origin", reason: originCheck.reason };
-    }
   }
   return undefined;
 }

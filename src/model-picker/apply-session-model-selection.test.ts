@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import {
@@ -16,6 +15,7 @@ import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
 
 // Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
@@ -39,7 +39,7 @@ const { effects, factories, resetMocks } = await vi.hoisted(async () => {
   return createModelSelectionMocks();
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-model-picker-profile-");
 let lifecycleEvents: SessionLifecycleEvent[];
 let unsubscribeLifecycle: () => void;
 
@@ -222,7 +222,7 @@ describe("applySessionModelSelection", () => {
   );
 
   it("publishes a profile-only selection after the scoped session has persisted", async () => {
-    const tempRoot = tempDirs.make("openclaw-model-picker-profile-");
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionKey = "agent:main:dm:profile";
     const sessionEntry = createEntry({
@@ -461,7 +461,7 @@ describe("applySessionModelSelection", () => {
   it.each([undefined, "openclaw", "claude-cli"])(
     "persists SDK model-only selection with inherited runtime %s",
     async (agentRuntimeOverride) => {
-      const tempRoot = tempDirs.make("openclaw-model-picker-runtime-");
+      const tempRoot = sessionDirs.make();
       const storePath = path.join(tempRoot, "sessions.json");
       const sessionKey = "agent:main:dm:runtime-compat";
       const sessionEntry = createEntry({
@@ -545,7 +545,7 @@ describe("applySessionModelSelection", () => {
   );
 
   it("rejects when the authoritative persisted row became locked", async () => {
-    const tempRoot = tempDirs.make("openclaw-model-picker-lock-");
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionKey = "agent:main:dm:locked-disk";
     const sessionEntry = createEntry();
@@ -624,7 +624,7 @@ describe("applySessionModelSelection", () => {
       }),
     },
   ])("returns conflict without a hybrid row after concurrent $name", async ({ concurrent }) => {
-    const tempRoot = tempDirs.make("openclaw-model-picker-service-");
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionEntry = createEntry({
       providerOverride: "anthropic",

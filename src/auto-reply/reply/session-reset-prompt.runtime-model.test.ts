@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 
 const inventoryMocks = vi.hoisted(() => {
   const runtimeModel = {
@@ -63,7 +64,6 @@ describe("resolveBareResetBootstrapFileAccess runtime model ownership", () => {
   });
 
   it("resolves runtime model context once and passes explicit facts to sync inventory", async () => {
-    const { resolveBareResetBootstrapFileAccess } = await import("./session-reset-prompt.js");
     const cfg = {} as OpenClawConfig;
     const params = {
       cfg,
@@ -97,7 +97,6 @@ describe("resolveBareResetBootstrapFileAccess runtime model ownership", () => {
   });
 
   it("releases the model context when bootstrap inventory projection fails", async () => {
-    const { resolveBareResetBootstrapFileAccess } = await import("./session-reset-prompt.js");
     const failure = new Error("inventory projection failed");
     inventoryMocks.resolveInventory.mockImplementationOnce(() => {
       expect(inventoryMocks.release).not.toHaveBeenCalled();

@@ -92,6 +92,11 @@ describe("default install identity", () => {
     const stateDir = path.join(accountHome, ".openclaw");
 
     expect(isDefaultInstallIdentity({ HOME: "/tmp/copied-home" }, () => accountHome)).toBe(false);
+    for (const processHome of ["HOME", "USERPROFILE"]) {
+      const env = { [processHome]: "/tmp/copied-home", OPENCLAW_HOME: accountHome };
+      expect(isDefaultInstallIdentity(env, () => accountHome)).toBe(false);
+      expect(allowsProcessHomeSessionScan(env, () => accountHome)).toBe(false);
+    }
     expect(
       isDefaultInstallIdentity(
         {
