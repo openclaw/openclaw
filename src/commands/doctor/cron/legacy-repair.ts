@@ -509,7 +509,9 @@ export async function applyLegacyCronStoreRepair(params: {
       );
     } else {
       warnings.push(
-        `Migrated quarantined automations to SQLite but could not archive the legacy cron file at ${shortenHomePath(state.legacyQuarantine.path)}: ${archiveResult.reason}. Remove it manually or rerun ${formatCliCommand("openclaw doctor --fix")} to retry.`,
+        archiveResult.deferred
+          ? archiveResult.reason
+          : `Migrated quarantined automations to SQLite but could not archive the legacy cron file at ${shortenHomePath(state.legacyQuarantine.path)}: ${archiveResult.reason}. Remove it manually or rerun ${formatCliCommand("openclaw doctor --fix")} to retry.`,
       );
     }
   }
@@ -517,7 +519,9 @@ export async function applyLegacyCronStoreRepair(params: {
   let importedRunLogs = 0;
   if (state.legacyRunLogDetected) {
     try {
-      importedRunLogs = (await migrateLegacyCronRunLogsToSqlite(state.storePath)).importedFiles;
+      const result = await migrateLegacyCronRunLogsToSqlite(state.storePath);
+      importedRunLogs = result.importedFiles;
+      warnings.push(...(result.warnings ?? []));
     } catch (err) {
       rethrowSqliteSchemaVersionError(err);
       warnings.push(
@@ -551,7 +555,9 @@ export async function applyLegacyCronStoreRepair(params: {
       // claiming a finished migration; doctor re-detects the leftover and retries.
       for (const failure of archiveResult.failures) {
         warnings.push(
-          `Migrated automations to SQLite but could not archive the legacy cron file at ${shortenHomePath(failure.path)}: ${failure.reason}. Remove it manually or rerun ${formatCliCommand("openclaw doctor --fix")} to retry.`,
+          failure.deferred
+            ? failure.reason
+            : `Migrated automations to SQLite but could not archive the legacy cron file at ${shortenHomePath(failure.path)}: ${failure.reason}. Remove it manually or rerun ${formatCliCommand("openclaw doctor --fix")} to retry.`,
         );
       }
     }

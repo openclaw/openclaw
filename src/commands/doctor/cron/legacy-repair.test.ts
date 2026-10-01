@@ -14,11 +14,14 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import type { CronJob } from "../../../cron/types.js";
+import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
+import { buildUpdateDoctorEnv } from "../../../infra/update-runner-doctor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 import {
@@ -26,6 +29,7 @@ import {
   loadLegacyCronRepairState,
   repairLegacyCronStoreWithoutPrompt,
 } from "./legacy-repair.js";
+import { archiveLegacyCronFile } from "./legacy-store-migration.js";
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
@@ -136,6 +140,108 @@ async function loadRepairStateForStore(storePath: string) {
   );
   return { cfg, state };
 }
+
+const updateDoctorEnv = {
+  ...buildUpdateDoctorEnv({
+    allowGatewayServiceRepair: false,
+    allowGatewayActivation: false,
+    serviceRepairPolicy: "external",
+    deferConfiguredPluginInstallRepair: true,
+  }),
+  OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+};
+
+it("rehearses cron imports without consuming the live source before activation", async () => {
+  await withOpenClawTestState({ label: "cron-rehearsal-import" }, async (state) => {
+    const storePath = state.statePath("custom-cron", "jobs.json");
+    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    const existing = { ...job("existing"), agentId: "ops" };
+    const source = JSON.stringify({
+      version: 1,
+      jobs: [
+        {
+          ...job("legacy"),
+          agentId: "ops",
+          delivery: { mode: "deliver", channel: "telegram", to: "synthetic-target" },
+        },
+      ],
+    });
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(storePath, source);
+    await saveCronStore(storePath, { version: 1, jobs: [existing] });
+    await closeOpenClawStateDatabaseAsync();
+    const rehearsalRoot = state.path("rehearsal");
+    await fs.mkdir(rehearsalRoot);
+    const expectImported = async (removedSource: number) => {
+      const stored = await loadCronStore(storePath);
+      expect(stored.jobs.map((entry) => entry.id)).toEqual(["existing", "legacy"]);
+      expect(stored.jobs[1]?.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "synthetic-target",
+      });
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT status, removed_source FROM migration_sources WHERE source_path = ?")
+          .all(storePath),
+      ).toEqual([{ status: "completed", removed_source: removedSource }]);
+    };
+    await withEnvAsync(
+      { ...buildUpdateRehearsalPathEnv(rehearsalRoot), ...updateDoctorEnv },
+      async () => {
+        try {
+          await saveCronStore(storePath, { version: 1, jobs: [existing] });
+          const repaired = await repairLegacyCronStoreWithoutPrompt({ cfg });
+          expect(await fs.readFile(storePath, "utf8")).toBe(source);
+          await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(repaired.warnings).toEqual([expect.stringContaining("Update rehearsal retained")]);
+          await expectImported(0);
+        } finally {
+          await closeOpenClawStateDatabaseAsync();
+        }
+      },
+    );
+    await withEnvAsync(updateDoctorEnv, async () => {
+      expect((await repairLegacyCronStoreWithoutPrompt({ cfg })).warnings).toEqual([]);
+      await expectImported(1);
+      await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(`${storePath}.migrated`, "utf8")).toBe(source);
+    });
+  });
+});
+
+it.each(["jobs-state.json", "runs/job.jsonl"])(
+  "retains an uncopied %s reached through a rehearsal symlink",
+  async (relative) => {
+    await withOpenClawTestState({ label: "cron-rehearsal-companion" }, async (state) => {
+      const rehearsalRoot = state.path("rehearsal");
+      const source = state.path("operator", relative);
+      const linked = path.join(rehearsalRoot, "cron", relative);
+      await fs.mkdir(path.dirname(source), { recursive: true });
+      await fs.mkdir(path.join(rehearsalRoot, "cron"), { recursive: true });
+      await fs.writeFile(source, "retained operator bytes\n");
+      const symlink = relative.startsWith("runs/") ? path.dirname(linked) : linked;
+      await fs.symlink(
+        relative.startsWith("runs/") ? path.dirname(source) : source,
+        symlink,
+        relative.startsWith("runs/") ? "dir" : "file",
+      );
+      await withEnvAsync(
+        { ...buildUpdateRehearsalPathEnv(rehearsalRoot), ...updateDoctorEnv },
+        async () => {
+          await expect(archiveLegacyCronFile(linked)).resolves.toMatchObject({
+            ok: false,
+            deferred: true,
+          });
+          expect((await fs.lstat(symlink)).isSymbolicLink()).toBe(true);
+          expect(await fs.readFile(linked, "utf8")).toBe("retained operator bytes\n");
+          await expect(fs.stat(`${linked}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(fs.stat(`${source}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    });
+  },
+);
 
 it.each(["legacy JSON", "SQLite"])(
   "preserves current-session delivery through %s repair and reload",

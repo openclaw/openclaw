@@ -90,6 +90,11 @@ default marker. Explicit creator and agent-qualified session ownership keep thei
 existing sharing checks. Deleting another agent leaves unresolved rows intact.
 The normal `openclaw update` Doctor phase performs this repair before saving
 the migrated config, including its early preflight and include-recovery writes.
+During the earlier update rehearsal, Doctor can import and normalize cron rows in
+the private database copy. It preserves uncopied legacy files, including linked
+state, quarantine, and run-log files, and reports their deferred archival. The
+live Doctor phase imports those sources and archives them after package installation. This
+also protects updates started by supported older releases.
 
 ## Legacy cron delivery settings
 
