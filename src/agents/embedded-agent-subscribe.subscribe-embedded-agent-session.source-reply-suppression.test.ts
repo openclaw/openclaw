@@ -653,11 +653,19 @@ describe("subscribeEmbeddedAgentSession", () => {
     { name: "a closing answer", batch: ["progress"], closing: "Done.", completes: false },
     { name: "work in the same batch", batch: ["read", "progress"], closing: "", completes: false },
     { name: "a later tool batch", batch: ["progress"], later: true, closing: "", completes: false },
+    {
+      name: "an explicit continuation into more work",
+      batch: ["progress"],
+      continued: true,
+      later: true,
+      closing: "",
+      completes: false,
+    },
     { name: "a progress reaction", batch: ["reaction"], closing: "", completes: false },
     { name: "a partial progress send", batch: ["partial"], closing: "", completes: false },
   ])(
     "treats trailing source progress as the reply after $name",
-    async ({ batch, later, closing, completes }) => {
+    async ({ batch, continued, later, closing, completes }) => {
       const { session, emit } = createStubSessionHarness();
       const sessionManager = {};
       Object.assign(session, { sessionManager });
@@ -714,6 +722,9 @@ describe("subscribeEmbeddedAgentSession", () => {
       };
 
       await runToolBatch(batch);
+      if (continued) {
+        emitAssistantMessageEnd(emit, "", { stopReason: "stop", endTurn: false });
+      }
       if (later) {
         await runToolBatch(["read"]);
       }

@@ -96,6 +96,7 @@ export function handleMessageEnd(
   ctx.noteLastAssistant(assistantMessage);
   // Progress sent as the last tool batch was written after every other tool
   // result. An empty stop after it leaves nothing to add, so it is the reply.
+  // `endTurn: false` keeps the run going, so later work may still need an answer.
   const progressEndsTurn = ctx.state.toolBatchSourceProgress === "progress";
   const startsToolBatch =
     Array.isArray(assistantMessage.content) &&
@@ -106,6 +107,7 @@ export function handleMessageEnd(
     progressEndsTurn &&
     !startsToolBatch &&
     assistantMessage.stopReason === "stop" &&
+    assistantMessage.endTurn !== false &&
     (!closingText || isSilentReplyText(closingText, SILENT_REPLY_TOKEN))
   ) {
     for (const send of [
