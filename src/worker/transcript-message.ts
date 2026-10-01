@@ -12,6 +12,11 @@ import {
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
+import {
+  projectWorkerAssistantContent,
+  projectWorkerTextOrImageContent,
+  projectWorkerTokenUsage,
+} from "./assistant-message-projection.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
 type WorkerTranscriptAssistantMessage = Extract<WorkerTranscriptMessage, { role: "assistant" }>;
@@ -31,18 +36,6 @@ type WorkerMessageProjectionPurpose = "inference" | "transcript";
 export const WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE =
   "Cloud worker could not preserve authoritative provider replay. " +
   "Stop or reclaim the cloud worker, then retry locally.";
-
-export function cloneTextContent(part: { type: "text"; text: string; textSignature?: string }) {
-  return {
-    type: "text" as const,
-    text: part.text,
-    ...(part.textSignature ? { textSignature: part.textSignature } : {}),
-  };
-}
-
-export function cloneImageContent(part: { type: "image"; data: string; mimeType: string }) {
-  return { type: "image" as const, data: part.data, mimeType: part.mimeType };
-}
 
 function providerReplayUnavailable(
   details: WorkerProviderReplayUnavailable,
@@ -154,27 +147,7 @@ export function projectWorkerProviderReplay<
 function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAssistantMessage {
   return {
     role: "assistant",
-    content: message.content.map((part) => {
-      if (part.type === "text") {
-        return cloneTextContent(part);
-      }
-      if (part.type === "thinking") {
-        return {
-          type: "thinking" as const,
-          thinking: part.thinking,
-          ...(part.thinkingSignature ? { thinkingSignature: part.thinkingSignature } : {}),
-          ...(part.redacted === undefined ? {} : { redacted: part.redacted }),
-        };
-      }
-      return {
-        type: "toolCall" as const,
-        id: part.id,
-        name: part.name,
-        arguments: structuredClone(part.arguments),
-        ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
-        ...(part.executionMode ? { executionMode: part.executionMode } : {}),
-      };
-    }),
+    content: message.content.map(projectWorkerAssistantContent),
     api: message.api,
     provider: message.provider,
     model: message.model,
@@ -184,22 +157,10 @@ function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAs
       ? { diagnostics: message.diagnostics.map(projectWorkerDiagnostic) }
       : {}),
     usage: {
-      input: message.usage.input,
-      output: message.usage.output,
-      cacheRead: message.usage.cacheRead,
-      cacheWrite: message.usage.cacheWrite,
+      ...projectWorkerTokenUsage(message.usage),
       ...(message.usage.contextUsage
         ? { contextUsage: structuredClone(message.usage.contextUsage) }
         : {}),
-      totalTokens: message.usage.totalTokens,
-      cost: {
-        input: message.usage.cost.input,
-        output: message.usage.cost.output,
-        cacheRead: message.usage.cost.cacheRead,
-        cacheWrite: message.usage.cost.cacheWrite,
-        total: message.usage.cost.total,
-        ...(message.usage.cost.totalOrigin ? { totalOrigin: message.usage.cost.totalOrigin } : {}),
-      },
     },
     stopReason: message.stopReason,
     ...(message.errorMessage
@@ -220,9 +181,7 @@ export function toWorkerTranscriptMessage(
     const content =
       typeof message.content === "string"
         ? [{ type: "text" as const, text: message.content }]
-        : message.content.map((part) =>
-            part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-          );
+        : message.content.map(projectWorkerTextOrImageContent);
     return { kind: "complete", message: { role: "user", content, timestamp: message.timestamp } };
   }
   if (message.role === "assistant") {
@@ -239,9 +198,7 @@ export function toWorkerTranscriptMessage(
         role: "toolResult",
         toolCallId: message.toolCallId,
         toolName: message.toolName,
-        content: message.content.map((part) =>
-          part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-        ),
+        content: message.content.map(projectWorkerTextOrImageContent),
         ...(message.details === undefined
           ? {}
           : { details: redactAgentDiagnosticPayload(message.details) }),

@@ -1,18 +1,14 @@
-// Microsoft Foundry plugin module implements auth behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/core";
 import {
-  ensureApiKeyFromOptionEnvOrPrompt,
   ensureAuthProfileStore,
-  normalizeApiKeyInput,
   normalizeOptionalSecretInput,
-  type SecretInput,
-  validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import { getLoggedInAccount, isAzCliInstalled } from "./cli.js";
+import { captureProviderApiKey } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { getLoggedInAccount, isAzCliInstalled, listSubscriptions } from "./cli.js";
 import {
   loginWithTenantFallback,
   listResourceDeployments,
@@ -21,7 +17,6 @@ import {
   promptTenantId,
   selectFoundryDeployment,
   selectFoundryResource,
-  listSubscriptions,
   testFoundryConnection,
 } from "./onboard.js";
 import {
@@ -128,42 +123,40 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
           api?: FoundryProviderApi;
         }>
       | undefined;
-    if (selectedSub) {
-      const useDiscoveredResource = await ctx.prompter.confirm({
+    if (
+      selectedSub &&
+      (await ctx.prompter.confirm({
         message: "Discover Microsoft Foundry resources from this subscription?",
         initialValue: true,
-      });
-      if (useDiscoveredResource) {
-        const selectedResource = await selectFoundryResource(ctx, selectedSub);
-        const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
-        const { selected: selectedDeployment, supported: supportedDeployments } =
-          await selectFoundryDeployment(ctx, selectedResource, resourceDeployments);
-        discoveredDeployments = supportedDeployments.map((deployment) =>
-          Object.assign(
-            { name: deployment.name },
-            deployment.modelName ? { modelName: deployment.modelName } : {},
-            { api: resolveFoundryApi(deployment.name, deployment.modelName) },
-          ),
-        );
-        endpoint = selectedResource.endpoint;
-        modelId = selectedDeployment.name;
-        modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);
-        api = resolveFoundryApi(modelId, modelNameHint);
-        await ctx.prompter.note(
-          [
-            `Resource: ${selectedResource.accountName}`,
-            `Endpoint: ${endpoint}`,
-            `Deployment: ${modelId}`,
-            selectedDeployment.modelName ? `Model: ${selectedDeployment.modelName}` : undefined,
-            `API: ${formatFoundryApiLabel(api)}`,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          "Microsoft Foundry",
-        );
-      } else {
-        ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
-      }
+      }))
+    ) {
+      const selectedResource = await selectFoundryResource(ctx, selectedSub);
+      const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
+      const { selected: selectedDeployment, supported: supportedDeployments } =
+        await selectFoundryDeployment(ctx, selectedResource, resourceDeployments);
+      discoveredDeployments = supportedDeployments.map((deployment) =>
+        Object.assign(
+          { name: deployment.name },
+          deployment.modelName ? { modelName: deployment.modelName } : {},
+          { api: resolveFoundryApi(deployment.name, deployment.modelName) },
+        ),
+      );
+      endpoint = selectedResource.endpoint;
+      modelId = selectedDeployment.name;
+      modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);
+      api = resolveFoundryApi(modelId, modelNameHint);
+      await ctx.prompter.note(
+        [
+          `Resource: ${selectedResource.accountName}`,
+          `Endpoint: ${endpoint}`,
+          `Deployment: ${modelId}`,
+          selectedDeployment.modelName ? `Model: ${selectedDeployment.modelName}` : undefined,
+          `API: ${formatFoundryApiLabel(api)}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Microsoft Foundry",
+      );
     } else {
       ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
     }
@@ -224,34 +217,15 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
     });
     const existing = authStore.profiles[`${PROVIDER_ID}:default`];
     const existingMetadata = existing?.type === "api_key" ? existing.metadata : undefined;
-    let capturedSecretInput: SecretInput | undefined;
-    let capturedCredential = false;
-    let capturedMode: "plaintext" | "ref" | undefined;
-    await ensureApiKeyFromOptionEnvOrPrompt({
+    const { input, mode } = await captureProviderApiKey(ctx, {
       token: normalizeOptionalSecretInput(ctx.opts?.azureOpenaiApiKey),
       tokenProvider: PROVIDER_ID,
-      secretInputMode:
-        ctx.allowSecretRefPrompt === false
-          ? (ctx.secretInputMode ?? "plaintext")
-          : ctx.secretInputMode,
-      config: ctx.config,
-      workspaceDir: ctx.workspaceDir,
       expectedProviders: [PROVIDER_ID],
       provider: PROVIDER_ID,
       envLabel: "AZURE_OPENAI_API_KEY",
       promptMessage: "Enter Azure OpenAI API key",
-      normalize: normalizeApiKeyInput,
-      validate: validateApiKeyInput,
-      prompter: ctx.prompter,
-      setCredential: async (apiKey, mode) => {
-        capturedSecretInput = apiKey;
-        capturedCredential = true;
-        capturedMode = mode;
-      },
+      missingInputMessage: "Missing Azure OpenAI API key.",
     });
-    if (!capturedCredential) {
-      throw new Error("Missing Azure OpenAI API key.");
-    }
     const selection = await promptApiKeyEndpointAndModel(ctx);
     const existingModelNameHint =
       existingMetadata?.modelId === selection.modelId
@@ -259,8 +233,8 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
         : undefined;
     return buildFoundryAuthResult({
       profileId: `${PROVIDER_ID}:default`,
-      apiKey: capturedSecretInput ?? "",
-      ...(capturedMode ? { secretInputMode: capturedMode } : {}),
+      apiKey: input,
+      ...(mode ? { secretInputMode: mode } : {}),
       endpoint: selection.endpoint,
       modelId: selection.modelId,
       modelNameHint: selection.modelNameHint ?? existingModelNameHint,

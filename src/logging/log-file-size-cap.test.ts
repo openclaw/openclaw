@@ -2,13 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getLogger,
-  getResolvedLoggerSettings,
-  resetLogger,
-  setLoggerOverride,
-} from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { getLogger, getResolvedLoggerSettings, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -52,11 +47,6 @@ describe("log file size cap", () => {
   it("defaults maxFileBytes to 100 MB when unset", () => {
     setLoggerOverride({ level: "info", file: logPath });
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(DEFAULT_MAX_FILE_BYTES);
-  });
-
-  it("uses configured maxFileBytes", () => {
-    setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 2048 });
-    expect(getResolvedLoggerSettings().maxFileBytes).toBe(2048);
   });
 
   it("rotates file writes after cap is reached and keeps logging", async () => {

@@ -71,6 +71,34 @@ function createManifestRecord(
   };
 }
 
+function createStartupPlugins() {
+  return [
+    createManifestRecord({
+      id: "openai",
+      origin: "bundled",
+      enabledByDefault: true,
+      providers: ["openai"],
+      activation: {
+        onStartup: true,
+      },
+    }),
+    createManifestRecord({
+      id: "browser",
+      origin: "bundled",
+      enabledByDefault: true,
+      activation: {
+        onStartup: true,
+        onConfigPaths: ["browser"],
+      },
+    }),
+    createManifestRecord({
+      id: "telegram",
+      origin: "bundled",
+      channels: ["telegram"],
+    }),
+  ];
+}
+
 function createIndex(
   plugins: readonly PluginManifestRecord[],
   params: { policyHash?: string; enabled?: boolean } = {},
@@ -307,101 +335,8 @@ describe("loadPluginLookUpTable", () => {
     ).toEqual(["telegram"]);
   });
 
-  it("projects restrictive startup allowlists from one complete inventory", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "openai",
-        origin: "bundled",
-        enabledByDefault: true,
-        providers: ["openai"],
-        activation: {
-          onStartup: true,
-        },
-      }),
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-      createManifestRecord({
-        id: "discord",
-        origin: "bundled",
-        channels: ["discord"],
-      }),
-    ];
-    const index = createIndex(plugins);
-    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
-      (params: { pluginIds?: readonly string[] }) => ({
-        plugins: params.pluginIds
-          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
-          : plugins,
-        diagnostics: [],
-      }),
-    );
-    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
-
-    const params = {
-      config: {
-        plugins: {
-          allow: ["openai"],
-          slots: { memory: "none" },
-        },
-      } as OpenClawConfig,
-      env: {},
-      index,
-    };
-    const table = loadPluginLookUpTable(params);
-    const repeated = loadPluginLookUpTable(params);
-    expect(repeated.manifestRegistry).toBe(table.manifestRegistry);
-
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
-      index,
-      config: {
-        plugins: {
-          allow: ["openai"],
-          slots: { memory: "none" },
-        },
-      },
-      env: {},
-      includeDisabled: true,
-    });
-    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).not.toHaveProperty(
-      "pluginIds",
-    );
-    expect(table.pluginIds).toEqual(["openai"]);
-    expect(table.metrics.indexPluginCount).toBe(3);
-    expect(table.metrics.manifestPluginCount).toBe(1);
-    expect(table.byPluginId.has("telegram")).toBe(false);
-    expect(table.startup.pluginIds).toEqual(["openai"]);
-  });
-
   it("keeps config-path activation owners when projecting one complete inventory", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "openai",
-        origin: "bundled",
-        enabledByDefault: true,
-        providers: ["openai"],
-        activation: {
-          onStartup: true,
-        },
-      }),
-      createManifestRecord({
-        id: "browser",
-        origin: "bundled",
-        enabledByDefault: true,
-        activation: {
-          onStartup: true,
-          onConfigPaths: ["browser"],
-        },
-      }),
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
+    const plugins = createStartupPlugins();
     const index = createIndex(plugins);
     loadPluginManifestRegistryForInstalledIndex.mockImplementation(
       (params: { pluginIds?: readonly string[] }) => ({
@@ -448,31 +383,7 @@ describe("loadPluginLookUpTable", () => {
   });
 
   it("selects restrictive startup activation without narrowing the prepared inventory", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "openai",
-        origin: "bundled",
-        enabledByDefault: true,
-        providers: ["openai"],
-        activation: {
-          onStartup: true,
-        },
-      }),
-      createManifestRecord({
-        id: "browser",
-        origin: "bundled",
-        enabledByDefault: true,
-        activation: {
-          onStartup: true,
-          onConfigPaths: ["browser"],
-        },
-      }),
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
+    const plugins = createStartupPlugins();
     const config = {
       browser: {
         enabled: true,
@@ -522,31 +433,7 @@ describe("loadPluginLookUpTable", () => {
   });
 
   it("reuses a scoped provided metadata snapshot when it covers the startup scope", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "openai",
-        origin: "bundled",
-        enabledByDefault: true,
-        providers: ["openai"],
-        activation: {
-          onStartup: true,
-        },
-      }),
-      createManifestRecord({
-        id: "browser",
-        origin: "bundled",
-        enabledByDefault: true,
-        activation: {
-          onStartup: true,
-          onConfigPaths: ["browser"],
-        },
-      }),
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
+    const plugins = createStartupPlugins();
     const config = {
       browser: {
         enabled: false,
@@ -650,55 +537,6 @@ describe("loadPluginLookUpTable", () => {
     expect(table.pluginIds).toEqual(["openai"]);
     expect(table.metrics.manifestPluginCount).toBe(1);
     expect(table.startup.pluginIds).toEqual([]);
-  });
-
-  it("derives startup ids from a provided metadata snapshot without reloading manifests", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
-    const index = createIndex(plugins);
-    const config = {
-      channels: {
-        telegram: { token: "configured" },
-      },
-    } as OpenClawConfig;
-    const compatibleIndex = {
-      ...index,
-      policyHash: resolveInstalledPluginIndexPolicyHash(config),
-    };
-    const manifestRegistry: PluginManifestRegistry = {
-      plugins,
-      diagnostics: [],
-    };
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
-    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
-
-    const metadataSnapshot = loadPluginMetadataSnapshot({
-      config,
-      env: {},
-      index: compatibleIndex,
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-    const table = loadPluginLookUpTable({
-      config,
-      env: {},
-      metadataSnapshot,
-    });
-
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-    expect(table.manifestRegistry).toBe(manifestRegistry);
-    expect(table.startup.pluginIds).toEqual(["telegram"]);
-    expect(table.metrics.indexPluginCount).toBe(1);
-    expect(table.metrics.manifestPluginCount).toBe(1);
-    expect(table.metrics.totalMs).toBe(
-      metadataSnapshot.metrics.totalMs + table.metrics.startupPlanMs,
-    );
   });
 
   it("applies current activation policy without replacing the startup inventory", async () => {

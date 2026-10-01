@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransaction } from "openclaw/plugin-sdk/sqlite-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
-import { MemoryIndexRevisionConflictError } from "./manager-db.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
@@ -114,11 +114,12 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
-  }): Promise<MemorySourceSyncPlan> {
+  }): Promise<MemorySourceSyncPlan | undefined> {
     // Consume this pass's dirtiness before awaits so later edits remain queued.
     this.clearMemoryRetryState();
 
     const fileEntries = await resolveMemorySourceFileEntries({
+      files: this.memoryFiles,
       workspaceDir: this.workspaceDir,
       settings: this.settings,
       concurrency: this.getIndexConcurrency(),
@@ -176,7 +177,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     }
 
     await deleteStaleRows();
-    return this.emptySourceSyncPlan();
+    return undefined;
   }
 
   protected override async syncArchiveFiles(params: {
@@ -186,7 +187,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
-  }): Promise<MemorySourceSyncPlan> {
+  }): Promise<void> {
     const updateUnchangedSessionSourceMetadata = this.db.prepare(
       `UPDATE memory_index_sources
        SET mtime = ?, size = ?, hash = ?
@@ -388,7 +389,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       await flushPendingIndexItems();
       await deleteTargetArchiveStaleLiveRows();
       await deleteStaleRows();
-      return this.emptySourceSyncPlan();
+      return;
     }
     if ((params.prefixIndexItems?.length ?? 0) > 0) {
       throw new Error("Memory session sync prefix requires deferred source-wide indexing.");
@@ -410,6 +411,5 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
     await deleteTargetArchiveStaleLiveRows();
     await deleteStaleRows();
-    return this.emptySourceSyncPlan();
   }
 }

@@ -49,6 +49,8 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
+}));
+vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: unknown,
     context: unknown,
@@ -71,12 +73,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({
-    directory: "/synthetic-coordinator",
-    keepAlive: false,
-  }),
-}));
 vi.mock("./project-checkout.js", () => ({
   ProjectCheckoutError: class extends Error {},
   withProjectCheckoutLifecycle: mocks.checkout,
@@ -91,7 +87,7 @@ vi.mock("./project-clone-runtime.js", () => ({
 }));
 vi.mock("./project-registry.kernel.js", () => ({
   ensureProjectRegistrySchema: mocks.forbiddenSqlite,
-  rowToProject: mocks.forbiddenSqlite,
+  removeProjectCheckoutReferenceInDatabase: mocks.forbiddenSqlite,
 }));
 
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";

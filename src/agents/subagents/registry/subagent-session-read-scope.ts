@@ -1,3 +1,4 @@
+import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 
 type RunIdentity = Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">;
@@ -58,6 +59,7 @@ export class SubagentSessionReadLookup {
   #children = new Map<string, Map<string, number>>();
   #byChild = new Map<string, Set<LookupMembership>>();
   #byController = new Map<string, Set<LookupMembership>>();
+  #byOwner = new Map<string, Set<LookupMembership>>();
   #nextOrder = 0;
 
   constructor(entries: Iterable<readonly [string, LookupIdentity]>) {
@@ -77,7 +79,7 @@ export class SubagentSessionReadLookup {
     }
     const child = entry.childSessionKey.trim();
     const requester = entry.requesterSessionKey;
-    const controller = entry.controllerSessionKey?.trim() || requester;
+    const controller = resolveControllerSessionKey(entry);
     if (
       previous &&
       previous.child === child &&
@@ -97,6 +99,9 @@ export class SubagentSessionReadLookup {
       order: previous?.order ?? this.#nextOrder++,
     };
     this.#memberships.set(cacheKey, membership);
+    for (const owner of new Set([requester.trim(), controller.trim()])) {
+      this.#addToBucket(this.#byOwner, owner, membership);
+    }
     if (membership.child) {
       const children = this.#children.get(membership.requester) ?? new Map<string, number>();
       children.set(membership.child, (children.get(membership.child) ?? 0) + 1);
@@ -118,8 +123,43 @@ export class SubagentSessionReadLookup {
     return { sessionKeys: selected, cacheKeys: this.#select(this.#byChild, selected) };
   }
 
+  selectChildren(childKeys: ReadonlySet<string>): string[] {
+    return this.#select(this.#byChild, childKeys);
+  }
+
   selectControllers(controllerKeys: ReadonlySet<string>): string[] {
     return this.#select(this.#byController, controllerKeys);
+  }
+
+  /** Include every generation of selected children, even after an ownership move. */
+  selectReadScope(
+    sessionKeys: readonly string[],
+    other: SubagentSessionReadLookup,
+    descendants: boolean,
+    additionalCacheKeys: readonly string[] = [],
+  ): string[] {
+    const owners = new Set(sessionKeys.map((key) => key.trim()).filter(Boolean));
+    const children = new Set(descendants ? owners : []);
+    for (const owner of owners) {
+      for (const lookup of [this, other]) {
+        for (const row of lookup.#byOwner.get(owner) ?? []) {
+          if (row.child) {
+            children.add(row.child);
+            if (descendants) {
+              owners.add(row.child);
+            }
+          }
+        }
+      }
+    }
+    const keys = new Set([
+      ...this.#select(this.#byOwner, owners),
+      ...this.selectChildren(children),
+      ...additionalCacheKeys.filter((key) => this.#memberships.has(key)),
+    ]);
+    return [...keys].toSorted(
+      (a, b) => this.#memberships.get(a)!.order - this.#memberships.get(b)!.order,
+    );
   }
 
   #select(buckets: Map<string, Set<LookupMembership>>, keys: ReadonlySet<string>): string[] {
@@ -173,5 +213,8 @@ export class SubagentSessionReadLookup {
     }
     this.#removeFromBucket(this.#byChild, membership.child, membership);
     this.#removeFromBucket(this.#byController, membership.controller, membership);
+    for (const owner of new Set([membership.requester.trim(), membership.controller.trim()])) {
+      this.#removeFromBucket(this.#byOwner, owner, membership);
+    }
   }
 }

@@ -1,14 +1,14 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import "../components/github-link-hovercard-registration.ts";
-import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.runtime.ts";
-import "../components/modal-dialog.ts";
+import type { LinkReaderHovercardProvider } from "../components/link-reader-hovercard.ts";
+import "../components/link-reader-hovercard-registration.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../components/panel-toggle-contract.ts";
+import "../components/modal-dialog.ts";
+import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
@@ -109,6 +109,36 @@ function menuItem(label: string): HTMLButtonElement {
     throw new Error(`Expected menu item: ${label}`);
   }
   return item;
+}
+
+async function focusGitHubLink() {
+  const provider = document.createElement(
+    "openclaw-link-reader-hovercard-provider",
+  ) as LinkReaderHovercardProvider;
+  provider.readers = [TEST_LINK_READER];
+  provider.client = {
+    request: vi.fn().mockResolvedValue({
+      url: "https://github.com/openclaw/openclaw/issues/102691",
+      comments: 1,
+      createdAt: "2026-07-09T10:00:00Z",
+      kind: "issue",
+      login: "octocat",
+      number: 102691,
+      owner: "openclaw",
+      repo: "openclaw",
+      state: "open",
+      title: "Open links in a sidebar browser",
+      updatedAt: "2026-07-09T10:00:00Z",
+    }),
+  } as unknown as GatewayBrowserClient;
+  const anchor = document.createElement("a");
+  anchor.href = "https://github.com/openclaw/openclaw/issues/102691";
+  anchor.textContent = "#102691";
+  provider.append(anchor);
+  document.body.append(provider);
+  anchor.focus();
+  await vi.waitFor(() => expect(document.querySelector(".link-reader-hovercard")).not.toBeNull());
+  return anchor;
 }
 
 describe("native link routing", () => {
@@ -219,34 +249,11 @@ describe("native link routing", () => {
     // bootstrap listeners fire alongside this file's own. Reproduce that order
     // and require a single registry definition.
     vi.resetModules();
-    await import("../components/github-link-hovercard-registration.ts");
+    await import("../components/link-reader-hovercard-registration.ts");
     const define = vi.spyOn(customElements, "define");
-    const provider = document.createElement(
-      "openclaw-github-link-hovercard-provider",
-    ) as GitHubLinkHovercardProvider;
-    provider.client = {
-      request: vi.fn().mockResolvedValue({
-        comments: 1,
-        createdAt: "2026-07-09T10:00:00Z",
-        kind: "issue",
-        login: "octocat",
-        number: 102691,
-        owner: "openclaw",
-        repo: "openclaw",
-        state: "open",
-        title: "Open links in a sidebar browser",
-        updatedAt: "2026-07-09T10:00:00Z",
-      }),
-    } as unknown as GatewayBrowserClient;
-    const anchor = document.createElement("a");
-    anchor.href = "https://github.com/openclaw/openclaw/issues/102691";
-    anchor.textContent = "#102691";
-    provider.append(anchor);
-    document.body.append(provider);
-    anchor.focus();
-    await vi.waitFor(() => expect(document.querySelector(".github-link-hovercard")).not.toBeNull());
+    await focusGitHubLink();
     const hovercardDefines = define.mock.calls.filter(
-      ([tag]) => tag === "openclaw-github-link-hovercard-provider",
+      ([tag]) => tag === "openclaw-link-reader-hovercard-provider",
     );
     expect(hovercardDefines).toHaveLength(1);
     define.mockRestore();
@@ -255,34 +262,11 @@ describe("native link routing", () => {
   it("closes an active GitHub hovercard after routing its link", async () => {
     const bridge = installBridge();
     routing = startNativeLinkRouting();
-    const provider = document.createElement(
-      "openclaw-github-link-hovercard-provider",
-    ) as GitHubLinkHovercardProvider;
-    provider.client = {
-      request: vi.fn().mockResolvedValue({
-        comments: 1,
-        createdAt: "2026-07-09T10:00:00Z",
-        kind: "issue",
-        login: "octocat",
-        number: 102691,
-        owner: "openclaw",
-        repo: "openclaw",
-        state: "open",
-        title: "Open links in a sidebar browser",
-        updatedAt: "2026-07-09T10:00:00Z",
-      }),
-    } as unknown as GatewayBrowserClient;
-    const anchor = document.createElement("a");
-    anchor.href = "https://github.com/openclaw/openclaw/issues/102691";
-    anchor.textContent = "#102691";
-    provider.append(anchor);
-    document.body.append(provider);
-    anchor.focus();
-    await vi.waitFor(() => expect(document.querySelector(".github-link-hovercard")).not.toBeNull());
+    const anchor = await focusGitHubLink();
 
     click(anchor);
 
-    expect(document.querySelector(".github-link-hovercard")).toBeNull();
+    expect(document.querySelector(".link-reader-hovercard")).toBeNull();
     expect(anchor.hasAttribute("aria-describedby")).toBe(false);
     expect(bridge.messages).toEqual([]);
     expect(bridge.browserRequests).toEqual([

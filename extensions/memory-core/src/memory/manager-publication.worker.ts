@@ -1,20 +1,28 @@
 import type { DatabaseSync } from "node:sqlite";
-import { supportsNodeSqliteExtensionLoading } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import { loadSqliteVecExtensionFromPath } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   assertTransactionUsable,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
   runSqliteImmediateTransactionSync,
+  supportsNodeSqliteExtensionLoading,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
-import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db.js";
+import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
+import {
+  clearMemoryEmbeddingCacheIdentities,
+  countMemoryEmbeddingCache,
+  pruneMemoryEmbeddingCache,
+  upsertMemoryEmbeddingCache,
+} from "./manager-embedding-cache.js";
 import type {
+  MemoryEmbeddingCacheEntry,
+  MemoryEmbeddingCacheHeader,
   MemoryPublicationConnection,
   MemoryPublicationOperations,
   MemoryPublicationResult,
-  MemoryPublicationState,
 } from "./manager-publication-task.js";
 import { assertMemoryShadowIdentity, type MemoryShadowFailure } from "./manager-shadow-task.js";
 import {
@@ -48,14 +56,43 @@ export function openExistingSqliteWorkerBackend(
   const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(context.databasePath), {
     allowExtension: !process.permission && supportsNodeSqliteExtensionLoading(),
   });
+  return createPublicationBackend(input, context.databasePath, db, true, (stage) =>
+    requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+  );
+}
+
+/** Agent publication borrows its executor connection; only private shadows open their own. */
+export function bindSqliteWorkerBackend(
+  input: MemoryPublicationConnection,
+  context: {
+    databasePath: string;
+    database: DatabaseSync;
+    admit(stage: "transaction" | "commit"): void;
+  },
+) {
+  return createPublicationBackend(input, context.databasePath, context.database, false, (stage) =>
+    context.admit(stage),
+  );
+}
+
+function createPublicationBackend(
+  input: MemoryPublicationConnection,
+  databasePath: string,
+  db: DatabaseSync,
+  ownsConnection: boolean,
+  admit: (stage: "transaction" | "commit") => void,
+) {
+  const assertPath = () => assertMemoryShadowIdentity(databasePath, input.fileIdentity);
   let staged:
-    | {
+    | ({
         operation: string;
-        header: MemorySourceIndexHeader;
         rows: number;
         row: number;
         part: number;
-      }
+      } & (
+        | { kind: "source"; header: MemorySourceIndexHeader }
+        | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
+      ))
     | undefined;
   let loadedExtension: string | undefined;
   try {
@@ -64,11 +101,22 @@ export function openExistingSqliteWorkerBackend(
       if (!Number.isSafeInteger(value)) {
         throw new Error("Invalid memory publication connection policy");
       }
-      db.exec(`PRAGMA ${name} = ${value}`);
+      if (ownsConnection) {
+        db.exec(`PRAGMA ${name} = ${value}`);
+      } else {
+        const row = db.prepare(`PRAGMA ${name}`).get();
+        if (!row || Number(Object.values(row)[0]) !== value) {
+          throw new Error(
+            `Memory publication differs from its canonical connection policy: ${name}`,
+          );
+        }
+      }
     }
     // Connection-local scratch spills to SQLite's temporary storage instead of
     // retaining a second complete source in the Worker or its broker queue.
-    db.exec("PRAGMA temp_store = FILE");
+    if (ownsConnection) {
+      db.exec("PRAGMA temp_store = FILE");
+    }
     db.exec(
       "CREATE TEMP TABLE memory_publication_input (row INTEGER NOT NULL, part INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (row, part)) WITHOUT ROWID",
     );
@@ -79,11 +127,16 @@ export function openExistingSqliteWorkerBackend(
       db.exec("DELETE FROM temp.memory_publication_input");
       staged = undefined;
     };
-    const configure = (state: MemoryPublicationState) => {
-      if (state.extensionPath && state.extensionPath !== loadedExtension) {
-        db.loadExtension(state.extensionPath);
-        loadedExtension = state.extensionPath;
+    const finish = <T>(outcome: MemoryPublicationResult<T>): MemoryPublicationResult<T> => {
+      // Failed commands close through their host owner; cleanup must not hide the write outcome.
+      if (outcome.ok) {
+        try {
+          discard();
+        } catch (error) {
+          return { ok: false, error: failure(error), entered: true, committed: true };
+        }
       }
+      return outcome;
     };
     const transact = <T>(
       run: (hooks: { onBegin: () => void; withCommit: (commit: () => void) => void }) => T,
@@ -100,11 +153,11 @@ export function openExistingSqliteWorkerBackend(
             entered = true;
             db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
             assertPath();
-            requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+            admit("transaction");
           },
           withCommit: (commit) => {
             assertPath();
-            requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+            admit("commit");
             commit();
             committed = true;
           },
@@ -127,11 +180,14 @@ export function openExistingSqliteWorkerBackend(
       },
       execute(command) {
         assertPath();
-        if (command.type === "stage.start") {
+        if (command.type === "stage.start" || command.type === "cache.stage.start") {
           if (staged) {
             throw new Error("Memory publication input already belongs to another operation");
           }
-          staged = { ...command.input, row: 0, part: 0 };
+          staged =
+            command.type === "stage.start"
+              ? { ...command.input, kind: "source", row: 0, part: 0 }
+              : { ...command.input, kind: "cache", row: 0, part: 0 };
           return undefined;
         }
         if (command.type === "stage.discard") {
@@ -162,7 +218,90 @@ export function openExistingSqliteWorkerBackend(
           }
           return undefined;
         }
-        configure(command.input.state);
+        if (command.type === "cache.prune") {
+          if (countMemoryEmbeddingCache(db) <= command.input.maxEntries) {
+            return { ok: true, value: false };
+          }
+          return transact((hooks) =>
+            runSqliteImmediateTransactionSync(
+              db,
+              () => {
+                hooks.onBegin();
+                pruneMemoryEmbeddingCache(db, command.input.maxEntries);
+                return true;
+              },
+              { withCommit: hooks.withCommit },
+            ),
+          );
+        }
+        if (command.type === "cache.clear") {
+          return transact((hooks) =>
+            runSqliteImmediateTransactionSync(
+              db,
+              () => {
+                hooks.onBegin();
+                if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
+                  return false;
+                }
+                clearMemoryEmbeddingCacheIdentities(db, command.input.identities);
+                return true;
+              },
+              { withCommit: hooks.withCommit },
+            ),
+          );
+        }
+        if (command.type === "cache.write") {
+          if (
+            !staged ||
+            staged.kind !== "cache" ||
+            staged.operation !== command.input.operation ||
+            staged.row !== staged.rows ||
+            staged.part !== 0
+          ) {
+            throw new Error("Memory cache input was not sealed");
+          }
+          const header = staged.header;
+          return finish(
+            transact((hooks) =>
+              runSqliteImmediateTransactionSync(
+                db,
+                () => {
+                  hooks.onBegin();
+                  if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
+                    return false;
+                  }
+                  const eligible = new Map<string, boolean>();
+                  function* entries() {
+                    for (const json of readStagedJson(db)) {
+                      // SAFETY: The paired cache producer owns these sealed records.
+                      const entry = JSON.parse(json) as MemoryEmbeddingCacheEntry;
+                      if (entry.sessionId) {
+                        let current = eligible.get(entry.sessionId);
+                        if (current === undefined) {
+                          current = !hasMemorySessionTombstone(db, header.agentId, entry.sessionId);
+                          eligible.set(entry.sessionId, current);
+                        }
+                        if (!current) {
+                          continue;
+                        }
+                      }
+                      yield entry;
+                    }
+                  }
+                  upsertMemoryEmbeddingCache({ ...header, db, enabled: true, entries });
+                  return true;
+                },
+                { withCommit: hooks.withCommit },
+              ),
+            ),
+          );
+        }
+        const extensionPath = command.input.state.extensionPath;
+        if (extensionPath && extensionPath !== loadedExtension) {
+          loadSqliteVecExtensionFromPath(db, extensionPath);
+          assertPath();
+          loadedExtension = extensionPath;
+        }
         if (command.type === "database.publish") {
           const publication = command.input;
           return transact((hooks) => {
@@ -194,6 +333,7 @@ export function openExistingSqliteWorkerBackend(
         }
         if (
           !staged ||
+          staged.kind !== "source" ||
           staged.operation !== command.input.operation ||
           staged.row !== staged.rows ||
           staged.part !== 0
@@ -224,48 +364,45 @@ export function openExistingSqliteWorkerBackend(
             { withCommit: hooks.withCommit },
           ),
         );
-        // Failed publication closes the Worker at its host owner. Preserve the
-        // transaction error instead of replacing it with a staging-cleanup error.
-        if (outcome.ok) {
-          try {
-            discard();
-          } catch (error) {
-            return {
-              ok: false,
-              error: failure(error),
-              entered: true,
-              committed: true,
-            };
-          }
-        }
-        return outcome;
+        return finish(outcome);
       },
       close() {
-        db.close();
+        if (ownsConnection) {
+          db.close();
+        } else {
+          db.exec("DROP TABLE temp.memory_publication_input");
+        }
       },
-    };
+    } satisfies SqliteWorkerBackend<MemoryPublicationOperations>;
   } catch (error) {
-    db.close();
+    if (ownsConnection) {
+      db.close();
+    }
     throw error;
   }
 }
 
 function* readStagedRows(db: DatabaseSync): Generator<MemorySourceIndexRow> {
+  for (const json of readStagedJson(db)) {
+    // SAFETY: Only the paired source producer writes these sealed JSON records.
+    yield JSON.parse(json) as MemorySourceIndexRow;
+  }
+}
+
+function* readStagedJson(db: DatabaseSync): Generator<string> {
   let parts: string[] = [];
   let row = 0;
   for (const fragment of db
     .prepare("SELECT row, json FROM temp.memory_publication_input ORDER BY row, part")
     .iterate()) {
     if (fragment.row !== row) {
-      // SAFETY: Only the paired typed producer writes these sealed JSON records.
-      yield JSON.parse(parts.join("")) as MemorySourceIndexRow;
+      yield parts.join("");
       parts = [];
       row = Number(fragment.row);
     }
     parts.push(String(fragment.json));
   }
   if (parts.length) {
-    // SAFETY: Only the paired typed producer writes these sealed JSON records.
-    yield JSON.parse(parts.join("")) as MemorySourceIndexRow;
+    yield parts.join("");
   }
 }

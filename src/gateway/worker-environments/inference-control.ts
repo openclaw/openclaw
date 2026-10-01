@@ -2,7 +2,7 @@ import type { WorkerEnvironmentService } from "./service.js";
 
 type WorkerInferenceControl = Pick<
   WorkerEnvironmentService,
-  "cancelInferenceForSession" | "hasInferenceForSession" | "resolveInferenceSessionForRunId"
+  "cancelInferenceForSession" | "hasInferenceForSession"
 >;
 
 export function asWorkerInferenceControl(service: unknown): WorkerInferenceControl | undefined {

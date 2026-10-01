@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -37,20 +39,21 @@ async function writeFixture(
     })}\n`,
     "utf8",
   );
-  await fs.writeFile(path.join(packageRoot, "dist", "worker", "worker.mjs"), workerSource, {
-    encoding: "utf8",
-    mode: 0o755,
-  });
-  await fs.writeFile(
-    path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
-    "export const launcher = true;\n",
-    { encoding: "utf8", mode: 0o755 },
-  );
-  await fs.writeFile(
-    path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
-    "export const receiver = true;\n",
-    { encoding: "utf8", mode: 0o755 },
-  );
+  for (const [artifactName, contents] of [
+    ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
+    ["github-exec-launcher.mjs", "export const launcher = true;\n"],
+    ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
+    ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
+    ["service-child-relay.mjs", "export const relay = true;\n"],
+    ["sqlite-store.worker.mjs", "export const sqliteStore = true;\n"],
+    ["worker.mjs", workerSource],
+    ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
+  ] as const) {
+    await fs.writeFile(path.join(packageRoot, "dist", "worker", artifactName), contents, {
+      encoding: "utf8",
+      mode: 0o755,
+    });
+  }
 }
 
 async function listTarball(tarballPath: string): Promise<string[]> {
@@ -78,24 +81,6 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 }
 
 describe("worker bundle producer", () => {
-  it("stages the workspace rsync receiver at the path used by transfers", async () => {
-    await withTestDir({ prefix: "openclaw-worker-bundle-receiver-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      await writeFixture(packageRoot);
-      const artifact = await createWorkerBundleProducer({
-        packageRoot,
-        cacheDir: path.join(root, "cache"),
-      }).prepare();
-      const installPrefix = `.openclaw-worker/${artifact.bundleHash}/`;
-      const receiverPath = workerWorkspaceRsyncReceiverEntryPath(artifact.bundleHash);
-
-      expect(receiverPath.startsWith(installPrefix)).toBe(true);
-      await expect(listTarball(artifact.tarballPath)).resolves.toContain(
-        receiverPath.slice(installPrefix.length),
-      );
-    });
-  });
-
   it("hashes and archives only the dedicated deploy artifacts", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-" }, async (root) => {
       const packageA = path.join(root, "package-a");
@@ -131,20 +116,44 @@ describe("worker bundle producer", () => {
       }).prepare();
       expect(first.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(second.bundleHash).toBe(first.bundleHash);
-      await expect(listTarball(first.tarballPath)).resolves.toEqual([
+      const compressed = await fs.readFile(first.tarballPath);
+      expect(first.tarballSha256).toBe(createHash("sha256").update(compressed).digest("hex"));
+      expect(first.tarballBytes).toBe(compressed.byteLength);
+      const entries = await listTarball(first.tarballPath);
+      expect(entries).toEqual([
+        "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
+        "image-processor.worker.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
+        "sqlite-store.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
+      const installPrefix = `.openclaw-worker/${first.bundleHash}/`;
+      const receiverPath = workerWorkspaceRsyncReceiverEntryPath(first.bundleHash);
+      expect(receiverPath.startsWith(installPrefix)).toBe(true);
+      expect(entries).toContain(receiverPath.slice(installPrefix.length));
       const extractRoot = path.join(root, "extract");
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });
-      await expect(fs.readFile(path.join(extractRoot, "worker.mjs"), "utf8")).resolves.toContain(
-        "worker = true",
-      );
-      await expect(
-        fs.readFile(path.join(extractRoot, "workspace-rsync-receiver.mjs"), "utf8"),
-      ).resolves.toContain("receiver = true");
+      for (const [artifactName, expectedContents] of [
+        ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
+        ["github-exec-launcher.mjs", "export const launcher = true;\n"],
+        ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
+        ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
+        ["service-child-relay.mjs", "export const relay = true;\n"],
+        ["sqlite-store.worker.mjs", "export const sqliteStore = true;\n"],
+        ["worker.mjs", "export const worker = true;\n"],
+        ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
+      ] as const) {
+        await expect(fs.readFile(path.join(extractRoot, artifactName), "utf8")).resolves.toBe(
+          expectedContents,
+        );
+        if (process.platform !== "win32") {
+          expect((await fs.stat(path.join(extractRoot, artifactName))).mode & 0o777).toBe(0o700);
+        }
+      }
       await expect(fs.access(path.join(extractRoot, "package.json"))).rejects.toThrow();
       await expect(fs.access(path.join(extractRoot, "node_modules"))).rejects.toThrow();
     });
@@ -164,26 +173,25 @@ describe("worker bundle producer", () => {
       const unrelated = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
       expect(unrelated.bundleHash).toBe(first.bundleHash);
 
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "worker.mjs"),
-        "export const value = 2;\n",
-      );
-      const changed = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(changed.bundleHash).not.toBe(first.bundleHash);
-
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
-        "export const receiver = false;\n",
-      );
-      const receiverChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(receiverChanged.bundleHash).not.toBe(changed.bundleHash);
-
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
-        "export const launcher = false;\n",
-      );
-      const launcherChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(launcherChanged.bundleHash).not.toBe(receiverChanged.bundleHash);
+      let previousHash = first.bundleHash;
+      for (const artifactName of [
+        "file-tool-planning.worker.mjs",
+        "github-exec-launcher.mjs",
+        "image-processor.worker.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
+        "sqlite-store.worker.mjs",
+        "worker.mjs",
+        "workspace-rsync-receiver.mjs",
+      ]) {
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "worker", artifactName),
+          "export const changed = true;\n",
+        );
+        const changed = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+        expect(changed.bundleHash, artifactName).not.toBe(previousHash);
+        previousHash = changed.bundleHash;
+      }
     });
   });
 
@@ -296,17 +304,22 @@ describe("worker bundle producer", () => {
         },
       });
       try {
-        const store = createWorkerEnvironmentStore({
+        const store = await createWorkerEnvironmentStore({
           database: openOpenClawStateDatabase({ path: databasePath }),
         });
-        store.createIntent({
+        await store.createIntent({
           environmentId: "preparing",
           providerId: "fixture",
           profileId: "test",
           provisionOperationId: "prepare-project",
           profileSnapshot: { settings: {}, project: { ...project, preparation } },
         });
-        store.transition({ environmentId: "preparing", from: "requested", to: "provisioning" });
+        await store.transition({
+          environmentId: "preparing",
+          from: "requested",
+          to: "provisioning",
+        });
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
 
         await writeFixture(packageRoot, "export const value = 2;\n");
@@ -317,7 +330,7 @@ describe("worker bundle producer", () => {
         });
         const current = await successor.prepare();
         expect(current.bundleHash).not.toBe(admitted.bundleHash);
-        const reopened = createWorkerEnvironmentStore({
+        const reopened = await createWorkerEnvironmentStore({
           database: openOpenClawStateDatabase({ path: databasePath }),
         });
         expect(reopened.get("preparing")).toMatchObject({
@@ -330,11 +343,16 @@ describe("worker bundle producer", () => {
         await successor.prune(retained);
         await expect(fs.readFile(admitted.tarballPath)).resolves.toEqual(admittedBytes);
 
-        reopened.transition({ environmentId: "preparing", from: "provisioning", to: "failed" });
+        await reopened.transition({
+          environmentId: "preparing",
+          from: "provisioning",
+          to: "failed",
+        });
         await successor.prune(retained);
         await expect(fs.stat(admitted.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
       } finally {
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
       }
     });
@@ -578,7 +596,12 @@ describe("worker bundle producer", () => {
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
+        "image-processor.worker.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
+        "sqlite-store.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -587,7 +610,12 @@ describe("worker bundle producer", () => {
 
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
     for (const artifactName of [
+      "file-tool-planning.worker.mjs",
       "github-exec-launcher.mjs",
+      "image-processor.worker.mjs",
+      "service-child-group-anchor.mjs",
+      "service-child-relay.mjs",
+      "sqlite-store.worker.mjs",
       "worker.mjs",
       "workspace-rsync-receiver.mjs",
     ]) {

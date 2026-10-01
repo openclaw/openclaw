@@ -1,8 +1,8 @@
 // Plugin route runtime scopes map authenticated HTTP callers to operator scopes exposed inside plugin handlers.
 import type { IncomingMessage } from "node:http";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { applyHttpOperatorRoleScopeCeiling } from "../http-auth-user-profile.js";
 import {
-  applyHttpOperatorRoleScopeCeiling,
   getHeader,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,

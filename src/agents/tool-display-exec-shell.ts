@@ -240,28 +240,13 @@ export function trimLeadingEnv(words: string[]): string[] {
     return words;
   }
 
-  let index = 0;
-  if (binaryName(words[0]) === "env") {
-    index = 1;
-    while (index < words.length) {
-      const token = words[index];
-      if (!token) {
-        break;
-      }
-      if (token.startsWith("-")) {
-        index += 1;
-        continue;
-      }
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
-        index += 1;
-        continue;
-      }
+  const isEnv = binaryName(words[0]) === "env";
+  let index = isEnv ? 1 : 0;
+  while (index < words.length) {
+    const token = words[index];
+    if (!token || (!(isEnv && token.startsWith("-")) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))) {
       break;
     }
-    return words.slice(index);
-  }
-
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words.at(index) ?? "")) {
     index += 1;
   }
   return words.slice(index);
@@ -299,7 +284,11 @@ type HeredocMarker = {
   operatorIndex: number;
 };
 
-function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
+export function parseHeredocMarker(
+  command: string,
+  operatorIndex: number,
+  whitespace = /[ \t]/u,
+): HeredocMarker | undefined {
   if (
     command[operatorIndex] !== "<" ||
     command[operatorIndex - 1] === "<" ||
@@ -311,7 +300,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
 
   const stripLeadingTabs = command[operatorIndex + 2] === "-";
   let index = operatorIndex + (stripLeadingTabs ? 3 : 2);
-  while (/[ \t]/u.test(command[index] ?? "")) {
+  while (whitespace.test(command[index] ?? "")) {
     index += 1;
   }
 
@@ -333,7 +322,7 @@ function parseHeredocMarker(command: string, operatorIndex: number): HeredocMark
       continue;
     }
 
-    if (/[\r\n;&|<>]/u.test(char) || /[ \t]/u.test(char)) {
+    if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
       break;
     }
     if (char === "'" || char === '"') {
@@ -583,31 +572,17 @@ const SHELL_NAMED_COMPOUND_START_PATTERN =
   `(?:\\[\\[|\\{)${SHELL_TOKEN_END_PATTERN})`;
 const SHELL_COMPOUND_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\((?!\\())`;
 const SHELL_FUNCTION_BODY_START_PATTERN = `(?:${SHELL_NAMED_COMPOUND_START_PATTERN}|\\()`;
-const SHELL_COMPOUND_AT_COMMAND_START_RE = new RegExp(
-  `${SHELL_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
-  "u",
-);
 const SHELL_FUNCTION_NAME_PATTERN = `[^\\s;&|()<>]+`;
-const SHELL_FUNCTION_AT_COMMAND_START_RE = new RegExp(
-  `${SHELL_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
-  "u",
-);
-const SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE = new RegExp(
-  `${SHELL_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
-  "u",
-);
 const SHELL_SUBSTITUTION_COMMAND_START_PATTERN = String.raw`(?:\$\((?!\()|[<>]\()\s*(?:(?:time(?:\s+-p)?(?:\s+--)?|!)(?:\s+|(?=\()))*`;
-const SHELL_COMPOUND_AT_SUBSTITUTION_START_RE = new RegExp(
-  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}${SHELL_COMPOUND_START_PATTERN}`,
-  "u",
-);
-const SHELL_FUNCTION_AT_SUBSTITUTION_START_RE = new RegExp(
-  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
-  "u",
-);
-const SHELL_PAREN_FUNCTION_AT_SUBSTITUTION_START_RE = new RegExp(
-  `${SHELL_SUBSTITUTION_COMMAND_START_PATTERN}(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
-  "u",
+const SHELL_COMPOUND_PATTERNS = [
+  SHELL_COMMAND_START_PATTERN,
+  SHELL_SUBSTITUTION_COMMAND_START_PATTERN,
+].flatMap((start) =>
+  [
+    SHELL_COMPOUND_START_PATTERN,
+    `function\\s+${SHELL_FUNCTION_NAME_PATTERN}(?:\\s+${SHELL_FUNCTION_BODY_START_PATTERN}|\\((?!\\s*\\)))`,
+    `(?:function\\s+)?${SHELL_FUNCTION_NAME_PATTERN}\\s*\\(\\s*\\)\\s*${SHELL_FUNCTION_BODY_START_PATTERN}`,
+  ].map((body) => new RegExp(`${start}${body}`, "u")),
 );
 
 /** Returns whether unquoted shell syntax contains a compound-command introducer. */
@@ -619,14 +594,7 @@ export function hasShellCompoundCommand(command: string): boolean {
     return true;
   });
   const syntax = syntaxChars.join("");
-  return (
-    SHELL_COMPOUND_AT_COMMAND_START_RE.test(syntax) ||
-    SHELL_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
-    SHELL_PAREN_FUNCTION_AT_COMMAND_START_RE.test(syntax) ||
-    SHELL_COMPOUND_AT_SUBSTITUTION_START_RE.test(syntax) ||
-    SHELL_FUNCTION_AT_SUBSTITUTION_START_RE.test(syntax) ||
-    SHELL_PAREN_FUNCTION_AT_SUBSTITUTION_START_RE.test(syntax)
-  );
+  return SHELL_COMPOUND_PATTERNS.some((pattern) => pattern.test(syntax));
 }
 
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
@@ -662,24 +630,6 @@ export function splitTopLevelPipes(command: string): string[] {
   });
 }
 
-function parseChdirTarget(head: string): string | undefined {
-  const { words } = parseShellWords(head, 3);
-  const bin = binaryName(words[0]);
-  if (bin === "cd" || bin === "pushd") {
-    return words[1] || undefined;
-  }
-  return undefined;
-}
-
-function isChdirCommand(head: string): boolean {
-  const bin = binaryName(parseShellWords(head, 2).words[0]);
-  return bin === "cd" || bin === "pushd" || bin === "popd";
-}
-
-function isPopdCommand(head: string): boolean {
-  return binaryName(parseShellWords(head, 2).words[0]) === "popd";
-}
-
 /** Removes leading setup commands such as exports and cwd changes from display summaries. */
 export function stripShellPreamble(command: string): PreambleResult {
   let rest = command.trim();
@@ -705,7 +655,10 @@ export function stripShellPreamble(command: string): PreambleResult {
       return undefined;
     });
     const head = (first ? rest.slice(0, first.index) : rest).trim();
-    const isChdir = (first ? !first.isOr : i > 0) && isChdirCommand(head);
+    const { words } = parseShellWords(head, 3);
+    const bin = binaryName(words[0]);
+    const isChdir =
+      (first ? !first.isOr : i > 0) && (bin === "cd" || bin === "pushd" || bin === "popd");
     const isPreamble =
       head.startsWith("set ") || head.startsWith("export ") || head.startsWith("unset ") || isChdir;
 
@@ -714,11 +667,7 @@ export function stripShellPreamble(command: string): PreambleResult {
     }
 
     if (isChdir) {
-      if (isPopdCommand(head)) {
-        chdirPath = undefined;
-      } else {
-        chdirPath = parseChdirTarget(head) ?? chdirPath;
-      }
+      chdirPath = bin === "popd" ? undefined : words[1] || chdirPath;
     }
 
     rest = first ? rest.slice(first.index + first.length).trimStart() : "";

@@ -1,8 +1,8 @@
-// Root `nodes` command registration: wires node status, pairing, invoke, media, and plugin extensions.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import { hasFlag } from "../argv.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
@@ -54,11 +54,17 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
     return;
   }
   const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+  const helpArgv = [...argv];
+  const invocation = resolveCliArgvInvocation(helpArgv);
+  const parentHelp =
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "nodes" &&
+    (hasFlag(helpArgv, "--help") || hasFlag(helpArgv, "-h"));
   await withConsoleLogsRoutedToStderrForJson(
     argv,
     async () =>
       await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-        mode: "lazy",
+        mode: parentHelp ? "metadata" : "lazy",
         primary: "nodes",
       }),
   );
@@ -67,8 +73,11 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
 /** Plugin node subcommands are only resolved when the invocation is not a built-in nodes command. */
 function shouldRegisterNodesPluginCommands(nodes: Command, argv: readonly string[]): boolean {
   const { commandPath } = resolveCliArgvInvocation([...argv]);
+  if (commandPath[0] === "completion") {
+    return false;
+  }
   if (commandPath[0] !== "nodes") {
-    // Eager registration (root help/completion) needs the full command tree, plugins included.
+    // Eager registration for root help needs the full command tree, plugins included.
     return true;
   }
   const requestedSubcommand = commandPath[1];

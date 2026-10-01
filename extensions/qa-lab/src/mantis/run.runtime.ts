@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements run behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -134,18 +133,6 @@ function formatMantisFailure(error: unknown): string {
   return lines.join("\n");
 }
 
-function createMantisFailureArtifactWriteError(params: {
-  artifactError: unknown;
-  error: unknown;
-  errorPath: string;
-}): AggregateError {
-  return new AggregateError(
-    [params.error, params.artifactError],
-    `Mantis run failed and could not safely write ${params.errorPath}: ${formatErrorMessage(params.error)}`,
-    { cause: params.artifactError },
-  );
-}
-
 async function throwMantisRunFailure(params: {
   error: unknown;
   outputDir: string;
@@ -155,11 +142,11 @@ async function throwMantisRunFailure(params: {
   try {
     await params.outputRoot.write("error.txt", `${formatMantisFailure(params.error)}\n`);
   } catch (artifactError) {
-    throw createMantisFailureArtifactWriteError({
-      artifactError,
-      error: params.error,
-      errorPath,
-    });
+    throw new AggregateError(
+      [params.error, artifactError],
+      `Mantis run failed and could not safely write ${errorPath}: ${formatErrorMessage(params.error)}`,
+      { cause: artifactError },
+    );
   }
   throw attachMantisFailureArtifact(params.error, errorPath);
 }
@@ -241,73 +228,49 @@ async function runLane(params: {
       lane: params.lane,
       runner: params.runner,
     });
-    if (!params.opts.skipInstall) {
-      await runMantisCommand({
+    const runPnpmStage = (stage: "install" | "build" | "qa", args: readonly string[]) =>
+      runMantisCommand({
         command: "pnpm",
-        args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
+        args: ["--dir", worktreeDir, ...args],
         execution: {
           cwd: params.repoRoot,
           env: process.env,
           signal: params.signal,
-          stage: "install",
-          timeoutMs: params.commandTimeouts.install,
+          stage,
+          timeoutMs: params.commandTimeouts[stage],
         },
         lane: params.lane,
         runner: params.runner,
       });
+    if (!params.opts.skipInstall) {
+      await runPnpmStage("install", ["install", "--frozen-lockfile"]);
     }
     if (!params.opts.skipBuild) {
-      await runMantisCommand({
-        command: "pnpm",
-        args: ["--dir", worktreeDir, "build"],
-        execution: {
-          cwd: params.repoRoot,
-          env: process.env,
-          signal: params.signal,
-          stage: "build",
-          timeoutMs: params.commandTimeouts.build,
-        },
-        lane: params.lane,
-        runner: params.runner,
-      });
+      await runPnpmStage("build", ["build"]);
     }
-    await runMantisCommand({
-      command: "pnpm",
-      args: [
-        "--dir",
-        worktreeDir,
-        "openclaw",
-        "qa",
-        "discord",
-        "--repo-root",
-        worktreeDir,
-        "--output-dir",
-        worktreeOutputDir,
-        "--provider-mode",
-        params.opts.providerMode,
-        "--model",
-        DEFAULT_MODEL,
-        "--alt-model",
-        DEFAULT_MODEL,
-        ...(params.opts.fastMode ? ["--fast"] : []),
-        "--credential-source",
-        params.opts.credentialSource,
-        "--credential-role",
-        params.opts.credentialRole,
-        "--scenario",
-        params.scenario,
-        "--allow-failures",
-      ],
-      execution: {
-        cwd: params.repoRoot,
-        env: process.env,
-        signal: params.signal,
-        stage: "qa",
-        timeoutMs: params.commandTimeouts.qa,
-      },
-      lane: params.lane,
-      runner: params.runner,
-    });
+    await runPnpmStage("qa", [
+      "openclaw",
+      "qa",
+      "discord",
+      "--repo-root",
+      worktreeDir,
+      "--output-dir",
+      worktreeOutputDir,
+      "--provider-mode",
+      params.opts.providerMode,
+      "--model",
+      DEFAULT_MODEL,
+      "--alt-model",
+      DEFAULT_MODEL,
+      ...(params.opts.fastMode ? ["--fast"] : []),
+      "--credential-source",
+      params.opts.credentialSource,
+      "--credential-role",
+      params.opts.credentialRole,
+      "--scenario",
+      params.scenario,
+      "--allow-failures",
+    ]);
     // Git owns worktree removal, so preserve the lane artifacts before cleanup.
     await stageMantisLaneOutput(path.join(worktreeDir, worktreeOutputDir), stagedLaneDir);
     // Resolve producer coordinates and preserve referenced media before Git removes the worktree.
@@ -464,10 +427,8 @@ export async function runMantisBeforeAfter(
       skipBuild: opts.skipBuild ?? false,
       skipInstall: opts.skipInstall ?? false,
     };
-    const baselineResult = await runLane({
-      lane: "baseline",
+    const laneOptions = {
       outputDir,
-      ref: baseline,
       repoRoot,
       runId,
       runner,
@@ -477,21 +438,9 @@ export async function runMantisBeforeAfter(
       commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
-    });
-    const candidateResult = await runLane({
-      lane: "candidate",
-      outputDir,
-      ref: candidate,
-      repoRoot,
-      runId,
-      runner,
-      scenario,
-      signal: opts.signal,
-      stagingDir: staging.dir,
-      commandTimeouts,
-      worktreeRoot,
-      opts: commonOpts,
-    });
+    };
+    const baselineResult = await runLane({ ...laneOptions, lane: "baseline", ref: baseline });
+    const candidateResult = await runLane({ ...laneOptions, lane: "candidate", ref: candidate });
     const comparison = {
       baseline: {
         expected: scenarioConfig.baselineExpected,

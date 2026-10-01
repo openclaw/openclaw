@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { WizardNextResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { clearFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
@@ -32,6 +33,105 @@ describe("ModelSetupPage first-run inference", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it.each(["current", "removed", "route", "reconnect"])(
+    "finishes native Use only while its page is current (%s)",
+    async (owner) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext(
+        undefined,
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
+      const agents = createAgentCapability(context.gateway);
+      Object.assign(context, { agents });
+      const refresh = vi.spyOn(agents, "refreshList");
+      request.mockImplementation(async (method) => {
+        if (method === "models.list") {
+          return {
+            models: [
+              {
+                provider: "acp-opencode",
+                id: "fixture-model",
+                name: "Fixture model",
+                available: true,
+                agentRuntime: { id: "acp-opencode", source: "implicit" },
+              },
+            ],
+          };
+        }
+        if (method === "openclaw.setup.detect") {
+          return detection;
+        }
+        if (method === "agents.update") {
+          return { ok: true, agentId: "main" };
+        }
+        if (method === "agents.list") {
+          return {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main", model: "acp-opencode/fixture-model" }],
+          };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { page } = await mountPage(context, {
+        client,
+        firstRun: true,
+        state: { phase: "ready", result: detection },
+      });
+      try {
+        page
+          .querySelector<HTMLButtonElement>("[data-native-model-setup] .picker-select__trigger")!
+          .click();
+        const option = '[role="option"][data-value="acp-opencode/fixture-model"]';
+        await waitForFast(() => expect(page.querySelector(option)).not.toBeNull());
+        page.querySelector<HTMLElement>(option)!.click();
+        await page.updateComplete;
+        page.querySelector<HTMLButtonElement>("[data-native-model-setup] button.primary")!.click();
+        await entered.promise;
+        expect(request).toHaveBeenCalledWith("agents.update", {
+          agentId: "main",
+          model: "acp-opencode/fixture-model",
+          agentRuntime: "acp-opencode",
+        });
+        expect(
+          request.mock.calls.some(
+            ([method]) =>
+              method === "openclaw.setup.verify" || method === "openclaw.setup.activate.start",
+          ),
+        ).toBe(false);
+        if (owner === "removed") {
+          page.remove();
+        } else if (owner === "route") {
+          page.routeData = { firstRun: false };
+          await page.updateComplete;
+        } else if (owner === "reconnect") {
+          publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+          publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
+          await page.updateComplete;
+        }
+        release.resolve();
+        await vi.mocked(context.runtimeConfig.runExternalMutation).mock.results[0]!.value;
+        if (owner === "current") {
+          await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat"));
+          expect(refresh).toHaveBeenCalledOnce();
+          expect(agents.state.agentsList?.agents[0]?.model).toBe("acp-opencode/fixture-model");
+        } else {
+          await Promise.resolve();
+          expect(refresh).not.toHaveBeenCalled();
+          expect(context.navigate).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        agents.dispose();
+      }
+    },
+  );
 
   it.each(["rejected", "uncertain"] as const)(
     "stops after a %s candidate and only permits retry after a proven rejection",
@@ -538,92 +638,6 @@ describe("ModelSetupPage first-run inference", () => {
     });
     expect(context.navigate).not.toHaveBeenCalledWith("chat");
     resolveActivation?.({
-      done: true,
-      status: "done",
-      modelActivation: { modelRef: "openai/new", gatewayRestartRequired: true },
-    });
-  });
-
-  it("does not repeat an unconfirmed activation after reconnect without an explicit retry", async () => {
-    const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext();
-    let resolveFirstActivation: ((result: WizardNextResult) => void) | undefined;
-    let activationCount = 0;
-    request.mockImplementation(async (method) => {
-      if (method === "openclaw.setup.activate.start") {
-        activationCount += 1;
-        if (activationCount === 1) {
-          return await new Promise<WizardNextResult>((resolve) => {
-            resolveFirstActivation = resolve;
-          });
-        }
-        return { done: true, status: "done", modelActivation: { modelRef: "openai/new" } };
-      }
-      if (method === "openclaw.setup.detect") {
-        return {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/new", true)],
-        };
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/new", true)],
-        },
-      },
-      client,
-      firstRun: true,
-    });
-    expect(request).not.toHaveBeenCalled();
-    await clickCandidate(page, "openai-api-key");
-    await waitForFast(() => expect(resolveFirstActivation).toBeTypeOf("function"));
-
-    publishGatewaySnapshot({
-      ...context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
-    await page.updateComplete;
-    publishGatewaySnapshot({
-      ...snapshot,
-      phase: "connected",
-      hello: { ...snapshot.hello },
-    });
-
-    await waitForFast(() => {
-      expect(page.textContent).toContain("previous activation is unresolved");
-      expect(page.textContent).toContain("Check again");
-    });
-    expect(activationCount).toBe(1);
-    expect(context.navigate).not.toHaveBeenCalled();
-
-    await waitForFast(() =>
-      expect(page.querySelector(".model-setup__recovery .btn")).not.toBeNull(),
-    );
-    const retry = page.querySelector<HTMLButtonElement>(".model-setup__recovery .btn")!;
-    expect(retry.disabled).toBe(false);
-    expect(
-      JSON.parse(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")!).deadlineMs,
-    ).toBeGreaterThan(Date.now());
-    retry.click();
-    await page.updateComplete;
-    expect(activationCount).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("may still be running"));
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 500_000);
-    retry.click();
-    await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
-    expect(activationCount).toBe(1);
-    await clickCandidate(page, "openai-api-key");
-
-    await waitForFast(() => {
-      expect(activationCount).toBe(2);
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
-    });
-    resolveFirstActivation?.({
       done: true,
       status: "done",
       modelActivation: { modelRef: "openai/new", gatewayRestartRequired: true },

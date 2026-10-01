@@ -2,7 +2,10 @@
  * Browser plugin runtime lifecycle helpers for startup and shutdown cleanup.
  */
 import type { Server } from "node:http";
-import { getExtensionRelayModule } from "./extension-relay.runtime.js";
+import {
+  getExtensionRelayModule,
+  getGatewayExtensionRelayModule,
+} from "./extension-relay.runtime.js";
 import { stopBrowserScreencasts } from "./screencast/session.js";
 import type { BrowserServerState } from "./server-context.js";
 import { markBrowserRuntimeStopping } from "./server-context.lifecycle.js";
@@ -96,28 +99,25 @@ async function stopBrowserRuntimeInternal(
 
   if (finalizeGlobalAdapters) {
     try {
-      const { disposeGatewayExtensionRelay } =
-        await import("./extension-relay/gateway-relay-route.js");
-      disposeGatewayExtensionRelay();
+      const gatewayRelay = await getGatewayExtensionRelayModule.peek();
+      gatewayRelay?.disposeGatewayExtensionRelay();
     } catch (err) {
       firstError ??= toRuntimeLifecycleError(err, "Gateway browser relay cleanup failed.");
     }
   }
 
-  if (!firstError) {
-    if (params.closeServer && current.server) {
-      await new Promise<void>((resolve) => {
-        current.server?.close(() => resolve());
-      });
-    }
-
-    params.clearState();
-    trackedTabCleanupDisposers.delete(current);
-    current.stopUnhandledRejectionHandler?.();
-  }
   if (firstError) {
     throw firstError;
   }
+  if (params.closeServer && current.server) {
+    await new Promise<void>((resolve) => {
+      current.server?.close(() => resolve());
+    });
+  }
+
+  params.clearState();
+  trackedTabCleanupDisposers.delete(current);
+  current.stopUnhandledRejectionHandler?.();
 }
 
 function toRuntimeLifecycleError(value: unknown, message: string): Error {

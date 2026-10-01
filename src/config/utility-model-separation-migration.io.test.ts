@@ -222,12 +222,14 @@ describe("utility model separation persistence", () => {
     expect(findLegacyConfigIssues(config)).toContainEqual(
       expect.objectContaining({ path: "agents" }),
     );
-    const migrated = migrateLegacyConfig(config);
+    const migrated = migrateLegacyConfig(config, { sourceConfigBeforeMigrations: config });
     expect(migrated.partiallyValid).toBeUndefined();
     expect(migrated.config?.agents?.defaults?.model).toEqual({ primary: "local-fixture/small" });
     expect(migrated.config?.agents?.defaults?.utilityModel).toBe("local-fixture/small");
     expect(migrated.config?.meta?.migrations?.utilityModelSeparation).toBe(true);
     expect(config).toEqual(original);
-    expect(migrateLegacyConfig(migrated.config)).toEqual({ config: null, changes: [] });
+    expect(
+      migrateLegacyConfig(migrated.config, { sourceConfigBeforeMigrations: migrated.config }),
+    ).toEqual({ config: null, changes: [] });
   });
 });

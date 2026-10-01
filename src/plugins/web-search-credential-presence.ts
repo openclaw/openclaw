@@ -1,4 +1,3 @@
-// Checks web-search credential presence from config and plugin metadata.
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";

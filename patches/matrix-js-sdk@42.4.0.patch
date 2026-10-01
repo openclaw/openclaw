@@ -1,0 +1,204 @@
+diff --git a/lib/client.d.ts b/lib/client.d.ts
+index aa8e43fe418defce5910d71a85d36cce1140ca93..d67db1bc6a5eb782e8bb688092b76ffa0679457a 100644
+--- a/lib/client.d.ts
++++ b/lib/client.d.ts
+@@ -714,6 +714,7 @@ export declare enum ClientEvent {
+      * events received over context, search, or pagination APIs.
+      *
+      * The payload is the matrix event which caused this event to fire.
++     * The optional second argument is true when replaying a saved sync response.
+      * @example
+      * ```
+      * matrixClient.on("event", function(event){
+@@ -806,7 +807,7 @@ type UserEvents = UserEvent.AvatarUrl | UserEvent.DisplayName | UserEvent.Presen
+ export type EmittedEvents = ClientEvent | RoomEvents | RoomStateEvents | CryptoEvents | MatrixEventEvents | RoomMemberEvents | UserEvents | CallEvent | CallEventHandlerEvent.Incoming | GroupCallEventHandlerEvent.Incoming | GroupCallEventHandlerEvent.Outgoing | GroupCallEventHandlerEvent.Ended | GroupCallEventHandlerEvent.Participants | HttpApiEvent.SessionLoggedOut | HttpApiEvent.NoConsent | BeaconEvent;
+ export type ClientEventHandlerMap = {
+     [ClientEvent.Sync]: (state: SyncState, prevState: SyncState | null, data?: ISyncStateData) => void;
+-    [ClientEvent.Event]: (event: MatrixEvent) => void;
++    [ClientEvent.Event]: (event: MatrixEvent, fromCache?: boolean) => void;
+     [ClientEvent.ToDeviceEvent]: (event: MatrixEvent) => void;
+     [ClientEvent.ReceivedToDeviceMessage]: (payload: ReceivedToDeviceMessage) => void;
+     [ClientEvent.AccountData]: (event: MatrixEvent, lastEvent?: MatrixEvent) => void;
+diff --git a/lib/client.js b/lib/client.js
+index aea41fc9b0877d28be090fdf57cec9d2d7b6a3cb..884da2764f927cb783a84e22b5c20a369a53b796 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -227,6 +227,7 @@ export let ClientEvent = /*#__PURE__*/function (ClientEvent) {
+    * events received over context, search, or pagination APIs.
+    *
+    * The payload is the matrix event which caused this event to fire.
++   * The optional second argument is true when replaying a saved sync response.
+    * @example
+    * ```
+    * matrixClient.on("event", function(event){
+@@ -1107,8 +1108,11 @@ export class MatrixClient extends TypedEventEmitter {
+     // attach the event listeners needed by RustCrypto
+     this.on(RoomMemberEvent.Membership, rustCrypto.onRoomMembership.bind(rustCrypto));
+     this.on(RoomStateEvent.Events, rustCrypto.onRoomStateEvent.bind(rustCrypto));
+-    this.on(ClientEvent.Event, event => {
+-      void rustCrypto.onLiveEventFromSync(event);
++    this.on(ClientEvent.Event, (event, fromCache) => {
++      // Restored room history must not restart completed verification requests.
++      if (!fromCache) {
++        void rustCrypto.onLiveEventFromSync(event);
++      }
+     });
+ 
+     // re-emit the events emitted by the crypto impl
+diff --git a/lib/sync.js b/lib/sync.js
+index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d011699c037c4 100644
+--- a/lib/sync.js
++++ b/lib/sync.js
+@@ -955,7 +955,7 @@ export class SyncApi {
+           user.setPresenceEvent(presenceEvent);
+           client.store.storeUser(user);
+         }
+-        client.emit(ClientEvent.Event, presenceEvent);
++        client.emit(ClientEvent.Event, presenceEvent, syncEventData.fromCache);
+       });
+     }
+ 
+@@ -1070,7 +1070,7 @@ export class SyncApi {
+         room.recalculate();
+       }
+       stateEvents.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+     }));
+ 
+@@ -1248,7 +1248,7 @@ export class SyncApi {
+         client.emit(ClientEvent.Room, room);
+       }
+       this.processEventsForNotifs(room, timelineEvents);
+-      const emitEvent = e => client.emit(ClientEvent.Event, e);
++      const emitEvent = e => client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       // this fires a couple of times for some events. (eg state events are in the timeline and the state)
+       // should this get a sync section as an additional event emission param (e, syncSection))?
+       stateEvents.forEach(emitEvent);
+@@ -1283,16 +1283,16 @@ export class SyncApi {
+       }
+       this.processEventsForNotifs(room, timelineEvents);
+       stateEvents?.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+       stateAfterEvents?.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+       timelineEvents.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+       accountDataEvents.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+     }));
+ 
+@@ -1310,7 +1310,7 @@ export class SyncApi {
+         room.recalculate();
+       }
+       stateEvents.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+     }));
+ 
+diff --git a/src/client.ts b/src/client.ts
+index 12d9963bf2abdc7939fe4ac4fc9639f52877e426..4d766de7f7bd9a11a071edcced022e36baff86af 100644
+--- a/src/client.ts
++++ b/src/client.ts
+@@ -1026,6 +1026,7 @@ export enum ClientEvent {
+      * events received over context, search, or pagination APIs.
+      *
+      * The payload is the matrix event which caused this event to fire.
++     * The optional second argument is true when replaying a saved sync response.
+      * @example
+      * ```
+      * matrixClient.on("event", function(event){
+@@ -1167,7 +1168,7 @@ export type EmittedEvents =
+ 
+ export type ClientEventHandlerMap = {
+     [ClientEvent.Sync]: (state: SyncState, prevState: SyncState | null, data?: ISyncStateData) => void;
+-    [ClientEvent.Event]: (event: MatrixEvent) => void;
++    [ClientEvent.Event]: (event: MatrixEvent, fromCache?: boolean) => void;
+     [ClientEvent.ToDeviceEvent]: (event: MatrixEvent) => void;
+     [ClientEvent.ReceivedToDeviceMessage]: (payload: ReceivedToDeviceMessage) => void;
+     [ClientEvent.AccountData]: (event: MatrixEvent, lastEvent?: MatrixEvent) => void;
+@@ -2073,8 +2074,11 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
+         // attach the event listeners needed by RustCrypto
+         this.on(RoomMemberEvent.Membership, rustCrypto.onRoomMembership.bind(rustCrypto));
+         this.on(RoomStateEvent.Events, rustCrypto.onRoomStateEvent.bind(rustCrypto));
+-        this.on(ClientEvent.Event, (event) => {
+-            void rustCrypto.onLiveEventFromSync(event);
++        this.on(ClientEvent.Event, (event, fromCache) => {
++            // Restored room history must not restart completed verification requests.
++            if (!fromCache) {
++                void rustCrypto.onLiveEventFromSync(event);
++            }
+         });
+ 
+         // re-emit the events emitted by the crypto impl
+diff --git a/src/sync.ts b/src/sync.ts
+index 3035f4bf1613ff85f3c59c8bca6e92ecba26b5e2..90276ab986418301d20be73d07ce53b02750b7b1 100644
+--- a/src/sync.ts
++++ b/src/sync.ts
+@@ -1131,7 +1131,7 @@ export class SyncApi {
+                         user.setPresenceEvent(presenceEvent);
+                         client.store.storeUser(user);
+                     }
+-                    client.emit(ClientEvent.Event, presenceEvent);
++                    client.emit(ClientEvent.Event, presenceEvent, syncEventData.fromCache);
+                 });
+         }
+ 
+@@ -1254,7 +1254,7 @@ export class SyncApi {
+                     room.recalculate();
+                 }
+                 stateEvents.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+             }),
+         );
+@@ -1482,7 +1482,7 @@ export class SyncApi {
+ 
+                 this.processEventsForNotifs(room, timelineEvents);
+ 
+-                const emitEvent = (e: MatrixEvent): boolean => client.emit(ClientEvent.Event, e);
++                const emitEvent = (e: MatrixEvent): boolean => client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 // this fires a couple of times for some events. (eg state events are in the timeline and the state)
+                 // should this get a sync section as an additional event emission param (e, syncSection))?
+                 stateEvents.forEach(emitEvent);
+@@ -1523,16 +1523,16 @@ export class SyncApi {
+                 this.processEventsForNotifs(room, timelineEvents);
+ 
+                 stateEvents?.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+                 stateAfterEvents?.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+                 timelineEvents.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+                 accountDataEvents.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+             }),
+         );
+@@ -1554,7 +1554,7 @@ export class SyncApi {
+                     room.recalculate();
+                 }
+                 stateEvents.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+             }),
+         );

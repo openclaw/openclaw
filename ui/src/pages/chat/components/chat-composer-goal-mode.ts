@@ -1,7 +1,9 @@
+import "../../../styles/chat/composer-context-strip.css";
 import { html, nothing } from "lit";
 import type { SessionGoal } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
@@ -9,6 +11,8 @@ import { resetSkillMenuState } from "./chat-composer-skill-menu.ts";
 import { resetSlashMenuState } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+
+registerChatGoalsEnglish();
 
 export function createGoalComposerController(
   props: ChatComposerProps,
@@ -76,6 +80,21 @@ export function createGoalComposerController(
     requestUpdate();
     focus();
   };
+  // Only incomplete creation commands become forms. Populated commands and
+  // lifecycle actions retain their text-command interpretation.
+  const activateDraft = (draft: string, submitting = false) => {
+    if (current() || !props.connected || !props.canSend || !props.onGoalSubmit) {
+      return false;
+    }
+    const match = /^\s*\/goal(?:\s+(start|set|create))?\s*$/iu.exec(draft);
+    // A separator commits the action word; do not consume prefixes such as
+    // /goal starting while the user is still typing an ordinary objective.
+    if (!match || (!submitting && (!match[1] || !/\s$/u.test(draft)))) {
+      return false;
+    }
+    begin();
+    return true;
+  };
   return {
     get active() {
       return current() !== null;
@@ -88,7 +107,14 @@ export function createGoalComposerController(
       return mode ? t(mode.action === "edit" ? "chat.goals.save" : "chat.goals.start") : undefined;
     },
     begin,
-    activateCommand(command: SlashCommandDef) {
+    activateDraft,
+    // Argument selection commits the draft before requesting command submission.
+    submitCommand: () => {
+      if (!activateDraft(props.getDraft?.() ?? props.draft, true)) {
+        void props.onSend();
+      }
+    },
+    activateCommand: (command: SlashCommandDef) => {
       if (
         command.key !== "goal" ||
         command.source !== "native" ||
@@ -136,21 +162,22 @@ export function createGoalComposerController(
       const mode = current();
       return mode
         ? html`<div
-            class="agent-chat__goal-mode"
+            class="agent-chat__goal-mode composer-context-strip"
             role="group"
             aria-label=${t("chat.goals.composerMode")}
           >
-            <span class="agent-chat__goal-mode-label"
-              >${icons.flag}${t(
-                mode.action === "edit" ? "chat.goals.edit" : "chat.goals.composerMode",
-              )}</span
-            >
-            <span class="agent-chat__goal-mode-hint"
+            <span class="agent-chat__goal-mode-label composer-context-strip__label">
+              <span class="composer-context-strip__icon">${icons.flag}</span>
+              <span class="composer-context-strip__label-text"
+                >${t(mode.action === "edit" ? "chat.goals.edit" : "chat.goals.composerMode")}</span
+              >
+            </span>
+            <span class="agent-chat__goal-mode-hint composer-context-strip__text"
               >${t(mode.action === "edit" ? "chat.goals.editHint" : "chat.goals.startHint")}</span
             >
             <button
               type="button"
-              class="agent-chat__goal-action"
+              class="composer-context-strip__dismiss"
               aria-label=${t("chat.goals.cancel")}
               ?disabled=${mode.pending}
               @click=${cancel}

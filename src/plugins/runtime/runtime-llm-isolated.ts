@@ -1,14 +1,35 @@
-// Isolated plugin LLM completion policy validates and dispatches the zero-tool runtime mode.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { IsolatedCompletionResult } from "../../agents/isolated-completion.js";
 import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
-import type { LlmCompleteParams, LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
+import {
+  createLlmCompleteError as completionError,
+  createLlmOperatorAuthorizationError,
+  isLlmOperatorAuthorizationError,
+} from "./runtime-llm-error.js";
+import type {
+  LlmCompleteErrorCode,
+  LlmCompleteParams,
+  LlmIsolatedAgentRuntimeCompleteParams,
+} from "./types-core.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const ISOLATED_COMPLETION_ERRORS = new Map<unknown, readonly [LlmCompleteErrorCode, string]>([
+  [
+    "unsupported",
+    ["LLM_ISOLATED_UNSUPPORTED", "Configured agent runtime does not support isolated completion."],
+  ],
+  ["runtime-unavailable", ["LLM_RUNTIME_UNAVAILABLE", "Configured agent runtime is unavailable."]],
+  ["input-rejected", ["LLM_ISOLATED_INPUT_REJECTED", "Isolated completion input was rejected."]],
+  [
+    "output-rejected",
+    ["LLM_COMPLETION_OUTPUT_REJECTED", "Isolated completion output was rejected."],
+  ],
+]);
 
 function requireIsolatedUserPrompt(params: LlmCompleteParams): string {
   if (
@@ -116,7 +137,10 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
   provider: string;
   model: string;
   authProfileId?: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  assertCurrent?: () => void;
 }): Promise<IsolatedCompletionResult> {
+  params.assertCurrent?.();
   const prompt = requireIsolatedUserPrompt(params.request);
   const timeoutMs = resolveIsolatedTimeoutMs(params.request.execution.timeoutMs);
   assertIsolatedReasoningSupported({
@@ -154,6 +178,9 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
         provider: params.provider,
         model: params.model,
         authProfileId: params.authProfileId,
+        operatorAuthority: params.operatorAuthority,
+        mapOperatorAuthorizationError: createLlmOperatorAuthorizationError,
+        assertCurrent: params.assertCurrent,
         agentId: params.agentId,
         systemPrompt: params.request.systemPrompt ?? "",
         prompt,
@@ -168,6 +195,15 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     })();
     return await Promise.race([operation, abortPromise]);
   } catch (error) {
+    if (isLlmOperatorAuthorizationError(error)) {
+      throw error;
+    }
+    // Source revocation can win the abort race before the operation rechecks authority.
+    try {
+      params.operatorAuthority?.assertCurrent();
+    } catch (authorizationError) {
+      throw createLlmOperatorAuthorizationError(authorizationError);
+    }
     if (timedOut) {
       throw completionError(
         "LLM_COMPLETION_TIMEOUT",
@@ -178,40 +214,12 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     if (params.request.signal?.aborted) {
       throw completionError("LLM_COMPLETION_ABORTED", "Plugin LLM completion was aborted.", error);
     }
-    const isolatedError = error as { code?: unknown; message?: unknown };
-    if (isolatedError.code === "unsupported") {
+    const isolatedError = asOptionalObjectRecord(error);
+    const mappedError = ISOLATED_COMPLETION_ERRORS.get(isolatedError?.code);
+    if (mappedError) {
       throw completionError(
-        "LLM_ISOLATED_UNSUPPORTED",
-        typeof isolatedError.message === "string"
-          ? isolatedError.message
-          : "Configured agent runtime does not support isolated completion.",
-        error,
-      );
-    }
-    if (isolatedError.code === "runtime-unavailable") {
-      throw completionError(
-        "LLM_RUNTIME_UNAVAILABLE",
-        typeof isolatedError.message === "string"
-          ? isolatedError.message
-          : "Configured agent runtime is unavailable.",
-        error,
-      );
-    }
-    if (isolatedError.code === "input-rejected") {
-      throw completionError(
-        "LLM_ISOLATED_INPUT_REJECTED",
-        typeof isolatedError.message === "string"
-          ? isolatedError.message
-          : "Isolated completion input was rejected.",
-        error,
-      );
-    }
-    if (isolatedError.code === "output-rejected") {
-      throw completionError(
-        "LLM_COMPLETION_OUTPUT_REJECTED",
-        typeof isolatedError.message === "string"
-          ? isolatedError.message
-          : "Isolated completion output was rejected.",
+        mappedError[0],
+        typeof isolatedError?.message === "string" ? isolatedError.message : mappedError[1],
         error,
       );
     }

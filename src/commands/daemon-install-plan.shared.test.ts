@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonRuntimeBinDir,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
 
@@ -24,7 +23,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
             runtime: "node",
             devMode: false,
           }),
-        ).resolves.toEqual({ devMode: false, runtimePath: pinned });
+        ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
@@ -74,18 +73,9 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       }),
     ).resolves.toEqual({
       devMode: false,
+      runtime: "node",
       runtimePath: "/custom/node",
     });
-  });
-});
-
-describe("resolveDaemonRuntimeBinDir", () => {
-  it("returns the absolute runtime bin directory", () => {
-    expect(resolveDaemonRuntimeBinDir("/custom/runtime/bin/bun")).toEqual(["/custom/runtime/bin"]);
-  });
-
-  it("ignores bare executable names", () => {
-    expect(resolveDaemonRuntimeBinDir("bun")).toBeUndefined();
   });
 });
 
@@ -139,6 +129,12 @@ describe("resolveDaemonServicePathDirs openclaw discovery", () => {
         fs.mkdirSync(path.dirname(otherEntrypoint), { recursive: true });
         fs.writeFileSync(activeEntrypoint, "");
         fs.writeFileSync(otherEntrypoint, "");
+        for (const entrypoint of [activeEntrypoint, otherEntrypoint]) {
+          fs.writeFileSync(
+            path.join(path.dirname(entrypoint), "package.json"),
+            '{"name":"openclaw"}',
+          );
+        }
         fs.symlinkSync(otherEntrypoint, path.join(binDir, "openclaw"));
 
         expect(

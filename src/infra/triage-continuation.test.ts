@@ -9,15 +9,19 @@ import { afterEach, expect, it, vi } from "vitest";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  triageRuntimeNodeOptions,
+  useTriageLeaseDatabaseFixture,
+} from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
+import { createManagedHandoffLeaseDatabase } from "./update-managed-service-handoff-database.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
-import {
-  createTriageBoundary,
-  triageRuntimeNodeOptions,
-} from "./update-managed-service-triage.test-support.js";
+import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
+
+useTriageLeaseDatabaseFixture();
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -186,8 +190,9 @@ if(process.argv[4]==='defer'){
   await new Promise(resolve=>process.stdin.once('data',resolve));
 }
 process.stdout.write('{"status":"error","reason":"original"}\\n');
-await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('original exit overwritten');}},
+const completion=await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('original exit overwritten');}},
  {kind,phase,error:'original',installationRoot:${JSON.stringify(root)},gateway:'preserve'});
+console.error('triage-completion:'+completion);
 process.exitCode=7;
 ${heldHandle ? "timerControl.close();" : ""}
 `,
@@ -415,6 +420,7 @@ unix.each([
       expect(await loser.exit).toEqual({ code: 7, signal: null });
       expect(loser.output().stdout).toBe('{"status":"error","reason":"original"}\n');
       expect(loser.output().stderr).toContain("already owned");
+      expect(loser.output().stderr).toContain("triage-completion:undefined");
     }
     expect(readClaim(root)).toEqual(held);
     const label = nativeWon ? "native" : firstLabel;
@@ -437,6 +443,7 @@ unix.each([
     if (order === "failed-but-drained") {
       expect(first!.output().stderr).toContain("failed (exit 17)");
       expect(first!.output().stderr).not.toContain("cleanup is uncertain");
+      expect(first!.output().stderr).toContain("triage-completion:undefined");
       expect(first!.output().stdout).toBe('{"status":"error","reason":"original"}\n');
       expect(await first!.exit).toEqual({ code: 7, signal: null });
     }
@@ -445,6 +452,7 @@ unix.each([
     expect(readClaim(root)?.owner).not.toBe(held?.owner);
     await control(root, "next", "release");
     expect(await next.exit).toEqual({ code: 7, signal: null });
+    expect(next.output().stderr).toContain("triage-completion:completed");
   },
   60_000,
 );
@@ -561,14 +569,15 @@ unix.each(["abrupt-executor", "replacement"] as const)(
       expect(await owner.exit).toEqual({ code: 7, signal: null });
       expect(owner.output().stderr).toContain("cleanup is uncertain");
     } else {
-      const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-      try {
-        db.prepare(
-          "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
-        ).run("replacement-generation", root, String(held.owner));
-      } finally {
-        db.close();
-      }
+      // Admitted children inspect this database while the fixture replaces the owner.
+      createManagedHandoffLeaseDatabase(resolveManagedUpdateLeaseDatabasePath())(true, (db) => {
+        const replaced = db
+          .prepare(
+            "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
+          )
+          .run("replacement-generation", root, String(held.owner));
+        expect(replaced.changes).toBe(1);
+      });
       await vi.waitFor(() => fs.access(path.join(root, "held.cancelled")), { timeout: 5000 });
     }
     const fenced = readClaim(root);
@@ -741,4 +750,129 @@ unix.each(["drained", "deadline"] as const)(
     expect(readClaim(root)).toEqual(fenced);
   },
   60_000,
+);
+
+unix.each([
+  {
+    format: "multiline v2",
+    membership: "5:cpu:/other\n0::$GROUP\n2:memory:/other\n",
+    admitted: true,
+  },
+  {
+    format: "multiline v1",
+    membership: "2:memory:/other\n7:name=systemd:$GROUP\n3:cpu:/other\n",
+    admitted: true,
+  },
+  {
+    format: "hybrid",
+    membership: "0::/other\n7:name=systemd:$GROUP\n3:cpu:/other\n",
+    admitted: true,
+  },
+  { format: "missing", membership: "", admitted: false },
+  { format: "suffix lookalike", membership: "0::/prefix$GROUP\n", admitted: false },
+  { format: "v1 suffix lookalike", membership: "7:name=systemd:/prefix$GROUP\n", admitted: false },
+  { format: "descendant", membership: "0::$GROUP/child\n", admitted: false },
+  { format: "wrong controller", membership: "2:cpu:$GROUP\n", admitted: false },
+  { format: "controller list", membership: "2:cpu,name=systemd:$GROUP\n", admitted: false },
+  { format: "malformed hierarchy", membership: "x:name=systemd:$GROUP\n", admitted: false },
+  { format: "zero v1 hierarchy", membership: "0:name=systemd:$GROUP\n", admitted: false },
+  { format: "nonzero v2 hierarchy", membership: "1::$GROUP\n", admitted: false },
+  { format: "path whitespace", membership: "7:name=systemd:$GROUP \n", admitted: false },
+])(
+  "checks the continuation's own $format membership before its fixer effect",
+  async ({ membership, admitted }) => {
+    const boundary = await createTriageBoundary("startup", undefined, undefined, async (root) => {
+      // The generated helper and its child-placement check see the normal records.
+      // Only the candidate's own admission read receives the changed input.
+      await fs.appendFile(
+        path.join(root, "placement.cjs"),
+        `
+const admissionRead = fs.readFileSync;
+fs.readFileSync = function(file, ...args) {
+  const value = admissionRead.call(this, file, ...args);
+  if (file !== '/proc/self/cgroup' || process.argv[1] !== root + '/candidate.mjs') return value;
+  event('continuation-membership');
+  return ${JSON.stringify(membership)}.replaceAll('$GROUP', value.trim().slice(3));
+};
+`,
+      );
+    });
+    cleanups.push(() => boundary.cleanup());
+    expect(await boundary.response(), boundary.stderr()).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
+    expect(await boundary.control("commit")).toBe("committed");
+    if (admitted) {
+      await vi.waitFor(
+        async () => {
+          expect(
+            (await boundary.readEvents()).filter((event) => event.kind === "branch"),
+            await boundary.log(),
+          ).toHaveLength(1);
+        },
+        { timeout: 15_000 },
+      );
+      await boundary.native("stop");
+    }
+    await boundary.exit;
+    const events = await boundary.readEvents();
+    expect(events.some((event) => event.kind === "continuation-membership")).toBe(true);
+    expect(events.filter((event) => event.kind === "fixer")).toHaveLength(admitted ? 1 : 0);
+    if (!admitted) {
+      // Native cleanup can terminate the rejected process before its error is flushed.
+      expect(events.some((event) => event.kind === "scope-stopped")).toBe(true);
+      expect(events.filter((event) => event.kind === "branch")).toEqual([]);
+    }
+  },
+);
+
+unix.each([
+  { format: "v2 foreign path", membership: "0::/foreign.scope\n" },
+  { format: "v1 suffix lookalike", membership: "7:name=systemd:/prefix$GROUP\n" },
+  { format: "v1 descendant", membership: "7:name=systemd:$GROUP/child\n" },
+])(
+  "revokes admitted continuation after $format placement loss before its fixer effect",
+  async ({ membership }) => {
+    const boundary = await createTriageBoundary("startup", undefined, undefined, async (root) => {
+      const candidate = path.join(root, "candidate.mjs");
+      const marker = path.join(root, "placement-lost");
+      const code = await fs.readFile(candidate, "utf8");
+      await fs.writeFile(
+        candidate,
+        code.replace(
+          "event('fixer', {failure:admission.failure});",
+          `event('admitted');
+fs.writeFileSync(${JSON.stringify(marker)}, '');
+admission.assertCurrent();
+event('fixer', {failure:admission.failure});`,
+        ),
+      );
+      await fs.appendFile(
+        path.join(root, "placement.cjs"),
+        `
+const currentRead = fs.readFileSync;
+fs.readFileSync = function(file, ...args) {
+  const value = currentRead.call(this, file, ...args);
+  if (file !== '/proc/self/cgroup' || process.argv[1] !== root + '/candidate.mjs' ||
+      !fs.existsSync(${JSON.stringify(marker)})) return value;
+  event('placement-lost');
+  return ${JSON.stringify(membership)}.replaceAll('$GROUP', value.trim().slice(3));
+};
+`,
+      );
+    });
+    cleanups.push(() => boundary.cleanup());
+    expect(await boundary.response(), boundary.stderr()).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
+    expect(await boundary.control("commit")).toBe("committed");
+    await vi.waitFor(
+      async () => {
+        const events = await boundary.readEvents();
+        expect(events.filter((event) => event.kind === "admitted")).toHaveLength(1);
+        expect(events.some((event) => event.kind === "placement-lost")).toBe(true);
+        expect(events.filter((event) => event.kind === "fixer")).toHaveLength(0);
+        expect(events.filter((event) => event.kind === "branch")).toHaveLength(0);
+      },
+      { timeout: 15_000 },
+    );
+    await boundary.exit;
+    expect((await boundary.readEvents()).filter((event) => event.kind === "fixer")).toHaveLength(0);
+  },
 );

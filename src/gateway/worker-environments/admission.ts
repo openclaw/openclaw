@@ -3,12 +3,12 @@ import {
   type WorkerAdmissionHandshake,
   type WorkerConnectParams,
   type WorkerProtocolCloseReason,
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
-  sameWorkerBuild,
   sameWorkerProtocolFeatures,
   type ExpectedWorkerBuild,
 } from "../../worker/worker-build-identity.js";
@@ -31,24 +31,19 @@ export class StaleWorkerBuildError extends Error {
   }
 }
 
-/** True only for bundles that accept the exact admitted execution carrier. */
-export function supportsWorkerExecutionContextLaunch(
+/** Fence persisted builds that cannot parse the exact current launch descriptor. */
+export function supportsCurrentWorkerLaunch(
   handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
 ): boolean {
-  return handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true;
+  return (
+    handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true &&
+    handshake.protocolFeatures.includes(WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE)
+  );
 }
 
 type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerAdmissionFailureReason };
-
-/** Admits only the exact build selected for this worker environment. */
-export function verifyWorkerAdmissionHandshake(
-  handshake: WorkerAdmissionHandshake,
-  expected: ExpectedWorkerBuild,
-): boolean {
-  return sameWorkerBuild(handshake, expected);
-}
 
 /** Validate an opaque credential and every server-owned worker admission binding. */
 export function admitWorkerConnection(params: {

@@ -9,6 +9,7 @@ type SourceEntry<T> = {
   source: T | undefined;
   cleanup: Cleanup | undefined;
   generation: number;
+  frame: number | undefined;
 };
 
 /**
@@ -24,10 +25,24 @@ export class SubscriptionsController implements ReactiveController {
     host.addController(this);
   }
 
+  watchStore<T extends { subscribe: (notify: () => void) => Cleanup }>(
+    getSource: () => T | null | undefined,
+    synchronize?: (source: T) => void,
+    commitInFrame?: () => void,
+  ): this {
+    return this.watch(
+      getSource,
+      (source, notify) => source.subscribe(notify),
+      synchronize,
+      commitInFrame,
+    );
+  }
+
   watch<T>(
     getSource: () => T | null | undefined,
     subscribe: (source: T, notify: () => void) => Cleanup,
     synchronize?: (source: T) => void,
+    commitInFrame?: () => void,
   ): this {
     return this.addEntry(
       getSource,
@@ -42,7 +57,27 @@ export class SubscriptionsController implements ReactiveController {
             return;
           }
           synchronize?.(source);
-          this.host.requestUpdate();
+          if (
+            !commitInFrame ||
+            globalThis.document?.visibilityState === "hidden" ||
+            typeof globalThis.requestAnimationFrame !== "function"
+          ) {
+            this.host.requestUpdate();
+          } else if (entry.frame === undefined) {
+            entry.frame = globalThis.requestAnimationFrame(() => {
+              entry.frame = undefined;
+              if (
+                !this.connected ||
+                entry.generation !== generation ||
+                !Object.is(entry.getSource(), source)
+              ) {
+                return;
+              }
+              this.host.requestUpdate();
+              // Commit bindings in the same frame, before Lit's queued microtask.
+              commitInFrame();
+            });
+          }
         };
         const cleanup = subscribe(source, notify);
         // Make cleanup visible before synchronization in case initial state
@@ -96,6 +131,7 @@ export class SubscriptionsController implements ReactiveController {
       source: undefined,
       cleanup: undefined,
       generation: 0,
+      frame: undefined,
     };
     this.entries.push(entry as SourceEntry<unknown>);
     if (this.connected) {
@@ -134,6 +170,10 @@ export class SubscriptionsController implements ReactiveController {
 
   private disconnectEntry<T>(entry: SourceEntry<T>): void {
     entry.generation += 1;
+    if (entry.frame !== undefined) {
+      globalThis.cancelAnimationFrame(entry.frame);
+      entry.frame = undefined;
+    }
     entry.source = undefined;
     const cleanup = entry.cleanup;
     entry.cleanup = undefined;

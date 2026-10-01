@@ -97,17 +97,6 @@ export function isRetainedUnendedSubagentRun(
   );
 }
 
-function isRecentlyEndedSubagentRun(
-  entry: { execution: Pick<SubagentRunRecord["execution"], "endedAt"> },
-  now = Date.now(),
-  recentMs = RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
-): boolean {
-  if (!hasSubagentRunEnded(entry)) {
-    return false;
-  }
-  return now - entry.execution.endedAt <= recentMs;
-}
-
 /** Return whether a child-session link should still appear in subagent listings. */
 export function shouldKeepSubagentRunChildLink(
   entry: SubagentRunLivenessRecord & { runId: string },
@@ -120,6 +109,7 @@ export function shouldKeepSubagentRunChildLink(
   return (
     isRetainedUnendedSubagentRun(entry, now) ||
     (options?.activeDescendants ?? 0) > 0 ||
-    isRecentlyEndedSubagentRun(entry, now)
+    (hasSubagentRunEnded(entry) &&
+      now - entry.execution.endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS)
   );
 }

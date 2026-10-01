@@ -12,10 +12,7 @@ import {
   type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
 import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary } from "./tunnel.test-support.js";
-import {
-  AcceptedWorkspacePublicationIndeterminateError,
-  isAcceptedWorkspacePublicationIndeterminateError,
-} from "./workspace-accepted-publication.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   createAcceptedWorkspacePublisherFactory as createAcceptedWorkspacePublisherFactoryRaw,
   recoverAcceptedWorkspacePublication,
@@ -106,6 +103,41 @@ function createAcceptedWorkspacePublisherFactory(
 }
 
 describe("accepted workspace publication", () => {
+  it("applies and rolls back an accepted change set above 25,000 paths", async () => {
+    const root = await fs.realpath(tempDirs.make("accepted-large-change-set-"));
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace);
+    const paths = Array.from(
+      { length: 26_000 },
+      (_, index) => `file-${String(index).padStart(5, "0")}`,
+    );
+    await fs.writeFile(path.join(workspace, paths[0]!), "preserve on rollback");
+    await fs.writeFile(path.join(workspace, "unrelated"), "keep");
+    const nonce = "a".repeat(32);
+    const run = async (action: string, input?: string) => {
+      const commandResult = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          action,
+          workspace,
+          nonce,
+        ],
+        { input, timeoutMs: 30_000, maxOutputBytes: 64 * 1024 },
+      );
+      expect(commandResult.code, commandResult.stderr).toBe(0);
+    };
+    await run("begin", JSON.stringify(paths));
+    await run("apply");
+    await expect(fs.stat(path.join(workspace, paths[0]!))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await run("rollback");
+    expect(await fs.readFile(path.join(workspace, paths[0]!), "utf8")).toBe("preserve on rollback");
+    expect(await fs.readFile(path.join(workspace, "unrelated"), "utf8")).toBe("keep");
+  }, 30_000);
+
   it.skipIf(process.platform === "win32")(
     "waits for the staging receiver group before promoting its inodes live",
     async () => {
@@ -645,7 +677,6 @@ Atomics.wait = function(waitArray, index, value, timeout) {
     });
     const thrown = await publishing.catch((error: unknown) => error);
     expect(thrown).toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
-    expect(isAcceptedWorkspacePublicationIndeterminateError(thrown)).toBe(true);
     expect(thrown).toMatchObject({
       message: "Accepted workspace publication is indeterminate and requires recovery",
       operation: "apply",

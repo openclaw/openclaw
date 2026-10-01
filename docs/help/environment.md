@@ -69,14 +69,34 @@ Blank values and the literal strings `undefined` and `null` (after trimming) are
 
 Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_GIT_DIR` still take precedence. OS-account tasks such as shell startup file detection, package-manager setup, and host `~` expansion may still use the real system home.
 
+### Temporary compile cache
+
+Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
+`NODE_COMPILE_CACHE` is set, or `node-compile-cache/openclaw` under the OS temporary
+directory otherwise. Child processes reuse the same build namespace. Source
+checkouts keep their existing cache-disable policy.
+
+The compile-cache bootstrap owner starts best-effort maintenance in a background
+worker that does not keep CLI commands alive. Node permission mode skips this
+maintenance because workers do not inherit its filesystem restrictions; cache
+entries remain until removed by an unrestricted invocation or by the operator.
+Cleanup stops when the command exits; long-lived processes give it time to
+complete. It removes superseded build directories as units. At most once an hour, or after retiring another build, it removes bytecode older than seven days
+and trims the current cache to 512 MiB, oldest files first. This is a maintenance
+target, not a hard disk quota: concurrent writes and processes that exit before
+cleanup completes can temporarily exceed it. Interrupted maintenance is eligible
+for another attempt after an hour. Other applications' caches outside
+the `openclaw` subtree are preserved.
+
 ### Gateway and authentication
 
-| Variable                    | Purpose                                                         |
-| --------------------------- | --------------------------------------------------------------- |
-| `OPENCLAW_GATEWAY_URL`      | Override the remote Gateway URL used by clients.                |
-| `OPENCLAW_GATEWAY_PORT`     | Override the local Gateway port.                                |
-| `OPENCLAW_GATEWAY_TOKEN`    | Supply token authentication for Gateway servers and clients.    |
-| `OPENCLAW_GATEWAY_PASSWORD` | Supply password authentication for Gateway servers and clients. |
+| Variable                                  | Purpose                                                                                                                                                                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OPENCLAW_GATEWAY_URL`                    | Override the remote Gateway URL used by clients.                                                                                                                                                                         |
+| `OPENCLAW_GATEWAY_PORT`                   | Override the local Gateway port.                                                                                                                                                                                         |
+| `OPENCLAW_GATEWAY_TOKEN`                  | Supply token authentication for Gateway servers and clients.                                                                                                                                                             |
+| `OPENCLAW_GATEWAY_PASSWORD`               | Supply password authentication for Gateway servers and clients.                                                                                                                                                          |
+| `OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP` | Cap outstanding unauthenticated WebSocket connections per resolved client IP (default `128`; positive integer). See [pre-auth connection limits](/gateway/security/rate-limiting#unauthenticated-websocket-connections). |
 
 ### Provider credentials
 
@@ -115,6 +135,36 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_ALLOW_MULTI_GATEWAY`       | Allow multiple Gateway processes while preserving per-state ownership locks.                 |
 | `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.                            |
 | `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                                  |
+
+### Filesystem observation
+
+Config hot reload, skills refresh, memory indexing, and the development watch
+supervisor use `@openclaw/fs-safe/watch`. The existing `CHOKIDAR_*` variable
+names remain supported for Docker, virtual machines, and other deployments
+that need an observation preference:
+
+| Variable              | Value                                   | Behavior                                                                                           |
+| --------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `CHOKIDAR_USEPOLLING` | Unset, `false`, `0`, or an empty string | `auto`: prefer native events, with polling fallback when no event backend is available.            |
+| `CHOKIDAR_USEPOLLING` | Any other nonempty value                | Select `poll`. Values are case-insensitive.                                                        |
+| `CHOKIDAR_INTERVAL`   | Positive integer in milliseconds        | Polling interval, default `100`, minimum `20`. Applies to explicit polling and automatic fallback. |
+
+Native events are supported on Node.js on Linux, macOS, and Windows. In `auto`
+mode, Bun and runtimes without the native backend use polling with the same
+`CHOKIDAR_INTERVAL` setting as explicit polling. Native events retain fs-safe's
+30-second reconciliation interval. Invalid or nonpositive polling intervals use
+`100` ms; larger intervals are capped at `2147483647` ms.
+
+Recovery remains specific to each owner. Config hot reload retries a failed
+subscription with its existing backoff. With `CHOKIDAR_USEPOLLING` unset, native
+watch failures can additionally trigger a fresh polling subscription after those
+retries. Explicit overrides keep the existing retry limit. Memory indexing switches to
+refresh-on-search when native watch capacity is exhausted (`watch-limit`).
+Each Memory subscription admits up to 1,000,000 directories and 1,000,000
+examined entries per scan, including excluded entries. Larger trees also fall
+back to refresh-on-search after observation retries are exhausted.
+Skills refreshes during agent preparation after capacity exhaustion, and the
+development supervisor stops its child if observation fails.
 
 ## Provider credentials and workspace `.env`
 
@@ -330,9 +380,10 @@ Do not rely on writing only to `~/.openclaw/.env` for this variable. Node reads
 
 ## Legacy environment variables
 
-OpenClaw only reads `OPENCLAW_*` environment variables. The legacy
+OpenClaw-specific runtime controls use the `OPENCLAW_*` prefix. The legacy
 `CLAWDBOT_*` and `MOLTBOT_*` prefixes from earlier releases are silently
-ignored.
+ignored. Supported provider and filesystem-observation variables retain their
+documented names.
 
 If any are still set on the Gateway process at startup, OpenClaw emits a
 single Node deprecation warning (`OPENCLAW_LEGACY_ENV_VARS`) listing the

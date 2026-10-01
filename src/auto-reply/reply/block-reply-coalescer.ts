@@ -1,4 +1,3 @@
-// Coalesces buffered block-streaming payloads into sendable reply parts.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   copyReplyPayloadMetadata,
@@ -32,6 +31,7 @@ export function createBlockReplyCoalescer(params: {
 
   let bufferText = "";
   let bufferSourceText: string | undefined;
+  let bufferSourceRange: readonly [start: number, end: number] | undefined;
   let bufferedPayload: ReplyPayload | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
 
@@ -46,6 +46,7 @@ export function createBlockReplyCoalescer(params: {
   const resetBuffer = () => {
     bufferText = "";
     bufferSourceText = undefined;
+    bufferSourceRange = undefined;
     bufferedPayload = undefined;
   };
 
@@ -77,7 +78,7 @@ export function createBlockReplyCoalescer(params: {
         ...bufferedPayload,
         text: bufferText,
       }),
-      { blockSourceText: bufferSourceText },
+      { blockSourceText: bufferSourceText, blockSourceRange: bufferSourceRange },
     );
     resetBuffer();
     await onFlush(payload);
@@ -101,10 +102,15 @@ export function createBlockReplyCoalescer(params: {
   const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
     const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
     const sourceText = text ? getReplyPayloadMetadata(payload)?.blockSourceText : undefined;
+    const sourceRange = text ? getReplyPayloadMetadata(payload)?.blockSourceRange : undefined;
     const mergedSourceText =
       bufferSourceText !== undefined || sourceText !== undefined
         ? (bufferSourceText ?? bufferText) + (sourceText ?? text)
         : undefined;
+    const mergedSourceRange =
+      bufferSourceRange && sourceRange
+        ? ([bufferSourceRange[0], sourceRange[1]] as const)
+        : (bufferSourceRange ?? sourceRange);
     const mergedPayload: ReplyPayload = {
       ...bufferedPayload,
       ...payload,
@@ -120,6 +126,7 @@ export function createBlockReplyCoalescer(params: {
     resetBuffer();
     return setReplyPayloadMetadata(copyReplyPayloadMetadata(payload, metadataMergedPayload), {
       blockSourceText: mergedSourceText,
+      blockSourceRange: mergedSourceRange,
     });
   };
 
@@ -131,6 +138,7 @@ export function createBlockReplyCoalescer(params: {
     const hasMedia = reply.hasMedia;
     const text = reply.text;
     const sourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
+    const sourceRange = getReplyPayloadMetadata(payload)?.blockSourceRange;
     const hasText = reply.hasText;
     if (hasMedia) {
       if (canMergeBufferedTextWithMedia(payload)) {
@@ -154,6 +162,7 @@ export function createBlockReplyCoalescer(params: {
       bufferedPayload = payload;
       bufferText = text;
       bufferSourceText = sourceText;
+      bufferSourceRange = sourceRange;
       void flush({ force: true });
       return;
     }
@@ -196,6 +205,7 @@ export function createBlockReplyCoalescer(params: {
         }
         bufferText = text;
         bufferSourceText = sourceText;
+        bufferSourceRange = sourceRange;
         scheduleIdleFlush();
         return;
       }
@@ -208,6 +218,10 @@ export function createBlockReplyCoalescer(params: {
       bufferSourceText !== undefined || sourceText !== undefined
         ? (bufferSourceText ?? bufferText) + (sourceText ?? text)
         : undefined;
+    bufferSourceRange =
+      bufferSourceRange && sourceRange
+        ? [bufferSourceRange[0], sourceRange[1]]
+        : (bufferSourceRange ?? sourceRange);
     bufferText = nextText;
     if (bufferText.length >= maxChars) {
       void flush({ force: true });

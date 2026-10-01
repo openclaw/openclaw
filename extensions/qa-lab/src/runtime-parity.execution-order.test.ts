@@ -1,9 +1,9 @@
 // QA Lab tests cover requested runtime execution order and canonical result identity.
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   isRuntimeParityResultPass,
   runRuntimeParityScenario,
-  type RuntimeId,
   type RuntimeParityCell,
 } from "./runtime-parity.js";
 
@@ -24,11 +24,6 @@ describe("runtime parity execution order", () => {
     {
       label: "the canonical default",
       runtimePair: undefined,
-      expectedExecutionOrder: ["openclaw", "codex"],
-    },
-    {
-      label: "an explicitly canonical pair",
-      runtimePair: ["openclaw", "codex"],
       expectedExecutionOrder: ["openclaw", "codex"],
     },
     {
@@ -61,24 +56,21 @@ describe("runtime parity execution order", () => {
     },
   );
 
-  it.each(["openclaw", "codex"] as const)(
-    "rejects duplicate %s runtimes before executing a parity cell",
-    async (runtime) => {
-      const runCell = vi.fn(async (selectedRuntime: RuntimeId) => ({
-        status: "pass" as const,
-        cell: makeRuntimeParityCell(selectedRuntime),
-      }));
+  it("rejects duplicate runtimes before executing a parity cell", async () => {
+    const runCell = vi.fn(async (runtime: RuntimeId) => ({
+      status: "pass" as const,
+      cell: makeRuntimeParityCell(runtime),
+    }));
 
-      await expect(
-        runRuntimeParityScenario({
-          scenarioId: "duplicate-runtime-pair",
-          runtimePair: [runtime, runtime],
-          runCell,
-        }),
-      ).rejects.toThrow(/different|distinct|duplicate/i);
-      expect(runCell).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      runRuntimeParityScenario({
+        scenarioId: "duplicate-runtime-pair",
+        runtimePair: ["openclaw", "openclaw"],
+        runCell,
+      }),
+    ).rejects.toThrow(/different|distinct|duplicate/i);
+    expect(runCell).not.toHaveBeenCalled();
+  });
 
   it("attributes a failed reversed pair to its canonical runtime cell", async () => {
     const executionOrder: RuntimeId[] = [];

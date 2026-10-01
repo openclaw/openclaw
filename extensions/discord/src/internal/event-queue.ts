@@ -1,4 +1,3 @@
-// Discord plugin module implements event queue behavior.
 export type DiscordEventQueueOptions = {
   maxQueueSize?: number;
   maxConcurrency?: number;
@@ -15,16 +14,6 @@ type DiscordEventQueueJob = {
 };
 
 type DiscordEventQueueDispatchOutcome = "completed" | "failed" | "timed-out";
-
-type DiscordEventQueueMetrics = {
-  queueSize: number;
-  processing: number;
-  processed: number;
-  dropped: number;
-  timeouts: number;
-  maxQueueSize: number;
-  maxConcurrency: number;
-};
 
 const DEFAULT_MAX_QUEUE_SIZE = 10_000;
 const DEFAULT_MAX_CONCURRENCY = 50;
@@ -70,7 +59,7 @@ export class DiscordEventQueue {
     });
   }
 
-  getMetrics(): DiscordEventQueueMetrics {
+  getMetrics() {
     return {
       queueSize: this.pendingQueueSize,
       processing: this.processing,

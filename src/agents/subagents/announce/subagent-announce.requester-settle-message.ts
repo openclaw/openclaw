@@ -1,7 +1,15 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION } from "../completion/subagent-completion-instructions.js";
+import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
+import {
+  SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
+  SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
+} from "../completion/subagent-completion-instructions.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import {
+  buildSubagentRestartRecoveryRoster,
+  SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
+} from "../subagent-restart-recovery-prompt.js";
 
 const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
 const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
@@ -10,9 +18,26 @@ export function buildRequesterSettleWakeMessage(params: {
   findings?: string;
   requireVisibleReply: boolean;
   parentOnly?: boolean;
-  children: readonly Pick<SubagentRunRecord, "completion">[];
+  children: readonly SubagentRunRecord[];
+  recoveryChildren: readonly SubagentRunRecord[];
   preserveModelRouteNotice: boolean;
 }): string {
+  const child = params.children.length === 1 ? params.children[0] : undefined;
+  const pauseNotice =
+    child?.pauseReason === "sessions_yield" ? child.requesterSettleWake?.pauseNotice : undefined;
+  if (child && pauseNotice) {
+    return [
+      "[Subagent Context] A child is paused awaiting a continuation; this is not a completion.",
+      JSON.stringify({
+        state: "paused",
+        childSessionKey: child.childSessionKey,
+        runId: child.runId,
+        label: child.label ?? null,
+      }),
+      `The child will resume only through sessions_send to ${child.childSessionKey}. Do not wait for its completion without sending the needed continuation.`,
+      wrapPromptDataBlock({ label: "Acknowledgment", text: pauseNotice.acknowledgment }),
+    ].join("\n");
+  }
   // The scheduling row need not be the rerouted child. Keep every current
   // child's producer-owned notice, with stable bytes and one batch-wide cap.
   const routeNotices = [
@@ -31,10 +56,15 @@ export function buildRequesterSettleWakeMessage(params: {
     routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
+  const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   return [
-    "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
-    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
-    "[Subagent Context] Child settlement ends this batch, not necessarily the original user request. Review the results against the requested outcome and continue any remaining in-scope work before replying.",
+    "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
+    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
+    // Private completion guidance already includes the shared outcome policy.
+    ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
+    ...(recoveryRoster
+      ? [`[Subagent Context] ${SUBAGENT_RESTART_RECOVERY_INSTRUCTION}`, recoveryRoster]
+      : []),
     params.parentOnly
       ? `[Subagent Context] ${SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION}`
       : params.requireVisibleReply

@@ -1,8 +1,4 @@
-/**
- * Helper functions for agent attempt execution, Claude CLI transcript probing,
- * fallback prompts, and ACP visible-text accumulation.
- */
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -30,6 +26,8 @@ import {
 } from "../../gateway/cli-session-history.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
+import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
+import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
@@ -45,18 +43,32 @@ function normalizeClaudeCliSessionId(sessionId: string | undefined): string | un
 
 type JsonlFileScan = { fileExists: boolean; hasAssistant: boolean };
 
-async function scanJsonlFile(filePath: string | undefined): Promise<JsonlFileScan> {
-  if (!filePath) {
-    return { fileExists: false, hasAssistant: false };
-  }
+async function readCliTranscriptFile<T>(
+  filePath: string,
+  missing: T,
+  read: (file: FileHandle, size: number) => Promise<T>,
+): Promise<T> {
   try {
     const stat = await fs.lstat(filePath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
-      return { fileExists: false, hasAssistant: false };
+      return missing;
     }
-
-    const fh = await fs.open(filePath, "r");
+    const file = await fs.open(filePath, "r");
     try {
+      return await read(file, stat.size);
+    } finally {
+      await file.close();
+    }
+  } catch {
+    return missing;
+  }
+}
+
+async function scanJsonlFile(filePath: string): Promise<JsonlFileScan> {
+  return await readCliTranscriptFile<JsonlFileScan>(
+    filePath,
+    { fileExists: false, hasAssistant: false },
+    async (fh) => {
       const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
       let recordCount = 0;
       for await (const line of rl) {
@@ -79,12 +91,8 @@ async function scanJsonlFile(filePath: string | undefined): Promise<JsonlFileSca
         }
       }
       return { fileExists: true, hasAssistant: false };
-    } finally {
-      await fh.close();
-    }
-  } catch {
-    return { fileExists: false, hasAssistant: false };
-  }
+    },
+  );
 }
 
 /** Checks whether the active SQLite history contains a persisted assistant turn. */
@@ -110,7 +118,6 @@ export async function sessionTranscriptHasContent(
   );
 }
 
-/** Resolves the expected Claude CLI transcript JSONL path for a session. */
 function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -136,17 +143,10 @@ function claudeCliSessionTranscriptPath(params: {
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
 const CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES = 1024 * 1024;
 
-/** Checks whether Claude CLI has flushed assistant content for a session. */
-export async function claudeCliSessionTranscriptHasContent(params: {
-  sessionId: string | undefined;
-  workspaceDir: string | undefined;
-  homeDir?: string;
-}): Promise<boolean> {
-  const expectedPath = claudeCliSessionTranscriptPath({
-    sessionId: params.sessionId,
-    workspaceDir: params.workspaceDir,
-    homeDir: params.homeDir,
-  });
+export async function claudeCliSessionTranscriptHasContent(
+  params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
+): Promise<boolean> {
+  const expectedPath = claudeCliSessionTranscriptPath(params);
   if (!expectedPath) {
     return false;
   }
@@ -177,119 +177,75 @@ function toToolContentBlocks(content: unknown): ToolContentBlock[] | undefined {
   );
 }
 
-function isClaudeTranscriptToolUseBlock(block: ToolContentBlock): boolean {
-  const type = block.type;
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
-function isClaudeTranscriptToolResultBlock(block: ToolContentBlock): boolean {
-  const type = block.type;
-  return type === "tool_result" || (typeof type === "string" && type.endsWith("_tool_result"));
-}
-
 async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.lstat(filePath);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      return false;
+  return await readCliTranscriptFile(filePath, false, async (fh, size) => {
+    const tailBytes = Math.min(size, CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES);
+    const start = size - tailBytes;
+    const buffer = Buffer.alloc(tailBytes);
+    const { bytesRead } = await fh.read(buffer, 0, tailBytes, start);
+    let tailText = buffer.toString("utf-8", 0, bytesRead);
+    if (start > 0) {
+      const firstNewline = tailText.indexOf("\n");
+      tailText = firstNewline === -1 ? "" : tailText.slice(firstNewline + 1);
     }
-
-    const fh = await fs.open(filePath, "r");
-    try {
-      const tailBytes = Math.min(stat.size, CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES);
-      const start = stat.size - tailBytes;
-      const buffer = Buffer.alloc(tailBytes);
-      const { bytesRead } = await fh.read(buffer, 0, tailBytes, start);
-      let tailText = buffer.toString("utf-8", 0, bytesRead);
-      if (start > 0) {
-        const firstNewline = tailText.indexOf("\n");
-        tailText = firstNewline === -1 ? "" : tailText.slice(firstNewline + 1);
+    let lastAssistantToolUseIds: Set<string> = new Set();
+    let answeredToolResultIds: Set<string> = new Set();
+    for (const line of tailText.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
       }
-      let lastAssistantToolUseIds: Set<string> = new Set();
-      let answeredToolResultIds: Set<string> = new Set();
-      for (const line of tailText.split(/\r?\n/)) {
-        if (!line.trim()) {
-          continue;
-        }
-        let obj: unknown;
-        try {
-          obj = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const rec = obj as Record<string, unknown> | null;
-        if (rec?.isSidechain === true) {
-          continue;
-        }
-        const message = rec?.message as Record<string, unknown> | undefined;
-        const role = message?.role;
-        if (role === "assistant") {
-          lastAssistantToolUseIds = new Set();
-          answeredToolResultIds = new Set();
-          const blocks = toToolContentBlocks(message?.content);
-          if (!blocks) {
-            continue;
-          }
-          for (const block of blocks) {
-            if (isClaudeTranscriptToolUseBlock(block)) {
-              const id = resolveToolUseId(block);
-              if (id) {
-                lastAssistantToolUseIds.add(id);
-              }
-            } else if (isClaudeTranscriptToolResultBlock(block)) {
-              const id = resolveToolUseId(block);
-              if (id) {
-                answeredToolResultIds.add(id);
-              }
-            }
-          }
-        } else if (role === "user") {
-          const blocks = toToolContentBlocks(message?.content);
-          if (!blocks) {
-            continue;
-          }
-          for (const block of blocks) {
-            if (isClaudeTranscriptToolResultBlock(block)) {
-              const id = resolveToolUseId(block);
-              if (id) {
-                answeredToolResultIds.add(id);
-              }
-            }
+      let obj: unknown;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const rec = obj as Record<string, unknown> | null;
+      if (rec?.isSidechain === true) {
+        continue;
+      }
+      const message = rec?.message as Record<string, unknown> | undefined;
+      const role = message?.role;
+      if (role === "assistant") {
+        lastAssistantToolUseIds = new Set();
+        answeredToolResultIds = new Set();
+      } else if (role !== "user") {
+        continue;
+      }
+      for (const block of toToolContentBlocks(message?.content) ?? []) {
+        const target =
+          role === "assistant" && isClaudeToolUseBlockType(block.type)
+            ? lastAssistantToolUseIds
+            : isClaudeToolResultBlockType(block.type)
+              ? answeredToolResultIds
+              : undefined;
+        if (target) {
+          const id = resolveToolUseId(block);
+          if (id) {
+            target.add(id);
           }
         }
       }
-      for (const id of lastAssistantToolUseIds) {
-        if (!answeredToolResultIds.has(id)) {
-          return true;
-        }
-      }
-      return false;
-    } finally {
-      await fh.close();
     }
-  } catch {
+    for (const id of lastAssistantToolUseIds) {
+      if (!answeredToolResultIds.has(id)) {
+        return true;
+      }
+    }
     return false;
-  }
+  });
 }
 
-/** Checks whether the latest Claude CLI transcript tail has unanswered tool use. */
-export async function claudeCliSessionTranscriptHasOrphanedToolUse(params: {
-  sessionId: string | undefined;
-  workspaceDir: string | undefined;
-  homeDir?: string;
-}): Promise<boolean> {
-  const expectedPath = claudeCliSessionTranscriptPath({
-    sessionId: params.sessionId,
-    workspaceDir: params.workspaceDir,
-    homeDir: params.homeDir,
-  });
+export async function claudeCliSessionTranscriptHasOrphanedToolUse(
+  params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
+): Promise<boolean> {
+  const expectedPath = claudeCliSessionTranscriptPath(params);
   if (!expectedPath) {
     return false;
   }
   return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
 }
 
-/** Builds the retry prompt sent to fallback models after a failed attempt. */
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
@@ -303,12 +259,7 @@ export function resolveFallbackRetryPrompt(params: {
   if (!params.sessionHasHistory && !prelude) {
     return params.body;
   }
-  // Even with persisted session history, fully replacing the body with a
-  // generic "continue where you left off" message strips the original task
-  // from the fallback model's view. Agents then have to reconstruct the
-  // instruction from history alone, which is fragile and sometimes
-  // impossible. Prepend the retry context to the original body instead so
-  // the fallback model has both the recovery signal AND the task. (#65760)
+  // Retain the original task: failed history may not contain enough context to reconstruct it. (#65760)
   const retryMarked = `[Retry after the previous model attempt failed or timed out]\n\n${params.body}`;
   return prelude ? `${prelude}\n\n${retryMarked}` : retryMarked;
 }
@@ -316,9 +267,7 @@ export function resolveFallbackRetryPrompt(params: {
 const CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET = 8_000;
 const CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS = 64;
 
-type FallbackTurnLikeMessage = Record<string, unknown>;
-
-function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
+function extractFallbackTurnText(message: ClaudeCliFallbackSeed["recentTurns"][number]): string {
   const content = message.content;
   if (typeof content === "string") {
     return content;
@@ -360,11 +309,11 @@ function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
 }
 
 function formatFallbackTurns(
-  turns: ReadonlyArray<FallbackTurnLikeMessage>,
+  turns: Readonly<ClaudeCliFallbackSeed["recentTurns"]>,
   remainingBudget: number,
-): { text: string; consumed: number } {
+): string {
   if (turns.length === 0 || remainingBudget <= 0) {
-    return { text: "", consumed: 0 };
+    return "";
   }
   const lines: string[] = [];
   let consumed = 0;
@@ -389,18 +338,10 @@ function formatFallbackTurns(
     consumed += line.length + 1;
   }
   lines.reverse();
-  return { text: lines.join("\n"), consumed };
+  return lines.join("\n");
 }
 
-/**
- * Format a previously-harvested Claude CLI session into a labeled prelude
- * suitable for prepending to a fallback candidate's prompt. Behavior matches
- * Claude Code's own resume strategy after compaction: prefer the explicit
- * summary, then append the most recent turns up to a char budget.
- *
- * Returns an empty string when neither a summary nor any usable turn fits in
- * the budget; callers can treat that as "no context to seed".
- */
+/** Prefer the harvested summary, then retain recent turns within the fallback prompt budget. */
 function formatClaudeCliFallbackPrelude(
   seed: ClaudeCliFallbackSeed,
   options?: { charBudget?: number },
@@ -429,10 +370,7 @@ function formatClaudeCliFallbackPrelude(
     }
   }
   if (remaining > CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS && seed.recentTurns.length > 0) {
-    const { text } = formatFallbackTurns(
-      seed.recentTurns as ReadonlyArray<FallbackTurnLikeMessage>,
-      remaining - 32,
-    );
+    const text = formatFallbackTurns(seed.recentTurns, remaining - 32);
     if (text) {
       sections.push(`\nRecent turns:\n${text}`);
     }
@@ -445,11 +383,7 @@ function formatClaudeCliFallbackPrelude(
   return sections.join("\n");
 }
 
-/**
- * Read the Claude CLI session pointed to by `cliSessionId` and format a
- * fallback prelude. Returns `""` when no session file is found or when the
- * harvested seed has no usable content.
- */
+/** Read a CLI session and project the available fallback context. */
 export function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
   homeDir?: string;
@@ -471,8 +405,6 @@ export function createAcpVisibleTextAccumulator() {
   let pendingSilentPrefix = "";
   let visibleText = "";
   let rawVisibleText = "";
-  const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
-
   const resolveNextCandidate = (base: string, chunk: string): string => {
     if (!base) {
       return chunk;
@@ -480,7 +412,7 @@ export function createAcpVisibleTextAccumulator() {
     if (
       isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
       !chunk.startsWith(base) &&
-      startsWithWordChar(chunk)
+      /^[\p{L}\p{N}]/u.test(chunk)
     ) {
       return chunk;
     }
@@ -488,20 +420,6 @@ export function createAcpVisibleTextAccumulator() {
       return chunk;
     }
     return `${base}${chunk}`;
-  };
-
-  const mergeVisibleChunk = (base: string, chunk: string): { rawText: string; delta: string } => {
-    if (!base) {
-      return { rawText: chunk, delta: chunk };
-    }
-    if (chunk.startsWith(base) && chunk.length > base.length) {
-      const delta = chunk.slice(base.length);
-      return { rawText: chunk, delta };
-    }
-    return {
-      rawText: `${base}${chunk}`,
-      delta: chunk,
-    };
   };
 
   return {
@@ -542,13 +460,13 @@ export function createAcpVisibleTextAccumulator() {
         }
       }
 
-      const nextVisible = mergeVisibleChunk(rawVisibleText, chunk);
-      rawVisibleText = nextVisible.rawText;
-      if (!nextVisible.delta) {
-        return null;
-      }
-      visibleText = `${visibleText}${nextVisible.delta}`;
-      return { text: visibleText, delta: nextVisible.delta };
+      const delta =
+        chunk.startsWith(rawVisibleText) && chunk.length > rawVisibleText.length
+          ? chunk.slice(rawVisibleText.length)
+          : chunk;
+      rawVisibleText += delta;
+      visibleText += delta;
+      return { text: visibleText, delta };
     },
     finalize(): string {
       return visibleText.trim();
@@ -565,8 +483,20 @@ export function createAcpVisibleTextAccumulator() {
   };
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.attemptExecutionHelpersTestApi")
-  ] = { claudeCliSessionTranscriptPath, formatClaudeCliFallbackPrelude };
+export function rebaseExecApprovalContinuationPromptRange(params: {
+  body: string;
+  prompt: string;
+  range?: ExecApprovalContinuationPromptRange;
+}): ExecApprovalContinuationPromptRange | undefined {
+  if (!params.range) {
+    return undefined;
+  }
+  if (!params.prompt.endsWith(params.body)) {
+    throw new Error("exec approval continuation prompt range could not be rebased");
+  }
+  const offset = params.prompt.length - params.body.length;
+  return {
+    start: offset + params.range.start,
+    end: offset + params.range.end,
+  };
 }

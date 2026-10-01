@@ -154,6 +154,8 @@ describe("release readiness contract", () => {
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
+    ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
+    ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
     ["missing source", { tag: "" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],
@@ -459,6 +461,8 @@ describe("release readiness executable handoff", () => {
       append_clawhub_dispatch_args() { clawhub_dispatch_args=(-f "plugins=fixture"); }
       dispatch_workflow() { node "$GITHUB_WORKSPACE/.release-harness/scripts/fixture-dispatch.mjs" "$@"; }
       dispatch_workflow_at_ref() { shift 2; dispatch_workflow "$@"; }
+      sweep_superseded_children() { :; }
+      require_clawhub_dispatch_available() { :; }
     `,
       );
       const plan = writeFixtureFile(
@@ -643,6 +647,12 @@ describe("release readiness executable handoff", () => {
 
 function finalizationFixture(overrides: Record<string, unknown> = {}) {
   const fixture = bridgeFixture();
+  const signedTagObjectSha = "d".repeat(40);
+  mkdirSync(join(fixture.scripts, "lib"), { recursive: true });
+  copyFileSync(
+    resolve("scripts/lib/release-publish-children.sh"),
+    join(fixture.scripts, "lib/release-publish-children.sh"),
+  );
   copyFileSync(
     resolve("scripts/release-tooling-identity.mjs"),
     join(fixture.scripts, "release-tooling-identity.mjs"),
@@ -810,6 +820,21 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
   `,
   );
   chmodSync(gh, 0o755);
+  const git = writeFixtureFile(
+    fixture.root,
+    "bin/git",
+    `#!${process.execPath}
+    const { readFileSync } = require('node:fs');
+    const args = process.argv.slice(2);
+    if (JSON.stringify(args) !== JSON.stringify(['ls-remote', '--tags', 'origin',
+      'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,
+      'refs/tags/' + process.env.FIXTURE_RELEASE_TAG + '^{}'])) process.exit(99);
+    const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
+    console.log('${signedTagObjectSha}\\trefs/tags/' + process.env.FIXTURE_RELEASE_TAG);
+    console.log(state.sourceSha + '\\trefs/tags/' + process.env.FIXTURE_RELEASE_TAG + '^{}');
+  `,
+  );
+  chmodSync(git, 0o755);
   const env = {
     ...fixture.env,
     PATH: `${dirname(gh)}:${fixture.env.PATH}`,
@@ -845,8 +870,11 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
         cwd: dirname(fixture.scripts),
         env: {
           ...env,
+          PARENT_WORKFLOW_SHA: TOOLING_SHA,
           RELEASE_TAG: tag,
+          SIGNED_RELEASE_TAG_OBJECT_SHA: signedTagObjectSha,
           SOURCE_SHA,
+          TARGET_SHA: SOURCE_SHA,
           FIXTURE_ACTIVATION_OWNER: owner,
           FIXTURE_RELEASE_TAG: tag,
           RELEASE_NPM_DIST_TAG: channel,
@@ -1586,7 +1614,6 @@ describe("publication dispatch retention", () => {
 
 describe("release preparation recovery", () => {
   it.each([
-    ["alpha-core", "v2026.9.2-alpha.1", "alpha", "v2026.9.2-alpha.1", "core-npm"],
     ["extended-core", "v2026.8.33", "extended-stable", "extended-stable/2026.8.33", "core-npm"],
     [
       "extended-docker",
@@ -1739,7 +1766,6 @@ describe("release preparation recovery", () => {
 
   it.each([
     ["raw-sha", "", "v2026.9.2", "latest", "normal", undefined, true],
-    ["raw-sha-alpha", "", "v2026.9.2-alpha.1", "alpha", "alpha", undefined, true],
     ["wrong-tag", "", "v2026.9.2", "latest", "normal", "v2026.9.3", false],
     ["invalid-explicit", "ordinary-branch", "v2026.9.2", "latest", "normal", undefined, false],
     ["canonical", "release/2026.9.2", "v2026.9.2", "latest", "normal", undefined, true],
@@ -1918,21 +1944,6 @@ process.exitCode = 1;
       }
     },
   );
-
-  it("preserves the validated Tideclaw alpha activation path without Linux carry", () => {
-    const fixture = finalizationFixture();
-    const branch = "tideclaw/alpha/2026-09-13-0100Z";
-    fixture.env.GITHUB_REF_NAME = branch;
-    fixture.env.GITHUB_REF = `refs/heads/${branch}`;
-    const result = fixture.run("parent", "v2026.9.2-alpha.1", "alpha");
-    expect(result.status, result.stderr).toBe(0);
-    expect(fixture.state()).toMatchObject({
-      writes: 1,
-      isDraft: false,
-      isPrerelease: true,
-      isLatest: false,
-    });
-  });
 
   it.each([
     ["", undefined],
@@ -2156,22 +2167,23 @@ process.exitCode = 1;
 
 describe("prepared Windows handoff", () => {
   it.each([
-    ["stable", "v2026.9.2", "success", true, true, false, true],
-    ["absent", "v2026.9.2", "success", false, false, false, false],
-    ["incomplete", "v2026.9.2", "success", true, false, false, true],
-    ["beta", "v2026.9.2-beta.1", "success", true, true, false, false],
-    ["alpha", "v2026.9.2-alpha.1", "success", true, true, false, false],
-    ["failed activation", "v2026.9.2", "failure", true, true, false, false],
-    ["skipped activation", "v2026.9.2", "skipped", true, true, false, false],
-    ["dispatch failed", "v2026.9.2", "success", true, true, true, true],
+    ["stable on beta", "v2026.9.2", "beta", "success", true, true, false, true],
+    ["stable on latest", "v2026.9.2", "latest", "success", true, true, false, true],
+    ["absent", "v2026.9.2", "beta", "success", false, false, false, false],
+    ["incomplete", "v2026.9.2", "beta", "success", true, false, false, true],
+    ["beta", "v2026.9.2-beta.1", "beta", "success", true, true, false, false],
+    ["failed activation", "v2026.9.2", "beta", "failure", true, true, false, false],
+    ["skipped activation", "v2026.9.2", "beta", "skipped", true, true, false, false],
+    ["dispatch failed", "v2026.9.2", "beta", "success", true, true, true, true],
   ] as const)(
     "uses the frozen optional selection after activation: %s",
-    (_label, tag, activation, selected, digests, dispatchFailure, scheduled) => {
+    (_label, tag, channel, activation, selected, digests, dispatchFailure, scheduled) => {
       const fixture = finalizationFixture({ windowsDispatchFailure: dispatchFailure });
       const ready = readyRelease();
       ready.inputs = {
         ...ready.inputs,
         tag,
+        npm_dist_tag: channel,
         windows_node_tag: selected ? "v1.2.3" : "",
         windows_node_installer_digests: digests
           ? JSON.stringify({

@@ -5,6 +5,7 @@ import { escapeRegExp } from "../shared/regexp.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
 import {
   ServiceInspectionError,
+  ServiceOwnershipRefusalError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
@@ -21,6 +22,14 @@ import {
 type SystemdExecResult = ExecResult & { inspectionReason?: ServiceInspectionReason };
 
 export type SystemdUnitScope = "system" | "user";
+
+export function isRunningAsRoot(): boolean {
+  try {
+    return process.geteuid?.() === 0;
+  } catch {
+    return false;
+  }
+}
 
 async function execSystemdCommand(
   command: "systemctl" | "busctl",
@@ -62,8 +71,18 @@ export function systemdInspectionError(
   if (result.inspectionReason) {
     return new ServiceInspectionError(result.inspectionReason);
   }
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+  }
   if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
     return new ServiceInspectionError("service-manager-access-denied");
+  }
+  if (
+    scope === "system" &&
+    result.termination === "exit" &&
+    readSystemctlDetail(result).includes("System has not been booted with systemd")
+  ) {
+    return new ServiceInspectionError("service-manager-unavailable");
   }
   if (
     scope === "user" &&
@@ -84,9 +103,6 @@ export function isSystemctlMissing(result: ExecResult): boolean {
 }
 
 export function isSystemdUnitNotEnabled(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("disabled") ||
@@ -100,9 +116,6 @@ export function isSystemdUnitNotEnabled(detail: string): boolean {
 }
 
 export function isSystemdUnitMissingDetail(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     (normalized.includes("unit file") && normalized.includes("does not exist")) ||
@@ -122,16 +135,11 @@ function isSystemdUnitAlreadyMissingOrInactive(detail: string, unitName: string)
   ).test(normalizeLowercaseStringOrEmpty(detail));
 }
 
-const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
-
 export function isSystemdUserScopeUnavailable(detail: string): boolean {
   return classifySystemdUnavailableDetail(detail) !== null;
 }
 
 function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.startsWith("command failed: systemctl") &&
@@ -147,11 +155,10 @@ function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
 
 export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   const detail = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
-  return isSystemctlBusUnavailable(normalized) || isGenericSystemctlIsEnabledFailure(normalized);
+  return (
+    isSystemdUserBusUnavailableDetail(normalized) || isGenericSystemctlIsEnabledFailure(normalized)
+  );
 }
 
 async function execSystemdUserCommand(
@@ -243,8 +250,9 @@ export async function disableSystemdUserUnitForRemoval(
 export async function reloadSystemdUserManager(
   env: GatewayServiceEnv,
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs);
+  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs, assertCurrent);
   if (result.code !== 0) {
     throw new Error(
       `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,
@@ -364,15 +372,18 @@ export async function bindSystemdManagerOwner(
     managerUid >= 0xffffffff ||
     !Array.isArray(uid) ||
     uid.length !== 1 ||
-    uid[0] !== managerUid
+    !Number.isInteger(uid[0])
   ) {
     throw unavailable();
+  }
+  if (uid[0] !== managerUid) {
+    throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   return {
     destination,
     async verify() {
       if (destination !== (await readOwner())) {
-        throw unavailable();
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
       }
     },
   };

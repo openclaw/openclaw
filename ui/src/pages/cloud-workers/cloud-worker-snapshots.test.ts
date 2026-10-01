@@ -40,8 +40,24 @@ describe("Cloud worker snapshots", () => {
     }
   });
 
-  it("loads on entry, groups old and current records, and refreshes only on request", async () => {
-    const fixture = mountPage(["crabbox.images.list", "crabbox.images.recover"]);
+  it("loads and groups snapshots with cold-only capture guidance, and refreshes only on request", async () => {
+    const result = snapshotListFixture();
+    result.images.push({
+      profileKey: "profile-key-unsupported",
+      profileId: "unsupported-build",
+      backend: "hetzner",
+      machineClass: "standard",
+      os: "linux",
+      state: "no-image",
+      allocationCount: 0,
+      held: false,
+      captureUnsupported: {
+        atMs: 1234,
+        provider: "hetzner",
+        message: "Native checkpoints are not supported by this coordinator.",
+      },
+    });
+    const fixture = mountPage(["crabbox.images.list", "crabbox.images.recover"], { result });
     try {
       await waitForFast(() =>
         expect(fixture.page.textContent).toContain("No cloud worker profiles"),
@@ -116,6 +132,24 @@ describe("Cloud worker snapshots", () => {
       );
       expect(classless.textContent).toContain("aws · linux · Warm images off");
       expect(classless.textContent).not.toContain("Unlabeled");
+      const unsupported = expectDefined(
+        groups.find((group) =>
+          group.querySelector("h2")?.textContent?.includes("unsupported-build"),
+        ),
+        "Profile whose native capture is unsupported",
+      );
+      expect(unsupported.textContent).toContain("hetzner · standard · linux");
+      expect(unsupported.querySelector(".settings-status")?.textContent?.trim()).toBe("Cold only");
+      expect(unsupported.textContent).toContain(
+        "Native checkpoints are not supported by this coordinator.",
+      );
+      expect(unsupported.textContent).toContain("otherwise provision cold");
+      expect(unsupported.textContent).toContain("Each eligible worker retries capture");
+      expect(unsupported.textContent).toContain(
+        "Crabbox configuration changes apply to the next dispatch",
+      );
+      expect(unsupported.textContent).toContain("settings.warmImage: false");
+      expect(unsupported.querySelector("button")).toBeNull();
       expect(snapshots.textContent).toContain("Needs migration");
       expect(snapshots.textContent).toContain("openclaw doctor --fix");
       expect(
@@ -352,9 +386,7 @@ describe("Cloud worker snapshots", () => {
         },
       });
       await waitForFast(() =>
-        expect(fixture.page.textContent).toContain(
-          "Retention policy saved. Restart the Gateway to apply it.",
-        ),
+        expect(fixture.page.textContent).toContain("Retention policy saved."),
       );
     } finally {
       fixture.dispose();

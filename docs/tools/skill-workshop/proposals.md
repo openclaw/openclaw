@@ -89,14 +89,19 @@ For personal library operations, `skill_workshop` exposes
 `list | read | create | update | share | unshare | transfer | activate | remove | rollback`.
 The Gateway chooses the authorized namespace. When Workshop authoring is also
 available, `target: "personal"` selects the personal library. Reads return a
-stable skill ID and revision. Updates require `skill_id` and `expected_revision`;
+stable skill ID and revision. Personal `list` takes only `action` and `target`;
+it returns up to 20 entries and points to My skills for the complete library.
+Use an entry's `skillId` as `skill_id` for `read`, not its name or slug.
+Personal operations do not accept Workshop-only fields such as `query`, `limit`,
+or `skill_name`, or proposal actions such as `inspect` and `prepare_patch`.
+Updates require `skill_id` and `expected_revision`;
 omit `proposal_content` to preserve the instructions. Use `files` for named
 support-file upserts and `delete_files` for explicit removals. Unmentioned
 support files are preserved. Large instructions are returned whole or explicitly
 omitted with directions to the operator workflow; binary supporting content is
 not injected into model context.
 
-For Workshop proposals, the tool uses one required `action`:
+For Workshop proposals, omit `target`. The tool uses one required `action`:
 `create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
 Other Workshop parameters apply depending on the action:
 

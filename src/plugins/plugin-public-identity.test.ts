@@ -32,11 +32,6 @@ describe("isPubliclyKnownPluginId", () => {
       plugin: { id: "opencode", origin: "workspace" as const, packageName: "@acme/private" },
       expected: false,
     },
-    {
-      name: "unknown private plugin ids",
-      plugin: { id: "acme-internal-crm", origin: "workspace" as const },
-      expected: false,
-    },
   ])("classifies $name", ({ plugin, expected }) => {
     expect(isPubliclyKnownPluginId(plugin)).toBe(expected);
   });

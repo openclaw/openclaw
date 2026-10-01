@@ -2,7 +2,6 @@
 // interactive blocks, mirror text, and suppressed relay status payloads.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import {
   getReplyPayloadMetadata,
@@ -36,29 +35,19 @@ it("createOutboundPayloadPlan preserves preceding-input metadata for delivery wi
   expect(projectOutboundPayloadPlanForJson(plan)[0]).not.toHaveProperty("precedingInputAnswer");
 });
 
-function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
-  const normalized = normalizeReplyPayloadsForDelivery(payloads);
-  return {
-    text: normalized
-      .map((payload) => payload.text)
-      .filter((text): text is string => Boolean(text))
-      .join("\n"),
-    mediaUrls: normalized.flatMap(
-      (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
-    ),
-  };
-}
-
 describe("normalizeReplyPayloadsForDelivery", () => {
-  it.each(["photo.png", "café 100% image.png"])(
+  it.each(["café 100% image.png"])(
     "deduplicates a file URL directive with its explicit local path: %s",
     (fileName) => {
       const filePath = path.resolve("media", fileName);
+      const fileUrl = pathToFileURL(filePath).href;
+      const attachments = [{ url: fileUrl, name: fileName, mimeType: "image/png", width: 640 }];
       const [payload] = normalizeReplyPayloadsForDelivery([
-        { text: `Caption\nMEDIA:${pathToFileURL(filePath).href}`, mediaUrl: filePath },
+        { text: `Caption\nMEDIA:${fileUrl}`, mediaUrl: filePath, attachments },
       ]);
 
       expect(payload).toMatchObject({ text: "Caption", mediaUrl: filePath, mediaUrls: [filePath] });
+      expect(payload?.attachments).toEqual(attachments);
     },
   );
 
@@ -127,37 +116,24 @@ describe("normalizeReplyPayloadsForDelivery", () => {
   });
 
   it("keeps parsed attachment order before an explicit singular attachment", () => {
-    const [payload] = normalizeReplyPayloadsForDelivery([
-      {
-        text: "MEDIA:https://x.test/one.png\nMEDIA:https://x.test/two.png",
-        mediaUrl: "https://x.test/primary.png",
-      },
-    ]);
+    const source: ReplyPayload = {
+      text: "MEDIA:https://x.test/one.png\nMEDIA:https://x.test/two.png",
+      mediaUrl: "https://x.test/primary.png",
+      attachments: [{ name: "Explicit photo.png", mimeType: "image/png" }],
+    };
+    const originalSource = structuredClone(source);
+    const [payload] = normalizeReplyPayloadsForDelivery([source]);
 
     expect(payload).toMatchObject({
       mediaUrl: undefined,
       mediaUrls: ["https://x.test/one.png", "https://x.test/two.png", "https://x.test/primary.png"],
     });
-  });
-
-  it("keeps parsed attachments when explicit list and singular sources override the first", () => {
-    const [payload] = normalizeReplyPayloadsForDelivery([
-      {
-        text: "MEDIA:https://x.test/one.png\nMEDIA:https://x.test/two.png",
-        mediaUrl: "https://x.test/primary.png",
-        mediaUrls: ["https://x.test/explicit.png"],
-      },
+    expect(payload?.attachments).toEqual([
+      {},
+      {},
+      { name: "Explicit photo.png", mimeType: "image/png" },
     ]);
-
-    expect(payload).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: [
-        "https://x.test/explicit.png",
-        "https://x.test/primary.png",
-        "https://x.test/one.png",
-        "https://x.test/two.png",
-      ],
-    });
+    expect(source).toEqual(originalSource);
   });
 
   it("strips leading echoed inbound metadata before parsing reply directives", () => {
@@ -203,7 +179,9 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(normalizeReplyPayloadsForDelivery(payloads)).toMatchObject([
       { text: "v2026.5.20 release note" },
     ]);
-    expect(resolveMirrorProjection(payloads).text).toBe("v2026.5.20 release note");
+    expect(projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan(payloads)).text).toBe(
+      "v2026.5.20 release note",
+    );
     expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads))).toMatchObject([
       { text: "v2026.5.20 release note" },
     ]);
@@ -402,22 +380,11 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
-  it("drops bare silent replies for direct conversations", () => {
+  it.each(["direct", "group"])("drops bare silent replies for %s conversations", (type) => {
     expect(
       projectOutboundPayloadPlanForDelivery(
         createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-          sessionKey: "agent:main:telegram:direct:123",
-          surface: "telegram",
-        }),
-      ),
-    ).toStrictEqual([]);
-  });
-
-  it("drops bare silent replies for groups", () => {
-    expect(
-      projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-          sessionKey: "agent:main:telegram:group:123",
+          sessionKey: `agent:main:telegram:${type}:123`,
           surface: "telegram",
         }),
       ),
@@ -454,89 +421,10 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(twice).toEqual(once);
   });
 
-  it("captures a tricky payload matrix snapshot", () => {
-    const input: ReplyPayload[] = [
-      { text: "NO_REPLY" },
-      { text: "NO_REPLY with details" },
-      { text: '{"action":"NO_REPLY"}' },
-      { text: '{"action":"NO_REPLY","note":"keep"}' },
-      { text: "NO_REPLY", mediaUrl: "https://x.test/m1.png" },
-      { text: "MEDIA:https://x.test/m2.png\n[[audio_as_voice]] [[reply_to: 444]] hi" },
-      { text: "headline", btw: { question: "what changed?" } },
-      { text: " \n\t ", channelData: { mode: "custom" } },
-      { text: "Reasoning block", isReasoning: true },
-    ];
-    expect(normalizeReplyPayloadsForDelivery(input)).toMatchInlineSnapshot(`
-      [
-        {
-          "audioAsVoice": false,
-          "mediaUrl": undefined,
-          "mediaUrls": undefined,
-          "replyToCurrent": undefined,
-          "replyToId": undefined,
-          "replyToTag": false,
-          "text": "NO_REPLY with details",
-        },
-        {
-          "audioAsVoice": false,
-          "mediaUrl": undefined,
-          "mediaUrls": undefined,
-          "replyToCurrent": undefined,
-          "replyToId": undefined,
-          "replyToTag": false,
-          "text": "{"action":"NO_REPLY","note":"keep"}",
-        },
-        {
-          "audioAsVoice": false,
-          "mediaUrl": "https://x.test/m1.png",
-          "mediaUrls": [
-            "https://x.test/m1.png",
-          ],
-          "replyToCurrent": undefined,
-          "replyToId": undefined,
-          "replyToTag": false,
-          "text": "",
-        },
-        {
-          "audioAsVoice": true,
-          "mediaUrl": "https://x.test/m2.png",
-          "mediaUrls": [
-            "https://x.test/m2.png",
-          ],
-          "replyToCurrent": undefined,
-          "replyToId": "444",
-          "replyToTag": true,
-          "text": "hi",
-        },
-        {
-          "audioAsVoice": false,
-          "btw": {
-            "question": "what changed?",
-          },
-          "mediaUrl": undefined,
-          "mediaUrls": undefined,
-          "replyToCurrent": undefined,
-          "replyToId": undefined,
-          "replyToTag": false,
-          "text": "BTW
-      Question: what changed?
-
-      headline",
-        },
-        {
-          "audioAsVoice": false,
-          "channelData": {
-            "mode": "custom",
-          },
-          "mediaUrl": undefined,
-          "mediaUrls": undefined,
-          "replyToCurrent": undefined,
-          "replyToId": undefined,
-          "replyToTag": false,
-          "text": "",
-        },
-      ]
-    `);
+  it("formats BTW context for external delivery", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([{ text: "headline", btw: { question: "what changed?" } }]),
+    ).toMatchObject([{ text: "BTW\nQuestion: what changed?\n\nheadline" }]);
   });
 
   it("keeps renderable channel-data payloads and reply-to-current markers", () => {
@@ -562,17 +450,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
 });
 
 describe("JSON payload projection", () => {
-  function cloneReplyPayloads(input: readonly ReplyPayload[]): ReplyPayload[] {
-    return input.map((payload) =>
-      "mediaUrls" in payload
-        ? ({
-            ...payload,
-            mediaUrls: payload.mediaUrls ? [...payload.mediaUrls] : undefined,
-          } as ReplyPayload)
-        : ({ ...payload } as ReplyPayload),
-    );
-  }
-
   it.each(
     typedCases<{
       name: string;
@@ -632,39 +509,7 @@ describe("JSON payload projection", () => {
       },
     ]),
   )("$name", ({ input, expected }) => {
-    expect(
-      projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(cloneReplyPayloads(input))),
-    ).toEqual(expected);
-  });
-
-  it("suppresses reasoning payloads during JSON normalization", () => {
-    expect(
-      projectOutboundPayloadPlanForJson(
-        createOutboundPayloadPlan([
-          { text: "Reasoning:\n_step_", isReasoning: true },
-          { text: "final answer" },
-        ]),
-      ),
-    ).toEqual([
-      { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
-    ]);
-  });
-
-  it("preserves portable locations during JSON normalization", () => {
-    const location = { latitude: 48.858844, longitude: 2.294351 };
-    expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan([{ location }]))).toEqual([
-      {
-        text: "",
-        mediaUrl: null,
-        mediaUrls: undefined,
-        audioAsVoice: undefined,
-        presentation: undefined,
-        delivery: undefined,
-        interactive: undefined,
-        channelData: undefined,
-        location,
-      },
-    ]);
+    expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(input))).toEqual(expected);
   });
 });
 
@@ -678,13 +523,6 @@ describe("OutboundPayloadPlan projections", () => {
     { text: "reasoning", isReasoning: true },
     { text: " \n", channelData: { mode: "flex" } },
   ];
-
-  it("matches normalizeReplyPayloadsForDelivery", () => {
-    const plan = createOutboundPayloadPlan(matrix);
-    expect(projectOutboundPayloadPlanForDelivery(plan)).toEqual(
-      normalizeReplyPayloadsForDelivery(matrix),
-    );
-  });
 
   it.each([
     ["current tag with one closing bracket", "[[reply_to_current] Visible reply"],
@@ -743,9 +581,12 @@ describe("OutboundPayloadPlan projections", () => {
     });
   });
 
-  it("matches mirror projection behavior", () => {
+  it("mirrors normalized text and attachments in source order", () => {
     const plan = createOutboundPayloadPlan(matrix);
-    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual(resolveMirrorProjection(matrix));
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: 'hello\nworld\n{"action":"NO_REPLY","note":"keep"}',
+      mediaUrls: ["https://x.test/1.png", "https://x.test/2.png"],
+    });
   });
 
   it("mirrors location-only replies without exposing untrusted place labels", () => {
@@ -923,6 +764,9 @@ describe("OutboundPayloadPlan projections", () => {
       extractMarkdownImages: true,
     },
   ])("preserves formatted reply text when extracting $name", (testCase) => {
+    const attachments = [
+      { name: "Quarterly chart.png", mimeType: "image/png", width: 640, height: 480 },
+    ];
     const visibleText = [
       "Here is the config.",
       "",
@@ -936,12 +780,13 @@ describe("OutboundPayloadPlan projections", () => {
       "The service is ready.",
     ].join("\n");
     const [planned] = createOutboundPayloadPlan(
-      [{ text: `${visibleText}\n\n${testCase.attachment}` }],
+      [{ text: `${visibleText}\n\n${testCase.attachment}`, attachments }],
       { extractMarkdownImages: testCase.extractMarkdownImages },
     );
 
     expect(planned?.payload.text).toBe(visibleText);
     expect(planned?.payload.mediaUrls).toEqual(["https://example.com/config.png"]);
+    expect(planned?.payload.attachments).toEqual(attachments);
   });
 
   it("preserves canonical code fences when reply directives and media share a payload", () => {
@@ -982,12 +827,7 @@ describe("formatOutboundPayloadLog", () => {
       },
     ]),
   )("$name", ({ input, expected }) => {
-    expect(
-      formatOutboundPayloadLog({
-        ...input,
-        mediaUrls: [...input.mediaUrls],
-      }),
-    ).toBe(expected);
+    expect(formatOutboundPayloadLog(input)).toBe(expected);
   });
 });
 

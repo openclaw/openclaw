@@ -1,15 +1,13 @@
-// Delivery lookup recovers routable channel context from persisted session stores.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import {
   resolveSessionStoreIdentity,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
-import {
-  deliveryContextFromSession,
-  hasDeliveryTargetFields,
-} from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { hasDeliveryTargetFields } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
@@ -17,9 +15,9 @@ import {
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   openSessionEntryReadView,
-  type SessionEntryReadSource,
-  type SessionEntryReadView,
 } from "./session-accessor.js";
+import type { SessionEntryReadView } from "./session-accessor.types.js";
+import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
@@ -27,7 +25,6 @@ import {
   normalizeStoreSessionKey,
 } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 /** Reads only the current session; missing delivery must not widen into alias discovery. */
@@ -95,7 +92,7 @@ export function extractDeliveryInfoBatch(
 ): DeliveryInfo[] {
   const parsed = sessionKeys.map((sessionKey) => ({
     sessionKey,
-    ...parseSessionThreadInfo(sessionKey),
+    ...resolveSessionThreadInfo(sessionKey),
   }));
   const results: DeliveryInfo[] = parsed.map(({ threadId }) => ({
     deliveryContext: undefined,
@@ -181,7 +178,7 @@ export function extractDeliveryInfoBatch(
         return {
           storePath: read.storePath,
           sessionKeys: read.sessionKeys,
-          projection: "list",
+          projection: "delivery",
           onReadSource: (source) => {
             read.source = source;
           },
@@ -350,12 +347,8 @@ function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string
 
 function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string, SessionEntry> {
   const index = new Map<string, SessionEntry>();
-  for (const { sessionKey: key, entry } of store.entries()) {
-    if (!entry) {
-      continue;
-    }
-    const normalized = normalizeStoreSessionKey(key);
-    const existing = index.get(normalized);
+  const indexEntry = (key: string, entry: SessionEntry) => {
+    const existing = index.get(key);
     const entryRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
     const existingRoutable = hasDeliveryTargetFields(deliveryContextFromSession(existing));
     if (
@@ -363,26 +356,22 @@ function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string
       (entryRoutable && !existingRoutable) ||
       (entryRoutable === existingRoutable && (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0))
     ) {
-      index.set(normalized, entry);
+      index.set(key, entry);
     }
+  };
+  for (const { sessionKey: key, entry } of store.entries()) {
+    if (!entry) {
+      continue;
+    }
+    const normalized = normalizeStoreSessionKey(key);
+    indexEntry(normalized, entry);
     // Lowercase aliases are only indexed when case folding is not proof-sensitive; Matrix-style
     // opaque ids must keep exact-case delivery evidence.
     const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
     if (foldedLegacyKey === normalized || requiresFoldedSessionKeyAliasProof(normalized)) {
       continue;
     }
-    const foldedExisting = index.get(foldedLegacyKey);
-    const foldedExistingRoutable = hasDeliveryTargetFields(
-      deliveryContextFromSession(foldedExisting),
-    );
-    if (
-      !foldedExisting ||
-      (entryRoutable && !foldedExistingRoutable) ||
-      (entryRoutable === foldedExistingRoutable &&
-        (entry.updatedAt ?? 0) > (foldedExisting.updatedAt ?? 0))
-    ) {
-      index.set(foldedLegacyKey, entry);
-    }
+    indexEntry(foldedLegacyKey, entry);
   }
   return index;
 }

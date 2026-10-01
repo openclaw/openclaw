@@ -1,16 +1,22 @@
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveOptionalIntegerOption,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { releaseChildProcessOutputAfterExit } from "./child-process.js";
+import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
 import { createSanitizedCommandError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import {
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
   resolveCommandProcessSignal,
+  retainCommandProcessCleanup,
   spawnCommand,
   waitForCommandSpawn,
 } from "./exec-spawn.js";
+import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 export { runCommandWithTimeout, runUtf8CommandWithTimeout } from "./exec-runner.js";
 export type { CommandOptions } from "./exec-runner.js";
@@ -69,6 +75,7 @@ export async function runExec(
       cancelSignal: resolvedOptions?.signal,
       cwd: resolvedOptions?.cwd,
       encoding: "buffer",
+      executionTimeoutMs: timeout,
       env: resolvedOptions?.env,
       forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
       ...(resolvedOptions?.input !== undefined ? { input: resolvedOptions.input } : {}),
@@ -81,61 +88,61 @@ export async function runExec(
             stdin: resolvedOptions.stdinFileDescriptor as 0,
           }),
       stripFinalNewline: false,
-      timeout,
     });
     const startupCanceled =
       subprocess.nodeChildProcess instanceof BrokerChild && subprocess.pid === undefined
         ? createDeferredCore<never>()
         : undefined;
-    if (startupCanceled) {
-      const signal = resolveCommandProcessSignal(resolvedOptions?.signal);
-      let cancellationOpen = true;
-      let deadline: NodeJS.Timeout | undefined;
-      const stopCommand = (reason: "timeout" | "signal") => {
-        if (!cancellationOpen) {
+    const signal = resolveCommandProcessSignal(resolvedOptions?.signal);
+    let cancellationOpen = true;
+    let deadline: ReturnType<typeof setProcessTimeout> | undefined;
+    const stopCommand = (reason: "timeout" | "signal") => {
+      if (!cancellationOpen) {
+        return;
+      }
+      releaseCancellation();
+      // Caller abort is already bridged; the command deadline owns its stop request.
+      if (reason === "timeout") {
+        if (hasChildProcessExited(subprocess.nodeChildProcess)) {
           return;
         }
-        releaseCancellation();
-        // Caller abort is already bridged; the host deadline needs its own stop request.
-        if (reason === "timeout") {
-          deadlineExpired = true;
-          subprocess.kill();
-        }
-        // After admission, await execa's output and cleanup before reporting the timeout.
-        if (!awaitingStartup) {
-          return;
-        }
-        acceptingOutput = false;
-        const flags = {
-          failed: true,
-          timedOut: reason === "timeout",
-          isCanceled: reason === "signal",
-          isMaxBuffer: false,
-          isTerminated: false,
-        };
-        const error = createSanitizedCommandError(flags);
-        startupCanceled.reject(
-          Object.assign(error, flags, {
-            shortMessage: error.message,
-            stdout: "",
-            stderr: "",
-            cleanup: "uncertain",
-          }),
-        );
-      };
-      const onAbort = () => stopCommand("signal");
-      releaseCancellation = () => {
-        cancellationOpen = false;
-        clearTimeout(deadline);
-        signal?.removeEventListener("abort", onAbort);
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (timeout !== undefined) {
-        deadline = setTimeout(() => stopCommand("timeout"), timeout);
+        deadlineExpired = true;
+        subprocess.kill();
       }
-      if (signal?.aborted) {
-        onAbort();
+      // After admission, await execa's output and cleanup before reporting the timeout.
+      if (!awaitingStartup || !startupCanceled) {
+        return;
       }
+      acceptingOutput = false;
+      const flags = {
+        failed: true,
+        timedOut: reason === "timeout",
+        isCanceled: reason === "signal",
+        isMaxBuffer: false,
+        isTerminated: false,
+      };
+      const error = createSanitizedCommandError(flags);
+      startupCanceled.reject(
+        Object.assign(error, flags, {
+          shortMessage: error.message,
+          stdout: "",
+          stderr: "",
+          cleanup: "uncertain",
+        }),
+      );
+    };
+    const onAbort = () => stopCommand("signal");
+    releaseCancellation = () => {
+      cancellationOpen = false;
+      deadline?.clear();
+      signal?.removeEventListener("abort", onAbort);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (timeout !== undefined) {
+      deadline = setProcessTimeout(() => stopCommand("timeout"), timeout);
+    }
+    if (signal?.aborted) {
+      onAbort();
     }
     // Keep draining and settling a late process after a local startup failure returns.
     const completion = (async () => {
@@ -192,6 +199,12 @@ export async function runExec(
       }
       return { stdout: decodedStdout, stderr: decodedStderr };
     })();
+    retainCommandProcessCleanup(
+      completion.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
     return await (startupCanceled
       ? Promise.race([completion, startupCanceled.promise])
       : completion);
@@ -205,7 +218,7 @@ export async function runExec(
         stderr?: unknown;
         timedOut?: boolean;
       };
-      if (deadlineExpired && !errorWithOutput.timedOut) {
+      if (deadlineExpired || errorWithOutput.timedOut) {
         const message = createSanitizedCommandError({ timedOut: true }).message;
         if (err instanceof Error) {
           err.stack = err.stack?.replace(err.message, message);
@@ -288,12 +301,10 @@ export async function runCommandBuffered(
 
   const chunks: Record<CommandOutputStream, Buffer[]> = { stdout: [], stderr: [] };
   const capturedBytes: Record<CommandOutputStream, number> = { stdout: 0, stderr: 0 };
-  const maxCombinedOutputBytes =
-    typeof options.maxCombinedOutputBytes === "number" &&
-    Number.isFinite(options.maxCombinedOutputBytes) &&
-    options.maxCombinedOutputBytes > 0
-      ? Math.max(1, Math.floor(options.maxCombinedOutputBytes))
-      : undefined;
+  const maxCombinedOutputBytes = resolveOptionalIntegerOption(
+    asPositiveFiniteNumber(options.maxCombinedOutputBytes),
+    { min: 1 },
+  );
   let outputLimitStream: CommandOutputStream | undefined;
   const appendChunk = (chunk: Buffer, stream: CommandOutputStream): boolean => {
     if (options.discardOutput?.[stream]) {

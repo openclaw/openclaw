@@ -1,13 +1,21 @@
 import { html, nothing, render, type RootPart } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
+import { guard } from "lit/directives/guard.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
+import type { MarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../components/markdown.ts";
+import {
+  toSanitizedJsonHtml,
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownParts,
+} from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { findMessageDisclosureLine, type MessageTextRect } from "./chat-message-disclosure.ts";
 import { renderMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
 
 registerChatMessageMetadataEnglish();
@@ -18,64 +26,31 @@ type DuplicateSuffix = {
   label: string;
 };
 
-// Bound synchronous parsing so large JSON messages cannot freeze the render loop.
-const MAX_JSON_AUTOPARSE_CHARS = 20_000;
-
-export function detectJson(text: string): { parsed: unknown; text: string } | null {
-  const trimmed = text.trim();
-
-  if (trimmed.length > MAX_JSON_AUTOPARSE_CHARS) {
-    return null;
-  }
-
-  if (
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"))
-  ) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      // Parsing is only for the summary; reserialization loses numeric precision and duplicate keys.
-      return { parsed, text: trimmed };
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function jsonSummaryLabel(parsed: unknown): string {
-  if (Array.isArray(parsed)) {
-    return t(
-      parsed.length === 1 ? "chat.codeBlock.jsonArrayItem" : "chat.codeBlock.jsonArrayItems",
-      { count: String(parsed.length) },
-    );
-  }
-  if (parsed && typeof parsed === "object") {
-    const keys = Object.keys(parsed);
-    if (keys.length <= 4) {
-      return `{ ${keys.join(", ")} }`;
-    }
-    return t("chat.codeBlock.jsonObjectKeys", { count: String(keys.length) });
-  }
-  return t("chat.codeBlock.jsonBadge");
-}
+type MessageTextOptions = {
+  role: string;
+  isStreaming: boolean;
+  isForwarded?: boolean;
+  isUserMessageExpanded?: (messageId: string) => boolean;
+  onToggleUserMessageExpanded?: (messageId: string) => void;
+  assistantMessageDisclosure?: AssistantMessageDisclosure;
+};
 
 export function renderMessageJson(
-  result: NonNullable<ReturnType<typeof detectJson>>,
-  open = false,
+  json: MarkdownJson,
+  messageKey: string,
+  opts: MessageTextOptions,
+  options: MarkdownRenderOptions,
 ) {
-  return html`<details class="chat-json-collapse" ?open=${open}>
-    <summary class="chat-json-summary">
-      <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-      <span class="chat-json-label">${jsonSummaryLabel(result.parsed)}</span>
-    </summary>
-    <pre class="chat-json-content"><code>${result.text}</code></pre>
-  </details>`;
+  const parts = [toSanitizedJsonHtml(json, options)];
+  const text = html`<div class="chat-text">${unsafeHTML(parts[0])}</div>`;
+  return renderMessageDisclosure(json.text, messageKey, opts, text, parts);
 }
 
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
 const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 1_200;
 const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 40;
+const USER_MESSAGE_PREVIEW_LINES = 5;
+const MESSAGE_PREVIEW_FADE_START_FRACTION = 0.24;
 
 function shouldCollapseUserMessage(markdown: string): boolean {
   return (
@@ -85,28 +60,179 @@ function shouldCollapseUserMessage(markdown: string): boolean {
   );
 }
 
-function userMessageOverflowRef(expanded: boolean) {
+const FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT = 3;
+
+type MessageOverflowMeasurement = {
+  element: HTMLElement;
+  read: () => (() => void) | undefined;
+};
+const pendingOverflowMeasurements = new Set<MessageOverflowMeasurement>();
+let overflowMeasurementQueued = false;
+
+function scheduleOverflowMeasurement(measurement: MessageOverflowMeasurement): void {
+  pendingOverflowMeasurements.add(measurement);
+  if (overflowMeasurementQueued) {
+    return;
+  }
+  overflowMeasurementQueued = true;
+  queueMicrotask(() => {
+    overflowMeasurementQueued = false;
+    const measurements = [...pendingOverflowMeasurements];
+    pendingOverflowMeasurements.clear();
+    // Restore every full preview before reading layout, then apply every cut.
+    // Interleaving these phases forces a separate page layout for each message.
+    for (const entry of measurements) {
+      entry.element.style.removeProperty("--chat-disclosure-clamp");
+    }
+    const updates = measurements.map((entry) => entry.read());
+    for (const update of updates) {
+      update?.();
+    }
+  });
+}
+
+function messageOverflowRef(expanded: boolean, forwarded: boolean) {
   let resizeObserver: ResizeObserver | null = null;
+  let onFontsLoaded: (() => void) | undefined;
+  let measurement: MessageOverflowMeasurement | undefined;
+  let generation = 0;
   return (element: Element | undefined) => {
+    const currentGeneration = ++generation;
+    if (measurement) {
+      pendingOverflowMeasurements.delete(measurement);
+      measurement = undefined;
+    }
     resizeObserver?.disconnect();
     resizeObserver = null;
+    if (onFontsLoaded) {
+      document.fonts?.removeEventListener("loadingdone", onFontsLoaded);
+      onFontsLoaded = undefined;
+    }
     if (!(element instanceof HTMLElement)) {
       return;
     }
-    const update = () => {
+    const read = () => {
+      if (generation !== currentGeneration) {
+        return undefined;
+      }
       const disclosure = element.parentElement;
       const toggle = disclosure?.querySelector<HTMLButtonElement>(
         ":scope > .chat-message-disclosure__toggle",
       );
       if (!disclosure || !toggle) {
-        return;
+        return undefined;
       }
-      toggle.hidden = !expanded && element.scrollHeight <= element.clientHeight + 1;
+      let clamp: string | undefined;
+      let fadeSize: string | undefined;
+      const text = element.querySelector<HTMLElement>(":scope > .chat-text");
+      // Test the full preview before a partial-line cut can create its own overflow.
+      const scrollHeight = element.scrollHeight;
+      const overflows = scrollHeight > element.clientHeight + 1;
+      if (!forwarded && !expanded && overflows && text && element.clientWidth > 0) {
+        const origin = element.getBoundingClientRect().top - element.scrollTop;
+        const defaultLineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
+        const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        const rects: MessageTextRect[] = [];
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (
+            !node.textContent?.trim() ||
+            !node.parentElement?.checkVisibility() ||
+            // Escaped HTML can be direct body text; the closed details itself stays visible.
+            node.parentElement.matches("details:not([open])")
+          ) {
+            continue;
+          }
+          const lineHeight =
+            Number.parseFloat(getComputedStyle(node.parentElement).lineHeight) || defaultLineHeight;
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            // Range bounds cover glyphs; account for the line's rounded half-leading.
+            const leading = Math.floor((lineHeight - rect.height) / 2);
+            rects.push({
+              top: rect.top - origin - leading,
+              glyphTop: rect.top - origin,
+              bottom: rect.bottom - origin - leading,
+              width: rect.width,
+              lineHeight,
+            });
+          }
+        }
+        // Native fallback summaries live in a closed shadow tree, outside the text walker.
+        for (const details of text.querySelectorAll("details:not(:has(> summary))")) {
+          if (!details.checkVisibility()) {
+            continue;
+          }
+          const style = getComputedStyle(details);
+          const lineHeight = Number.parseFloat(style.lineHeight) || defaultLineHeight;
+          const bounds = details.getBoundingClientRect();
+          const top =
+            bounds.top -
+            origin +
+            Number.parseFloat(style.borderTopWidth) +
+            Number.parseFloat(style.paddingTop);
+          rects.push({
+            top,
+            glyphTop: top,
+            bottom: top + lineHeight,
+            width: bounds.width,
+            lineHeight,
+          });
+        }
+        const lastLine = findMessageDisclosureLine(rects, USER_MESSAGE_PREVIEW_LINES);
+        if (lastLine) {
+          clamp = `${lastLine.clamp}px`;
+          fadeSize = `${lastLine.clamp - lastLine.top - lastLine.lineHeight * MESSAGE_PREVIEW_FADE_START_FRACTION}px`;
+        }
+      }
+      const hidden =
+        !expanded &&
+        (forwarded && text
+          ? scrollHeight <=
+            Number.parseFloat(getComputedStyle(text).lineHeight) *
+              FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT +
+              1
+          : !overflows);
+      return () => {
+        if (generation !== currentGeneration) {
+          return;
+        }
+        for (const [property, value] of [
+          ["--chat-disclosure-clamp", clamp],
+          ["--chat-disclosure-fade-size", fadeSize],
+        ] as const) {
+          if (value === undefined) {
+            element.style.removeProperty(property);
+          } else if (element.style.getPropertyValue(property) !== value) {
+            element.style.setProperty(property, value);
+          }
+        }
+        toggle.hidden = hidden;
+      };
+    };
+    const currentMeasurement = (measurement = { element, read });
+    const update = () => {
+      if (generation === currentGeneration) {
+        scheduleOverflowMeasurement(currentMeasurement);
+      }
     };
     // Lit resolves refs while siblings are still committing. Measure after the
     // toggle exists; it renders visible so collapsing never shifts row height,
     // and only content that fits the clamp hides it.
-    queueMicrotask(update);
+    queueMicrotask(() => {
+      if (generation !== currentGeneration) {
+        return;
+      }
+      const text = element.querySelector(":scope > .chat-text");
+      if (text) {
+        resizeObserver?.observe(text);
+      }
+    });
+    update();
+    // Font metrics can change without resizing tightly spaced text, including
+    // fonts loaded after this retained message's original render.
+    onFontsLoaded = update;
+    document.fonts?.addEventListener("loadingdone", onFontsLoaded);
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(update);
       resizeObserver.observe(element);
@@ -117,13 +243,7 @@ function userMessageOverflowRef(expanded: boolean) {
 export function renderMessageMarkdown(
   markdown: string,
   messageKey: string,
-  opts: {
-    role: string;
-    isStreaming: boolean;
-    isUserMessageExpanded?: (messageId: string) => boolean;
-    onToggleUserMessageExpanded?: (messageId: string) => void;
-    assistantMessageDisclosure?: AssistantMessageDisclosure;
-  },
+  opts: MessageTextOptions,
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
   media?: MarkdownMedia,
@@ -133,7 +253,7 @@ export function renderMessageMarkdown(
   const recoverFullMessage =
     isAssistant || (opts.role === "user" && disclosure?.onRetryFullMessage);
   const recovered = recoverFullMessage && disclosure?.expanded;
-  const text = renderMarkdownText(
+  const { content: text, parts } = renderMarkdownText(
     recovered ? (disclosure.markdown ?? markdown) : markdown,
     messageKey,
     opts.isStreaming,
@@ -158,19 +278,37 @@ export function renderMessageMarkdown(
       </div>
     `;
   }
+  return renderMessageDisclosure(markdown, messageKey, opts, text, parts);
+}
+
+function renderMessageDisclosure(
+  source: string,
+  messageKey: string,
+  opts: MessageTextOptions,
+  text: ReturnType<typeof html>,
+  parts: readonly string[],
+) {
   if (
-    opts.role !== "user" ||
     !opts.onToggleUserMessageExpanded ||
-    !shouldCollapseUserMessage(markdown)
+    (opts.isForwarded
+      ? opts.isStreaming
+      : opts.role !== "user" || !shouldCollapseUserMessage(source))
   ) {
     return text;
   }
 
-  const disclosureId = `user-message:${messageKey}`;
+  const disclosureId = `${opts.isForwarded ? "forwarded" : "user"}-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
   return html`
-    <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
-      <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
+    <div
+      class="chat-message-disclosure ${opts.isForwarded ? "chat-message-disclosure--forwarded" : ""} ${expanded ? "is-expanded" : ""}"
+    >
+      <div
+        class="chat-message-disclosure__content"
+        ${guard([...parts, expanded, opts.isForwarded], () =>
+          ref(messageOverflowRef(expanded, Boolean(opts.isForwarded))),
+        )}
+      >
         ${text}
       </div>
       <button
@@ -194,11 +332,14 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
+type MarkdownFragment = { html: string; incremental: boolean };
+
 class MarkdownPartsDirective extends AsyncDirective {
   private messageKey: string | undefined;
   private source = "";
   private stableHtml = "";
-  private fragments: string[] = [];
+  private fragments: MarkdownFragment[] = [];
+  private tail: MarkdownFragment | undefined;
   private generation = {};
   private mediaSlots = new Map<number, { element: HTMLElement; part?: RootPart }>();
   private mediaRender = {};
@@ -233,11 +374,31 @@ class MarkdownPartsDirective extends AsyncDirective {
       !stableHtml.startsWith(this.stableHtml)
     ) {
       this.fragments = [];
+      this.tail = undefined;
       this.stableHtml = "";
       this.generation = {};
     }
     if (stableHtml.length > this.stableHtml.length) {
-      this.fragments.push(stableHtml.slice(this.stableHtml.length));
+      const completed = stableHtml.slice(this.stableHtml.length);
+      if (this.tail) {
+        // Promotion keeps this fragment's Lit part and renderer. Switching to
+        // static HTML would discard its live controls and reader enhancements.
+        this.tail.html = completed;
+        this.tail = undefined;
+      } else {
+        this.fragments.push({ html: completed, incremental: false });
+      }
+    }
+    if (tailHtml) {
+      if (this.tail) {
+        this.tail.html = tailHtml;
+      } else {
+        this.tail = { html: tailHtml, incremental: true };
+        this.fragments.push(this.tail);
+      }
+    } else if (this.tail) {
+      this.fragments.pop();
+      this.tail = undefined;
     }
     this.messageKey = messageKey;
     this.source = source;
@@ -277,7 +438,11 @@ class MarkdownPartsDirective extends AsyncDirective {
     // control choices and Markdown enhancements, which must stay on its nodes.
     return keyed(
       this.generation,
-      html`${this.fragments.map((fragment) => renderMarkdownMedia(fragment, positionedMedia))}${renderMarkdownMedia(tailHtml, positionedMedia)}`,
+      html`${this.fragments.map((fragment) =>
+        guard([fragment.html, positionedMedia], () =>
+          renderMarkdownMedia(fragment.html, positionedMedia, fragment.incremental),
+        ),
+      )}`,
     );
   }
 }
@@ -301,9 +466,12 @@ function renderMarkdownText(
     parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
   }
   const content = markdownParts(messageKey, markdown, parts, media);
-  return html`
-    <div class="chat-text" dir="${detectTextDirection(media?.text ?? markdown)}">${content}</div>
-  `;
+  return {
+    parts,
+    content: html`
+      <div class="chat-text" dir="${detectTextDirection(media?.text ?? markdown)}">${content}</div>
+    `,
+  };
 }
 
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {

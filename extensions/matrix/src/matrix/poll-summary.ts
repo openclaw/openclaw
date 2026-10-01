@@ -1,4 +1,3 @@
-// Matrix plugin module implements poll summary behavior.
 import type { MatrixMessageSummary } from "./actions/types.js";
 import {
   buildPollResultsSummary,
@@ -6,7 +5,7 @@ import {
   formatPollResultsAsText,
   isPollEventType,
   isPollStartType,
-  parsePollStartContent,
+  parsePollStart,
   resolvePollReferenceEventId,
   type PollStartContent,
 } from "./poll-types.js";
@@ -76,7 +75,7 @@ export async function fetchMatrixPollSnapshot(
   }
 
   const pollStartContent = rootEvent.content as PollStartContent;
-  const pollSummary = parsePollStartContent(pollStartContent);
+  const pollSummary = parsePollStart(pollStartContent);
   if (!pollSummary) {
     return null;
   }

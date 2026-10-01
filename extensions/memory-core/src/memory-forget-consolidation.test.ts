@@ -6,6 +6,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -15,6 +16,7 @@ import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { failMemoryEntryOriginWrites } from "./memory-entry-origins-fault.test-support.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -45,6 +47,7 @@ describe("memory forget", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -106,7 +109,7 @@ describe("memory forget", () => {
       const notePath = path.join(workspaceDir, "memory", "2026-08-26.md");
       await fs.mkdir(path.dirname(notePath), { recursive: true });
       await fs.writeFile(notePath, `${snippet}\n`);
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId: "gamma",
         origins: [
           {
@@ -164,13 +167,17 @@ describe("memory forget", () => {
         complete: vi.fn(async () => ({ text: output })),
       };
 
-      if (failOrigins) {
-        openOpenClawAgentDatabase({ agentId: "gamma" }).db.exec(`
-          CREATE TRIGGER fail_origin_reservation BEFORE INSERT ON memory_entry_origins
-          WHEN NEW.entry_key != 'retired-entry'
-          BEGIN SELECT RAISE(ABORT, 'injected origin write failure'); END;
-        `);
-      }
+      const restoreOriginFailure = failOrigins
+        ? failMemoryEntryOriginWrites({
+            agentId: "gamma",
+            trigger: "fail_origin_reservation",
+            createSql: `
+              CREATE TRIGGER fail_origin_reservation BEFORE INSERT ON memory_entry_origins
+              WHEN NEW.entry_key != 'retired-entry'
+              BEGIN SELECT RAISE(ABORT, 'injected origin write failure'); END;
+            `,
+          })
+        : undefined;
       let renamed = false;
       let fileFaultInjected = false;
       let memoryRenameCalls = 0;
@@ -248,9 +255,9 @@ describe("memory forget", () => {
         const memory = await fs.readFile(memoryPath, "utf8");
         expect(memory).toContain("openclaw-memory-promotion:retired-entry");
         expect(memory).toContain(`openclaw-memory-promotion:${promoted!.key}`);
-        expect(listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] })).toEqual(
-          [],
-        );
+        expect(
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        ).toEqual([]);
         await forgetMemoryEntries({ cfg, agentId: "gamma", sessionIds: ["private-session"] });
         expect(await fs.readFile(memoryPath, "utf8")).toContain(
           `openclaw-memory-promotion:${promoted!.key}`,
@@ -298,10 +305,10 @@ describe("memory forget", () => {
           ).map(({ value }) => value.content),
         ).toEqual([previousMemory]);
         expect(
-          listMemoryEntryOrigins({ agentId: "gamma", entryKeys: ["retired-entry"] }),
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: ["retired-entry"] }),
         ).toHaveLength(1);
         expect(
-          listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
         ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
         const report = await forgetMemoryEntries({
           cfg,
@@ -312,24 +319,28 @@ describe("memory forget", () => {
         expect(await fs.readFile(memoryPath, "utf8")).not.toContain(
           `openclaw-memory-promotion:${promoted!.key}`,
         );
-        expect(listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] })).toEqual(
-          [],
-        );
+        expect(
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        ).toEqual([]);
         return;
       }
       if (failOrigins) {
-        await expect(application).rejects.toThrow("injected origin write failure");
-        await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
-        expect(
-          (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
-        ).toBeUndefined();
+        try {
+          await expect(application).rejects.toThrow("injected origin write failure");
+          await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
+          expect(
+            (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
+          ).toBeUndefined();
+        } finally {
+          restoreOriginFailure?.();
+        }
         return;
       }
       const applied = await application;
 
       expect(applied.applied).toBe(1);
       expect(
-        listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
       ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
       const readBackups = () =>
         readMemoryCoreWorkspaceEntries<{ content: string }>({
@@ -346,6 +357,7 @@ describe("memory forget", () => {
       ).toBeUndefined();
 
       expect(await fs.readFile(diaryPath, "utf8")).toContain(snippet);
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       resetPluginStateStoreForTests();
@@ -362,7 +374,7 @@ describe("memory forget", () => {
       expect((await readBackups()).every(({ value }) => !value.content.includes(priorEntry))).toBe(
         true,
       );
-      expect(listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
+      expect(await listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
       const diary = await fs.readFile(diaryPath, "utf8");
       expect.soft(diary).not.toContain(priorEntry);
       expect.soft(diary).not.toContain(snippet);
@@ -381,7 +393,7 @@ describe("memory forget", () => {
     "warns and preserves historical untraceable highlights in %s",
     async (diaryName) => {
       await seedSession("target");
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId: "main",
         origins: [
           {

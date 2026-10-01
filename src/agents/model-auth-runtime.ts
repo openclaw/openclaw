@@ -4,6 +4,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   prepareProviderSyntheticAuthWithPlugin,
@@ -15,7 +16,7 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import { isAuthModeAllowedForModel } from "./model-auth-openai.js";
+import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
@@ -80,12 +81,7 @@ function runtimeLookupAllowsSetupProviderFallback(params: {
 function resolveRuntimeEnvApiKeyLookupOptions(params: {
   provider: string;
   runtimeLookup?: RuntimeProviderAuthLookup;
-}):
-  | Pick<
-      EnvApiKeyLookupOptions,
-      "aliasMap" | "candidateMap" | "authEvidenceMap" | "skipSetupProviderFallback"
-    >
-  | undefined {
+}): RuntimeProviderAuthLookup["envApiKey"] | undefined {
   const envApiKey = params.runtimeLookup?.envApiKey;
   if (!envApiKey) {
     return undefined;
@@ -106,7 +102,7 @@ function listProviderSyntheticAuthRefs(params: {
   modelApi?: string;
 }): string[] {
   const refs = [params.provider];
-  const providerConfig = authConfig.resolveProviderConfig(params.cfg, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   if (params.modelApi) {
     refs.push(params.modelApi);
   }
@@ -143,6 +139,7 @@ type RuntimeProviderAuthParams = {
   allowPluginSyntheticAuth?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   modelApi?: string;
+  capability?: string;
   store?: AuthProfileStore;
 };
 
@@ -159,15 +156,10 @@ function resolveRuntimeAvailableProviderAuth<T>(
   // Callers that supply the auth store get inline provider keys hidden while
   // their billing/auth cooldown is active, so browse and tool selection stop
   // advertising a credential the resolver would refuse to hand back.
-  const inlineProviderApiKeyUsable = params.store
-    ? (() => {
-        const unusableUntil = authConfig.resolveInlineProviderApiKeyCooldownUntil(
-          params.store,
-          provider,
-        );
-        return unusableUntil === null || unusableUntil <= Date.now();
-      })()
-    : true;
+  const unusableUntil = params.store
+    ? authConfig.resolveInlineProviderApiKeyCooldownUntil(params.store, provider)
+    : null;
+  const inlineProviderApiKeyUsable = unusableUntil === null || unusableUntil <= Date.now();
 
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
@@ -182,6 +174,7 @@ function resolveRuntimeAvailableProviderAuth<T>(
     isAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
+      capability: params.capability,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     }) &&
     (!authConfig.isConfigBackedInlineProviderApiKey({
@@ -200,7 +193,9 @@ function resolveRuntimeAvailableProviderAuth<T>(
       provider,
       env: params.env,
     }) &&
-    inlineProviderApiKeyUsable
+    inlineProviderApiKeyUsable &&
+    (!params.capability ||
+      isAuthModeAllowedForModel({ provider, capability: params.capability, mode: "api-key" }))
   ) {
     return true;
   }
@@ -210,6 +205,13 @@ function resolveRuntimeAvailableProviderAuth<T>(
   });
   if (
     managedRuntimeAuth &&
+    (!params.capability ||
+      isAuthModeAllowedForModel({
+        provider,
+        capability: params.capability,
+        mode: managedRuntimeAuth.mode,
+        authFlow: managedRuntimeAuth.authFlow,
+      })) &&
     (!authConfig.isConfigBackedInlineProviderApiKey({
       cfg: params.cfg,
       provider,
@@ -292,7 +294,7 @@ function syntheticAuthLookup(
     context: {
       config,
       provider: params.provider,
-      providerConfig: authConfig.resolveProviderConfig(config, params.provider),
+      providerConfig: resolveMergedModelProviderConfig(config, params.provider),
     },
   };
 }

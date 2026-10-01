@@ -242,7 +242,6 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
     runtime: { error: () => {} } as never,
     log: { info: () => {}, error: () => {} },
     app: {} as never,
-    appId: "app-trace",
     conversationRef: {
       activityId: "inbound-activity",
       user: { id: "29:trace-user", name: "Trace User" },

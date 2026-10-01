@@ -129,6 +129,10 @@ resolve here.
 - <a id="hook-decision-semantics" />[Hook decision semantics](/plugins/sdk-overview/events-and-hooks#hook-decision-semantics)
 - <a id="internal-module-convention" />[Internal module convention](/plugins/sdk-overview/imports#internal-module-convention)
 
+## Docked link readers
+
+See [docked link readers](/plugins/sdk-overview/host-hooks#docked-link-readers) for passive documents beside chat.
+
 ## Related
 
 <CardGroup cols={2}>

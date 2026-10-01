@@ -1,4 +1,3 @@
-// Checks install policy constraints for package and plugin operations.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
@@ -156,7 +155,6 @@ function resolvePolicyScriptArg(params: {
   | { kind: "unsupported"; message: string }
   | undefined {
   const interpreterName = executableName(params.command);
-  const startIndex = 0;
   if (interpreterName === "env") {
     return {
       kind: "unsupported",
@@ -164,11 +162,11 @@ function resolvePolicyScriptArg(params: {
         "security.installPolicy.exec.command must not use env; configure the policy executable directly.",
     };
   }
-  if (!POLICY_INTERPRETER_NAMES.has(interpreterName) || interpreterName === "env") {
+  if (!POLICY_INTERPRETER_NAMES.has(interpreterName)) {
     return undefined;
   }
   const scripts: Array<{ index: number; path: string }> = [];
-  for (let index = startIndex; index < params.args.length; index += 1) {
+  for (let index = 0; index < params.args.length; index += 1) {
     const arg = params.args[index];
     if (!arg) {
       continue;
@@ -321,10 +319,6 @@ async function assertSecurePolicyScriptArg(params: {
       trustedDirs: params.trustedDirs,
     });
   }
-}
-
-function createPolicyChildEnv(_sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {};
 }
 
 function readPassEnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -489,10 +483,6 @@ export async function runInstallPolicy(params: {
       label: "security.installPolicy.exec.command",
       trustedDirs: policy.exec.trustedDirs,
     });
-  } catch (err) {
-    return failClosed(formatErrorMessage(err));
-  }
-  try {
     await assertSecurePolicyScriptArg({
       command: secureCommandPath,
       args: policy.exec.args ?? [],
@@ -503,7 +493,7 @@ export async function runInstallPolicy(params: {
   }
 
   const env = params.env ?? process.env;
-  const childEnv = createPolicyChildEnv(env);
+  const childEnv: NodeJS.ProcessEnv = {};
   for (const key of policy.exec.passEnv ?? []) {
     const value = readPassEnvValue(env, key);
     if (value !== undefined) {

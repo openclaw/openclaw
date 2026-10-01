@@ -15,6 +15,7 @@ import {
 } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { mock } from "node:test";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   type DesktopProofSourceStatus,
@@ -35,12 +36,19 @@ import {
   withDesktopProofCleanup,
 } from "../../scripts/lib/desktop-resize-proof.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { acquireTestPortBlock, reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import type { DesktopClient } from "../../ui/src/components/desktop/desktop-client.ts";
 import {
   observeDesktopEndpointPackets,
   observeDesktopProofRfbLifecycle,
 } from "../../ui/src/e2e/desktop-resize-real.test-support.ts";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingNativeRuntimeEntrypoints } from "./tooling-native-runtime.test-support.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -352,42 +360,80 @@ describe("desktop proof identity and public evidence", () => {
     expect(await readDesktopProofGatewayCloses(link)).toBeNull();
   });
 
-  it("bounds repeated tap closures and retains a fixed upstream error category", async () => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing fixture address");
-    }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    const tap = await observeDesktopEndpointPackets(address.port, new AbortController().signal);
-    const clients: net.Socket[] = [];
-    try {
-      for (let index = 0; index < 10; index++) {
-        const client = net.connect({ host: "127.0.0.1", port: tap.port });
-        client.on("error", () => {});
-        clients.push(client);
-        await vi.waitFor(() =>
-          expect(tap.terminalSnapshot().events.at(-1)?.connectionIndex).toBe(index),
-        );
+  it("keeps the tap off a port claimed before its listener binds", async () => {
+    const upstream = await acquireTestPortBlock({ offsets: [0] });
+    const listen = mock.method(net.Server.prototype, "listen");
+    // Model the kernel choosing another fixture's claimed but unbound port.
+    const listenSpy = vi.spyOn(net.Server.prototype, "listen").mockImplementation(function (
+      this: net.Server,
+      ...args
+    ) {
+      if (args[0] === 0) {
+        args[0] = upstream.port;
       }
-      expect(tap.terminalSnapshot()).toEqual({
-        events: Array.from({ length: 8 }, (_, index) => ({
-          connectionIndex: index + 2,
-          side: "upstream",
-          event: "error",
-          errorCategory: "refused",
-          hadError: null,
-        })),
-        omitted: 2,
-      });
-    } finally {
-      clients.forEach((client) => client.destroy());
-      await tap.close();
-    }
+      return Reflect.apply(listen, this, args);
+    });
+    let closeTap: (() => Promise<void>) | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        const tap = await observeDesktopEndpointPackets(
+          upstream.port,
+          new AbortController().signal,
+        );
+        closeTap = tap.close;
+        expect(tap.port).not.toBe(upstream.port);
+      },
+      () => {
+        listenSpy.mockRestore();
+        listen.mock.restore();
+        listen.mock.resetCalls();
+      },
+      () => closeTap?.(),
+      () => upstream.release(),
+    );
+  });
+
+  it("bounds repeated tap closures and retains a fixed upstream error category", async () => {
+    const upstream = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => net.createServer(),
+    });
+    const clients: net.Socket[] = [];
+    let closeTap: (() => Promise<void>) | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        const tap = await observeDesktopEndpointPackets(
+          upstream.claim.port,
+          new AbortController().signal,
+        );
+        closeTap = tap.close;
+        expect(tap.port).not.toBe(upstream.claim.port);
+        // Keep the claim after closing the reservation: every connection must be refused.
+        await upstream.releaseListener();
+        for (let index = 0; index < 10; index++) {
+          const client = net.connect({ host: "127.0.0.1", port: tap.port });
+          client.on("error", () => {});
+          clients.push(client);
+          await vi.waitFor(() =>
+            expect(tap.terminalSnapshot().events.at(-1)?.connectionIndex).toBe(index),
+          );
+        }
+        expect(tap.terminalSnapshot()).toEqual({
+          events: Array.from({ length: 8 }, (_, index) => ({
+            connectionIndex: index + 2,
+            side: "upstream",
+            event: "error",
+            errorCategory: "refused",
+            hadError: null,
+          })),
+          omitted: 2,
+        });
+      },
+      () => clients.forEach((client) => client.destroy()),
+      () => closeTap?.(),
+      () => (upstream.listener.listening ? upstream.releaseListener() : undefined),
+      () => upstream.claim.release(),
+    );
   });
 
   it("projects SSH, tap and RFB diagnostics with closed fields and explicit omitted counts", () => {
@@ -448,16 +494,17 @@ describe("desktop proof identity and public evidence", () => {
 
   it("retains node close categories from the existing JSON file logger", async () => {
     const file = path.join(dirs.make("desktop-node-log-"), "node.log");
+    const loggerUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.logger);
+    const subsystemUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.subsystemLogger);
     execFileSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(loggerUrl, process.execPath).slice(0, -1),
         "--input-type=module",
         "--eval",
         `
-          import { flushLogger, setLoggerOverride } from "./src/logging/logger.ts";
-          import { createSubsystemLogger } from "./src/logging/subsystem.ts";
+          import { flushLogger, setLoggerOverride } from ${JSON.stringify(loggerUrl.href)};
+          import { createSubsystemLogger } from ${JSON.stringify(subsystemUrl.href)};
           setLoggerOverride({ file: process.argv[1], level: "info", consoleLevel: "silent" });
           const log = createSubsystemLogger("node-host/stream");
           log.info("node stream closed", {

@@ -74,6 +74,61 @@ export function resolveWorkerCellExport(source, name) {
   return matches[0];
 }
 
+/** Generated forwarding entries can share the defining owner's filename prefix. */
+export async function resolveWorkerCellFunctionBinding(
+  identity,
+  packageRoot,
+  prefix,
+  symbol,
+  parser,
+) {
+  const ts = await import("typescript/unstable/ast");
+  const root = fs.realpathSync(packageRoot);
+  const sources = [];
+  for (const relative of Object.keys(identity.files)) {
+    const name = path.posix.basename(relative);
+    if (
+      path.posix.dirname(relative) !== "dist" ||
+      !name.startsWith(`${prefix}-`) ||
+      !name.endsWith(".mjs")
+    ) {
+      continue;
+    }
+    const file = path.join(root, relative);
+    assert.equal(fs.realpathSync(file), file, `Owner must be a regular package path: ${relative}`);
+    assert(fs.lstatSync(file).isFile());
+    const bytes = fs.readFileSync(file);
+    const expectedHash = identity.files[relative].sha256;
+    assert.equal(hash(bytes), expectedHash, `Package owner changed: ${relative}`);
+    sources.push({ fileName: file, text: bytes.toString("utf8"), name, expectedHash });
+  }
+  const sourceFiles = parser.parseSourceFiles(sources);
+  const resolveFunctionExport = (sourceFile) => {
+    assert.equal(
+      parser.getSyntacticDiagnostics(sourceFile.fileName).length,
+      0,
+      `Cannot parse package owner: ${sourceFile.fileName}`,
+    );
+    const definitions = sourceFile.statements.filter(
+      (entry) => ts.isFunctionDeclaration(entry) && entry.name?.text === symbol && entry.body,
+    );
+    if (definitions.length === 0) {
+      return undefined;
+    }
+    assert.equal(definitions.length, 1, `Ambiguous local definition: ${symbol}`);
+    return resolveWorkerCellExport(sourceFile.text, symbol);
+  };
+  const matches = [];
+  for (const [index, sourceFile] of sourceFiles.entries()) {
+    if (resolveFunctionExport(sourceFile)) {
+      const { name, expectedHash } = sources[index];
+      matches.push([name, symbol, expectedHash]);
+    }
+  }
+  assert.equal(matches.length, 1, `Expected one installed defining ${prefix} owner`);
+  return matches[0];
+}
+
 function inspectTarball(tarball, runtimeRoot) {
   const bytes = fs.readFileSync(tarball);
   const sha256 = hash(bytes);

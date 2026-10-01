@@ -57,27 +57,6 @@ describe("ensureCliExecutionBootstrap", () => {
     });
   });
 
-  it("forwards prepared pristine migration facts to the config guard", async () => {
-    const runtime = {} as never;
-
-    await ensureCliExecutionBootstrap({
-      runtime,
-      commandPath: ["gateway"],
-      startupPolicy: bootstrapPolicy(["gateway"]),
-      loadPlugins: false,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
-    });
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime,
-      commandPath: ["gateway"],
-      measure: expect.any(Function),
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
-    });
-  });
-
   it("skips config guard without skipping plugin loading", async () => {
     await ensureCliExecutionBootstrap({
       runtime: {} as never,
@@ -116,25 +95,29 @@ describe("ensureCliExecutionBootstrap", () => {
     });
   });
 
+  it("uses validation-only admission for managed worktree commands", async () => {
+    const runtime = {} as never;
+
+    await ensureCliExecutionBootstrap({
+      runtime,
+      commandPath: ["worktrees", "gc"],
+      startupPolicy: bootstrapPolicy(["worktrees", "gc"]),
+      loadPlugins: false,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime,
+      commandPath: ["worktrees", "gc"],
+      measure: expect.any(Function),
+      validateConfigOnly: true,
+    });
+  });
+
   it("loads configured channel plugins with repair enabled for operational channel commands", async () => {
     await ensureCliExecutionBootstrap({
       runtime: {} as never,
       commandPath: ["channels", "send"],
       startupPolicy: bootstrapPolicy(["channels", "send"]),
-      loadPlugins: true,
-    });
-
-    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      routeLogsToStderr: false,
-    });
-  });
-
-  it("loads configured channel plugins without package-manager repair for read-only channel commands", async () => {
-    await ensureCliExecutionBootstrap({
-      runtime: {} as never,
-      commandPath: ["channels", "resolve"],
-      startupPolicy: bootstrapPolicy(["channels", "resolve"]),
       loadPlugins: true,
     });
 

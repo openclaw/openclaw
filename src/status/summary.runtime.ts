@@ -6,10 +6,8 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  readAcpSessionMetaForEntry,
-  resolveSessionStorePathForAcp,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
@@ -71,27 +69,20 @@ function resolveConfiguredStatusModelRef(params: {
   const agentRawModel = params.agentId
     ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
     : undefined;
-  if (agentRawModel) {
-    // Agent-specific primary model wins over global defaults for session status rows.
-    const parsed = resolveStatusModelRefFromRaw({
-      cfg: params.cfg,
-      rawModel: agentRawModel,
-      defaultProvider: params.defaultProvider,
-    });
-    if (parsed) {
-      return parsed;
-    }
-  }
-
-  const defaultsRawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
-  if (defaultsRawModel) {
-    const parsed = resolveStatusModelRefFromRaw({
-      cfg: params.cfg,
-      rawModel: defaultsRawModel,
-      defaultProvider: params.defaultProvider,
-    });
-    if (parsed) {
-      return parsed;
+  // Agent-specific primary model wins over global defaults for session status rows.
+  for (const rawModel of [
+    agentRawModel,
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model),
+  ]) {
+    if (rawModel) {
+      const parsed = resolveStatusModelRefFromRaw({
+        cfg: params.cfg,
+        rawModel,
+        defaultProvider: params.defaultProvider,
+      });
+      if (parsed) {
+        return parsed;
+      }
     }
   }
 
@@ -223,7 +214,7 @@ function resolveSessionRuntime(params: {
   });
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
-    agentId: params.agentId ?? "",
+    agentId: params.agentId ?? acpAgentId,
     provider: params.provider,
     model: params.model,
     sessionKey: acpSessionKey,

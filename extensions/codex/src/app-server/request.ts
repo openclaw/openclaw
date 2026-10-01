@@ -1,14 +1,11 @@
-/**
- * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
- * checks, shared-client leasing, and isolated-client shutdown handling.
- */
+import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
-import type { CodexAppServerClient, CodexCatalogListRequestKey } from "./client.js";
-import type { CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerClient } from "./client.js";
 import type {
   CodexAppServerRequestMethod,
   CodexAppServerRequestParams,
   CodexAppServerRequestResult,
+  CodexGetAccountResponse,
   JsonValue,
 } from "./protocol.js";
 import type {
@@ -129,8 +126,11 @@ type CodexAppServerJsonClientOptions = Pick<
   sessionKey?: string;
   sessionId?: string;
   isolated?: boolean;
+  signal?: AbortSignal;
   assertCurrent?: () => void;
-  catalogListKey?: CodexCatalogListRequestKey;
+  catalogPreview?: true;
+  catalogPreviewCache?: CodexCatalogPreviewCache;
+  catalogRows?: number;
   controlObservation?: CodexControlRequestObservation;
 };
 
@@ -182,6 +182,18 @@ export class CodexAppServerScopedRequestRejectedError extends Error {
   }
 }
 
+function createScopeCleanupError(message: string): CodexAppServerScopedRequestRejectedError {
+  // Every completed scope needs a fresh abort reason, even on success. Skip its
+  // unused stack, restoring capture before abort listeners can create diagnostics.
+  const stackTraceLimit = Error.stackTraceLimit;
+  try {
+    Error.stackTraceLimit = 0;
+    return new CodexAppServerScopedRequestRejectedError(message);
+  } finally {
+    Error.stackTraceLimit = stackTraceLimit;
+  }
+}
+
 // Preserve pre-write rejection identity so callers do not retire a healthy shared client.
 function assertRequestOwnerCurrent(assertCurrent?: () => void): void {
   try {
@@ -203,20 +215,23 @@ const CODEX_USAGE_DEADLINE_RESERVE_MS =
   CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS;
 
 /** Reads rate limits and best-effort account identity from one isolated app-server session. */
-export async function readCodexAppServerUsage(options: {
-  timeoutMs: number;
-  agentDir?: string;
-  authProfileId?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  startOptions?: CodexAppServerStartOptions;
-  preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
-  authRequirement?: CodexAppServerClientOptions["authRequirement"];
-  assertCurrent?: () => void;
-}): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
+export async function readCodexAppServerUsage(
+  options: Pick<
+    CodexAppServerJsonClientOptions,
+    | "signal"
+    | "agentDir"
+    | "config"
+    | "startOptions"
+    | "preparedAuth"
+    | "authRequirement"
+    | "assertCurrent"
+  > & { timeoutMs: number; authProfileId?: string },
+): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
   const deadline = performance.now() + options.timeoutMs;
   return await withCodexAppServerJsonClient(
     {
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
       timeoutMessage: "codex app-server usage read timed out",
       agentDir: options.agentDir,
       ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
@@ -237,19 +252,6 @@ export async function readCodexAppServerUsage(options: {
   );
 }
 
-function extractCodexAccountEmail(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as { account?: unknown; email?: unknown; accountEmail?: unknown };
-  const account =
-    record.account && typeof record.account === "object"
-      ? (record.account as { email?: unknown; accountEmail?: unknown })
-      : record;
-  const email = account.email ?? account.accountEmail;
-  return typeof email === "string" && email.trim() ? email.trim() : undefined;
-}
-
 async function readCodexAccountEmailBestEffort(
   request: CodexAppServerScopedRequest,
   deadline: number,
@@ -261,8 +263,8 @@ async function readCodexAccountEmailBestEffort(
   if (boundMs <= 0) {
     return undefined;
   }
-  const read = request<unknown>({ method: "account/read", requestParams: {} }).then(
-    (account) => extractCodexAccountEmail(account),
+  const read = request<CodexGetAccountResponse>({ method: "account/read", requestParams: {} }).then(
+    ({ account }) => (account?.type === "chatgpt" ? account.email?.trim() || undefined : undefined),
     () => undefined,
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -304,6 +306,11 @@ export async function withCodexAppServerJsonClient<T>(
   let errorPhase: CodexControlRequestPhase | undefined;
   observeControlPhase(params.controlObservation, activePhase);
   const timeoutController = new AbortController();
+  const abort = () => timeoutController.abort(params.signal?.reason);
+  params.signal?.addEventListener("abort", abort, { once: true });
+  if (params.signal?.aborted) {
+    abort();
+  }
   const deadline =
     Number.isFinite(timeoutMs) && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
   const isPastDeadline = () => deadline !== undefined && performance.now() >= deadline;
@@ -321,6 +328,7 @@ export async function withCodexAppServerJsonClient<T>(
   };
 
   try {
+    throwIfAbandoned();
     return await withAbortableTimeout({
       signal: timeoutController.signal,
       timeoutMs,
@@ -374,11 +382,9 @@ export async function withCodexAppServerJsonClient<T>(
             activePhase = "prepare";
             observeControlPhase(params.controlObservation, activePhase);
             assertCurrent();
-            const scopedRequest: CodexAppServerScopedRequest = async <R>(request: {
-              method: string;
-              requestParams?: unknown;
-              assertCurrent?: () => void;
-            }) => {
+            const scopedRequest: CodexAppServerScopedRequest = async <R>(
+              request: Parameters<CodexAppServerScopedRequest>[0],
+            ) => {
               activePhase = "prepare";
               observeControlPhase(params.controlObservation, activePhase);
               const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
@@ -402,7 +408,13 @@ export async function withCodexAppServerJsonClient<T>(
                 timeoutMs: remainingTimeoutMs(),
                 signal: timeoutController.signal,
                 ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
-                ...(params.catalogListKey ? { catalogListKey: params.catalogListKey } : {}),
+                ...(params.catalogPreview
+                  ? {
+                      catalogPreview: true as const,
+                      catalogPreviewCache: params.catalogPreviewCache,
+                      catalogRows: params.catalogRows,
+                    }
+                  : {}),
                 assertCurrent: () => {
                   assertCurrent();
                   request.assertCurrent?.();
@@ -480,8 +492,9 @@ export async function withCodexAppServerJsonClient<T>(
     }
     throw error;
   } finally {
+    params.signal?.removeEventListener("abort", abort);
     // `withTimeout` only stops awaiting. Abort the shared operation before its
     // timeout becomes observable so no delayed acquire can issue a request or retry.
-    timeoutController.abort(new CodexAppServerScopedRequestRejectedError(timeoutMessage));
+    timeoutController.abort(createScopeCleanupError(timeoutMessage));
   }
 }

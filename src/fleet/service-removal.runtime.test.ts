@@ -1,17 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
-import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
+import { cellAuthSecretDir } from "./cell-profile.js";
 import { getFleetCell, reserveFleetCell } from "./registry.js";
 import { createFleetService as createFleetServiceRuntime } from "./service.runtime.js";
+import {
+  createContainerMock,
+  fleetLabels,
+  runningInspection,
+  setFleetSuiteRoot,
+  TEST_ATTEMPT_ID,
+} from "./service.runtime.test-helpers.js";
 
 type FleetServiceOptions = NonNullable<Parameters<typeof createFleetServiceRuntime>[0]>;
 
 let root: string;
-const TEST_ATTEMPT_ID = "22222222222222222222222222222222";
 
 function createFleetService(options: FleetServiceOptions = {}) {
   return createFleetServiceRuntime({
@@ -21,144 +29,6 @@ function createFleetService(options: FleetServiceOptions = {}) {
   });
 }
 
-function fleetLabels(tenant = "acme", attemptId = TEST_ATTEMPT_ID): Record<string, string> {
-  return {
-    "openclaw.fleet.tenant": tenant,
-    "openclaw.fleet.owner": cellOwnerId(path.join(root, "fleet", "cells", tenant)),
-    "openclaw.fleet.attempt": attemptId,
-    "openclaw.fleet.env-keys": "FEATURE",
-  };
-}
-
-function runningInspection(
-  overrides: Partial<Extract<FleetContainerInspectResult, { kind: "ok" }>> = {},
-): Extract<FleetContainerInspectResult, { kind: "ok" }> {
-  return {
-    kind: "ok",
-    containerId: "container-id",
-    state: "running",
-    running: true,
-    labels: fleetLabels(),
-    environment: {
-      HOME: "/home/node",
-      OPENCLAW_GATEWAY_TOKEN: "old-token",
-      FEATURE: "enabled",
-      NODE_VERSION: "old-image-default",
-    },
-    imageId: "sha256:old-image-id",
-    memory: "2147483648",
-    cpus: "2",
-    pidsLimit: 512,
-    storageOpt: {},
-    capDrop: ["ALL"],
-    effectiveCaps: undefined,
-    securityOpt: ["no-new-privileges"],
-    init: true,
-    restartPolicy: "unless-stopped",
-    portBindings: [{ containerPort: "18789/tcp", hostIp: "127.0.0.1", hostPort: "19100" }],
-    ...overrides,
-  };
-}
-
-function createContainerMock(
-  initialInspection: FleetContainerInspectResult = {
-    kind: "missing",
-    state: "missing",
-  },
-) {
-  const assertLocal = vi.fn<FleetContainerRuntime["assertLocal"]>(async () => undefined);
-  const inspections = new Map<string, FleetContainerInspectResult>();
-  const removedContainers = new Set<string>();
-  const inspect = vi.fn<FleetContainerRuntime["inspect"]>(async (_runtime, name) =>
-    removedContainers.has(name)
-      ? { kind: "missing", state: "missing" }
-      : (inspections.get(name) ?? initialInspection),
-  );
-  const networks = new Map<
-    string,
-    Extract<Awaited<ReturnType<FleetContainerRuntime["inspectNetwork"]>>, { kind: "ok" }>
-  >();
-  const inspectNetwork = vi.fn<FleetContainerRuntime["inspectNetwork"]>(
-    async (_runtime, name) => networks.get(name) ?? { kind: "missing" },
-  );
-  const isDockerRootless = vi.fn<FleetContainerRuntime["isDockerRootless"]>(async () => false);
-  const run = vi.fn<FleetContainerRuntime["run"]>(async (profile, start) => {
-    removedContainers.delete(profile.containerName);
-    inspections.set(
-      profile.containerName,
-      runningInspection({
-        state: start ? "running" : "created",
-        running: start,
-        labels: fleetLabels(profile.tenantId, profile.attemptId),
-        environment: { ...profile.environment },
-        containerId: `container-${profile.attemptId}`,
-        imageId: `sha256:${profile.attemptId}`,
-        memory: profile.memory,
-        cpus: profile.cpus,
-        pidsLimit: profile.pidsLimit,
-      }),
-    );
-  });
-  const pull = vi.fn<FleetContainerRuntime["pull"]>(async () => undefined);
-  const createNetwork = vi.fn<FleetContainerRuntime["createNetwork"]>(
-    async (_runtime, name, labels, options) => {
-      networks.set(name, {
-        kind: "ok",
-        labels: { ...labels },
-        attachedContainers: [],
-        internal: options.internal,
-      });
-    },
-  );
-  const removeNetwork = vi.fn<FleetContainerRuntime["removeNetwork"]>(async (_runtime, name) => {
-    networks.delete(name);
-  });
-  const start = vi.fn<FleetContainerRuntime["start"]>(async (_runtime, name) => {
-    const current = await inspect("docker", name);
-    if (current.kind === "ok") {
-      inspections.set(name, { ...current, state: "running", running: true });
-    }
-  });
-  const stop = vi.fn<FleetContainerRuntime["stop"]>(async () => undefined);
-  const restart = vi.fn<FleetContainerRuntime["restart"]>(async () => undefined);
-  const logs = vi.fn<FleetContainerRuntime["logs"]>(async () => undefined);
-  const remove = vi.fn<FleetContainerRuntime["remove"]>(async (_runtime, name) => {
-    inspections.delete(name);
-    removedContainers.add(name);
-    inspect.mockResolvedValue({ kind: "missing", state: "missing" });
-  });
-  return {
-    runtime: {
-      assertLocal,
-      inspect,
-      inspectNetwork,
-      isDockerRootless,
-      run,
-      pull,
-      createNetwork,
-      removeNetwork,
-      start,
-      stop,
-      restart,
-      logs,
-      remove,
-    },
-    assertLocal,
-    inspect,
-    inspectNetwork,
-    isDockerRootless,
-    run,
-    pull,
-    createNetwork,
-    removeNetwork,
-    start,
-    stop,
-    restart,
-    logs,
-    remove,
-  };
-}
-
 describe("fleet service filesystem and removal", () => {
   let env: NodeJS.ProcessEnv;
 
@@ -166,10 +36,12 @@ describe("fleet service filesystem and removal", () => {
 
   beforeEach(async () => {
     root = await tempRoot.setup();
+    setFleetSuiteRoot(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: root };
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await tempRoot.cleanup();
   });
@@ -218,7 +90,7 @@ describe("fleet service filesystem and removal", () => {
     const outside = path.join(root, "outside-cell");
     await fs.mkdir(cellsRoot, { recursive: true });
     await fs.mkdir(outside);
-    reserveFleetCell(env, {
+    await reserveFleetCell(env, {
       tenantId: "escape",
       createdAtMs: 1000,
       image: "ghcr.io/openclaw/openclaw:latest",
@@ -232,7 +104,7 @@ describe("fleet service filesystem and removal", () => {
       service.remove({ tenant: "escape", purgeData: true, force: true }),
     ).rejects.toThrow(/outside its fleet-owned directory/iu);
     expect(containers.inspect).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "escape")).toBeDefined();
+    expect(await getFleetCell(env, "escape")).toBeDefined();
     await expect(fs.stat(outside)).resolves.toBeDefined();
   });
 
@@ -253,7 +125,7 @@ describe("fleet service filesystem and removal", () => {
 
     expect(containers.inspect).not.toHaveBeenCalled();
     await expect(fs.stat(path.join(betaDir, "openclaw.json"))).resolves.toBeDefined();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 
   it("refuses a tenant-controlled config symlink during recreate", async () => {
@@ -283,7 +155,7 @@ describe("fleet service filesystem and removal", () => {
 
     expect(containers.run).toHaveBeenCalledTimes(runCount + 1);
     expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.readFile(betaConfig, "utf8")).resolves.toBe(betaBefore);
   });
 
@@ -302,7 +174,7 @@ describe("fleet service filesystem and removal", () => {
     ).rejects.toThrow(/expected KEY=VAL/iu);
 
     expect(containers.run).toHaveBeenCalledTimes(runCount);
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.readFile(configPath, "utf8")).resolves.toBe(configBefore);
   });
 
@@ -318,7 +190,7 @@ describe("fleet service filesystem and removal", () => {
 
     expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
     expect(containers.removeNetwork).toHaveBeenCalledWith("docker", "openclaw-cell-acme-net");
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.stat(path.join(root, "fleet", "cells", "acme"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -348,13 +220,13 @@ describe("fleet service filesystem and removal", () => {
     await expect(service.remove({ tenant: "acme", purgeData: true, force: true })).rejects.toThrow(
       /still in use/iu,
     );
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
     await expect(fs.stat(path.join(root, "fleet", "cells", "acme"))).resolves.toBeDefined();
 
     await expect(
       service.remove({ tenant: "acme", purgeData: true, force: true }),
     ).resolves.toMatchObject({ tenant: "acme", dataPurged: true });
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("finishes purge when one exact tenant directory is already missing", async () => {
@@ -367,7 +239,7 @@ describe("fleet service filesystem and removal", () => {
       { tenant: "acme", action: "rm", dataPurged: true },
     );
 
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.stat(cellAuthSecretDir(root, "acme"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -394,7 +266,7 @@ describe("fleet service filesystem and removal", () => {
     );
     expect(containers.remove).not.toHaveBeenCalled();
     expect(containers.removeNetwork).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 
   it("removes the ownership-validated generation, not whatever holds the cell name", async () => {
@@ -420,7 +292,7 @@ describe("fleet service filesystem and removal", () => {
 
     expect(live).toEqual(new Set(["foreign-id"]));
     expect(containers.removeNetwork).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 
   it("refuses removal before mutation when an unexpected network peer is attached", async () => {
@@ -439,6 +311,6 @@ describe("fleet service filesystem and removal", () => {
     await expect(service.remove({ tenant: "acme" })).rejects.toThrow(/unexpected containers/iu);
     expect(containers.remove).not.toHaveBeenCalled();
     expect(containers.removeNetwork).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 });

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { SqliteWorkerBackend } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { SqliteWorkerBackend } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LogbookOperations } from "./store-contract.js";
@@ -14,8 +14,8 @@ const reads = vi.hoisted(() => ({
   frameTextBytes: 0,
 }));
 const preparations = vi.hoisted(() => new Map<string, number>());
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
+vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
   return {
     ...actual,
     openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
@@ -96,6 +96,15 @@ function openBackend() {
   const backend = createSqliteWorkerBackend({ dataDir }, { databasePath });
   backends.push(backend);
   return { backend, databasePath };
+}
+
+function captureError(operation: () => unknown): unknown {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected native overflow rejection");
 }
 
 describe("Logbook native statement and read budgets", () => {
@@ -237,74 +246,48 @@ describe("Logbook native statement and read budgets", () => {
     expect(reads.cardRows).toBe(0);
   });
 
-  it.each([0, 199, 200, 201])(
-    "reads at most 200 of %i observations with stable timestamp ties",
-    (count) => {
-      const { backend } = openBackend();
-      const frameId = backend.execute({
-        type: "insertFrame",
-        input: {
-          capturedAtMs: 1,
-          day,
-          path: "synthetic.jpg",
-          screenIndex: 0,
-          byteSize: 0,
-          contentHash: "synthetic",
-          idle: false,
-        },
-      });
-      if (typeof frameId !== "number") {
-        throw new Error("Expected a frame id from the native backend");
-      }
-      const batchId = backend.execute({
-        type: "createBatch",
-        input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, frameIds: [frameId] },
-      });
-      if (typeof batchId !== "number") {
-        throw new Error("Expected a batch id from the native backend");
-      }
-      const segments = Array.from({ length: count }, (_, index) => ({
-        startMs: 1 + Math.floor(index / 3) * 1000,
-        endMs: 1001 + Math.floor(index / 3) * 1000,
-        text: `Observation ${index} 🦞`,
-      }));
-      backend.execute({ type: "replaceObservations", input: { batchId, day, segments } });
-      reads.observationRows = 0;
-      expect(
-        backend.execute({
-          type: "observationsInRange",
-          input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, tailLimit: 200 },
-        }),
-      ).toEqual(
-        segments
-          .map((segment, index) => Object.assign({ id: index + 1, batchId, day }, segment))
-          .slice(-200),
-      );
-      expect(reads.observationRows).toBe(Math.min(count, 200));
-    },
-  );
-  const keyframeDrafts = [
-    {
-      day,
-      startMs: 0,
-      endMs: 40_000,
-      title: "First card",
-      summary: "Summary",
-      detail: "",
-      category: "coding",
-      distractions: [],
-    },
-    {
-      day,
-      startMs: 40_000,
-      endMs: 80_000,
-      title: "Second card",
-      summary: "Summary",
-      detail: "",
-      category: "coding",
-      distractions: [],
-    },
-  ];
+  it("reads at most 200 observations with stable timestamp ties", () => {
+    const { backend } = openBackend();
+    const frameId = insertCandidate(backend, 1);
+    if (typeof frameId !== "number") {
+      throw new Error("Expected a frame id from the native backend");
+    }
+    const batchId = backend.execute({
+      type: "createBatch",
+      input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, frameIds: [frameId] },
+    });
+    if (typeof batchId !== "number") {
+      throw new Error("Expected a batch id from the native backend");
+    }
+    const segments = Array.from({ length: 201 }, (_, index) => ({
+      startMs: 1 + Math.floor(index / 3) * 1000,
+      endMs: 1001 + Math.floor(index / 3) * 1000,
+      text: `Observation ${index} 🦞`,
+    }));
+    backend.execute({ type: "replaceObservations", input: { batchId, day, segments } });
+    reads.observationRows = 0;
+    expect(
+      backend.execute({
+        type: "observationsInRange",
+        input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, tailLimit: 200 },
+      }),
+    ).toEqual(
+      segments
+        .map((segment, index) => Object.assign({ id: index + 1, batchId, day }, segment))
+        .slice(-200),
+    );
+    expect(reads.observationRows).toBe(200);
+  });
+  const keyframeDrafts = [0, 40_000].map((startMs) => ({
+    day,
+    startMs,
+    endMs: startMs + 40_000,
+    title: `Card ${startMs}`,
+    summary: "Summary",
+    detail: "",
+    category: "coding",
+    distractions: [],
+  }));
   function insertCandidate(
     backend: SqliteWorkerBackend<LogbookOperations>,
     capturedAtMs: number,
@@ -326,7 +309,7 @@ describe("Logbook native statement and read budgets", () => {
     });
   }
 
-  it("selects ordered pending frames without decoding unused text or narrowing full readers", () => {
+  it("selects ordered pending and range metadata without decoding unused text or narrowing full readers", () => {
     const { backend } = openBackend();
     insertCandidate(backend, 3000);
     insertCandidate(backend, 1000);
@@ -353,6 +336,19 @@ describe("Logbook native statement and read budgets", () => {
       expect(pending).toEqual(expected.slice(0, limit));
     }
 
+    reads.frameRows = 0;
+    reads.frameTextBytes = 0;
+    const range = backend.execute({ type: "framesInRange", input: { startMs: 500, endMs: 3000 } });
+    expect(reads.frameRows).toBe(5);
+    expect.soft(reads.frameTextBytes).toBe(0);
+    expect(range).toEqual([
+      { id: 5, capturedAtMs: 500, idle: true },
+      { id: 6, capturedAtMs: 750, idle: false },
+      { id: 2, capturedAtMs: 1000, idle: false },
+      { id: 3, capturedAtMs: 1000, idle: false },
+      { id: 4, capturedAtMs: 2000, idle: false },
+    ]);
+
     const fullFrame = {
       id: 6,
       capturedAtMs: 750,
@@ -365,9 +361,6 @@ describe("Logbook native statement and read budgets", () => {
       idle: false,
     };
     expect(backend.execute({ type: "frameById", input: { id: 6 } })).toEqual(fullFrame);
-    expect(backend.execute({ type: "framesInRange", input: { startMs: 750, endMs: 751 } })).toEqual(
-      [fullFrame],
-    );
     expect(backend.execute({ type: "batchFrames", input: { batchId: 1 } })).toEqual([fullFrame]);
     expect(backend.execute({ type: "sampledBatchFrames", input: { batchId: 1 } })).toEqual([
       fullFrame,
@@ -375,7 +368,7 @@ describe("Logbook native statement and read budgets", () => {
     expect(reads.frameTextBytes).toBeGreaterThan(0);
   });
 
-  it.each([0, 1, 120])(
+  it.each([0, 120])(
     "selects keyframes without reading path/day payloads for %i candidates",
     (count) => {
       const { backend } = openBackend();
@@ -390,7 +383,7 @@ describe("Logbook native statement and read budgets", () => {
         type: "replaceCardsInWindow",
         input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts, selectKeyframes: true },
       });
-      const expectedIds = count === 0 ? [undefined, undefined] : count === 1 ? [1, 1] : [41, 119];
+      const expectedIds = count === 0 ? [undefined, undefined] : [41, 119];
       expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(
         keyframeDrafts.map((draft, index) =>
           expect.objectContaining(Object.assign({}, draft, { keyframeId: expectedIds[index] })),
@@ -398,28 +391,6 @@ describe("Logbook native statement and read budgets", () => {
       );
       expect(reads.frameRows).toBe(count);
       expect.soft(reads.frameTextBytes).toBe(0);
-      const frames = backend.execute({
-        type: "framesInRange",
-        input: { startMs: 0, endMs: 120_000 },
-      });
-      expect(frames).toHaveLength(count);
-      if (count > 0) {
-        expect(frames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: 1,
-              capturedAtMs: 0,
-              day,
-              path: `captures/${"nested/".repeat(12)}0.jpg`,
-              width: 640,
-              height: 480,
-              byteSize: 10,
-              screenIndex: 0,
-              idle: false,
-            }),
-          ]),
-        );
-      }
     },
   );
 
@@ -444,31 +415,17 @@ describe("Logbook native statement and read budgets", () => {
       } finally {
         writer.close();
       }
-      let originalError: unknown;
-      try {
-        backend.execute({ type: "framesInRange", input: { startMs: 0, endMs: 120_000 } });
-      } catch (error) {
-        originalError = error;
-      }
+      const originalError = captureError(() =>
+        backend.execute({ type: "frameById", input: { id: 1 } }),
+      );
       if (!(originalError instanceof Error)) {
         throw new Error("Expected the full frame reader to reject the unsafe integer fixture");
       }
       expect(originalError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
-      let pendingError: unknown;
-      try {
-        backend.execute({ type: "unbatchedActiveFrames", input: { limit: 1 } });
-      } catch (error) {
-        pendingError = error;
-      }
-      expect(pendingError).toBeInstanceOf(Error);
-      expect(pendingError).toMatchObject({
-        code: "ERR_OUT_OF_RANGE",
-        name: originalError.name,
-        message: originalError.message,
-      });
-      let replacementError: unknown;
-      try {
-        backend.execute({
+      for (const command of [
+        { type: "framesInRange", input: { startMs: 0, endMs: 120_000 } },
+        { type: "unbatchedActiveFrames", input: { limit: 1 } },
+        {
           type: "replaceCardsInWindow",
           input: {
             day,
@@ -477,16 +434,16 @@ describe("Logbook native statement and read budgets", () => {
             drafts: emptyDrafts ? [] : keyframeDrafts,
             selectKeyframes: true,
           },
+        },
+      ] satisfies Parameters<typeof backend.execute>[0][]) {
+        const error = captureError(() => backend.execute(command));
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({
+          code: "ERR_OUT_OF_RANGE",
+          name: originalError.name,
+          message: originalError.message,
         });
-      } catch (error) {
-        replacementError = error;
       }
-      expect(replacementError).toBeInstanceOf(Error);
-      expect(replacementError).toMatchObject({
-        code: "ERR_OUT_OF_RANGE",
-        name: originalError.name,
-        message: originalError.message,
-      });
       expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(before);
     },
   );

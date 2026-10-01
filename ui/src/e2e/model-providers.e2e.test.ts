@@ -1,11 +1,10 @@
 // Control UI tests cover the Models settings page against a mocked Gateway.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Locator } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   defaultControlUiFeatureMethods,
@@ -18,7 +17,12 @@ import {
   pickerValue as modelPickerValue,
   selectPickerValue as selectModelPicker,
 } from "../test-helpers/select-picker-e2e.ts";
-import { requestRaw, resolveConfigMutation } from "./model-providers.test-support.ts";
+import {
+  requestRaw,
+  resolveConfigMutation,
+  providerConfig,
+  createProviderProofCapture,
+} from "./model-providers.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -29,6 +33,7 @@ const NOW = Date.now();
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 let artifactDir: string;
 let readinessArtifactDir: string;
+const captureProviderProof = createProviderProofCapture(() => artifactDir);
 beforeEach(() => {
   if (recordVisuals) {
     artifactDir = createControlUiE2eArtifactDir("model-providers");
@@ -41,18 +46,6 @@ const googleInputValue = ["e2e", "google", "key"].join("-");
 
 let browser: Browser;
 let server: ControlUiE2eServer;
-
-function providerConfig(value: string): { apiKey: string } {
-  return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
-}
-
-async function captureProviderProof(fileName: string, content: Locator): Promise<void> {
-  const page = content.page();
-  await writeFile(
-    path.join(artifactDir, fileName),
-    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
-  );
-}
 
 describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   beforeAll(async () => {
@@ -78,7 +71,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     const page = await context.newPage();
     const config = { auth: { profiles: { "openai:chatgpt": { provider: "openai" } } } };
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "models.probe", "openclaw.setup.detect"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "config.get",
+        "config.patch",
+        "models.probe",
+        "openclaw.setup.detect",
+      ],
       methodResponses: {
         "config.get": {
           config,
@@ -197,8 +197,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(2);
 
-      await readiness.getByRole("button", { name: "Connect a verified AI model" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await readiness.getByRole("button", { name: "Connect provider", exact: true }).click();
+      await page.locator("[data-models-login-search]").waitFor();
+      expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
     } finally {
       await context.close();
     }
@@ -213,9 +214,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       featureMethods: defaultControlUiFeatureMethods.filter((method) => method !== "config.patch"),
-      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+        { id: "gpt-4.1", name: "GPT-4.1", provider: "openai", available: true },
+      ],
       methodResponses: {
         "config.get": {
           config,
@@ -235,15 +239,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const defaults = page.locator(".model-providers__defaults");
       await defaults.waitFor();
-      await expect
-        .poll(() =>
-          defaults
-            .locator(".picker-select__trigger, wa-radio-group")
-            .evaluateAll((controls) =>
-              controls.every((control) => control.hasAttribute("disabled")),
-            ),
-        )
-        .toBe(true);
+      const picker = defaults.locator("openclaw-select-picker").first();
+      await picker.locator(".picker-select__trigger").click();
+      const otherModel = picker.locator('[role="option"][data-value="openai/gpt-4.1"]');
+      expect(await otherModel.getAttribute("aria-disabled")).toBe("true");
+      await otherModel.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       await expect.poll(() => page.getByText(/operator\.admin access/u).count()).toBe(0);
       if (recordVisuals) {
         await page.screenshot({
@@ -421,14 +422,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         if (!heading || !actions || !updated || !refresh || !icon) {
           throw new Error("expected configured-provider header controls");
         }
-        const headingBounds = heading.getBoundingClientRect();
-        const actionsBounds = actions.getBoundingClientRect();
+        const updatedBounds = updated.getBoundingClientRect();
+        const refreshBounds = refresh.getBoundingClientRect();
         const iconBounds = icon.getBoundingClientRect();
         return {
           centerOffset: Math.abs(
-            headingBounds.top +
-              headingBounds.height / 2 -
-              (actionsBounds.top + actionsBounds.height / 2),
+            updatedBounds.top +
+              updatedBounds.height / 2 -
+              (refreshBounds.top + refreshBounds.height / 2),
           ),
           iconWidth: iconBounds.width,
           textSize: Number.parseFloat(getComputedStyle(updated).fontSize),
@@ -723,11 +724,10 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(await modelPickerValue(primary)).toBe("anthropic/claude-sonnet-4-5");
       expect(await page.locator(".model-providers__defaults .callout.success").count()).toBe(0);
 
-      const addSection = page.locator(".settings-section", {
-        has: page.getByRole("heading", { name: "Add provider" }),
-      });
-      await addSection.getByRole("button", { name: "Add provider", exact: true }).click();
-      await addSection.getByLabel("Provider").selectOption("google");
+      await page.locator("[data-models-connect]").click();
+      await page.locator('[data-models-login-provider="google"]').click();
+      await page.locator("[data-models-login-api-key]").click();
+      const addSection = page.locator("[data-models-key-dialog]");
       await addSection.getByLabel("API key").fill(googleInputValue);
       const savedConfig = {
         ...updatedDefaultsConfig,

@@ -1,4 +1,3 @@
-// QA Lab WhatsApp driver lifecycle and no-reply waits.
 import {
   startWhatsAppQaDriverSession,
   type WhatsAppQaDriverObservedMessage,
@@ -51,21 +50,23 @@ export async function waitForNoWhatsAppReply(
   await new Promise((resolve) => {
     setTimeout(resolve, params.windowMs);
   });
-  const noReplyTarget =
-    params.target === "group"
-      ? ({
-          groupJid: params.groupJid,
-          target: "group",
-        } satisfies WhatsAppQaNoReplyTarget)
-      : ({
-          target: "dm",
-        } satisfies WhatsAppQaNoReplyTarget);
-  const unexpectedReply = findUnexpectedWhatsAppNoReplyMessage({
-    allowQuietWindowMessage: params.allowQuietWindowMessage,
-    messages: params.driver.getObservedMessages(),
-    observedAfter: params.observedAfter,
-    sutPhoneE164: params.sutPhoneE164,
-    ...noReplyTarget,
+  const observedAfterMs = params.observedAfter.getTime();
+  const unexpectedReply = params.driver.getObservedMessages().find((message) => {
+    if (new Date(message.observedAt).getTime() <= observedAfterMs) {
+      return false;
+    }
+    const fromExpectedSut = isWhatsAppScenarioSutMessage(message, {
+      observedAfter: params.observedAfter,
+      sutPhoneE164: params.sutPhoneE164,
+      target: params.target === "group" ? params.groupJid : "",
+      targetKind: params.target,
+    });
+    const missingGroupSender =
+      params.target === "group" && message.fromJid === params.groupJid && !message.fromPhoneE164;
+    if (!fromExpectedSut && !missingGroupSender) {
+      return false;
+    }
+    return !(params.allowQuietWindowMessage?.(message) ?? false);
   });
   if (unexpectedReply) {
     throw new Error("unexpected WhatsApp reply observed in quiet scenario");
@@ -118,10 +119,9 @@ export async function waitForDistinctWhatsAppSutMessages(
   }
 
   while (matched.size < params.matchers.length) {
-    const next = await waitForWhatsAppScenarioSutMessage(context, {
+    const next = await waitForScenarioObservedMessage(context, {
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs,
-      targetKind: "group",
       match: (message) => {
         const key = messageKey(message);
         return (
@@ -138,69 +138,9 @@ export async function waitForDistinctWhatsAppSutMessages(
     .map(([, message]) => message);
 }
 
-export async function waitForWhatsAppScenarioSutMessage(
-  context: WhatsAppQaMessageScenarioContext,
-  params: {
-    diagnosticChecks?: Array<{
-      label: string;
-      match: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    }>;
-    match: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    observedAfter: Date;
-    targetKind: "dm" | "group";
-    timeoutMs?: number;
-  },
-) {
-  return await waitForScenarioObservedMessage(context, {
-    diagnosticChecks: params.diagnosticChecks,
-    observedAfter: params.observedAfter,
-    timeoutMs: params.timeoutMs,
-    expectedSender: (message) =>
-      isWhatsAppScenarioSutMessage(message, {
-        observedAfter: params.observedAfter,
-        sutPhoneE164: context.sutPhoneE164,
-        target: context.target,
-        targetKind: params.targetKind,
-      }),
-    match: params.match,
-  });
-}
-
-function findUnexpectedWhatsAppNoReplyMessage(
-  params: {
-    allowQuietWindowMessage?: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    messages: WhatsAppQaDriverObservedMessage[];
-    observedAfter: Date;
-    sutPhoneE164: string;
-  } & WhatsAppQaNoReplyTarget,
-): WhatsAppQaDriverObservedMessage | undefined {
-  const observedAfterMs = params.observedAfter.getTime();
-  return params.messages.find((message) => {
-    if (new Date(message.observedAt).getTime() <= observedAfterMs) {
-      return false;
-    }
-    const fromExpectedSut = isWhatsAppScenarioSutMessage(message, {
-      observedAfter: params.observedAfter,
-      sutPhoneE164: params.sutPhoneE164,
-      target: params.target === "group" ? params.groupJid : "",
-      targetKind: params.target,
-    });
-    const missingGroupSender =
-      params.target === "group" && message.fromJid === params.groupJid && !message.fromPhoneE164;
-    if (!fromExpectedSut && !missingGroupSender) {
-      return false;
-    }
-    return !(params.allowQuietWindowMessage?.(message) ?? false);
-  });
-}
-
 export function isTransientWhatsAppQaDriverError(error: unknown) {
-  const message = formatErrorMessage(error);
-  return (
-    /\bConnection Closed\b/iu.test(message) ||
-    /\bconflict\b/iu.test(message) ||
-    /\bpending notifications\b/iu.test(message) ||
-    /\bsession conflict\b/iu.test(message)
+  return /\b(?:Connection Closed|conflict|pending notifications)\b/iu.test(
+    formatErrorMessage(error),
   );
 }
 
@@ -213,10 +153,7 @@ export async function restartWhatsAppQaDriverSession(params: {
 }
 
 export async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }) {
-  for (const attempt of Array.from(
-    { length: WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS },
-    (_, index) => index + 1,
-  )) {
+  for (let attempt = 1; attempt <= WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS; attempt += 1) {
     try {
       return await startWhatsAppQaDriverSession({
         authDir: params.authDir,

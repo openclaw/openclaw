@@ -23,6 +23,8 @@ type CatalogResponse = {
 
 it("shares a held catalog RPC after 128 distinct catalog results settle", async ({ signal }) => {
   const token = "catalog-sharing-proof-token";
+  const heldCatalogId = "catalog-sharing-proof";
+  const completedCatalogId = "catalog-completed-proof";
   const started = createDeferredCore();
   const release = createDeferredCore();
   const host: SessionCatalogHost = {
@@ -37,36 +39,38 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
   const requests: Promise<CatalogResponse>[] = [];
   let heldCalls = 0;
   const registry = createEmptyPluginRegistry();
-  registry.sessionCatalogs.push({
-    pluginId: "catalog-sharing-proof",
-    source: "test",
-    provider: {
-      id: "catalog-sharing-proof",
-      label: "Catalog sharing proof",
-      audience: "gateway-operators",
-      supportsProcessHomeIsolation: true,
-      list: ({ search, onHost }) => {
-        const operation = (async () => {
-          if (search === "held") {
-            heldCalls += 1;
-            publishHeldHosts.push(() => onHost?.(host));
-            started.resolve();
-            await release.promise;
-            return [host];
-          }
-          if (search === "after-follower") {
-            for (const publish of publishHeldHosts) {
-              publish();
+  for (const catalogId of [heldCatalogId, completedCatalogId]) {
+    registry.sessionCatalogs.push({
+      pluginId: "catalog-sharing-proof",
+      source: "test",
+      provider: {
+        id: catalogId,
+        label: "Catalog sharing proof",
+        audience: "gateway-operators",
+        supportsProcessHomeIsolation: true,
+        list: ({ search, onHost }) => {
+          const operation = (async () => {
+            if (search === "held") {
+              heldCalls += 1;
+              publishHeldHosts.push(() => onHost?.(host));
+              started.resolve();
+              await release.promise;
+              return [host];
             }
-          }
-          return [];
-        })();
-        providerRuns.push(operation);
-        return operation;
+            if (search === "after-follower") {
+              for (const publish of publishHeldHosts) {
+                publish();
+              }
+            }
+            return [];
+          })();
+          providerRuns.push(operation);
+          return operation;
+        },
+        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
       },
-      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-    },
-  });
+    });
+  }
   setTestPluginRegistry(registry);
   const unblock = () => release.resolve();
   signal.addEventListener("abort", unblock, { once: true });
@@ -81,7 +85,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     ws = await gateway.openWs();
     await connectOk(ws, { token, scopes: ["operator.admin"] });
     const socket = ws;
-    const request = (search: string, progressId?: string) => {
+    const request = (catalogId: string, search: string, progressId?: string) => {
       const id = `catalog-${requests.length}`;
       const response = onceMessage<CatalogResponse>(
         socket,
@@ -93,12 +97,12 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
           type: "req",
           id,
           method: "sessions.catalog.list",
-          params: { catalogId: "catalog-sharing-proof", search, progressId },
+          params: { catalogId, search, progressId },
         }),
       );
       return response;
     };
-    const leader = request("held", "leader-progress");
+    const leader = request(heldCatalogId, "held", "leader-progress");
     await Promise.race([
       started.promise,
       leader.then(() => {
@@ -106,9 +110,9 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
       }),
     ]);
     for (let index = 0; index < 128; index += 1) {
-      expect(await request(`completed-${index}`)).toMatchObject({
+      expect(await request(completedCatalogId, `completed-${index}`)).toMatchObject({
         ok: true,
-        payload: { catalogs: [{ id: "catalog-sharing-proof", hosts: [] }] },
+        payload: { catalogs: [{ id: completedCatalogId, hosts: [] }] },
       });
     }
     followerHost = onceMessage(
@@ -118,23 +122,26 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
         frame.event === "sessions.catalog.host" &&
         frame.payload?.progressId === "follower-progress",
     );
-    const follower = request("held", "follower-progress");
-    const [barrier, progress] = await Promise.all([request("after-follower"), followerHost]);
+    const follower = request(heldCatalogId, "held", "follower-progress");
+    const [barrier, progress] = await Promise.all([
+      request(completedCatalogId, "after-follower"),
+      followerHost,
+    ]);
     expect(barrier).toMatchObject({
       ok: true,
-      payload: { catalogs: [{ id: "catalog-sharing-proof", hosts: [] }] },
+      payload: { catalogs: [{ id: completedCatalogId, hosts: [] }] },
     });
     expect(progress).toMatchObject({
       payload: {
         progressId: "follower-progress",
-        catalog: { id: "catalog-sharing-proof", hosts: [host] },
+        catalog: { id: heldCatalogId, hosts: [host] },
       },
     });
     unblock();
     for (const response of await Promise.all([leader, follower])) {
       expect(response).toMatchObject({
         ok: true,
-        payload: { catalogs: [{ id: "catalog-sharing-proof", hosts: [host] }] },
+        payload: { catalogs: [{ id: heldCatalogId, hosts: [host] }] },
       });
     }
     expect(heldCalls).toBe(1);

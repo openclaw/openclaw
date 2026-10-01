@@ -1,8 +1,12 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
+import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
+import { recordModelFallbackStop } from "../../model-fallback-stop.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
 type Params = Parameters<typeof handleEmbeddedPromptFailure>[0];
@@ -68,6 +72,48 @@ function makeParams(
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it("records local profile absence without an HTTP status in the fallback trace", async () => {
+    const code = "selected_auth_profile_unavailable";
+    const message = 'Selected auth profile "openai:work" was not found in OpenClaw.';
+    const params = makeParams({
+      promptError: Object.assign(new Error(message), { code }),
+      failover: {
+        advanceAuthProfile: vi.fn(async () => false),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      },
+    });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toMatchObject({
+      code,
+      message,
+      status: undefined,
+    });
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({ result: "fallback_model", reason: "auth", stage: "prompt" }),
+    ]);
+    expect(params.traceAttempts[0]).not.toHaveProperty("status");
+  });
+
+  it.each(["401 invalid API key", "Reasoning is mandatory for this endpoint"])(
+    "does not recover a recorded terminal failure despite provider-shaped text: %s",
+    async (message) => {
+      const committed = Object.freeze(new Error(message));
+      recordModelFallbackStop(committed);
+      const failure = new Error("metadata view unavailable", { cause: committed });
+      const params = makeParams({ promptError: failure });
+
+      await expect(handleEmbeddedPromptFailure(params)).rejects.toBe(failure);
+
+      expect(params.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+      expect(params.suspendForFailure).not.toHaveBeenCalled();
+      expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(params.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+      expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(params.attemptedThinking).toEqual(new Set());
+      expect(params.traceAttempts).toEqual([]);
+    },
+  );
+
   it.each([false, true])(
     "keeps account-restricted model errors on the model-failure path with fallback=%s",
     async (fallbackConfigured) => {
@@ -327,5 +373,58 @@ describe("handleEmbeddedPromptFailure", () => {
     }
 
     await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
+  });
+
+  it("keeps a live SessionManager transcript-validation error off shared credential health", async () => {
+    let promptError: unknown;
+    try {
+      await SessionManager.inMemory("/tmp").appendModelChange("", "");
+    } catch (error) {
+      promptError = error;
+    }
+    expect(promptError).toBeInstanceOf(Error);
+    expect(promptError).toHaveProperty("message", "Invalid session transcript entry: model_change");
+
+    const params = makeParams({
+      promptError,
+      provider: "openrouter",
+      modelId: "gemini-2.5-flash",
+      activeErrorContext: { provider: "openrouter", model: "gemini-2.5-flash" },
+      failover: {
+        resolveAuthProfileFailureReason: (reason, opts) =>
+          resolveAuthProfileFailureReason({
+            failoverReason: reason,
+            providerStarted: opts?.providerStarted,
+            transientRateLimit: opts?.transientRateLimit,
+            policy: "shared",
+          }),
+        advanceAuthProfile: vi.fn(async () => false),
+      },
+    });
+
+    const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+    expect(error).toBe(promptError);
+    expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({
+        provider: "openrouter",
+        model: "gemini-2.5-flash",
+        result: "surface_error",
+        reason: "format",
+        stage: "prompt",
+      }),
+    ]);
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: error,
+        sessionCtx: { ChatType: "direct" },
+        resolvedVerboseLevel: "off",
+      }),
+    ).toMatchObject({
+      text: "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
+      isError: true,
+    });
   });
 });

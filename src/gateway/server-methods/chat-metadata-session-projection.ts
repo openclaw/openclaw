@@ -1,5 +1,5 @@
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
@@ -26,12 +26,6 @@ export type ChatMetadataProjectionFacts = {
   modelCatalog: ModelCatalogSnapshot;
 };
 
-export type PreparedAgentProjection<T = ChatMetadataResult> = {
-  modelCatalog: ModelCatalogEntry[];
-  read: () => T;
-  isCurrent: () => boolean;
-};
-
 export async function prepareChatMetadataModelProjection(params: {
   context: GatewayModelCatalogContext;
   facts: ChatMetadataProjectionFacts;
@@ -41,7 +35,11 @@ export async function prepareChatMetadataModelProjection(params: {
   profileProvider?: string;
   runtimeOverride?: string;
   assertCurrent?: () => void;
-}): Promise<PreparedAgentProjection<{ models?: ModelChoice[] }>> {
+}): Promise<{
+  modelCatalog: ModelCatalogEntry[];
+  read: () => { models?: ModelChoice[] };
+  isCurrent: () => boolean;
+}> {
   const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
   // A draft has no persisted session grant: recheck its live human before hydrating private auth.
@@ -55,6 +53,7 @@ export async function prepareChatMetadataModelProjection(params: {
     snapshot,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
+    accountCatalog: params.facts.owner.accountCatalog,
     requesterProfileId: params.requesterProfileId,
     // The owner records usable auth at discovery; metadata must share that exact generation fact.
     preparedRuntimeAuthModes: params.facts.authModes,

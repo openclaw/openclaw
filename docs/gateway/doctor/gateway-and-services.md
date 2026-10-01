@@ -9,11 +9,21 @@ read_when:
 Checks 8-17 cover gateway service migrations, device pairing, security
 warnings, workspace status, gateway auth and health, and supervisors.
 
+A valid `openclaw-install-owner.json` marker at the package root identifies an
+app-owned installation. Doctor reports the host's name and update hint and leaves
+package, bundled UI, and runtime replacement to that host, including when a
+standalone CLI inspects an app-owned Gateway service. For OpenClaw.app payloads,
+update the app to update the Gateway; normal config and state checks still apply.
+
 ## Checks 8-17
 
 <AccordionGroup>
   <Accordion title="8. Gateway service migrations and cleanup hints">
     Run `openclaw doctor` interactively to review legacy gateway services (launchd/systemd/schtasks) and confirm supported cleanup. Explicit repair maintenance skips this separate cleanup flow. Removal is reported separately from installation; use `openclaw gateway install` when the intended native service is missing. Doctor can also scan for extra gateway-like services and print cleanup hints. Profile-named OpenClaw gateway services are considered first-class and are not flagged as "extra."
+
+    Cleanup previews include only legacy launchd services and recognized legacy systemd unit names in the user scope. Legacy Windows services, unrecognized Linux unit names, and services in the system scope remain findings for manual review.
+
+    Windows extra-service hints use read-only `schtasks /Query` inspection. Node hosts remain visible in diagnostics; discovery alone does not make a service a removal target. Unreadable unrelated Scheduled Tasks do not block discovery or test runtime preparation, regardless of whether they are running. Selected tasks, recognized OpenClaw launchers, and custom aliases with OpenClaw launcher content still report incomplete inspection when their command cannot be verified.
 
     Linux user-service cleanup preserves the unit file if stopping or disabling the service fails. An interrupted status probe does not permit file-only removal; that fallback is reported only when `systemctl` is unavailable.
 
@@ -33,6 +43,7 @@ warnings, workspace status, gateway auth and health, and supervisors.
     - paired tokens whose scopes drift outside the approved pairing baseline
     - local cached device-token entries for the current machine that predate a gateway-side token rotation or carry stale scope metadata
     - a retired `identity/device-auth.json` file that is still present and blocks inspection of locally cached tokens, including in remote Gateway mode; stop the Gateway and run `openclaw doctor --fix` to finish migration or cleanup
+    - retired `devices/*.json` and `nodes/*.json` stores on a local Gateway; stop the Gateway and run `openclaw doctor --fix` to import device approvals before node capabilities and archive the originals. Existing SQLite records take precedence; unreadable sources remain in place for repair.
 
     Doctor does not auto-approve pair requests or auto-rotate device tokens. It prints the exact next steps:
 
@@ -57,14 +68,14 @@ warnings, workspace status, gateway auth and health, and supervisors.
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
   </Accordion>
-  <Accordion title="11. Workspace status (skills, plugins, and TaskFlows)">
+  <a id="11-workspace-status-skills-plugins-and-taskflows" />
+  <Accordion title="11. Workspace status (skills and plugins)">
     Doctor prints problems and actions for the default agent, not healthy-state inventory:
 
     - **Skills**: lists allowed but unusable skill names; use `openclaw skills check` for requirement details and full counts.
     - **Plugins**: reports only errored plugin IDs; use `openclaw plugins list` for loaded, imported, disabled, and bundle-plugin inventory.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
-    - **TaskFlow recovery**: surfaces suspicious managed TaskFlows that need manual inspection or cancellation.
     - **Claude CLI**: reports only binary, authentication, profile, workspace, or project-directory problems; healthy probe details are omitted.
 
   </Accordion>
@@ -138,6 +149,27 @@ warnings, workspace status, gateway auth and health, and supervisors.
     and must not be copied into shared reports. The redacted name identifies the
     entry but is not its literal Git config key.
 
+    Git can retain `objects/pack/*.promisor` sidecars after the remote keys are
+    unset and the repository is repacked. The sidecars are harmless: OpenClaw
+    determines partial-clone repair availability from Git configuration, not from
+    those files. To remove the stale on-disk label, first confirm that the missing
+    object command below prints nothing and that `git fsck` succeeds:
+
+    ```bash
+    git rev-list --objects --missing=print --all | sed -n 's/^?//p'
+    git fsck --full
+    ```
+
+    Then move only the sidecars out of the pack directory, keeping them as a
+    recoverable backup until the next successful Doctor and managed-worktree run:
+
+    ```bash
+    promisor_marker_backup="$(git rev-parse --git-dir)/retired-promisor-markers"
+    mkdir -p "$promisor_marker_backup"
+    find "$(git rev-parse --git-dir)/objects/pack" -maxdepth 1 -type f -name '*.promisor' -exec mv -n {} "$promisor_marker_backup"/ \;
+    git fsck --full
+    ```
+
     Rerun Doctor afterward. If history or objects remain missing, recover them
     from the original repository. Origin may not contain local-only snapshots;
     see [snapshot restore](/concepts/managed-worktrees#snapshots-cleanup-and-restore).
@@ -148,7 +180,8 @@ warnings, workspace status, gateway auth and health, and supervisors.
 
     - If token mode needs a token and no token source exists, doctor offers to generate one.
     - If `gateway.auth.token` is SecretRef-managed but unavailable, doctor warns and does not overwrite it with plaintext.
-    - `openclaw doctor --generate-gateway-token` forces generation only when no token SecretRef is configured.
+    - `openclaw doctor --generate-gateway-token` reports when a healthy SecretRef makes generation unnecessary.
+    - If a store-backed token resolves to a known redaction placeholder, `--fix` or `--generate-gateway-token` verifies a database backup and regenerates that entry while preserving its SecretRef. Doctor prints the backup path and restart/re-pair guidance. Other external secrets require replacement at their source.
 
   </Accordion>
   <Accordion title="12b. Read-only SecretRef-aware repairs">
@@ -160,7 +193,7 @@ warnings, workspace status, gateway auth and health, and supervisors.
 
   </Accordion>
   <Accordion title="13. Gateway health check + restart">
-    Guided Doctor runs a health check and can offer recovery for a local Gateway, subject to service ownership and confirmation. A failed remote health check does not trigger local service recovery, even when the remote URL is a loopback SSH tunnel. Check the remote connection and recover the Gateway on its host. Explicit repair maintenance only resumes the matching service it stopped. A loaded, enabled macOS job between respawns is not treated as an intentionally stopped service.
+    Guided Doctor runs a health check and can offer recovery for a local Gateway, subject to service ownership and confirmation. A failed remote health check does not trigger local service recovery, even when the remote URL is a loopback SSH tunnel. Check the remote connection and recover the Gateway on its host. Explicit repair maintenance resumes the matching service it stopped. After successful standalone `openclaw doctor --fix`, it also starts and verifies an already-stopped managed Gateway whose service targets the current installation. Update-time Doctor leaves activation with the updater. A loaded, enabled macOS job between respawns is not treated as an intentionally stopped service.
   </Accordion>
   <Accordion title="13b. Memory search readiness">
     Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured provider:
@@ -173,23 +206,28 @@ warnings, workspace status, gateway auth and health, and supervisors.
 
     Use `openclaw memory status --deep` to verify embedding readiness at runtime.
 
-    Embedding-provider readiness is a health check, not a state migration. Gateway startup does not initialize memory embedding providers during migration preflight, so auth-profile SecretRefs can activate afterward. If embeddings remain unavailable, memory sync preserves an existing semantic index rather than replacing it with FTS-only data. Migration warnings allow degraded startup; errors that leave required state unsafe to read still block Gateway readiness.
+    Embedding-provider readiness is a health check, not a state migration. Gateway startup does not initialize memory embedding providers during readiness checks, so auth-profile SecretRefs can activate afterward. If embeddings remain unavailable, memory sync preserves an existing semantic index rather than replacing it with FTS-only data. Readiness warnings allow degraded startup; errors that leave required state unsafe to read still block Gateway readiness.
 
   </Accordion>
   <Accordion title="14. Channel status warnings">
     If the gateway is healthy, doctor runs a channel status probe and reports warnings with suggested fixes.
   </Accordion>
   <Accordion title="15. Supervisor config audit + repair">
-    Plain Doctor inspection checks the installed supervisor config (launchd/systemd/schtasks) for missing or outdated defaults (for example systemd network-online dependencies and restart delay) and can offer an interactive repair. Explicit repair maintenance preserves the installed service definition and skips this separate service-rewrite phase. Run `openclaw gateway install --force` from the intended installation to replace the launcher and managed environment.
+    Plain Doctor inspection checks the installed supervisor config (launchd/systemd/schtasks) for missing or outdated defaults (for example systemd network-online dependencies and restart delay) and can offer an interactive repair. Explicit repair maintenance skips this separate service-rewrite phase, but reconciles [eligible installation drift in a previously running service](/cli/doctor/recovery#gateway-service-recovery) through the native installer. Stopped services keep their launcher and stop state. Run `openclaw gateway install --force` from the intended installation to replace the launcher and managed environment.
+
+    Before a Linux maintenance stop, policy refresh backs up outdated OpenClaw unit settings, confirms `daemon-reload`, and verifies that the effective `TimeoutStopSec` covers drain and cleanup (currently 330 seconds). This refresh preserves the launcher, environment, and operator drop-ins; an offline service can receive it without being started. A short or unknown resident shutdown budget uses bounded lifecycle drain before stopping. At the update deadline, reported write custody refuses the stop with its owner phase; remaining admitted turns or unknown custody produce a warning and the stop proceeds.
 
     Notes:
 
+    - An older installation marker does not make custom native settings safe to replace. Automatic reconciliation repairs only missing or recognized released defaults; unrecognized base-unit, LaunchAgent, or Scheduled Task settings remain unchanged with a diagnostic. Linux operator drop-ins are never rewritten.
+    - On macOS, reconciliation recognizes the complete default PATH generated by the 2026.4.29 installer and refreshes it to the current service PATH after backing up the definition. Added custom entries and other unrecognized values remain protected, including edits inside the generated environment file. If optional user-bin directories have changed since installation, the old PATH remains unrecognized rather than being discarded.
+    - If backup or migration subprocess cleanup cannot confirm that owned work stopped, its write-custody blocker remains for the Gateway process lifetime, even after the command reports an error. Automatic maintenance does not clear it on a timeout. The deployment owner must independently verify that the work stopped before replacing the Gateway process.
     - `openclaw doctor` prompts before rewriting supervisor config. `openclaw doctor --force` alone remains guided: it allows aggressive repair choices but still requires interactive consent for an eligible service rewrite. It does not enter repair maintenance or bypass ownership and write-access checks.
-    - `openclaw doctor --yes` accepts default non-service repair prompts and enters maintenance while preserving the service definition.
-    - `openclaw doctor --fix` applies recommended repairs without prompts (`--repair` is an alias; `--yes` also enters repair maintenance). It stops the matching managed Gateway before plugin or mutable-state inspection, verifies repairs, and restarts the same service once, even when no changes are needed. It preserves the installed service definition, leaves services confirmed offline before maintenance offline, and refuses to stop an ancestor Gateway. Plain inspection does not enter maintenance, and custom state directories do not adopt native services.
+    - `openclaw doctor --yes` accepts default non-service repair prompts and enters maintenance under the policy-refresh and installation-drift rules above.
+    - `openclaw doctor --fix` applies recommended repairs without prompts (`--repair` is an alias; `--yes` also enters repair maintenance). It stops the matching managed Gateway before plugin or mutable-state inspection, verifies repairs, and restarts the same service once, even when no changes are needed. It reconciles eligible installation drift, preserves launchers and stop state for services confirmed offline before maintenance, and refuses to stop an ancestor Gateway. Plain inspection does not enter maintenance, and custom state directories do not adopt native services.
     - Explicit repair refuses unavailable service inspection and unmatched services that may still run. After their owner stops them and the native manager confirms they are offline, Doctor repairs its selected state without changing or starting those services. A disabled systemd unit can still be restarting; Doctor checks runtime state as well as installation state.
     - An updater's explicit Gateway activation policy leaves stop/restart ownership with the updater. Doctor still requires native proof that the service is offline; a live `update --no-restart` repair fails without stopping or restarting it. Stop the service through its owner before retrying the update. Older update parents without that policy retain ordinary Doctor maintenance.
-    - `openclaw doctor --fix --force` preserves the service definition too. Use `openclaw gateway install --force` to request a rewrite; operator-owned systemd drop-ins remain unchanged.
+    - `openclaw doctor --fix --force` uses the same policy-refresh and installation-drift rules. Use `openclaw gateway install --force` to request a rewrite; operator-owned systemd drop-ins remain unchanged.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. Have the deployment owner stop the Gateway, run Doctor as the state-owning account, then restart through that owner. The policy skips native maintenance inspection and service mutations, including install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup. It keeps Gateway/state coordinators and agent-database lease checks, reports service health, and runs non-service repairs. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
     - Doctor and `gateway status --deep` name unavailable launchd domains, missing systemd user-session buses, and native probe access denial separately. Linux guidance covers `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, and `dbus-user-session`; externally supervised deployments receive the existing policy above. See [Gateway and service recovery](/cli/doctor/recovery).
     - Within a live Linux service inspection, OpenClaw can retain the authenticated user manager's private connection if its session bus stops. Typed command and runtime reads continue only for that original manager and unit. A missing initial manager identity or a replaced manager remains unavailable; OpenClaw does not start the bus or select another manager. This read-only recovery does not change service start/stop authority.
@@ -211,7 +249,18 @@ warnings, workspace status, gateway auth and health, and supervisors.
     Doctor inspects the service runtime (PID, last exit status) and warns when the service is installed but not actually running. It also checks for port collisions on the gateway port (default `18789`) and reports likely causes (gateway already running, SSH tunnel).
   </Accordion>
   <Accordion title="17. Gateway runtime best practices">
-    Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Repairs migrate unsupported Bun services to Node. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
+    Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Supported Bun services, whether recorded or pinned, are retained. A pinned runtime is never migrated. Only an unpinned, unsupported Bun is offered migration to a supported system Node, with interactive approval. Update-driven Doctor runs never migrate the runtime. If no supported Node is available, the service stays on Bun and Doctor warns. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor can offer to migrate an unpinned version-managed Node to a supported system Node install (Homebrew/apt/choco).
+
+    When reinstalling an existing but unloaded service without a wrapper or runtime
+    pin, Doctor defaults its runtime picker to the supported recorded Node or Bun.
+    Keeping that runtime retains its executable without creating a pin; choosing
+    the other runtime selects a new executable. An unavailable or unsupported
+    recorded runtime falls back to the fresh-install default of Node, or the running supported Bun without creating a pin when no supported Node is found and no explicit runtime, pin, or wrapper is set.
+
+    Doctor uses that same suggestion for its non-interactive runtime fallback.
+    Choosing Node explicitly still fails before installation if no supported Node
+    is available; it does not silently substitute Bun. This does not change when
+    Doctor requires confirmation to install a service.
 
     Explicit runtime-path pins are retained during service repair.
     Doctor still checks their runtime capabilities, but does not migrate a valid

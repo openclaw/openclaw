@@ -3,7 +3,9 @@ import { once } from "node:events";
 import { text } from "node:stream/consumers";
 import { describe, expect, it } from "vitest";
 
-describe.skipIf(process.platform === "win32")("spawn broker proxy lifetime", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker proxy lifetime", () => {
   it("releases completed command proxies after the host closes", async () => {
     const source = `
       import {createSpawnBrokerHost} from ${JSON.stringify(new URL("./host.js", import.meta.url).href)};

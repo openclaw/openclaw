@@ -31,13 +31,13 @@ const fixture = vi.hoisted(() => ({
     invoke: vi.fn(),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => undefined),
     updateGatewayConnection: vi.fn(),
     close: vi.fn(),
   },
 }));
 vi.mock("node:readline", () => ({ createInterface: () => fixture.input }));
-vi.mock("./startup-state-migrations.js", () => ({ runStartupMigrations: async () => {} }));
+vi.mock("./startup-state-readiness.js", () => ({ ensureNodeHostStateReady: () => {} }));
 vi.mock("./config.js", () => ({ loadNodeHostConfig: fixture.loadConfig }));
 vi.mock("./runtime.js", () => ({ prepareNodeHostRuntime: fixture.prepare }));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
@@ -80,6 +80,7 @@ function startWorkerFixture(
   workerHostingDisabledReason?: string,
   options: {
     prepared?: PreparedRuntime;
+    desktopSharingEnabled?: boolean;
     initialWorkerCapacity?: { total: number; available: number } | null;
     gatewayResponse?: (
       message: Record<string, unknown>,
@@ -133,7 +134,7 @@ function startWorkerFixture(
   const previousExitCode = process.exitCode;
   const interruptListeners = process.listeners("SIGINT");
   const terminateListeners = process.listeners("SIGTERM");
-  const running = runNodeHostWorker();
+  const running = runNodeHostWorker({ desktopSharingEnabled: options.desktopSharingEnabled });
   return {
     input,
     messages,
@@ -236,6 +237,43 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     await stop();
   }
 });
+
+it.each([
+  { desktopSharingEnabled: undefined, configured: false, enabled: false },
+  { desktopSharingEnabled: false, configured: true, enabled: false },
+  { desktopSharingEnabled: true, configured: false, enabled: true },
+])(
+  "publishes the app's desktop preference in the worker manifest: $desktopSharingEnabled",
+  async ({ desktopSharingEnabled, configured, enabled }) => {
+    fixture.prepare.mockImplementationOnce(async (params) => ({
+      ...(await prepareNodeHostRuntime({
+        ...params,
+        config: { desktop: { host: { enabled: configured } } },
+        env: {},
+        platform: "darwin",
+      })),
+      start: fixture.start,
+    }));
+    const { messages, stop } = startWorkerFixture(false, undefined, { desktopSharingEnabled });
+    try {
+      await vi.waitFor(() =>
+        expect(messages.some((message) => message.type === "ready")).toBe(true),
+      );
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          type: "ready",
+          manifest: expect.objectContaining({
+            commands: enabled
+              ? expect.arrayContaining(["desktop.stream"])
+              : expect.not.arrayContaining(["desktop.stream"]),
+          }),
+        }),
+      );
+    } finally {
+      await stop();
+    }
+  },
+);
 
 it("publishes hosting through the app route and retires it on disconnect", async () => {
   const { input, messages, stderr, stop } = startWorkerFixture();
@@ -587,6 +625,7 @@ it("publishes host stats through the native bridge only while connected", async 
         connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
       }),
     );
+    await vi.advanceTimersByTimeAsync(0);
     expect(publications()).toHaveLength(1);
     expect(publications()[0]).toMatchObject({
       type: "node-event",

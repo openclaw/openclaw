@@ -7,7 +7,9 @@ import { createServiceChildRelayAdapter } from "../supervisor/service-child-rela
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
 
-describe.skipIf(process.platform === "win32")("brokered process lifecycle owners", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("brokered process lifecycle owners", () => {
   let broker: ReturnType<typeof createSpawnBrokerHost>;
   beforeAll(async () => {
     broker = createSpawnBrokerHost();
@@ -58,8 +60,10 @@ describe.skipIf(process.platform === "win32")("brokered process lifecycle owners
           Number(
             (await runExec("ps", ["-o", "ppid=", "-p", String(pid)], { logOutput: false })).stdout,
           );
-        const relayPid = await parentOf(anchorPid);
-        expect(await parentOf(relayPid)).toBe(broker.pid);
+        // Native custody is brokered directly; process-group custody adds a relay.
+        const brokerChildPid =
+          adapter.treeOwnership === "linux-subreaper" ? anchorPid : await parentOf(anchorPid);
+        expect(await parentOf(brokerChildPid)).toBe(broker.pid);
         adapter.kill("SIGTERM");
         await withTestTimeout(extinction, 10_000, "brokered relay cleanup did not complete");
         expect(extinct).toBe(true);

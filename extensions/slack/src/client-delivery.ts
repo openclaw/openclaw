@@ -293,6 +293,7 @@ export async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
   auditContext?: string;
 }): Promise<string> {
   const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
@@ -340,6 +341,7 @@ export async function uploadSlackFile(params: {
         // the same budget to Undici's connect, header, and body phases.
         timeoutMs: SLACK_UPLOAD_POST_TIMEOUT_MS,
         signal: uploadTimeoutSignal,
+        beforeRequest: params.assertDirectAdapterHandoff,
         requireHttps: uploadTransport.requireHttps,
         policy: uploadTransport.policy,
         capture: false,

@@ -23,8 +23,9 @@
     "providers": {
       "openrouter": {
         "openRouter": {
-          "passthroughProviderModel": true
+          "provider": "openrouter"
         },
+        "modelsDev": false,
         "liteLLM": false
       }
     }

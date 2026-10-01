@@ -4,6 +4,34 @@ import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { assistantTextMessage } from "./session-history-fixtures.test-support.js";
 
 describe("internal history display projection", () => {
+  it("hides attributed child coordination without hiding peer messages or parent answers", () => {
+    const child = {
+      role: "user",
+      content: "Root accepted the unchanged child report.",
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:visible-worker",
+        sourceTool: "  sessions_send\t",
+        sourceRole: "subagent",
+      },
+    };
+    const peer = {
+      ...child,
+      content: "Independent peer result.",
+      provenance: { ...child.provenance, sourceRole: undefined },
+    };
+    const answer = assistantTextMessage("The regression is fixed; release checks remain.", 4);
+    expect(
+      projectChatDisplayMessages([
+        child,
+        { ...assistantTextMessage("No state changed.", 2), display: false },
+        peer,
+        answer,
+      ]),
+    ).toEqual([expect.objectContaining({ role: "assistant", content: peer.content }), answer]);
+    expect(child.content).toBe("Root accepted the unchanged child report.");
+  });
+
   it("strips legacy internal envelopes before exposing history", () => {
     const projected = projectChatDisplayMessages([
       {

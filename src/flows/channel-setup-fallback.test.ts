@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { setupChannels } from "./channel-setup.js";
 import {
   externalChatSetupEntries,
@@ -13,138 +14,36 @@ import {
   makeSetupPlugin,
 } from "./channel-setup.test-helpers.js";
 
-type ResolveChannelSetupEntries =
-  typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
-type CollectChannelStatus = typeof import("./channel-setup.status.js").collectChannelStatus;
-type EnsureChannelSetupPluginInstalled =
-  typeof import("../commands/channel-setup/plugin-install.js").ensureChannelSetupPluginInstalled;
-type LoadChannelSetupPluginRegistrySnapshotForChannel =
-  typeof import("../commands/channel-setup/plugin-install.js").loadChannelSetupPluginRegistrySnapshotForChannel;
+const {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  listTrustedChannelPluginCatalogEntries,
+  getTrustedChannelPluginCatalogEntry,
+  getChannelSetupPlugin,
+  listChannelSetupPlugins,
+  listActiveChannelSetupPlugins,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+  ensureChannelSetupPluginInstalled,
+  resolveChannelSetupEntries,
+  collectChannelStatus,
+  resolveChannelSetupWorkspaceDir,
+  isChannelConfigured,
+  factories,
+} = await vi.hoisted(async () => {
+  const { createChannelSetupMocks } = await import("./channel-setup.test-helpers.js");
+  return createChannelSetupMocks();
+});
 
-const resolveAgentWorkspaceDir = vi.hoisted(() =>
-  vi.fn((_cfg?: unknown, _agentId?: unknown) => "/tmp/openclaw-workspace"),
-);
-const resolveDefaultAgentId = vi.hoisted(() => vi.fn((_cfg?: unknown) => "default"));
-const listTrustedChannelPluginCatalogEntries = vi.hoisted(() =>
-  vi.fn((_params?: unknown): unknown[] => []),
-);
-const getTrustedChannelPluginCatalogEntry = vi.hoisted(() =>
-  vi.fn((_channelId: string, _params?: unknown): unknown => undefined),
-);
-const getChannelSetupPlugin = vi.hoisted(() => vi.fn((_channel?: unknown) => undefined));
-const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
-const listActiveChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
-const loadChannelSetupPluginRegistrySnapshotForChannel = vi.hoisted(() =>
-  vi.fn((_params: Parameters<LoadChannelSetupPluginRegistrySnapshotForChannel>[0]) =>
-    makePluginRegistry(),
-  ),
-);
-const ensureChannelSetupPluginInstalled = vi.hoisted(() =>
-  vi.fn(async ({ cfg, entry }: Parameters<EnsureChannelSetupPluginInstalled>[0]) => ({
-    cfg,
-    installed: true,
-    pluginId: entry?.pluginId,
-    status: "installed",
-  })),
-);
-const resolveChannelSetupEntries = vi.hoisted(() =>
-  vi.fn(
-    (
-      _params: Parameters<ResolveChannelSetupEntries>[0],
-    ): ReturnType<ResolveChannelSetupEntries> => ({
-      entries: [],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    }),
-  ),
-);
-const collectChannelStatus = vi.hoisted(() =>
-  vi.fn(async (_params: Parameters<CollectChannelStatus>[0]) => ({
-    installedPlugins: [],
-    catalogEntries: [],
-    installedCatalogEntries: [],
-    statusByChannel: new Map(),
-    statusLines: [],
-  })),
-);
-const resolveChannelSetupWorkspaceDir = vi.hoisted(() =>
-  vi.fn((_cfg?: unknown) => "/tmp/openclaw-workspace"),
-);
-const isChannelConfigured = vi.hoisted(() => vi.fn((_cfg?: unknown, _channel?: unknown) => true));
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: (cfg?: unknown, agentId?: unknown) =>
-    resolveAgentWorkspaceDir(cfg, agentId),
-  resolveDefaultAgentId: (cfg?: unknown) => resolveDefaultAgentId(cfg),
-}));
-
-vi.mock("../channels/plugins/setup-registry.js", () => ({
-  getChannelSetupPlugin: (channel?: unknown) => getChannelSetupPlugin(channel),
-  listActiveChannelSetupPlugins: () => listActiveChannelSetupPlugins(),
-  listChannelSetupPlugins: () => listChannelSetupPlugins(),
-}));
-
-vi.mock("../channels/registry.js", () => ({
-  getChatChannelMeta: (channelId: string) => ({ id: channelId, label: channelId }),
-  listChatChannels: () => [],
-  normalizeAnyChannelId: (channelId?: unknown) =>
-    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
-  normalizeChatChannelId: (channelId?: unknown) =>
-    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
-}));
-
-vi.mock("../commands/channel-setup/discovery.js", () => ({
-  resolveChannelSetupEntries: (params: Parameters<ResolveChannelSetupEntries>[0]) =>
-    resolveChannelSetupEntries(params),
-  shouldShowChannelInSetup: () => true,
-}));
-
-vi.mock("../commands/channel-setup/plugin-install.js", () => ({
-  ensureChannelSetupPluginInstalled: (params: Parameters<EnsureChannelSetupPluginInstalled>[0]) =>
-    ensureChannelSetupPluginInstalled(params),
-  loadChannelSetupPluginRegistrySnapshotForChannel: (
-    params: Parameters<LoadChannelSetupPluginRegistrySnapshotForChannel>[0],
-  ) => loadChannelSetupPluginRegistrySnapshotForChannel(params),
-}));
-
-vi.mock("../commands/channel-setup/registry.js", () => ({
-  resolveChannelSetupWizardAdapterForPlugin: (plugin?: { setupWizard?: unknown }) =>
-    plugin?.setupWizard,
-}));
-
-vi.mock("../commands/channel-setup/trusted-catalog.js", () => ({
-  listTrustedChannelPluginCatalogEntries: (params?: unknown) =>
-    listTrustedChannelPluginCatalogEntries(params),
-  getTrustedChannelPluginCatalogEntry: (channelId: string, params?: unknown) =>
-    getTrustedChannelPluginCatalogEntry(channelId, params),
-}));
-
-vi.mock("../config/channel-configured.js", () => ({
-  isChannelConfigured: (cfg?: unknown, channel?: unknown) => isChannelConfigured(cfg, channel),
-}));
-
-vi.mock("./channel-setup.prompts.js", () => ({
-  maybeConfigureCommandOwner: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => cfg),
-  maybeConfigureDmPolicies: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => cfg),
-  promptConfiguredAction: vi.fn(),
-  promptRemovalAccountId: vi.fn(),
-  formatAccountLabel: vi.fn(),
-}));
-
-vi.mock("./channel-setup.status.js", () => ({
-  collectChannelStatus: (params: Parameters<CollectChannelStatus>[0]) =>
-    collectChannelStatus(params),
-  findBundledSourceForCatalogChannel: vi.fn(() => undefined),
-  noteChannelPrimer: vi.fn(),
-  noteChannelStatus: vi.fn(),
-  resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
-  resolveChannelSelectionNoteLines: vi.fn(() => []),
-  resolveChannelSetupSelectionContributions: vi.fn(() => []),
-  resolveChannelSetupWorkspaceDir: (cfg?: unknown) => resolveChannelSetupWorkspaceDir(cfg),
-  resolveQuickstartDefault: vi.fn(() => undefined),
-}));
+vi.mock("../agents/agent-scope.js", factories.agentScope);
+vi.mock("../channels/plugins/setup-registry.js", factories.setupRegistry);
+vi.mock("../channels/registry.js", factories.channels);
+vi.mock("../commands/channel-setup/discovery.js", factories.discovery);
+vi.mock("../commands/channel-setup/plugin-install.js", factories.pluginInstall);
+vi.mock("../commands/channel-setup/registry.js", factories.registry);
+vi.mock("../commands/channel-setup/trusted-catalog.js", factories.trustedCatalog);
+vi.mock("../config/channel-configured.js", factories.configured);
+vi.mock("./channel-setup.prompts.js", factories.prompts);
+vi.mock("./channel-setup.status.js", factories.status);
 
 const TARGETED_CHANNEL_SETUP_OPTIONS = {
   initialSelection: ["external-chat"],
@@ -170,7 +69,7 @@ function runChannelSetup(
   );
 }
 
-describe("setupChannels catalog fallback plugin reuse", () => {
+describe("setupChannels status and catalog fallback plugin reuse", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
@@ -208,6 +107,23 @@ describe("setupChannels catalog fallback plugin reuse", () => {
       statusLines: [],
     });
     isChannelConfigured.mockReturnValue(true);
+  });
+
+  it("localizes the channel status note title in the setup flow", async () => {
+    const note = vi.fn(async () => undefined);
+    collectChannelStatus.mockResolvedValue({
+      installedPlugins: [],
+      catalogEntries: [],
+      installedCatalogEntries: [],
+      statusByChannel: new Map(),
+      statusLines: ["Discord: configured"],
+    });
+
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, () =>
+      runChannelSetup({}, { note, confirm: vi.fn(async () => false) }),
+    );
+
+    expect(note).toHaveBeenCalledWith("Discord: configured", "频道状态");
   });
 
   it(

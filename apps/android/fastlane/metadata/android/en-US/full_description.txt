@@ -10,6 +10,9 @@ What you can do:
 - Enable device capabilities such as camera, screen, location, and notifications when you choose
 - Receive push wakes and node status updates for connected workflows
 
+Wear OS companion:
+OpenClaw includes a Wear OS companion app. Use the included OpenClaw Tile to open the voice screen or chat on your watch. The watch app requires a paired Android phone running OpenClaw and connected to your OpenClaw Gateway.
+
 OpenClaw is local-first: you control your gateway, keys, configuration, and permissions. Device access is managed by Android permissions and can be enabled only for the capabilities you want to use.
 
 Getting started:

@@ -1,8 +1,3 @@
-/**
- * Channel allowlist matching primitives.
- *
- * Compiles normalized allowlists and records match metadata for diagnostics.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -102,27 +97,13 @@ export function resolveAllowlistMatchSimple(params: {
   senderName?: string | null;
   allowNameMatching?: boolean;
 }): AllowlistMatch<"wildcard" | "id" | "name"> {
-  const allowFrom = compileSimpleAllowlist(params.allowFrom);
-
-  if (allowFrom.set.size === 0) {
-    return { allowed: false };
-  }
-  if (allowFrom.wildcard) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
-
   const senderId = normalizeLowercaseStringOrEmpty(params.senderId);
   const senderName = normalizeOptionalLowercaseString(params.senderName);
-  return resolveAllowlistCandidates({
-    compiledAllowlist: allowFrom,
+  return resolveCompiledAllowlistMatch({
+    compiledAllowlist: compileSimpleAllowlist(params.allowFrom),
     candidates: [
       { value: senderId, source: "id" },
-      ...(params.allowNameMatching === true && senderName
-        ? ([{ value: senderName, source: "name" as const }] satisfies Array<{
-            value?: string;
-            source: "id" | "name";
-          }>)
-        : []),
+      { value: params.allowNameMatching === true ? senderName : undefined, source: "name" },
     ],
   });
 }

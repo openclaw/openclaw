@@ -128,12 +128,22 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
   `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
   `agent_end`, and `before_agent_run`. Bundled plugins are allowed unless this
   option is explicitly `false`.
+- `session_end` remains available as a metadata-only lifecycle hook without
+  that grant. Its bounded `ctx.endedTranscript` reader is available only when
+  the effective conversation-access policy allows it; see the
+  [session lifecycle contract](/plugins/hooks/reference#sessions-and-compaction).
 - `allowPromptInjection: false` blocks `agent_turn_prepare`,
   `before_prompt_build`, `heartbeat_prompt_contribution`, and durable next-turn
   injections. It defaults to allowed, but does not grant conversation access.
   The first two hooks therefore need both permissions.
 - These are specific registration gates, not a sandbox or a universal filter
   for every hook that can see message data. Install only plugins you trust.
+
+Incognito sessions do not dispatch `llm_input` or `llm_output` observations.
+Their `agent_end` hooks still receive run identity, success, and duration for
+cleanup and settlement, but receive empty `messages` and no `error` text.
+Policy, provider, approval, and explicitly invoked tool hooks remain active.
+This boundary does not sandbox plugins or disable native harness telemetry.
 
 A typed handler receives `(event, ctx)`. The event describes the operation;
 the second argument carries hook-specific context. Fields such as

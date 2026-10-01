@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements resolve outbound target behavior.
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -9,23 +8,12 @@ import {
 
 type WhatsAppOutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
-function whatsappAllowFromPolicyError(target: string): Error {
-  return new Error(`Target "${target}" is not listed in the configured WhatsApp allowFrom policy.`);
-}
-
 export function resolveWhatsAppOutboundTarget(params: {
   to: string | null | undefined;
   allowFrom: Array<string | number> | null | undefined;
   mode: string | null | undefined;
 }): WhatsAppOutboundTargetResolution {
   const trimmed = params.to?.trim() ?? "";
-  if (!trimmed) {
-    return {
-      ok: false,
-      error: missingTargetError("WhatsApp", "<E.164|group JID|newsletter JID>"),
-    };
-  }
-
   const normalizedTo = normalizeWhatsAppTarget(trimmed);
   if (!normalizedTo) {
     return {
@@ -43,14 +31,13 @@ export function resolveWhatsAppOutboundTarget(params: {
     .filter((entry) => entry !== "*")
     .map((entry) => normalizeWhatsAppTarget(entry))
     .filter((entry): entry is string => Boolean(entry));
-  if (hasWildcard || allowList.length === 0) {
-    return { ok: true, to: normalizedTo };
-  }
-  if (allowList.includes(normalizedTo)) {
+  if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTo)) {
     return { ok: true, to: normalizedTo };
   }
   return {
     ok: false,
-    error: whatsappAllowFromPolicyError(normalizedTo),
+    error: new Error(
+      `Target "${normalizedTo}" is not listed in the configured WhatsApp allowFrom policy.`,
+    ),
   };
 }

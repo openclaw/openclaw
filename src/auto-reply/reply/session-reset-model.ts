@@ -1,4 +1,3 @@
-/** Applies model override tokens embedded in reset/new command text. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -25,7 +24,6 @@ import {
 } from "./model-selection-directive.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 
-/** Result of applying a reset-message model override. */
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
   cleanedBody?: string;
@@ -94,12 +92,11 @@ async function applySelectionToSession(params: {
     if (persistence.status === "model-selection-locked") {
       throw new ModelSelectionLockedError();
     }
-    const persistedEntry = persistence.entry;
-    appliedEntry = persistedEntry;
+    appliedEntry = persistence.entry;
     selectionApplied = sessionModelOverrideChangesApplied({
       initial: initialSessionEntry,
       next: nextSessionEntry,
-      current: persistedEntry,
+      current: appliedEntry,
     });
   }
   adoptPersistedSessionSnapshot(sessionEntry, appliedEntry);
@@ -145,14 +142,7 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const catalog =
-    params.modelCatalog ??
-    (await loadResetModelCatalog({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-    }));
+  const catalog = params.modelCatalog ?? (await loadResetModelCatalog(params));
   const modelPolicy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
@@ -233,17 +223,11 @@ export async function applyResetModelOverride(params: {
   params.sessionCtx.BodyForCommands = cleanedBody;
 
   const selectionApplied = await applySelectionToSession({
-    cfg: params.cfg,
+    ...params,
     agentDir:
       params.agentDir ??
       resolveAgentDir(params.cfg, params.agentId ?? resolveDefaultAgentId(params.cfg)),
-    defaultProvider: params.defaultProvider,
     selection,
-    sessionEntry: params.sessionEntry,
-    sessionEntryHandle: params.sessionEntryHandle,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
   });
 
   return { selection: selectionApplied ? selection : undefined, cleanedBody };

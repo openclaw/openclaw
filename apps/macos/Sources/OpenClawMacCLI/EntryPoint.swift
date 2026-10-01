@@ -1,10 +1,5 @@
 import Foundation
 
-struct RootCommand: Equatable {
-    var name: String
-    var args: [String]
-}
-
 enum RootCommandAction: Equatable {
     case usage
     case control([String])
@@ -46,29 +41,25 @@ struct OpenClawMacCLI {
     }
 }
 
-func parseRootCommand(_ args: [String]) -> RootCommand? {
-    guard let first = args.first else { return nil }
-    return RootCommand(name: first, args: Array(args.dropFirst()))
-}
-
 func resolveRootCommandAction(_ args: [String]) -> RootCommandAction {
-    guard let command = parseRootCommand(args) else {
+    guard let command = args.first else {
         return .control(args)
     }
 
-    switch command.name {
+    let commandArgs = Array(args.dropFirst())
+    switch command {
     case "status", "primary", "gateway", "--profile", "--json", "--timeout", "--launch", "--no-launch":
         return .control(args)
     case "-h", "--help", "help":
         return .usage
     case "connect":
-        return .connect(command.args)
+        return .connect(commandArgs)
     case "configure-remote":
-        return .configureRemote(command.args)
+        return .configureRemote(commandArgs)
     case "discover":
-        return .discover(command.args)
+        return .discover(commandArgs)
     case "wizard":
-        return .wizard(command.args)
+        return .wizard(commandArgs)
     default:
         return .unknown(exitCode: 1)
     }

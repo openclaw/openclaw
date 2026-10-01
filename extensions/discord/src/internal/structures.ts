@@ -1,4 +1,3 @@
-// Discord plugin module implements structures behavior.
 import type {
   APIChannel,
   APIEmbed,
@@ -9,16 +8,7 @@ import type {
   APIUser,
   MessageType,
 } from "discord-api-types/v10";
-import {
-  createChannelMessage,
-  deleteChannelMessage,
-  editChannelMessage,
-  getChannelMessage,
-  pinChannelMessage,
-  unpinChannelMessage,
-} from "./api.messages.js";
-import { createUserDmChannel } from "./api.users.js";
-import { serializePayload, type MessagePayload } from "./payload.js";
+import { getChannelMessage } from "./api.messages.js";
 import type { RequestClient } from "./rest.js";
 
 type RawOrId<T> = T | string | { id: string; channelId?: string };
@@ -31,16 +21,19 @@ class Base {
   constructor(protected client: StructureClient) {}
 }
 
-export class User<IsPartial extends boolean = false> extends Base {
-  protected rawDataValue: APIUser | null;
+class PartialEntity<Raw extends { id: string }, IsPartial extends boolean> extends Base {
+  protected rawDataValue: Raw | null;
   readonly id: string;
 
-  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIUser) {
+  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : Raw);
+  constructor(client: StructureClient, rawDataOrId: string | Raw) {
     super(client);
     this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
     this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
   }
+}
 
+export class User<IsPartial extends boolean = false> extends PartialEntity<APIUser, IsPartial> {
   get rawData(): Readonly<APIUser> {
     if (!this.rawDataValue) {
       throw new Error("Partial Discord user has no raw data");
@@ -65,56 +58,23 @@ export class User<IsPartial extends boolean = false> extends Base {
   get avatar() {
     return this.rawDataValue?.avatar;
   }
-  get avatarUrl() {
-    return this.avatar ? `https://cdn.discordapp.com/avatars/${this.id}/${this.avatar}.png` : null;
-  }
-  override toString(): string {
-    return `<@${this.id}>`;
-  }
   async fetch(): Promise<User> {
     return this.client.fetchUser(this.id);
   }
-  async createDm() {
-    return await createUserDmChannel(this.client.rest, this.id);
-  }
-  async send(data: MessagePayload): Promise<Message> {
-    const dm = await this.createDm();
-    const message = await createChannelMessage(this.client.rest, dm.id, {
-      body: serializePayload(data),
-    });
-    return new Message(this.client, message);
-  }
 }
 
-export class Role<IsPartial extends boolean = false> extends Base {
-  protected rawDataValue: APIRole | null;
-  readonly id: string;
-  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIRole) {
-    super(client);
-    this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
-    this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
-  }
+export class Role<IsPartial extends boolean = false> extends PartialEntity<APIRole, IsPartial> {
   get name() {
     return this.rawDataValue?.name ?? "";
   }
 }
 
-export class Guild<IsPartial extends boolean = false> extends Base {
-  protected rawDataValue: APIGuild | null;
-  readonly id: string;
-  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIGuild) {
-    super(client);
-    this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
-    this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
-  }
+export class Guild<IsPartial extends boolean = false> extends PartialEntity<APIGuild, IsPartial> {
   get name() {
     return this.rawDataValue?.name ?? "";
   }
   get icon() {
     return this.rawDataValue?.icon;
-  }
-  get iconUrl() {
-    return this.icon ? `https://cdn.discordapp.com/icons/${this.id}/${this.icon}.png` : null;
   }
 }
 
@@ -232,30 +192,6 @@ export class Message<IsPartial extends boolean = false> extends Base {
   async fetch(): Promise<Message> {
     const raw = await getChannelMessage(this.client.rest, this.channelId, this.id);
     return new Message(this.client, raw);
-  }
-  async delete(): Promise<void> {
-    await deleteChannelMessage(this.client.rest, this.channelId, this.id);
-  }
-  async edit(data: MessagePayload): Promise<Message> {
-    const raw = await editChannelMessage(this.client.rest, this.channelId, this.id, {
-      body: serializePayload(data),
-    });
-    return new Message(this.client, raw);
-  }
-  async reply(data: MessagePayload): Promise<Message> {
-    const raw = await createChannelMessage(this.client.rest, this.channelId, {
-      body: {
-        ...serializePayload(data),
-        message_reference: { message_id: this.id, fail_if_not_exists: false },
-      },
-    });
-    return new Message(this.client, raw);
-  }
-  async pin(): Promise<void> {
-    await pinChannelMessage(this.client.rest, this.channelId, this.id);
-  }
-  async unpin(): Promise<void> {
-    await unpinChannelMessage(this.client.rest, this.channelId, this.id);
   }
 }
 

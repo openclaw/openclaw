@@ -12,11 +12,12 @@ import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
   resolveSessionGoalDisplayState,
-  type SessionEntry,
+  type InternalSessionEntry as SessionEntry,
 } from "../config/sessions.js";
+import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import type {
   SessionListActiveRunProjector,
   SessionListRowContext,
@@ -25,40 +26,48 @@ import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-s
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEntry) {
+  // Explicit renames outrank channel metadata and generated titles.
+  const explicitLabel = normalizeOptionalString(entry?.label);
+  if (explicitLabel !== undefined) {
+    return explicitLabel;
+  }
   const parsed = parseGroupKey(key);
-  const parsedAgent = parseAgentSessionKey(key);
-  const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
-  const subject = entry?.subject;
-  const topicName = entry?.topicName;
-  const groupChannel = entry?.groupChannel;
-  const space = entry?.space;
-  const id = parsed?.id;
-  const origin = sessionDeliveryOrigin(entry);
-  const originLabel = origin?.label;
-  const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
-  const groupTitle = isGroupSession
-    ? buildGroupDisplayTitle({ subject, topicName, groupChannel, space })
-    : undefined;
+  const groupTitle = isGroupSession ? buildGroupDisplayTitle(entry ?? {}) : undefined;
+  if (groupTitle !== undefined) {
+    return groupTitle;
+  }
+  const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
+  const id = parsed?.id;
   const compactGroupFallback =
     isGroupSession && channel
       ? buildGroupDisplayName({
           provider: channel,
-          subject,
-          topicName,
-          groupChannel,
-          space,
+          subject: entry?.subject,
+          topicName: entry?.topicName,
+          groupChannel: entry?.groupChannel,
+          space: entry?.space,
           id,
           key,
         })
       : undefined;
   const storedDisplayName =
-    channel === "imessage" &&
-    isGroupSession &&
-    !groupTitle &&
-    entry?.displayName === compactGroupFallback
+    channel === "imessage" && isGroupSession && entry?.displayName === compactGroupFallback
       ? undefined
       : entry?.displayName;
+  const displayName =
+    storedDisplayName ??
+    entry?.autoLabel ??
+    (channel === "imessage" ? undefined : compactGroupFallback);
+  if (displayName !== undefined) {
+    return displayName;
+  }
+  // Dashboard origin labels identify the sender, not the conversation.
+  if (parseAgentSessionKey(key)?.rest.startsWith("dashboard:")) {
+    return undefined;
+  }
+  const origin = sessionDeliveryOrigin(entry);
+  const originLabel = origin?.label;
   const normalizedOriginFrom = normalizeOptionalString(origin?.from);
   const routeIdentityTail = normalizedOriginFrom?.split(":").at(-1);
   const routeIdentityTailIsOpaque =
@@ -71,26 +80,9 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   const originIsGenericGroupFallback =
     channel === "imessage" &&
     isGroupSession &&
-    !groupTitle &&
     id != null &&
     originLabel?.toLowerCase() === `group id:${id.toLowerCase()}`;
-  const readableOriginLabel =
-    originIsRouteIdentity || originIsGenericGroupFallback ? undefined : originLabel;
-  // A user-assigned label is an explicit rename; it must win over stored
-  // channel-derived display names or renames silently vanish on refresh.
-  // Group sessions prefer the human chat title (subject/#channel) over the
-  // stored compact token displayName (e.g. "slack:g-general").
-  const explicitLabel = normalizeOptionalString(entry?.label);
-  const displayName =
-    explicitLabel ??
-    groupTitle ??
-    storedDisplayName ??
-    entry?.autoLabel ??
-    (channel === "imessage" ? undefined : compactGroupFallback) ??
-    // Dashboard origin labels identify the authenticated sender. Using them as
-    // titles leaks account names into the sidebar while the generated title is pending.
-    (isDashboardSession ? undefined : readableOriginLabel);
-  return displayName;
+  return originIsRouteIdentity || originIsGenericGroupFallback ? undefined : originLabel;
 }
 
 export function resolveGatewaySessionKind(key: string, entry?: SessionEntry) {
@@ -105,7 +97,10 @@ export function projectGatewaySessionRunState(params: {
   key: string;
   entry?: SessionEntry;
   now: number;
-  rowContext?: Pick<SessionListRowContext, "subagentRuns">;
+  rowContext?: Pick<
+    SessionListRowContext,
+    "subagentRuns" | "projectedAgentRuns" | "projectedSubagentActivity"
+  >;
 }) {
   const { key, entry, now, rowContext } = params;
   const subagentRuns = rowContext?.subagentRuns ?? buildSubagentSessionListReadIndex(now);
@@ -114,13 +109,36 @@ export function projectGatewaySessionRunState(params: {
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
   const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
+  const hasProjectedRun = (sessionKey: string, sessionId?: string) => {
+    if (!rowContext?.projectedAgentRuns) {
+      return false;
+    }
+    const state = resolveProjectedAgentRunProgressState({
+      sessionKeys: [sessionKey],
+      sessionId,
+      index: rowContext.projectedAgentRuns,
+    });
+    return state !== undefined;
+  };
+  // Follow-up turns retain the child session while owning a different run from its original spawn.
   const hasActiveSubagentRun =
-    liveSubagentRunActive || subagentRuns.countActiveDescendantRuns(key) > 0;
+    liveSubagentRunActive ||
+    subagentRuns.countActiveDescendantRuns(key) > 0 ||
+    ((subagentRun !== null || entry?.spawnedBy !== undefined) &&
+      hasProjectedRun(key, entry?.sessionId)) ||
+    rowContext?.projectedSubagentActivity?.has(key) === true;
   const fields: Pick<
     GatewaySessionRow,
-    "status" | "subagentRunState" | "hasActiveSubagentRun" | "startedAt" | "endedAt" | "runtimeMs"
+    | "status"
+    | "lastRunError"
+    | "subagentRunState"
+    | "hasActiveSubagentRun"
+    | "startedAt"
+    | "endedAt"
+    | "runtimeMs"
   > = {
-    status: entry?.status === "interrupted" ? "failed" : entry?.status,
+    status: entry?.status,
+    lastRunError: entry?.lastRunError,
     subagentRunState: undefined,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     startedAt: entry?.startedAt,
@@ -129,6 +147,7 @@ export function projectGatewaySessionRunState(params: {
   };
   if (subagentRun) {
     const endedAt = subagentRun.execution.endedAt;
+    const subagentStatus = resolveSubagentSessionStatus(subagentRun);
     fields.subagentRunState = liveSubagentRunActive
       ? "active"
       : typeof endedAt === "number" ||
@@ -137,11 +156,27 @@ export function projectGatewaySessionRunState(params: {
         ? "historical"
         : "interrupted";
     fields.status = liveSubagentRunActive
-      ? resolveSubagentSessionStatus(subagentRun)
+      ? subagentStatus
       : fields.status === "running"
         ? undefined
-        : (fields.status ??
-          (typeof endedAt === "number" ? resolveSubagentSessionStatus(subagentRun) : undefined));
+        : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
+    const ownsInterruptedSession =
+      entry?.lifecycleRunId === subagentRun.runId ||
+      (entry?.lifecycleRunId === undefined && entry?.lastRunId === subagentRun.runId) ||
+      (subagentRun.taskRunId !== undefined &&
+        entry?.subagentRecovery?.lastRunId === subagentRun.runId &&
+        entry.lifecycleRunId ===
+          (entry.subagentRecovery.sessionLifecycleRunId ?? subagentRun.taskRunId));
+    if (
+      fields.status === "interrupted" &&
+      subagentStatus === "failed" &&
+      subagentRun.execution.interruptionReason === "gateway-restart" &&
+      ownsInterruptedSession
+    ) {
+      fields.status = "failed";
+      fields.lastRunError ??=
+        "Restart recovery could not reach the parent. Inspect the child session before continuing.";
+    }
     fields.startedAt =
       (liveSubagentRunActive ? undefined : fields.startedAt) ??
       getSubagentSessionStartedAt(subagentRun);

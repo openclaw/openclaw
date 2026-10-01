@@ -1,12 +1,10 @@
-// Builds complete read-only Claw add plans without mutating local state.
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
-import { stableStringify } from "@openclaw/normalization-core";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -16,6 +14,7 @@ import {
   findClawExtensionPackageCollisions,
   planClawExtensions,
 } from "./application-plan.js";
+import { digestClawValue } from "./digest.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -71,23 +70,6 @@ type PendingWorkspaceFileAction = {
   byteLength: number;
   content?: Buffer;
 };
-
-function blockedWorkspaceFileAction(params: {
-  id: string;
-  source: string;
-  target: string;
-  reason: string;
-}): ClawAddPlanAction {
-  return {
-    kind: "workspaceFile",
-    id: params.id,
-    action: "write",
-    target: params.target,
-    source: params.source,
-    blocked: true,
-    reason: params.reason,
-  };
-}
 
 function workspaceSourceErrorCode(
   error: unknown,
@@ -173,12 +155,15 @@ async function inspectWorkspaceFileAction(params: {
     const message = workspaceSourceMessage(code, params.sourcePath);
     const diagnostic = blocker(code, params.manifestPath, message);
     return {
-      action: blockedWorkspaceFileAction({
+      action: {
+        kind: "workspaceFile",
         id: params.id,
+        action: "write",
         target: requestedTarget,
         source: requestedSource,
+        blocked: true,
         reason: diagnostic.message,
-      }),
+      },
       blocker: diagnostic,
     };
   }
@@ -331,10 +316,7 @@ export async function buildClawAddPlan(params: {
       sourceRoot,
       source,
       workspace,
-      sourcePath: fileParams.sourcePath,
-      targetPath: fileParams.targetPath,
-      id: fileParams.id,
-      manifestPath: fileParams.manifestPath,
+      ...fileParams,
     });
     const action = result.pending?.action ?? result.action;
     if (!action) {
@@ -654,21 +636,17 @@ export async function buildClawAddPlan(params: {
     context.config ?? {},
     new Set([...existingAgentIds, finalId]),
   );
-  const planIntegrity = `sha256:${createHash("sha256")
-    .update(
-      stableStringify({
-        manifestSchemaVersion: params.manifest.schemaVersion,
-        clawIntegrity: source.integrity,
-        finalId,
-        workspace,
-        actions,
-        capabilityChanges,
-        blockers,
-        extensions,
-        ...(notices.length > 0 ? { notices } : {}),
-      }),
-    )
-    .digest("hex")}`;
+  const planIntegrity = digestClawValue({
+    manifestSchemaVersion: params.manifest.schemaVersion,
+    clawIntegrity: source.integrity,
+    finalId,
+    workspace,
+    actions,
+    capabilityChanges,
+    blockers,
+    extensions,
+    ...(notices.length > 0 ? { notices } : {}),
+  });
 
   return {
     schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,

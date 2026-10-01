@@ -22,7 +22,6 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @state() private draft: PolicyDraft | null = null;
-  @state() private saved = false;
 
   private readonly configSave = new CloudWorkerConfigSave(this);
 
@@ -30,21 +29,18 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => {
       this.draft = null;
-      this.configSave.update({ busy: false, error: null });
-      this.saved = false;
+      this.configSave.update({ busy: false, error: null, notice: null });
     },
   });
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.runtimeConfig,
-    (runtimeConfig) => {
-      void runtimeConfig.ensureLoaded();
-      return runtimeConfig.subscribe(() => this.requestUpdate());
-    },
-  );
-
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    super.disconnectedCallback();
+  constructor() {
+    super();
+    void new SubscriptionsController(this).effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
+        void runtimeConfig.ensureLoaded();
+        return runtimeConfig.subscribe(() => this.requestUpdate());
+      },
+    );
   }
 
   private policy(): PolicyDraft {
@@ -75,8 +71,7 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
 
   private edit(patch: Partial<PolicyDraft>) {
     this.draft = { ...(this.draft ?? this.policy()), ...patch };
-    this.configSave.update({ error: null });
-    this.saved = false;
+    this.configSave.update({ error: null, notice: null });
   }
 
   private async save() {
@@ -98,7 +93,6 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
         return;
       }
     }
-    this.saved = false;
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
     await this.configSave.save(runtimeConfig, isCurrent, {
@@ -126,7 +120,7 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
       failed: () => t("cloudWorkersPage.snapshots.policySaveFailed"),
       success: () => {
         this.draft = null;
-        this.saved = true;
+        return t("cloudWorkersPage.snapshots.policySaved");
       },
     });
   }
@@ -179,7 +173,7 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
           </select>`,
         })}
         ${renderSettingsRow({
-          title: t("cloudWorkersPage.snapshots.policyRestart"),
+          title: t("cloudWorkersPage.snapshots.policyApplies"),
           control: html`<button
             class="btn btn--sm"
             type="button"
@@ -190,7 +184,7 @@ class CloudWorkerSnapshotPolicy extends OpenClawLightDomContentsElement {
           </button>`,
         })}
         ${this.configSave.state.error ? html`<div class="callout warning" role="alert">${this.configSave.state.error}</div>` : nothing}
-        ${this.saved ? html`<div class="callout" role="status">${t("cloudWorkersPage.snapshots.policySaved")}</div>` : nothing}
+        ${this.configSave.state.notice ? html`<div class="callout" role="status">${this.configSave.state.notice}</div>` : nothing}
       `,
     );
   }

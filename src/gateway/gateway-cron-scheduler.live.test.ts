@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import type {
+  CronScratchGetResult,
+  CronScratchSetResult,
+} from "../../packages/gateway-protocol/src/schema/cron.types.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -11,7 +15,7 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
-import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 
 const describeLive = isLiveTestEnabled() ? describe : describe.skip;
 
@@ -52,7 +56,9 @@ describeLive("cron scheduling through an isolated Gateway", () => {
     const instance = await createOpenClawTestInstance({
       name: "cron-scheduler",
       env: {
-        ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
+        ...Object.fromEntries(
+          listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
+        ),
         OPENCLAW_SKIP_CRON: "0",
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
         OPENCLAW_AGENT_RUNTIME: undefined,
@@ -121,15 +127,6 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           lastTriggerEvalAtMs: firstEvalAt,
           nextRunAtMs: nextEvalAt,
         });
-        await instance.stopGateway();
-        await instance.startGateway();
-        const restored = await cliJson<CronJob>(instance, ["cron", "get", watcher.id]);
-        expect(restored.state).toMatchObject({
-          triggerEvalCount: 1,
-          triggerState: first.state.triggerState,
-          lastTriggerEvalAtMs: firstEvalAt,
-          nextRunAtMs: nextEvalAt,
-        });
         const second = await waitForJob(
           instance,
           watcher.id,
@@ -142,9 +139,68 @@ describeLive("cron scheduling through an isolated Gateway", () => {
         expect(await cliJson(instance, ["cron", "runs", watcher.id])).toMatchObject({
           entries: [],
         });
+        await cliJson(instance, ["cron", "disable", watcher.id]);
+        const quiescent = await waitForJob(
+          instance,
+          watcher.id,
+          (job) => !job.enabled && job.state.runningAtMs === undefined,
+        );
+        const scratchText = "private café notes\nretained across restart";
+        expect(
+          await cliJson<CronScratchSetResult>(instance, [
+            "cron",
+            "scratch",
+            watcher.id,
+            "--set",
+            scratchText,
+            "--expected-revision",
+            "0",
+          ]),
+        ).toMatchObject({ ok: true, currentRevision: 1, scratch: { content: scratchText } });
+        await instance.stopGateway();
+        await instance.startGateway();
+        const restored = await cliJson<CronJob>(instance, ["cron", "get", watcher.id]);
+        expect(restored.enabled).toBe(false);
+        expect(restored.state).toEqual(quiescent.state);
+        expect(
+          await cliJson<CronScratchGetResult>(instance, ["cron", "scratch", watcher.id]),
+        ).toMatchObject({ currentRevision: 1, scratch: { content: scratchText } });
+        expect(
+          await cliJson<CronScratchSetResult>(instance, [
+            "cron",
+            "scratch",
+            watcher.id,
+            "--unset",
+            "--expected-revision",
+            "1",
+          ]),
+        ).toEqual({ ok: true, scratch: null, currentRevision: 2, maxBytes: 262_144 });
+        const staleScratch = await instance.cli([
+          "cron",
+          "scratch",
+          watcher.id,
+          "--set",
+          "stale resurrection",
+          "--expected-revision",
+          "1",
+          "--url",
+          instance.url,
+          "--token",
+          instance.gatewayToken,
+          "--json",
+        ]);
+        expect(staleScratch.code).toBe(1);
+        expect(staleScratch.stderr).toContain("cron scratch changed concurrently");
+        const clearedScratch = await cliJson<CronScratchGetResult>(instance, [
+          "cron",
+          "scratch",
+          watcher.id,
+        ]);
+        expect(clearedScratch.currentRevision).toBe(2);
+        expect(clearedScratch.scratch).toBeNull();
         await cliJson(instance, ["cron", "rm", watcher.id]);
         logLiveProgress(
-          "cron scheduler: quiet condition kept its 30-second floor through reads and restart",
+          "cron scheduler: quiet condition kept its 30-second floor; disabled trigger state and scratch survived restart",
         );
 
         const scriptPath = path.join(workspace, "capture-stream.js");

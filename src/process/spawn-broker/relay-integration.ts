@@ -1,42 +1,48 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
-import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
 import { spawnProcess } from "../spawn-utils.js";
+import { createServiceChildCleanup } from "../supervisor/service-child-cleanup.js";
 import { BrokerChild } from "./child.js";
 
 /** Publish cleanup ownership before waiting for the broker's pipe and IPC handoff. */
 export function spawnServiceChildRelay(params: {
-  entrypoint: Parameters<typeof resolveRuntimeWorkerUrl>[0];
+  workerUrl: URL;
   stdio: SpawnOptions["stdio"];
-  useWindowsJobAnchor: boolean;
+  env: NodeJS.ProcessEnv;
+  detached: boolean;
   onSpawnCleanup?: (completion: Promise<void>) => void;
 }): {
   child: ChildProcess;
-  extinctionCompletion: Deferred;
+  cleanup: ReturnType<typeof createServiceChildCleanup>;
   transportReady: Promise<void> | undefined;
 } {
-  const workerUrl = resolveRuntimeWorkerUrl(params.entrypoint);
-  const child = spawnProcess(process.execPath, resolveRuntimeWorkerArgv(workerUrl), {
+  const child = spawnProcess(process.execPath, resolveRuntimeWorkerArgv(params.workerUrl), {
     stdio: params.stdio,
-    // A detached Windows Job owner survives host loss long enough to clean up.
-    // Keep its child handle referenced so an idle host can finish admission and lineage cleanup.
-    detached: params.useWindowsJobAnchor,
+    detached: params.detached,
     windowsHide: true,
-    env: process.env,
+    env: params.env,
   });
-  const extinctionCompletion = createDeferredCore();
-  void extinctionCompletion.promise.catch(() => {});
-  params.onSpawnCleanup?.(extinctionCompletion.promise);
-  // Native pipes are ready synchronously; only the broker waits for transferred handles.
-  const transportReady =
-    child instanceof BrokerChild
-      ? child.ready().catch((error: unknown) => {
-          extinctionCompletion.reject(error);
-          throw error;
-        })
-      : undefined;
-  return { child, extinctionCompletion, transportReady };
+  const cleanup = createServiceChildCleanup();
+  params.onSpawnCleanup?.(cleanup.promise);
+  let transportReady: Promise<void> | undefined;
+  if (child instanceof BrokerChild) {
+    transportReady = child.ready().catch((error: unknown) => {
+      cleanup.completion.reject(error);
+      throw error;
+    });
+  } else if (child.pid === undefined) {
+    // Native spawn failures can lack stdio entirely. Join Node's close before
+    // releasing the no-process cleanup owner, and preserve its original errno.
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    transportReady = new Promise<Error>((resolve) => {
+      child.once("error", resolve);
+    }).then(async (error) => {
+      await closed;
+      cleanup.completion.resolve();
+      throw error;
+    });
+  }
+  return { child, cleanup, transportReady };
 }

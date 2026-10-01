@@ -25,7 +25,7 @@ extension OpenClawChatViewModel {
             }
         }
         guard let snapshot = payload.inFlightRun,
-              let runId = Self.normalizedRunID(snapshot.runId),
+              let runId = ChatPayloadDecoding.trimmedNonEmptyString(snapshot.runId),
               self.liveRunStateByRunID[runId]?.terminal != true
         else {
             return
@@ -34,14 +34,15 @@ extension OpenClawChatViewModel {
         self.isApplyingRunSnapshot = true
         defer { self.isApplyingRunSnapshot = false }
         self.updateActiveSessionRunWithoutChatSnapshot(false)
-        self.adoptRunState(runId: runId, bufferedText: snapshot.text)
+        self.adoptRun(runId: runId, bufferedText: snapshot.text)
+        // Replay only this snapshot's narration through the live owner. Tool
+        // grouping and current assistant-text precedence keep their own paths.
+        for event in snapshot.events ?? [] where event.runId == runId {
+            self.handleAgentNarration(event)
+        }
     }
 
     func adoptRun(runId: String, bufferedText: String) {
-        self.adoptRunState(runId: runId, bufferedText: bufferedText)
-    }
-
-    private func adoptRunState(runId: String, bufferedText: String) {
         // A terminal ID stays retired until an authoritative session snapshot
         // explicitly removes it; late deltas/history cannot resurrect the run.
         guard self.liveRunStateByRunID[runId]?.terminal != true else { return }
@@ -51,8 +52,7 @@ extension OpenClawChatViewModel {
             // Replace stale local ownership so only that run consumes later events.
             clearPendingRuns(reason: nil)
             self.pendingRuns.insert(runId)
-            self.pendingToolCallsById = [:]
-            self.updateStreamingAssistantText(nil)
+            self.clearStreamingActivity()
         }
         if self.runMessageScopesByRunID[runId] == nil {
             self.runMessageScopesByRunID[runId] = currentRunMessageScope()
@@ -61,8 +61,8 @@ extension OpenClawChatViewModel {
             armPendingRunOwner(runId: runId)
         }
         // Chat snapshots concatenate model turns; agent text owns the current item once observed.
-        if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true, !bufferedText.isEmpty {
-            self.updateStreamingAssistantText(bufferedText)
+        if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true {
+            self.updateStreamingAssistantText(bufferedText.isEmpty ? nil : bufferedText)
         }
         self.logDiagnostic(
             "chat.ui adopted in-flight run sessionKey=\(self.sessionKey) "

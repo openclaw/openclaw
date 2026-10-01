@@ -392,7 +392,7 @@ function sanitizeLiveConfig(raw: string): string {
     }
 
     const { applyLegacyDoctorMigrations } = loadLegacyConfigCompatApi();
-    const migrated = applyLegacyDoctorMigrations(parsed);
+    const migrated = applyLegacyDoctorMigrations(parsed, { sourceConfigBeforeMigrations: parsed });
     if (!migrated.next) {
       return `${JSON.stringify(parsed, null, 2)}\n`;
     }

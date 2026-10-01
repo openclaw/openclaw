@@ -4,9 +4,8 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { isPluginJsonValue } from "../plugins/host-hook-json.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeCloudRepo } from "./cloud-worker-project-profiles.js";
-import { type ConfigSchemaShape, projectConfigFieldMetadata } from "./schema.field-metadata.js";
+import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
-import type { CloudWorkerProfileConfig, CloudWorkersConfig } from "./types.cloud-workers.js";
 import { isSecretRef } from "./types.secrets.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
 
@@ -86,11 +85,10 @@ const CloudWorkerProfileShape = {
     label: "Cloud Worker Provider Settings",
     help: "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
   }),
-} satisfies ConfigSchemaShape<CloudWorkerProfileConfig>;
+};
 
 const CloudWorkerProfileSchema = z
-  .object(CloudWorkerProfileShape)
-  .strict()
+  .strictObject(CloudWorkerProfileShape)
   .register(configUiMetadata, {
     label: "Cloud Worker Profile",
     help: "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
@@ -119,21 +117,17 @@ const CloudWorkerPreparedPoolShape = {
     label: "Cloud Worker Ready Reserve Cap",
     help: "Gateway-wide cap on unassigned prepared cloud workers across projects and profiles (default: 4). Preparing workers and unconfirmed reserve cleanup count toward the cap. Set 0 to drain unassigned reserves and disable replenishment while preserving snapshot reuse and active sessions.",
   }),
-} satisfies ConfigSchemaShape<NonNullable<CloudWorkersConfig["preparedPool"]>>;
+};
 
 const CloudWorkersConfigShape = {
   desktop: z.boolean().optional().register(configUiMetadata, {
     label: "Cloud Worker Desktop (Labs)",
     help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",
   }),
-  preparedPool: z
-    .object(CloudWorkerPreparedPoolShape)
-    .strict()
-    .optional()
-    .register(configUiMetadata, {
-      label: "Cloud Worker Prepared Pool",
-      help: "Limits for prepared cloud workers kept ready for later sessions. Reserves incur running-machine charges until provider cleanup completes; their fixed expiry follows actual project demand and the provider's existing idle policy.",
-    }),
+  preparedPool: z.strictObject(CloudWorkerPreparedPoolShape).optional().register(configUiMetadata, {
+    label: "Cloud Worker Prepared Pool",
+    help: "Limits for prepared cloud workers kept ready for later sessions. Reserves incur running-machine charges until provider cleanup completes; their fixed expiry follows actual project demand and the provider's existing idle policy.",
+  }),
   projectProfiles: z
     .record(CloudWorkerProjectKeySchema, CloudWorkerProjectProfileSchema)
     .optional()
@@ -148,9 +142,9 @@ const CloudWorkersConfigShape = {
       label: "Cloud Worker Profiles",
       help: "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings.",
     }),
-} satisfies ConfigSchemaShape<CloudWorkersConfig>;
+};
 
-export const CloudWorkersConfigSchema = z.object(CloudWorkersConfigShape).strict().optional();
+export const CloudWorkersConfigSchema = z.strictObject(CloudWorkersConfigShape).optional();
 
 export const { labels: CLOUD_WORKER_FIELD_LABELS, help: CLOUD_WORKER_FIELD_HELP } =
   projectConfigFieldMetadata(CloudWorkersConfigSchema, "cloudWorkers");

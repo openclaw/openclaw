@@ -29,6 +29,43 @@ execution or Gateway/node host overrides cannot bypass it. The default
 `"inherit"` preserves existing agent-mode behavior. See
 [Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
+### Per-chat sandbox opt-out
+
+An administrator can opt one idle chat out of configured sandboxing without
+changing the agent or global configuration. `sessions.patch` accepts
+`sandboxMode: "off"`; `sandboxMode: null` clears that choice and restores the
+configured policy. Both mutations require `operator.admin` and existing access
+to the target session. A creator-role requirement (`sandbox: "required"`) is
+immutable and always takes precedence: even an administrator cannot opt that
+session out.
+
+For race-safe updates, include `expectedSessionId`, `expectedLifecycleRevision`,
+and `expectedSandboxMode` (`null` means no override). A stale expectation rejects
+the mutation rather than changing a replaced chat or overwriting another choice.
+`sessions.patchMany` supports the same sandbox mutation with expectations on each
+target. Stop any active run before changing the sandbox mode; the Gateway checks
+again before committing and never changes containment underneath a running turn.
+
+The choice persists with that chat across restarts and resets. A newly forked chat
+does not inherit the opt-out; restoring a checkpoint in the same chat retains it.
+Clearing the override does not remove sandbox containers or change other chats.
+Older versions that do not support this preference follow their configured
+sandbox policy instead.
+
+Native runtime selection and sending can offer **Continue for this chat** when an
+administrator explicitly chooses the native agent's own permissions. This
+combines the optional sandbox opt-out with Full access and consent bound to that
+chat and runtime. Optional native tool and workspace restrictions are then
+delegated to the native agent; OpenClaw-hosted tools keep their existing policy.
+After a refused send, confirmation saves the permissions and retries that message
+once. Selection-only confirmation does not send the draft. Neither changes global
+settings. Native consent is cleared on reset or runtime change and is never
+inherited by a fork. Required sandboxing, required workspace boundaries, and remote
+execution placement remain independently enforced. See
+[native runtime permissions](/tools/acp-agents-setup#permissions-for-native-chat-runtimes).
+
+### Scope and backend
+
 **Scope** controls how many containers/environments are created:
 
 - `agent`: one container per agent.
@@ -45,6 +82,27 @@ required sandbox per canonical session. A matching raw ID cannot reuse a
 profile's resources. Required sandboxing and the read-only workspace cap remain
 in force; backend failure never falls back to host execution.
 Sessions without a role-required sandbox keep the configured scope behavior.
+
+When original Guest access is revoked, registered background commands retain that
+access dependency and are cancelled even after their foreground turn finishes.
+Closing the browser or stopping one turn does not revoke this retained access.
+
+OpenClaw also stops and verifies a Docker or Podman container when it created
+that container under the original access and every use has remained with the
+same original invitation and profile. Multiple connections and sessions can
+share that private container. Revoking one device or source preserves it while
+another source remains authorized; revoking the invitation ends all of them.
+This preserves saved workspace files and the
+container's writable layer; stopping loses temporary filesystem and process
+state. Ordinary authorized use can restart the retained container; stopping it
+does not erase its invitation and profile history.
+
+A different invitation, staff access, or unclassified use makes
+that container ineligible for this shutdown. Explicitly shared containers,
+containers already present when the Gateway starts, sandbox browsers, and other
+backends also remain running. Their existing cancellation owners target the
+affected work. Arbitrary detached processes inside these shared or unclassified
+environments are not guaranteed to stop when access is revoked.
 
 The [creator namespace migration](/reference/database-schemas#creator-namespace-migration)
 does not delete or adopt old ambiguous workspaces or containers. Such sessions

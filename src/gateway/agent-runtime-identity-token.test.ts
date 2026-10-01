@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import {
   claimAgentRunDelegatedAuthority,
+  claimAgentRunApprovalAuthority,
   releaseAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
+  validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
@@ -84,10 +86,10 @@ async function importRuntimeTokenModule(): Promise<
 }
 
 function validateDelegatedAuthority(
-  runtimeToken: typeof import("./agent-runtime-identity-token.js"),
+  approvalAuthority: typeof import("./agent-runtime-approval-authority.js"),
   authority: import("./agent-runtime-identity-token.js").AgentRuntimeDelegatedAuthority,
 ): boolean {
-  return runtimeToken.createAgentRuntimeApprovalAuthorityValidator()({
+  return approvalAuthority.createAgentRuntimeApprovalAuthorityValidator()({
     kind: "agentRuntime",
     agentId: "test",
     sessionKey: "agent:test:test",
@@ -109,6 +111,7 @@ async function createIdentity(
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetAgentRunRegistryForTest();
   closeOpenClawStateDatabaseForTest();
   for (const closeDatabase of reloadedStateDatabaseClosers) {
@@ -124,10 +127,63 @@ afterEach(() => {
 
 describe("agent runtime identity token", () => {
   it.each(["signed", "direct"] as const)(
+    "retains a worker approval scope through delayed first %s use",
+    async (mode) => {
+      useTempHome();
+      const runtimeToken = await importRuntimeTokenModule();
+      const run = operationalRun(`worker-scope-${mode}`);
+      const lifetime = new AbortController();
+      const original = claimAgentRunApprovalAuthority(run.delegatedAuthority, [lifetime.signal]);
+      const params: AgentRuntimeIdentityTokenParams = {
+        agentId: "main",
+        sessionKey: "agent:main:worker-scope",
+        operationalRunInstance: run.operationalRunInstance,
+        approvalAuthority: original,
+        workerTurnClaim: {
+          sessionId: "worker-scope-session",
+          claimId: "worker-scope-claim",
+          runId: run.operationalRunInstance.runId,
+          placementGeneration: 0,
+          owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 1 },
+        },
+      };
+      const token =
+        mode === "signed" ? await runtimeToken.mintAgentRuntimeIdentityToken(params) : undefined;
+      const direct =
+        mode === "direct" ? await runtimeToken.createAgentRuntimeIdentity(params) : undefined;
+      lifetime.abort();
+      const replacement = claimAgentRunApprovalAuthority(run.delegatedAuthority, [
+        new AbortController().signal,
+      ]);
+      const stale = token ? await runtimeToken.verifyAgentRuntimeIdentityToken(token) : direct;
+      if (!stale) {
+        throw new Error("Expected decoded worker identity");
+      }
+      expect(validateAgentRunDelegatedAuthority(stale.delegatedAuthority)).toBe(false);
+      expect(validateAgentRunDelegatedAuthority(run.delegatedAuthority)).toBe(true);
+      const current = await createIdentity(runtimeToken, mode, {
+        ...params,
+        approvalAuthority: replacement,
+      });
+      if (!current) {
+        throw new Error("Expected replacement worker identity");
+      }
+      expect(validateAgentRunDelegatedAuthority(current.delegatedAuthority)).toBe(true);
+      await expect(
+        runtimeToken.createAgentRuntimeIdentity({
+          ...params,
+          approvalAuthority: run.delegatedAuthority,
+        }),
+      ).rejects.toThrow("original claim approval authority");
+    },
+  );
+
+  it.each(["signed", "direct"] as const)(
     "rejects %s delegated authority after terminal, replacement, and restart boundaries",
     async (mode) => {
       useTempHome();
       const runtimeToken = await importRuntimeTokenModule();
+      const approvalAuthority = await import("./agent-runtime-approval-authority.js");
       const first = operationalRun("run-lifecycle");
       const firstRun = first.operationalRunInstance;
       const copied = await createIdentity(runtimeToken, mode, {
@@ -136,20 +192,20 @@ describe("agent runtime identity token", () => {
         operationalRunInstance: firstRun,
       });
       expect(copied).toBeDefined();
-      expect(copied && validateDelegatedAuthority(runtimeToken, copied.delegatedAuthority)).toBe(
-        true,
-      );
+      expect(
+        copied && validateDelegatedAuthority(approvalAuthority, copied.delegatedAuthority),
+      ).toBe(true);
 
       releaseAgentRunDelegatedAuthority(first.delegatedAuthority);
-      expect(copied && validateDelegatedAuthority(runtimeToken, copied.delegatedAuthority)).toBe(
-        false,
-      );
+      expect(
+        copied && validateDelegatedAuthority(approvalAuthority, copied.delegatedAuthority),
+      ).toBe(false);
 
       const replacement = { instanceId: "instance-replacement", runId: firstRun.runId };
       claimAgentRunDelegatedAuthority(replacement);
-      expect(copied && validateDelegatedAuthority(runtimeToken, copied.delegatedAuthority)).toBe(
-        false,
-      );
+      expect(
+        copied && validateDelegatedAuthority(approvalAuthority, copied.delegatedAuthority),
+      ).toBe(false);
 
       const replacementIdentity = await createIdentity(runtimeToken, mode, {
         agentId: "main",
@@ -158,13 +214,13 @@ describe("agent runtime identity token", () => {
       });
       expect(
         replacementIdentity &&
-          validateDelegatedAuthority(runtimeToken, replacementIdentity.delegatedAuthority),
+          validateDelegatedAuthority(approvalAuthority, replacementIdentity.delegatedAuthority),
       ).toBe(true);
 
       rotateAgentRunRegistryLifecycleGeneration();
       expect(
         replacementIdentity &&
-          validateDelegatedAuthority(runtimeToken, replacementIdentity.delegatedAuthority),
+          validateDelegatedAuthority(approvalAuthority, replacementIdentity.delegatedAuthority),
       ).toBe(false);
     },
   );
@@ -371,12 +427,43 @@ describe("agent runtime identity token", () => {
       executionIdentityToken: createExecutionIdentityAdmissionToken("run-other"),
     });
 
-    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+    const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+    expect(identity).toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
       operationalRunInstance: operationalRun("run-1").operationalRunInstance,
     });
+    expect(identity).not.toHaveProperty("executionIdentity");
+  });
+
+  it("preserves inherited permission modes in signed spawn context and rejects malformed modes", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const run = operationalRun();
+    const inheritedToolPolicy = { version: 1 as const, allow: ["read"], deny: ["exec"] };
+    let token = "";
+
+    for (const inheritedPermissionMode of ["read-only", "guarded", "workspace", "full"] as const) {
+      token = await runtimeToken.mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance: run.operationalRunInstance,
+        sessionSpawnContext: { inheritedPermissionMode, inheritedToolPolicy },
+      });
+
+      await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+        sessionSpawnContext: { inheritedPermissionMode, inheritedToolPolicy },
+      });
+    }
+
+    const malformed = rewriteSignedPayload(token, (payload) => {
+      payload.sessionSpawnContext = {
+        inheritedToolPolicy,
+        inheritedPermissionMode: "approve-all",
+      };
+    });
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(malformed)).resolves.toBeUndefined();
   });
 
   it("round-trips spawn policy without serializing private lineage", async () => {
@@ -393,6 +480,7 @@ describe("agent runtime identity token", () => {
       executionIdentityToken: parentExecutionIdentity,
       sessionSpawnContext: withAgentRuntimeExecutionLineage(
         {
+          requesterProfileId: " profile-vito ",
           completionOwnerSessionKey: " agent:main:discord:direct:alice ",
           resolvedModel: { provider: "custom", model: "custom/model" },
           spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
@@ -428,6 +516,7 @@ describe("agent runtime identity token", () => {
       sessionKey: "agent:main:main",
       executionIdentity: parentExecutionIdentity,
       sessionSpawnContext: {
+        requesterProfileId: "profile-vito",
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         resolvedModel: { provider: "custom", model: "custom/model" },
         spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
@@ -444,7 +533,7 @@ describe("agent runtime identity token", () => {
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);
+    vi.spyOn(Date, "now").mockReturnValue(1000);
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "ops",
       sessionKey: "agent:ops:cron:job-1:run:run-1",
@@ -464,7 +553,6 @@ describe("agent runtime identity token", () => {
     await expect(
       runtimeToken.verifyAgentRuntimeIdentityToken(token, 61_000),
     ).resolves.toBeUndefined();
-    nowSpy.mockRestore();
   });
 
   it.each(["signed", "direct"] as const)(
@@ -492,7 +580,7 @@ describe("agent runtime identity token", () => {
     },
   );
 
-  it("round-trips a signed private cron creator grant only with final provenance", async () => {
+  it("round-trips captured-surface grants and rejects unqualified creator grants", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
     const run = operationalRun();
@@ -516,7 +604,7 @@ describe("agent runtime identity token", () => {
         operationalRunInstance: run.operationalRunInstance,
         cronCreatorAuthorityGrant,
       }),
-    ).rejects.toThrow("require final tool-surface provenance");
+    ).rejects.toThrow("require tool-surface or authenticated-requester provenance");
     const managementToken = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -529,6 +617,61 @@ describe("agent runtime identity token", () => {
       cronManagementGrant: cronCreatorAuthorityGrant,
     });
   });
+
+  it.each(["signed", "direct"] as const)(
+    "carries a %s live native requester grant without claiming complete tool capture",
+    async (mode) => {
+      useTempHome();
+      const runtimeToken = await importRuntimeTokenModule();
+      const grants = await import("./cron-creator-authority-grant.js");
+      const run = operationalRun("run-native-requester");
+      const requester = {
+        version: 1 as const,
+        channel: "discord",
+        accountId: "work",
+        senderId: "native-current-sender",
+      };
+      const scope = grants.createCronCreatorAuthorityRunScope(
+        run.operationalRunInstance.runId,
+        { kind: "external", channel: "discord" },
+        undefined,
+        undefined,
+        requester,
+      );
+      try {
+        const grant = grants.mintCronCreatorAuthorityGrant(
+          scope,
+          undefined,
+          undefined,
+          undefined,
+          "requester",
+        );
+        const params = {
+          agentId: "main",
+          sessionKey: "agent:main:shared-discord",
+          operationalRunInstance: run.operationalRunInstance,
+          turnSourceChannel: "discord",
+          turnSourceAccountId: "work",
+          cronCreatorAuthorityGrant: grant,
+        };
+        const identity = await createIdentity(runtimeToken, mode, params);
+        expect(identity).toMatchObject({ cronCreatorAuthorityGrant: grant });
+        expect(identity).not.toHaveProperty("cronToolsAllowCapture");
+        expect(JSON.stringify(identity)).not.toContain(requester.senderId);
+        expect(JSON.stringify(scope)).not.toContain(requester.senderId);
+        expect(grants.resolveCronCreatorAuthorityGrantProvenance(grant, scope.runId)).toEqual({
+          capturesRuntimeAuthority: false,
+          channelRequester: requester,
+        });
+        grants.revokeCronCreatorAuthorityRunScope(scope);
+        await expect(createIdentity(runtimeToken, mode, params)).rejects.toThrow(
+          "require tool-surface or authenticated-requester provenance",
+        );
+      } finally {
+        grants.revokeCronCreatorAuthorityRunScope(scope);
+      }
+    },
+  );
 
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
     useTempHome();
@@ -648,7 +791,7 @@ describe("agent runtime identity token", () => {
   it("bounds run-lifetime message action bearers independently of local revocation", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);
+    vi.spyOn(Date, "now").mockReturnValue(1000);
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
@@ -664,7 +807,6 @@ describe("agent runtime identity token", () => {
     await expect(
       runtimeToken.verifyAgentRuntimeIdentityToken(token, 61_000),
     ).resolves.toBeUndefined();
-    nowSpy.mockRestore();
   });
 
   it("queues parallel verifications behind a same-process approvals update", async () => {

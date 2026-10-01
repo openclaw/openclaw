@@ -13,7 +13,6 @@ import {
 import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
-import { listLegacySkillWorkshopWorkspaceDirs } from "../commands/doctor-skill-workshop-sources.js";
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
@@ -39,7 +38,6 @@ import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
   parseSource,
-  type SourceSnapshot,
 } from "./state-migrations.workspace-setup-store.js";
 import type {
   LegacyWorkspaceStateDetection,
@@ -191,6 +189,8 @@ export async function detectLegacyWorkspaceState(params: {
   if (params.doctorOnlyStateMigrations !== true) {
     return { sources: [], hasLegacy: false };
   }
+  const { listLegacySkillWorkshopWorkspaceDirs } =
+    await import("../commands/doctor-skill-workshop-sources.js");
   const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
   const homedir = params.homedir ?? os.homedir;
   const byPath = new Map<string, LegacyWorkspaceStateSource>();
@@ -284,7 +284,7 @@ function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): 
 
 async function cleanupReceiptSource(params: {
   sourceRoot: Root;
-  sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
+  sourceClaim: LegacyMigrationSourceClaim;
   source: LegacyWorkspaceStateSource;
   receipt: MigrationReceipt;
   env: NodeJS.ProcessEnv;
@@ -394,7 +394,7 @@ async function migrateOneSource(params: {
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
-  let sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
+  let sourceClaim: LegacyMigrationSourceClaim;
   let sourceRoot: Root;
   const unreadable = (error: unknown): MigrationMessages => ({
     changes: [],
@@ -425,6 +425,7 @@ async function migrateOneSource(params: {
   let hasSource: boolean;
   let hasClaim: boolean;
   try {
+    await sourceClaim.recoverLinkedMove();
     hasSource = await sourceClaim.exists();
     hasClaim = await sourceClaim.exists(true);
   } catch (error) {

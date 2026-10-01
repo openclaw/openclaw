@@ -1,6 +1,8 @@
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it } from "vitest";
+import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -64,10 +66,26 @@ suite.define(() => {
           result: skipped,
         },
       });
+      await gateway.emitGatewayEvent("agent", {
+        runId,
+        sessionKey: "main",
+        seq: 3,
+        stream: "item",
+        ts: timestamp,
+        data: projectAgentToolActivity({
+          name: "write",
+          toolCallId: skipped.toolCallId,
+          phase: "result",
+          args,
+          isError: true,
+          result: skipped,
+        }),
+      });
       const row = page.locator(".chat-tool-msg-summary").filter({ hasText: "operation.json" });
       await row.waitFor();
       await row.click({ position: { x: 4, y: 4 } });
       await page.locator(".chat-tool-card__outcome").waitFor();
+      expect(await row.textContent()).not.toMatch(/blocked|failed/u);
       await page.locator(".chat-main").screenshot({ path: path.join(artifactDir, "live.png") });
       expect(await page.locator(".chat-tool-card__outcome").textContent()).toBe("Skipped");
       expect(await page.locator(".chat-tool-card--error").count()).toBe(0);
@@ -79,28 +97,32 @@ suite.define(() => {
 
       const historyPage = await context.newPage();
       await installMockGateway(historyPage, {
-        historyMessages: [
-          { role: "user", content: "Prepare the release", timestamp: timestamp - 1_000 },
-          {
-            role: "assistant",
-            content: [{ type: "toolCall", id: skipped.toolCallId, name: "write", arguments: args }],
-            timestamp,
-          },
-          skipped,
-          {
-            role: "toolResult",
-            toolCallId: "failed-check",
-            toolName: "exec",
-            content: "Permission denied",
-            isError: true,
-            timestamp: timestamp + 1_000,
-          },
-          {
-            role: "assistant",
-            content: "Received the subagent update. The validation command needs attention.",
-            timestamp: timestamp + 2_000,
-          },
-        ],
+        methodResponses: {
+          "chat.history": prepareChatHistoryFixture([
+            { role: "user", content: "Prepare the release", timestamp: timestamp - 1_000 },
+            {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: skipped.toolCallId, name: "write", arguments: args },
+              ],
+              timestamp,
+            },
+            skipped,
+            {
+              role: "toolResult",
+              toolCallId: "failed-check",
+              toolName: "exec",
+              content: "Permission denied",
+              isError: true,
+              timestamp: timestamp + 1_000,
+            },
+            {
+              role: "assistant",
+              content: "Received the subagent update. The validation command needs attention.",
+              timestamp: timestamp + 2_000,
+            },
+          ]),
+        },
       });
       await historyPage.goto(`${suite.server.baseUrl}chat`);
       await historyPage
@@ -108,7 +130,11 @@ suite.define(() => {
         .waitFor();
       const group = historyPage.locator(".chat-activity-group__summary").first();
       expect(await group.textContent()).toContain("1 failed");
-      expect(await group.textContent()).toContain("1 skipped");
+      expect((await group.textContent())?.match(/1 skipped/gu)).toHaveLength(1);
+      expect(await group.textContent()).not.toContain("blocked");
+      expect(await group.locator(".chat-activity-group__label").textContent()).not.toContain(
+        "Write (failed)",
+      );
       await group.click();
       const historyRow = historyPage
         .locator(".chat-tool-msg-summary")
@@ -116,6 +142,8 @@ suite.define(() => {
       expect(await historyRow.textContent()).toContain("Skipped");
       await historyRow.click({ position: { x: 4, y: 4 } });
       expect(await historyPage.locator(".chat-tool-card__outcome").textContent()).toBe("Skipped");
+      expect((await group.textContent())?.match(/1 skipped/gu)).toHaveLength(1);
+      expect(await group.textContent()).not.toContain("blocked");
       await historyPage
         .locator(".chat-main")
         .screenshot({ path: path.join(artifactDir, "history.png") });

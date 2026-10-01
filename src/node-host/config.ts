@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import {
   executeSqliteQuerySync,
@@ -10,12 +11,9 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { logInfo } from "../logger.js";
-import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   normalizeNodeHostCloudflareAccessConfig,
   type NodeHostCloudflareAccessConfig,
@@ -49,10 +47,6 @@ export const LEGACY_NODE_HOST_CONFIG_FILE = "node.json";
 export const LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX = ".doctor-importing";
 
 type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
-
-function databaseOptions(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
-  return { env };
-}
 
 function resolveLegacyNodeHostConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), LEGACY_NODE_HOST_CONFIG_FILE);
@@ -100,11 +94,6 @@ function optionalNonEmptyString(value: unknown, label: string): string | undefin
     throw new Error(`invalid node-host SQLite row: ${label} must not be empty`);
   }
   return normalized;
-}
-
-function optionalInputString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized || undefined;
 }
 
 function validatePort(value: unknown, label: string): number | undefined {
@@ -183,35 +172,47 @@ function cloudflareAccessEntry(cloudflareAccess: NodeHostCloudflareAccessConfig 
 
 function normalizeGatewayConfig(gateway: NodeHostGatewayConfig): NodeHostGatewayConfig | undefined {
   const normalized: NodeHostGatewayConfig = {
-    host: optionalInputString(gateway.host),
+    host: normalizeOptionalString(gateway.host),
     port: validatePort(gateway.port, "gateway port"),
     tls: gateway.tls,
-    tlsFingerprint: optionalInputString(gateway.tlsFingerprint),
-    contextPath: optionalInputString(gateway.contextPath),
+    tlsFingerprint: normalizeOptionalString(gateway.tlsFingerprint),
+    contextPath: normalizeOptionalString(gateway.contextPath),
     ...cloudflareAccessEntry(normalizeNodeHostCloudflareAccessConfig(gateway.cloudflareAccess)),
   };
   return Object.values(normalized).some((value) => value !== undefined) ? normalized : undefined;
 }
 
-function readNodeHostConfig(env: NodeJS.ProcessEnv): NodeHostConfig | null {
-  const stored = readConfigMachineStateWithMetadata<unknown>(
-    NODE_HOST_CONFIG_KEY,
-    databaseOptions(env),
+async function readNodeHostConfig(env: NodeJS.ProcessEnv): Promise<NodeHostConfig | null> {
+  const selectedEnv = { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) };
+  assertNodeHostLegacyStateMigrated(selectedEnv);
+  const reply = await executeExistingOpenClawStateRead(
+    { env: selectedEnv },
+    {
+      type: NODE_HOST_CONFIG_KEY,
+    },
   );
+  assertNodeHostLegacyStateMigrated(selectedEnv);
+  if (!reply) {
+    return null;
+  }
+  if (!reply.ok || reply.type !== NODE_HOST_CONFIG_KEY) {
+    throw new Error("Unexpected node-host configuration read result");
+  }
+  const stored = reply.row;
   if (!stored) {
     return null;
   }
-  if (!Number.isSafeInteger(stored.updatedAtMs) || stored.updatedAtMs < 0) {
+  const value: unknown = JSON.parse(stored.value_json);
+  if (!Number.isSafeInteger(stored.updated_at_ms) || stored.updated_at_ms < 0) {
     throw new Error("invalid node-host SQLite row: updated_at_ms must be a non-negative integer");
   }
-  return normalizeStoredNodeHostConfig(stored.value);
+  return normalizeStoredNodeHostConfig(value);
 }
 
 /** Load canonical node-host state. Legacy files block the read until Doctor migrates them. */
 export async function loadNodeHostConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<NodeHostConfig | null> {
-  assertNodeHostLegacyStateMigrated(env);
   return readNodeHostConfig(env);
 }
 
@@ -219,7 +220,6 @@ export async function loadNodeHostConfig(
 export async function loadNodeHostConfigReadOnly(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<NodeHostConfig | null> {
-  assertNodeHostLegacyStateMigrated(env);
   return readNodeHostConfig(env);
 }
 
@@ -241,9 +241,9 @@ export async function configureNodeHost(params: {
 }): Promise<NodeHostConfig> {
   const env = params.env ?? process.env;
   assertNodeHostLegacyStateMigrated(env);
-  const explicitNodeId = optionalInputString(params.nodeId);
-  const explicitDisplayName = optionalInputString(params.displayName);
-  const fallbackDisplayName = optionalInputString(params.fallbackDisplayName);
+  const explicitNodeId = normalizeOptionalString(params.nodeId);
+  const explicitDisplayName = normalizeOptionalString(params.displayName);
+  const fallbackDisplayName = normalizeOptionalString(params.fallbackDisplayName);
   const candidateNodeId = params.candidateNodeId?.trim() || crypto.randomUUID();
   const gateway = normalizeGatewayConfig(params.gateway);
   const commands =
@@ -253,6 +253,7 @@ export async function configureNodeHost(params: {
     throw new Error("invalid node-host updatedAtMs: expected a non-negative integer");
   }
 
+  const stateOptions = { env };
   let clearedCommands = false;
   const config = runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getNodeSqliteKysely<NodeHostConfigDatabase>(db);
@@ -293,7 +294,7 @@ export async function configureNodeHost(params: {
         ),
     );
     return next;
-  }, databaseOptions(env));
+  }, stateOptions);
 
   // Detect a retired writer that recreated node.json while the transaction committed.
   assertNodeHostLegacyStateMigrated(env);

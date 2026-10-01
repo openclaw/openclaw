@@ -1,13 +1,15 @@
 import { fork, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import * as sqliteLocation from "../infra/sqlite-readonly-location.js";
+import * as sqliteSource from "../infra/sqlite-source-handle.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   runDatabaseVerifyWorker,
   terminateDatabaseVerifyWorker,
@@ -66,13 +68,16 @@ describe("database verifier child process entrypoint", () => {
     fs.writeFileSync(databasePath, source);
 
     await expect(
-      runDatabaseVerifyWorker([{ path: databasePath, kind: "state", label: "synthetic database" }]),
+      runDatabaseVerifyWorker([
+        { path: databasePath, kind: "state", label: "synthetic database", check: "quick" },
+      ]),
     ).resolves.toEqual([
       {
         path: databasePath,
         ok: false,
-        error: "Error: file is not a database (code=ERR_SQLITE_ERROR, errcode=26)",
-        terminal: false,
+        error:
+          "SqliteIntegrityError: SQLite quick_check failed for synthetic database: file is not a database (code=ERR_SQLITE_ERROR, errcode=26)",
+        terminal: true,
       },
     ]);
     expect(fs.readFileSync(databasePath)).toEqual(source);
@@ -106,6 +111,13 @@ describe("database verifier child process entrypoint", () => {
 });
 
 describe("database verifier worker lifetime", () => {
+  function observeWorkerExit(child: ChildProcess): Promise<void> {
+    // Signal errors are not native exit; the error fixtures must still join the child.
+    return new Promise((resolve) => {
+      child.once("exit", () => resolve());
+    });
+  }
+
   function createWorkerFixture(): URL {
     const fixtureDir = tempDirs.make("openclaw-database-verify-lifetime-");
     const fixturePath = path.join(fixtureDir, "worker.mjs");
@@ -120,39 +132,44 @@ describe("database verifier worker lifetime", () => {
 
   it("retains a failed IPC worker until exit without losing a concurrent stop waiter", async () => {
     let worker: ChildProcess | undefined;
+    let exited: Promise<void> | undefined;
     let releasedWhileAlive: boolean | undefined;
     const verification = runDatabaseVerifyWorker([], {
       workerUrl: createWorkerFixture(),
       onWorker: (current) => {
         if (current) {
           worker = current;
+          exited = observeWorkerExit(current);
           current.disconnect();
         } else {
           releasedWhileAlive = worker?.exitCode === null && worker.signalCode === null;
         }
       },
     }).catch((error: unknown) => error);
-    if (!worker) {
+    if (!worker || !exited) {
       throw new Error("verifier did not publish its child");
     }
     const child = worker;
     let stopCompleted = false;
-    void terminateDatabaseVerifyWorker(child).then(() => {
+    const termination = terminateDatabaseVerifyWorker(child).then(() => {
       stopCompleted = true;
     });
+    try {
+      await exited;
+      const error = await verification;
 
-    await vi.waitFor(() => expect(child.exitCode ?? child.signalCode).not.toBeNull());
-    const error = await verification;
-
-    expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) {
-      throw new Error("verifier returned a non-Error IPC failure");
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) {
+        throw new Error("verifier returned a non-Error IPC failure");
+      }
+      expect(error.message).toMatch(/Channel closed|IPC channel is open/u);
+      expect({ releasedWhileAlive, stopCompleted }).toEqual({
+        releasedWhileAlive: false,
+        stopCompleted: true,
+      });
+    } finally {
+      await Promise.all([verification, termination]);
     }
-    expect(error.message).toMatch(/Channel closed|IPC channel is open/u);
-    expect({ releasedWhileAlive, stopCompleted }).toEqual({
-      releasedWhileAlive: false,
-      stopCompleted: true,
-    });
   });
 
   it.each(["not delivered", "throws"])(
@@ -220,13 +237,13 @@ describe("database verifier worker lifetime", () => {
   });
 
   it("preserves the IPC failure when termination reports a second error", async () => {
-    let worker: ChildProcess | undefined;
+    let exited: Promise<void> | undefined;
     let restoreKill: (() => void) | undefined;
     const verification = runDatabaseVerifyWorker([], {
       workerUrl: createWorkerFixture(),
       onWorker: (current) => {
         if (current) {
-          worker = current;
+          exited = observeWorkerExit(current);
           const kill = vi.spyOn(current, "kill").mockImplementation(() => {
             current.emit("error", Object.assign(new Error("signal refused"), { code: "EPERM" }));
             return false;
@@ -240,12 +257,14 @@ describe("database verifier worker lifetime", () => {
       await expect(verification).rejects.toMatchObject({ code: "ERR_IPC_CHANNEL_CLOSED" });
     } finally {
       restoreKill?.();
-      await vi.waitFor(() => expect(worker?.exitCode ?? worker?.signalCode).not.toBeNull());
+      await exited;
     }
   });
 
   it("keeps stop joined while the native IPC disconnect notification is pending", async () => {
+    const disconnectPending = createDeferredCore();
     let worker: ChildProcess | undefined;
+    let exited: Promise<void> | undefined;
     let releaseDisconnect: (() => void) | undefined;
     let restoreEmit: (() => void) | undefined;
     let verificationCompleted = false;
@@ -254,12 +273,14 @@ describe("database verifier worker lifetime", () => {
       onWorker: (current) => {
         if (current) {
           worker = current;
+          exited = observeWorkerExit(current);
           const emit = current.emit.bind(current);
           const spy = vi.spyOn(current, "emit").mockImplementation((event, ...args) => {
             if (event === "disconnect") {
               releaseDisconnect = () => {
                 emit(event, ...args);
               };
+              disconnectPending.resolve();
               return true;
             }
             return emit(event, ...args);
@@ -270,17 +291,19 @@ describe("database verifier worker lifetime", () => {
     }).then(() => {
       verificationCompleted = true;
     });
-    if (!worker) {
+    if (!worker || !exited) {
       throw new Error("verifier did not publish its child");
     }
     const child = worker;
     let stopCompleted = false;
-    await vi.waitFor(() => expect(child.exitCode ?? child.signalCode).not.toBeNull());
-    const termination = terminateDatabaseVerifyWorker(child).then(() => {
-      stopCompleted = true;
-    });
+    let termination: Promise<void> | undefined;
     try {
-      await vi.waitFor(() => expect(releaseDisconnect).toBeTypeOf("function"));
+      await Promise.all([exited, disconnectPending.promise]);
+      termination = terminateDatabaseVerifyWorker(child).then(() => {
+        stopCompleted = true;
+      });
+      // Let premature completion settle before checking the held IPC boundary.
+      await nextTurn();
       expect({ stopCompleted, verificationCompleted }).toEqual({
         stopCompleted: false,
         verificationCompleted: false,
@@ -288,13 +311,18 @@ describe("database verifier worker lifetime", () => {
     } finally {
       releaseDisconnect?.();
       restoreEmit?.();
-      await Promise.all([verification, termination]);
+      await Promise.all([verification, termination ?? terminateDatabaseVerifyWorker(child)]);
     }
   });
 });
 
 describe("database verifier bounded diagnostics", () => {
-  const target = { path: "synthetic.sqlite", kind: "state", label: "synthetic database" } as const;
+  const target = {
+    path: "synthetic.sqlite",
+    kind: "state",
+    label: "synthetic database",
+    check: "quick",
+  } as const;
 
   afterEach(() => vi.restoreAllMocks());
 
@@ -309,7 +337,7 @@ describe("database verifier bounded diagnostics", () => {
     },
     {
       name: "wrapped I/O error without cause prose or metadata",
-      failure: new Error("snapshot failed", {
+      failure: new Error("source read failed", {
         cause: Object.assign(new Error("private cause prose"), {
           code: "ERR_SQLITE_ERROR",
           errcode: 10,
@@ -319,18 +347,18 @@ describe("database verifier bounded diagnostics", () => {
           stack: "private stack",
         }),
       }),
-      expected: "Error: snapshot failed (code=ERR_SQLITE_ERROR, errcode=10)",
+      expected: "Error: source read failed (code=ERR_SQLITE_ERROR, errcode=10)",
     },
     {
       name: "distinct extended codes in traversal order with exact duplicates removed",
       failure: Object.assign(
-        new Error("snapshot failed", {
+        new Error("source read failed", {
           cause: { code: "EIO", errcode: 778, cause: { code: "ERR_SQLITE_ERROR", errcode: 1034 } },
         }),
         { code: "ERR_SQLITE_ERROR", errcode: 778 },
       ),
       expected:
-        "Error: snapshot failed (code=ERR_SQLITE_ERROR, errcode=778, code=EIO, errcode=1034)",
+        "Error: source read failed (code=ERR_SQLITE_ERROR, errcode=778, code=EIO, errcode=1034)",
     },
     { name: "non-Error value", failure: "unavailable", expected: "unavailable" },
     {
@@ -352,9 +380,10 @@ describe("database verifier bounded diagnostics", () => {
       expected: "AggregateError: aggregate failure",
     },
   ])("preserves $name", async ({ failure, expected }) => {
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockRejectedValueOnce(
-      failure,
-    );
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+      // oxlint-disable-next-line typescript/only-throw-error -- Verify diagnostics for non-Error native failures.
+      throw failure;
+    });
 
     await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
       { path: target.path, ok: false, error: expected, terminal: false },
@@ -368,9 +397,13 @@ describe("database verifier bounded diagnostics", () => {
     for (let index = 7; index >= 0; index -= 1) {
       deep = Object.assign(new Error("deep failure", { cause: deep }), { errcode: index });
     }
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess")
-      .mockRejectedValueOnce(cycle)
-      .mockRejectedValueOnce(deep);
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase")
+      .mockImplementationOnce(() => {
+        throw cycle;
+      })
+      .mockImplementationOnce(() => {
+        throw deep;
+      });
 
     await expect(verifyOpenClawDatabases([target, target])).resolves.toEqual([
       {
@@ -398,39 +431,39 @@ describe("database verifier bounded diagnostics", () => {
     { code: { secret: "private metadata" }, errcode: "10" },
   ])("omits invalid code metadata %#", async (metadata) => {
     const failure = Object.assign(
-      new Error("snapshot failed", {
+      new Error("source read failed", {
         cause: { code: "EIO", errcode: 10, message: "private cause prose" },
       }),
       metadata,
     );
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockRejectedValueOnce(
-      failure,
-    );
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+      throw failure;
+    });
 
     await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
       {
         path: target.path,
         ok: false,
-        error: "Error: snapshot failed (code=EIO, errcode=10)",
+        error: "Error: source read failed (code=EIO, errcode=10)",
         terminal: false,
       },
     ]);
   });
 
   it("admits the code length and integer boundaries", async () => {
-    const failure = Object.assign(new Error("snapshot failed", { cause: { errcode: 0 } }), {
+    const failure = Object.assign(new Error("source read failed", { cause: { errcode: 0 } }), {
       code: "X".repeat(64),
       errcode: 0x7fff_ffff,
     });
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockRejectedValueOnce(
-      failure,
-    );
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+      throw failure;
+    });
 
     await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
       {
         path: target.path,
         ok: false,
-        error: `Error: snapshot failed (code=${"X".repeat(64)}, errcode=2147483647, errcode=0)`,
+        error: `Error: source read failed (code=${"X".repeat(64)}, errcode=2147483647, errcode=0)`,
         terminal: false,
       },
     ]);
@@ -442,12 +475,6 @@ describe("database verifier bounded diagnostics", () => {
     { name: "original corruption before close failure", errcode: 779, terminal: true },
   ])("preserves $name and classification", async ({ errcode, terminal }) => {
     const database = nodeSqlite.openNodeSqliteDatabase(":memory:");
-    const cleanup = vi.fn(() => true);
-    vi.spyOn(sqliteLocation, "prepareSqliteReadOnlyLocationInProcess").mockResolvedValueOnce({
-      location: ":memory:",
-      cleanup,
-      cleanupAsync: async () => cleanup(),
-    });
     vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
     if (errcode !== undefined) {
       vi.spyOn(database, "prepare").mockImplementationOnce(() => {
@@ -468,11 +495,10 @@ describe("database verifier bounded diagnostics", () => {
           error:
             errcode === undefined
               ? "Error: close failed (code=EIO, errcode=10)"
-              : `SqliteIntegrityError: SQLite integrity_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
+              : `SqliteIntegrityError: SQLite quick_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
         },
       ]);
       expect(database.isOpen).toBe(false);
-      expect(cleanup).toHaveBeenCalledOnce();
     } finally {
       if (database.isOpen) {
         close();

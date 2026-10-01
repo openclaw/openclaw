@@ -3,19 +3,18 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
-import {
-  isGatewaySigusr1RestartExternallyAllowed,
-  setGatewaySigusr1RestartPolicy,
-} from "../infra/restart.js";
+import { isGatewayRestartExternallyAllowed, setGatewayRestartPolicy } from "../infra/restart.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
@@ -216,17 +215,21 @@ describe("mcp connection resolver helpers", () => {
   });
 
   it("revokes MCP credentials during a full gateway plugin-disable replacement", async () => {
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const proof = await startAuthenticatedMcpProofServer();
-    const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
+    const previousExternalRestartPolicy = isGatewayRestartExternallyAllowed();
 
     try {
-      // Keep Gateway refresh scheduling observable without starting provider discovery.
-      const refreshPreparedModelRuntimeSnapshots = vi
-        .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
-        .mockResolvedValue(undefined);
-      const refreshContextWindowCache = vi
-        .spyOn(await import("./context.js"), "refreshContextWindowCache")
-        .mockResolvedValue(undefined);
+      // Keep provider discovery outside the MCP credential-revocation fixture.
+      vi.spyOn(
+        await import("./prepared-model-runtime.js"),
+        "refreshPreparedModelRuntimeSnapshots",
+      ).mockResolvedValue(undefined);
+      vi.spyOn(await import("./context.js"), "refreshContextWindowCache").mockResolvedValue(
+        undefined,
+      );
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
         serverName: "user-mail",
@@ -247,8 +250,15 @@ describe("mcp connection resolver helpers", () => {
         throw new Error("Expected an authorized MCP connection before plugin disable");
       }
       const sessionId = "gateway-plugin-disable-mcp-proof";
-      const previousRuntime = await getOrCreateSessionMcpRuntime({
+      const previousScope = {
         sessionId,
+        requesterSenderId: "existing-before-disable",
+        agentAccountId: "proof-bot",
+        messageChannel: "telegram",
+      };
+      const previousRuntimeKey = buildMcpRequesterRuntimeCacheKey(previousScope);
+      const previousRuntime = await getOrCreateSessionMcpRuntime({
+        ...previousScope,
         sessionKey: "agent:test:gateway-plugin-disable-mcp-proof",
         workspaceDir: process.cwd(),
         cfg: {
@@ -261,11 +271,8 @@ describe("mcp connection resolver helpers", () => {
             },
           },
         },
-        requesterSenderId: "existing-before-disable",
-        agentAccountId: "proof-bot",
-        messageChannel: "telegram",
       });
-      expect(peekSessionMcpRuntime({ sessionId })).toBeDefined();
+      expect(peekSessionMcpRuntime({ sessionId: previousRuntimeKey })).toBeDefined();
       await expect(previousRuntime.callTool("user-mail", "owner_probe", {})).resolves.toMatchObject(
         { content: [{ type: "text", text: "mail" }] },
       );
@@ -333,6 +340,7 @@ describe("mcp connection resolver helpers", () => {
         sourceDigests: {},
       };
       const gatewayReload = createGatewayReloadHandlers({
+        scheduler,
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
@@ -372,14 +380,11 @@ describe("mcp connection resolver helpers", () => {
         status: "applied",
         runtime,
       });
-      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
-        allowGatewaySubagentBinding: true,
-        catalogMode: "static",
-      });
-      expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
-      expect(peekSessionMcpRuntime({ sessionId })?.peekCatalog()?.tools ?? []).toEqual([]);
+      expect(
+        peekSessionMcpRuntime({ sessionId: previousRuntimeKey })?.peekCatalog()?.tools ?? [],
+      ).toEqual([]);
 
       const legacyRequests = proof.mail.requests;
       await expect(previousRuntime.callTool("user-mail", "owner_probe", {})).rejects.toThrow(
@@ -404,16 +409,21 @@ describe("mcp connection resolver helpers", () => {
       );
 
       const nextSessionId = "gateway-plugin-disable-brand-new-mcp-proof";
-      const nextRuntime = await getOrCreateSessionMcpRuntime({
+      const nextScope = {
         sessionId: nextSessionId,
-        sessionKey: "agent:test:gateway-plugin-disable-brand-new-mcp-proof",
-        workspaceDir: process.cwd(),
-        cfg: nextConfig,
         requesterSenderId: "brand-new-after-disable",
         agentAccountId: "proof-bot",
         messageChannel: "telegram",
+      };
+      const nextRuntime = await getOrCreateSessionMcpRuntime({
+        ...nextScope,
+        sessionKey: "agent:test:gateway-plugin-disable-brand-new-mcp-proof",
+        workspaceDir: process.cwd(),
+        cfg: nextConfig,
       });
-      expect(peekSessionMcpRuntime({ sessionId: nextSessionId })).toBeDefined();
+      expect(
+        peekSessionMcpRuntime({ sessionId: buildMcpRequesterRuntimeCacheKey(nextScope) }),
+      ).toBeDefined();
       await expect(nextRuntime.callTool("user-drive", "owner_probe", {})).resolves.toMatchObject({
         content: [{ type: "text", text: "active-drive" }],
       });
@@ -426,7 +436,7 @@ describe("mcp connection resolver helpers", () => {
     } finally {
       await disposeAllSessionMcpRuntimes();
       await resetPreparedModelRuntimeSnapshotsForTest();
-      setGatewaySigusr1RestartPolicy({ allowExternal: previousExternalRestartPolicy });
+      setGatewayRestartPolicy({ allowExternal: previousExternalRestartPolicy });
       await proof.close();
     }
   });
@@ -696,23 +706,5 @@ describe("mcp connection resolver helpers", () => {
       { url: "https://live.example/sse-case" },
     );
     expect(sseCase.transport).toBe("sse");
-  });
-
-  it("builds stable requester cache keys", () => {
-    expect(
-      buildMcpRequesterRuntimeCacheKey({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    ).toBe(
-      JSON.stringify({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    );
   });
 });

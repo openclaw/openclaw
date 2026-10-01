@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 
 export type ActivitySummaryTarget = { key: string; agentId: string };
@@ -21,10 +22,8 @@ type PendingState = {
   state: SessionActivitySummary["state"];
 };
 const pending = new Map<string, PendingState & { owner: symbol }>();
-let version = 0;
 export const activitySummaryScope = (target: ActivitySummaryTarget) =>
   `${target.agentId}\0${target.key}`;
-export const readSessionActivitySummaryVersion = () => version;
 export const sessionActivitySummaryOwnerIsCurrent = (
   target: ActivitySummaryTarget,
   owner: symbol,
@@ -54,7 +53,7 @@ export function setSessionActivitySummaryState(
   } else {
     return false;
   }
-  version += 1;
+  sessionChanges.emit({ sessionKey: target.key, agentId: target.agentId });
   return true;
 }
 
@@ -65,6 +64,8 @@ export function projectSessionActivitySummary(
     entry: SessionEntry | undefined;
     enabled?: boolean;
     watermark?: SessionTranscriptWatermark;
+    /** Physical target for cold reads; pending work retains its configured-path identity. */
+    storeTarget?: { agentId: string; storePath: string };
   },
 ): SessionActivitySummary | undefined {
   const { entry } = params;
@@ -97,10 +98,10 @@ export function projectSessionActivitySummary(
   const watermark = summary
     ? (params.watermark ??
       readSessionTranscriptWatermark({
-        agentId: params.agentId,
+        agentId: params.storeTarget?.agentId ?? params.agentId,
         sessionId: entry.sessionId,
         sessionKey: params.key,
-        storePath,
+        storePath: params.storeTarget?.storePath ?? storePath,
       }))
     : undefined;
   const fresh =

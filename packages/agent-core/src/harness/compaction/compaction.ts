@@ -8,7 +8,6 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { isRuntimeContextCarrier } from "../messages.js";
-import type { HarnessMessage } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
@@ -208,18 +207,14 @@ export function calculateContextTokens(usage: Usage): number {
   return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
-  if (msg.role === "assistant" && "usage" in msg) {
-    const assistantMsg = msg;
-    if (
-      assistantMsg.stopReason !== "aborted" &&
-      assistantMsg.stopReason !== "error" &&
-      assistantMsg.usage &&
-      calculateContextTokens(assistantMsg.usage) > 0
-    ) {
-      return assistantMsg.usage;
-    }
-  }
-  return undefined;
+  return msg.role === "assistant" &&
+    "usage" in msg &&
+    msg.stopReason !== "aborted" &&
+    msg.stopReason !== "error" &&
+    msg.usage &&
+    calculateContextTokens(msg.usage) > 0
+    ? msg.usage
+    : undefined;
 }
 
 function isUnavailableContextBarrier(message: AgentMessage): boolean {
@@ -291,23 +286,9 @@ function getLastAssistantUsageInfo(
 /** Estimate context tokens for messages using provider usage when available. */
 export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
   const usageInfo = getLastAssistantUsageInfo(messages);
-
-  if (!usageInfo) {
-    let estimated = 0;
-    for (const message of messages) {
-      estimated += estimateTokens(message);
-    }
-    return {
-      tokens: estimated,
-      usageTokens: 0,
-      trailingTokens: estimated,
-      lastUsageIndex: null,
-    };
-  }
-
-  const usageTokens = calculateContextTokens(usageInfo.usage);
+  const usageTokens = usageInfo ? calculateContextTokens(usageInfo.usage) : 0;
   let trailingTokens = 0;
-  for (const message of messages.slice(usageInfo.index + 1)) {
+  for (const message of usageInfo ? messages.slice(usageInfo.index + 1) : messages) {
     trailingTokens += estimateTokens(message);
   }
 
@@ -315,7 +296,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
     tokens: usageTokens + trailingTokens,
     usageTokens,
     trailingTokens,
-    lastUsageIndex: usageInfo.index,
+    lastUsageIndex: usageInfo?.index ?? null,
   };
 }
 
@@ -352,12 +333,10 @@ export function estimateTokens(message: AgentMessage): number {
     return 0;
   }
   let chars = 0;
-  const harnessMessage = message as HarnessMessage;
 
-  switch (harnessMessage.role) {
+  switch (message.role) {
     case "assistant": {
-      const assistant = harnessMessage;
-      for (const block of assistant.content) {
+      for (const block of message.content) {
         if (block.type === "text") {
           chars += estimateStringChars(block.text);
         } else if (block.type === "thinking") {
@@ -368,48 +347,34 @@ export function estimateTokens(message: AgentMessage): number {
             estimateStringChars(stringifyCompactionValue(block.arguments));
         }
       }
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      break;
     }
     case "user": {
-      chars = countContentChars(harnessMessage.content);
+      chars = countContentChars(message.content);
       // serializeConversation projects this exact persisted-sender suffix.
-      chars += estimateStringChars(formatPersistedSenderSuffix(harnessMessage));
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      chars += estimateStringChars(formatPersistedSenderSuffix(message));
+      break;
     }
     case "custom":
     case "toolResult": {
-      chars = countContentChars(harnessMessage.content);
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      chars = countContentChars(message.content);
+      break;
     }
     case "bashExecution": {
-      chars =
-        estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      chars = estimateStringChars(message.command) + estimateStringChars(message.output);
+      break;
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = estimateStringChars(harnessMessage.summary);
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      chars = estimateStringChars(message.summary);
+      break;
     }
   }
 
-  return 0;
+  return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
 }
 function isCutPointMessage(message: AgentMessage): boolean {
-  switch (message.role) {
-    case "custom":
-      return !isRuntimeContextCarrier(message);
-    case "user":
-    case "assistant":
-    case "bashExecution":
-    case "branchSummary":
-    case "compactionSummary":
-      return true;
-    case "toolResult":
-      return false;
-  }
-
-  return false;
+  return message.role === "assistant" || isTurnStartMessage(message);
 }
 
 function isTurnStartMessage(message: AgentMessage): boolean {
@@ -748,14 +713,9 @@ export function prepareCompaction(
     return ok(undefined);
   }
 
-  let prevBoundaryIndex = -1;
-  for (let i = pathEntries.length - 1; i >= 0; i--) {
-    const type = pathEntries.at(i)?.type;
-    if (type === "compaction" || type === "reset") {
-      prevBoundaryIndex = i;
-      break;
-    }
-  }
+  let prevBoundaryIndex = pathEntries.findLastIndex(
+    (entry) => entry?.type === "compaction" || entry?.type === "reset",
+  );
 
   let previousSummary: string | undefined;
   let previousSummaryDetails: CompactionDetails | undefined;
@@ -857,21 +817,12 @@ export function prepareCompaction(
 
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [...resetPreludeMessages];
-  for (let i = boundaryStart; i < historyEnd; i++) {
+  const turnPrefixMessages: AgentMessage[] = [];
+  for (let i = boundaryStart; i < cutPoint.firstKeptEntryIndex; i++) {
     const entry = effectiveEntries.at(i);
     const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (msg) {
-      messagesToSummarize.push(msg);
-    }
-  }
-  const turnPrefixMessages: AgentMessage[] = [];
-  if (cutPoint.isSplitTurn) {
-    for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
-      const entry = effectiveEntries.at(i);
-      const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      if (msg) {
-        turnPrefixMessages.push(msg);
-      }
+      (i < historyEnd ? messagesToSummarize : turnPrefixMessages).push(msg);
     }
   }
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {

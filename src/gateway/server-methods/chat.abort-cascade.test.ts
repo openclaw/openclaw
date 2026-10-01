@@ -1,21 +1,20 @@
 /** Real handler and registry proof for session-wide descendant cancellation ownership. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import {
-  addSubagentRunForTests,
-  getSubagentRunByChildSessionKey,
-  resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
-} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import * as transcriptInject from "./chat-transcript-inject.js";
+import * as transcriptPersistence from "./chat-transcript-persistence.js";
 import { requireLastRespondCall } from "./chat.abort-authorization.test-helpers.js";
 import {
   createActiveRun,
@@ -23,29 +22,89 @@ import {
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
 
-vi.mock("../session-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadSessionEntry: (sessionKey: string) => ({
-    cfg: {},
+const fixture = useChatAbortRegistryFixture();
+const writeSession = (sessionKey: string, sessionId: string) =>
+  writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
     agentId: "main",
-    canonicalKey: sessionKey,
-    entry: { sessionId: "main-session" },
-  }),
-}));
+    sessionKey,
+    defaultSessionId: sessionId,
+  });
 
 describe("descendant cascade ownership", () => {
-  beforeEach(() => {
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
+  it("does not stop descendants after the original caller is revoked during parent cancellation", async () => {
+    const sessionKey = "agent:main:main";
+    const childKey = "agent:main:subagent:retained-stop";
+    await writeSession(sessionKey, "main-session");
+    await writeSession(childKey, "retained-stop-child");
+    await registerSubagentRun({
+      runId: "retained-stop-child",
+      childSessionKey: childKey,
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId: "parent",
+      requesterDisplayKey: sessionKey,
+      task: "retain original Stop authority",
+      cleanup: "keep",
+      collect: true,
+      queued: true,
     });
-  });
-  afterEach(async () => {
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    subagentRegistryTesting.setDepsForTest();
-    swarmSchedulerTesting.reset();
-    vi.restoreAllMocks();
+    const started = createDeferred();
+    const start = vi.fn(async () => {
+      started.resolve();
+    });
+    enqueueSwarmRun({
+      groupId: "retained-stop",
+      runId: "retained-stop-child",
+      maxConcurrent: 1,
+      activeRunIds: ["held-capacity"],
+      start,
+      onStartFailure: () => true,
+    });
+    let current = true;
+    const parent = createActiveRun(sessionKey, {
+      sessionId: "main-session",
+      agentId: "main",
+      owner: { connId: "owner" },
+    });
+    parent.controller.signal.addEventListener("abort", () => {
+      current = false;
+    });
+    const context = createChatAbortContext({ chatAbortControllers: new Map([["parent", parent]]) });
+    context.chatRunState.getOrCreate("parent").buffer = "cancelled parent partial";
+    using persist = vi
+      .spyOn(transcriptPersistence, "persistAbortedPartials")
+      .mockResolvedValue(undefined);
+    const respond = await invokeChatAbortHandler({
+      handler: (options) =>
+        handleChatAbortRequestWithLifecycle({
+          ...options,
+          hasCurrentClientAuthority: () => current,
+        }),
+      context,
+      request: { sessionKey, runId: "parent" },
+      client: { connId: "owner", connect: { scopes: ["operator.write"] } },
+    });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringMatching(
+          /Parent run stopped, but descendant cancellation was incomplete: .*Gateway requester authority changed/,
+        ),
+      }),
+    );
+    expect(parent.controller.signal.aborted).toBe(true);
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
+      "parent",
+    ]);
+    expect(getSubagentRunByChildSessionKey(childKey)?.execution.endedAt).toBeUndefined();
+    expect(start).not.toHaveBeenCalled();
+    releaseSwarmRun("held-capacity");
+    await started.promise;
+    expect(start).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -69,6 +128,8 @@ describe("descendant cascade ownership", () => {
     const sessionKey = kind.includes("worker") ? "global" : "agent:main:main";
     const cfg: OpenClawConfig = sessionKey === "global" ? { session: { scope: "global" } } : {};
     const childKey = "agent:main:subagent:cascade-ownership";
+    await writeSession(sessionKey, "main-session");
+    await writeSession(childKey, "cascade-queued");
     const canCascade = ["owned", "orphan", "represented worker", "late descendant"].includes(kind);
     const hasOwnedActive = kind !== "orphan" && !kind.startsWith("all foreign");
     const mine = createActiveRun(sessionKey, {
@@ -141,11 +202,11 @@ describe("descendant cascade ownership", () => {
           : kind === "hidden worker"
             ? "run-foreign"
             : "worker-run";
-      context.workerEnvironmentService = {
+      context.workerEnvironmentService = createWorkerInferenceCancellationService(
+        "main-session",
+        [workerRunId],
         cancelInferenceForSession,
-        hasInferenceForSession: (sessionId: string, runId?: string) =>
-          sessionId === "main-session" && (!runId || runId === workerRunId),
-      };
+      );
     }
     const registerChild = () =>
       registerSubagentRun({
@@ -161,7 +222,8 @@ describe("descendant cascade ownership", () => {
         queued: true,
       });
     if (kind === "late descendant") {
-      addSubagentRunForTests({
+      await writeSession("agent:main:subagent:orchestrator", "orchestrator");
+      await registerSubagentRun({
         runId: "orchestrator",
         childSessionKey: "agent:main:subagent:orchestrator",
         requesterSessionKey: sessionKey,
@@ -170,11 +232,10 @@ describe("descendant cascade ownership", () => {
         requesterDisplayKey: sessionKey,
         task: "live orchestrator",
         cleanup: "keep",
-        createdAt: 1,
-        startedAt: 2,
+        collect: true,
       });
     } else {
-      registerChild();
+      await registerChild();
     }
     const start = vi.fn(async () => {});
     enqueueSwarmRun({
@@ -238,7 +299,7 @@ describe("descendant cascade ownership", () => {
           expect(
             getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator")?.execution.endedAt,
           ).toBeUndefined();
-          registerChild();
+          await registerChild();
         }
         if (canCascade) {
           expect(

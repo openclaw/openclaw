@@ -1,66 +1,59 @@
 import { randomUUID } from "node:crypto";
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { Static } from "typebox";
 import { Value } from "typebox/value";
 import { WebSocket } from "ws";
 import {
   type WorkerConnectParams,
   type WorkerHeartbeatParams,
-  type WorkerHeartbeatResponseFrame,
   WorkerHeartbeatResponseFrameSchema,
   type WorkerLiveEventParams,
-  type WorkerLiveEventResponseFrame,
   WorkerLiveEventResponseFrameSchema,
-  type WorkerPortalParams,
-  type WorkerPortalResponseFrame,
-  WorkerPortalResponseFrameSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-  type WorkerSessionsSendParams,
-  type WorkerSessionsSendResponseFrame,
-  WorkerSessionsSendResponseFrameSchema,
-  type WorkerSessionsSpawnParams,
-  type WorkerSessionsSpawnResponseFrame,
-  WorkerSessionsSpawnResponseFrameSchema,
   type WorkerTranscriptCommitParams,
-  type WorkerTranscriptCommitResponseFrame,
   WorkerTranscriptCommitResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   type WorkerComputerParams,
-  type WorkerComputerResponseFrame,
   WorkerComputerResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import {
+  type WorkerGatewayToolInvokeParams,
+  type WorkerGatewayToolCancelParams,
+  type WorkerGatewayToolUpdateFrame,
+  WorkerGatewayToolResponseFrameSchema,
+  WorkerGatewayToolCancelResponseFrameSchema,
+  WORKER_GATEWAY_TOOL_METHODS,
+  isWorkerGatewayToolFrameWithinBudget,
+  validateWorkerGatewayToolUpdateFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import {
   type WorkerInferenceCancelParams,
-  type WorkerInferenceCancelResponseFrame,
   WorkerInferenceCancelResponseFrameSchema,
   type WorkerInferenceEventFrame,
   type WorkerInferenceStartParams,
-  type WorkerInferenceStartResponseFrame,
   WorkerInferenceStartResponseFrameSchema,
   type WorkerInferenceTerminalFrame,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  WorkerSkillWorkshopResponseFrameSchema,
-  type WorkerSkillWorkshopParams,
-  type WorkerSkillWorkshopResponseFrame,
-} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
   createPendingRequestRegistry,
   type PendingRequestEntry,
 } from "../shared/pending-request-registry.js";
-import {
-  WorkerConnectionInterruptedError,
-  toWorkerConnectionError,
-} from "./worker-connection-contract.js";
+import { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
-  "skill-workshop": {
-    method: "worker.skill-workshop",
-    responseSchema: WorkerSkillWorkshopResponseFrameSchema,
+  "gateway-tool": {
+    method: WORKER_GATEWAY_TOOL_METHODS.invoke,
+    responseSchema: WorkerGatewayToolResponseFrameSchema,
+  },
+  "gateway-tool-cancel": {
+    method: WORKER_GATEWAY_TOOL_METHODS.cancel,
+    responseSchema: WorkerGatewayToolCancelResponseFrameSchema,
   },
   heartbeat: {
     method: "worker.heartbeat",
@@ -73,18 +66,6 @@ const WORKER_REQUEST_SPECS = {
   "live-event": {
     method: "worker.live-event",
     responseSchema: WorkerLiveEventResponseFrameSchema,
-  },
-  "sessions-spawn": {
-    method: "worker.sessions.spawn",
-    responseSchema: WorkerSessionsSpawnResponseFrameSchema,
-  },
-  "sessions-send": {
-    method: "worker.sessions.send",
-    responseSchema: WorkerSessionsSendResponseFrameSchema,
-  },
-  portal: {
-    method: "worker.portal",
-    responseSchema: WorkerPortalResponseFrameSchema,
   },
   computer: {
     method: "worker.computer",
@@ -102,28 +83,17 @@ const WORKER_REQUEST_SPECS = {
 
 type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
 type WorkerRequestParams = {
-  "skill-workshop": WorkerSkillWorkshopParams;
+  "gateway-tool": WorkerGatewayToolInvokeParams;
+  "gateway-tool-cancel": WorkerGatewayToolCancelParams;
   heartbeat: WorkerHeartbeatParams;
   transcript: WorkerTranscriptCommitParams;
   "live-event": WorkerLiveEventParams;
-  "sessions-spawn": WorkerSessionsSpawnParams;
-  "sessions-send": WorkerSessionsSendParams;
-  portal: WorkerPortalParams;
   computer: WorkerComputerParams;
   "inference-start": WorkerInferenceStartParams;
   "inference-cancel": WorkerInferenceCancelParams;
 };
 type WorkerResponseFrames = {
-  "skill-workshop": WorkerSkillWorkshopResponseFrame;
-  heartbeat: WorkerHeartbeatResponseFrame;
-  transcript: WorkerTranscriptCommitResponseFrame;
-  "live-event": WorkerLiveEventResponseFrame;
-  "sessions-spawn": WorkerSessionsSpawnResponseFrame;
-  "sessions-send": WorkerSessionsSendResponseFrame;
-  portal: WorkerPortalResponseFrame;
-  computer: WorkerComputerResponseFrame;
-  "inference-start": WorkerInferenceStartResponseFrame;
-  "inference-cancel": WorkerInferenceCancelResponseFrame;
+  [K in WorkerRequestKind]: Static<(typeof WORKER_REQUEST_SPECS)[K]["responseSchema"]>;
 };
 type WorkerResponseFrame = WorkerResponseFrames[WorkerRequestKind];
 type PendingRequestValue = {
@@ -165,12 +135,20 @@ export class WorkerConnectionFrameDispatcher {
     WorkerResponseFrame,
     PendingRequestValue
   >();
+  private readonly gatewayToolUpdateListeners = new Set<
+    (frame: WorkerGatewayToolUpdateFrame) => void
+  >();
   private readonly inferenceEventListeners = new Set<(frame: WorkerInferenceEventFrame) => void>();
   private readonly inferenceTerminalListeners = new Set<
     (frame: WorkerInferenceTerminalFrame) => void
   >();
 
   constructor(private readonly options: WorkerConnectionFrameDispatcherOptions) {}
+
+  onGatewayToolUpdate(listener: (frame: WorkerGatewayToolUpdateFrame) => void): () => void {
+    this.gatewayToolUpdateListeners.add(listener);
+    return () => this.gatewayToolUpdateListeners.delete(listener);
+  }
 
   onInferenceEvent(listener: (frame: WorkerInferenceEventFrame) => void): () => void {
     this.inferenceEventListeners.add(listener);
@@ -183,6 +161,14 @@ export class WorkerConnectionFrameDispatcher {
   }
 
   dispatchReadyFrame(frame: unknown, socket: WebSocket): void {
+    if (validateWorkerGatewayToolUpdateFrame(frame)) {
+      if (!isWorkerGatewayToolFrameWithinBudget(frame, frame.payload.result)) {
+        closeInvalidWorkerFrame(socket);
+        return;
+      }
+      notifyListeners(this.gatewayToolUpdateListeners, frame);
+      return;
+    }
     if (validateWorkerInferenceEventFrame(frame)) {
       if (!this.matchesInferenceIdentity(frame.payload)) {
         closeInvalidWorkerFrame(socket);
@@ -255,18 +241,28 @@ export class WorkerConnectionFrameDispatcher {
     if (!Value.Check(spec.responseSchema, frame)) {
       return false;
     }
+    if (
+      (pending.value.kind === "gateway-tool" || pending.value.kind === "gateway-tool-cancel") &&
+      !isWorkerGatewayToolFrameWithinBudget(
+        frame,
+        Value.Check(WorkerGatewayToolResponseFrameSchema, frame) && frame.ok
+          ? frame.payload
+          : undefined,
+      )
+    ) {
+      return false;
+    }
     const completed = this.pending.take(id, pending);
     if (!completed) {
       return false;
     }
-    const response = frame as WorkerResponseFrame;
     try {
-      completed.value.beforeResolve?.(response);
+      completed.value.beforeResolve?.(frame);
     } catch (error) {
-      completed.reject(toWorkerConnectionError(error));
+      completed.reject(toStructuredErrorObject(error));
       return true;
     }
-    completed.resolve(response);
+    completed.resolve(frame);
     return true;
   }
 
@@ -288,7 +284,7 @@ export class WorkerConnectionFrameDispatcher {
     try {
       encoded = JSON.stringify(frame);
     } catch (error) {
-      return Promise.reject(toWorkerConnectionError(error));
+      return Promise.reject(toStructuredErrorObject(error));
     }
     const payloadLimit =
       value.kind === "inference-start" || value.kind === "transcript"
@@ -322,7 +318,7 @@ export class WorkerConnectionFrameDispatcher {
     } catch (error) {
       this.pending
         .take(id, pending)
-        ?.reject(new WorkerConnectionInterruptedError(toWorkerConnectionError(error).message));
+        ?.reject(new WorkerConnectionInterruptedError(toStructuredErrorObject(error).message));
       this.options.interruptReadySocket(readySocket);
     }
     return pending.promise;

@@ -8,6 +8,7 @@ import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -33,7 +34,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
-import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
 import {
   isSidebarSlotVisible,
   openSlot,
@@ -47,12 +47,62 @@ describe("chat pane retained presentation lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["connection", "pane"] as const)(
+    "releases reply preview objects at the %s retirement boundary",
+    async (boundary) => {
+      class ReplyPreviewMessage {
+        role = "assistant";
+        content = "Previous connection's answer";
+      }
+      let preview: WeakRef<ReplyPreviewMessage> | undefined;
+      let requests = 0;
+      const client = createGatewayBrowserClientFixture({
+        request: async (method) => {
+          if (method !== "chat.message.get") {
+            return {};
+          }
+          requests += 1;
+          const message = new ReplyPreviewMessage();
+          preview = new WeakRef(message);
+          return { ok: true, message };
+        },
+      });
+      const { pane } = createTestChatPane({ client });
+      pane.requestReplyMessage("source-message");
+      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBeDefined());
+
+      pane.resetOlderMessagesViewport();
+      pane.presented = false;
+      pane.presented = true;
+      const retainedControl = new WeakRef({ unowned: true });
+      await collectGarbageForTest();
+      expect(retainedControl.deref()).toBeUndefined();
+      expect(preview!.deref()).toBeDefined();
+      pane.requestReplyMessage("source-message");
+      expect(requests).toBe(1);
+
+      if (boundary === "connection") {
+        pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "stopped" });
+      } else {
+        pane.disconnectedCallback();
+      }
+      const retiredControl = new WeakRef({ unowned: true });
+      await collectGarbageForTest();
+      expect(retiredControl.deref()).toBeUndefined();
+      expect(preview!.deref()).toBeUndefined();
+      expect(pane.readReplyMessage("source-message")).toBeUndefined();
+    },
+  );
+
   it.each([false, true])(
     "restores dormant sidebar tabs for compact=%s without replacing saved task preferences",
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const layout = promoteSidebarPanel(
         openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
         "companion",
@@ -60,7 +110,6 @@ describe("chat pane retained presentation lifecycle", () => {
       patchSettings({ sidebarSessionLayouts: { [state.sessionKey]: layout } });
       const presentation = pane as TestChatPane & {
         compact: boolean;
-        selectedSessionRailMode: (sessionKey: string) => "expanded" | "hidden";
       };
       presentation.compact = compact;
       pane.connectedClient = null;
@@ -73,9 +122,6 @@ describe("chat pane retained presentation lifecycle", () => {
       );
       expect(state.sidebarLayout.open).toBe(!compact);
       expect(isSidebarSlotVisible(state.sidebarLayout, "companion")).toBe(!compact);
-      expect(presentation.selectedSessionRailMode(state.sessionKey)).toBe(
-        compact ? "hidden" : "expanded",
-      );
       expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
       expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]).toMatchObject(layout);
       expect(isSidebarSlotVisible(openSlot(state.sidebarLayout, "workspace"), "workspace")).toBe(
@@ -89,11 +135,11 @@ describe("chat pane retained presentation lifecycle", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const page = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const dock = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const listeners = new Set<(draft: string) => void>();
     page.pane.context.nativeChatDrafts.subscribe = (listener) => {
@@ -420,13 +466,8 @@ describe("chat pane retained presentation lifecycle", () => {
     const release = vi.fn();
     state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
     state.realtimeTalkActive = true;
-    state.sidebarContent = { kind: "task", taskId: "task-live" };
+    state.sidebarContent = { kind: "markdown", content: "Review selection" };
     state.imageLightbox = { release, src: "blob:test", title: "preview" };
-    const detailHost = state as unknown as TaskDetailHost;
-    readTaskTranscript(detailHost, {
-      taskId: "task-live",
-    });
-    expect(detailHost.taskDetailState).toBeDefined();
     pane.presentationId = "p1:visible";
     const announcement = document.createElement("span");
     announcement.className = "chat-transcript-announcement";
@@ -437,9 +478,6 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(state.sidebarContent).toBeNull();
-    // The wiped detail slot can no longer reset the loader itself; retirement
-    // must stop its timer/fetch loop so hidden panes stop reading history.
-    expect(detailHost.taskDetailState).toBeUndefined();
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
 

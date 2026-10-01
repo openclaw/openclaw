@@ -10,11 +10,10 @@ import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./model-selection.js";
 
@@ -64,7 +63,7 @@ export function formatModelCatalogAuthLabel(
       return true;
     }
     const mode = store.profiles[id]?.type ?? cfg.auth?.profiles?.[id]?.mode;
-    return !isStoredAuthProfileType(mode) || mode === "api_key";
+    return mode !== "oauth" && mode !== "token";
   });
   if (!order.length) {
     return label.fallback;
@@ -101,21 +100,13 @@ export function formatModelCatalogAuthLabel(
   return `${profiles.join(", ")} (${label.source})`;
 }
 
-function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential["type"] {
-  return value === "api_key" || value === "oauth" || value === "token";
-}
-
 function captureProfileLabel(
-  provider: string,
   profileId: string,
   cfg: OpenClawConfig,
   store: AuthProfileStore,
 ): string {
   const profile = store.profiles[profileId];
   const configProfile = cfg.auth?.profiles?.[profileId];
-  if (!profile && isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId })) {
-    return `${profileId}=aws-sdk`;
-  }
   if (
     !profile ||
     (configProfile?.provider && configProfile.provider !== profile.provider) ||
@@ -175,6 +166,7 @@ export type ModelCatalogAuthLabels = ReadonlyMap<
 export function prepareModelCatalogAuthLabels(params: {
   config: OpenClawConfig;
   agentDir: string;
+  authStorePath: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
@@ -187,16 +179,26 @@ export function prepareModelCatalogAuthLabels(params: {
     ...Object.values(params.store.order ?? {}).flat(),
     ...Object.values(params.config.auth?.order ?? {}).flat(),
   ]);
-  for (const provider of new Set([...params.providers].map(normalizeProviderId))) {
+  const providers = new Set([...params.providers].map(normalizeProviderId));
+  if (providers.size === 0) {
+    return labels;
+  }
+  const profileLabels = [...profileIds].map(
+    (id) => [id, captureProfileLabel(id, params.config, params.store)] as const,
+  );
+  for (const provider of providers) {
     const all = {
       provider,
       profiles: Object.fromEntries(
-        [...profileIds].map((id) => [
+        profileLabels.map(([id, label]) => [
           id,
-          captureProfileLabel(provider, id, params.config, params.store),
+          !params.store.profiles[id] &&
+          isConfiguredAwsSdkAuthProfileForProvider({ cfg: params.config, provider, profileId: id })
+            ? `${id}=aws-sdk`
+            : label,
         ]),
       ),
-      source: `auth profile store: ${shortenHomePath(resolveAuthStorePathForDisplay(params.agentDir))}`,
+      source: `auth profile store: ${shortenHomePath(params.authStorePath)}`,
       fallback: captureFallbackLabel(
         provider,
         params.config,

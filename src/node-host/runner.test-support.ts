@@ -1,4 +1,5 @@
 import { type Mock, vi } from "vitest";
+import type { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import type { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
 import type { configureNodeHost, NodeHostConfig } from "./config.js";
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     request: Mock<(method: string, params?: unknown) => Promise<unknown>>;
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
+    stopAndWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
@@ -18,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
+  useRealGatewayClient: false,
   fakeRuntimeWorkerHosting: false,
   fakeRuntimeWorkerHostingDisabledReason: undefined as string | undefined,
   runnerCapacityChanged: undefined as
@@ -33,9 +36,11 @@ const mocks = vi.hoisted(() => ({
     | { request: (method: string, params?: unknown) => Promise<unknown> }
     | undefined,
   closeMcpManager: vi.fn(async () => undefined),
-  runStartupMigrations: vi.fn(async () => undefined),
   loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
-  loadDeviceAuthTokenReadOnly: vi.fn<typeof loadDeviceAuthTokenReadOnly>(() => null),
+  loadDeviceAuthTokenReadOnly: vi.fn<typeof loadDeviceAuthTokenReadOnly>(async () => null),
+  loadDeviceIdentityIfPresent: vi.fn(
+    () => null as { deviceId: string; publicKeyPem: string; privateKeyPem: string } | null,
+  ),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => {
     mocks.capturedConfiguredGatewayConfigs.push(params.gateway);
     return {
@@ -46,17 +51,23 @@ const mocks = vi.hoisted(() => ({
     };
   }),
   getRuntimeConfig: vi.fn<() => unknown>(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
-  startGatewayClientWhenEventLoopReady: vi.fn(async () => ({
-    ready: false,
-    aborted: false,
-    elapsedMs: 0,
-  })),
+  startGatewayClientWhenEventLoopReady: vi.fn<typeof startGatewayClientWhenEventLoopReady>(
+    async () => ({
+      ready: false,
+      aborted: false,
+      elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 0,
+    }),
+  ),
   resolveGatewayCredentialsWithSecretInputs: vi.fn(async (_params: { config: unknown }) => ({})),
   activeRuntime: {
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => {}),
+    tryPauseForUpdate: vi.fn(async () => true),
+    resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
     close: vi.fn(async () => {}),
   },
@@ -75,10 +86,14 @@ vi.mock("../gateway/client.js", async (importOriginal) => {
   return {
     ...actual,
     GatewayClient: function GatewayClient(opts: GatewayClientOptions) {
+      if (mocks.useRealGatewayClient) {
+        return new actual.GatewayClient(opts);
+      }
       const client = {
         request: vi.fn(async () => ({})),
         start: vi.fn(),
         stop: vi.fn(),
+        stopAndWait: vi.fn(async () => {}),
         updateNodeManifest: vi.fn(),
       };
       mocks.capturedGatewayClientOptions.push(opts);
@@ -97,7 +112,9 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
   loadDeviceAuthTokenReadOnly: mocks.loadDeviceAuthTokenReadOnly,
 }));
 
-vi.mock("../infra/device-identity.js", () => ({
+vi.mock("../infra/device-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
+  loadDeviceIdentityIfPresent: mocks.loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity: vi.fn(() => ({
     deviceId: "device-test",
     publicKeyPem: "public-key-test",
@@ -133,6 +150,7 @@ vi.mock("./config.js", () => ({
 
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => {}),
   listRegisteredNodeHostCapsAndCommands: vi.fn((context: { env: NodeJS.ProcessEnv }) => {
     mocks.runtimeSteps.push(`commands:${context.env.PATH ?? ""}`);
     return {
@@ -175,8 +193,8 @@ vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
 }));
 
-vi.mock("./startup-state-migrations.js", () => ({
-  runStartupMigrations: mocks.runStartupMigrations,
+vi.mock("./startup-state-readiness.js", () => ({
+  ensureNodeHostStateReady: () => {},
 }));
 
 vi.mock("./runtime.js", async (importOriginal) => {
@@ -210,7 +228,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
 });
 
 // Load after mock registration and retain local bindings for Vitest's export transform.
-const { runNodeHost } = await import("./runner.js");
+const { loadResumableNodeHostGateway, runNodeHost } = await import("./runner.js");
 const { startNodeHostMcpManager } = await import("./mcp.js");
 
 export function lastCapturedOptions(): GatewayClientOptions | undefined {
@@ -235,6 +253,7 @@ export function resetRunnerTestState() {
   mocks.nodeSkillDescriptors = [];
   mocks.runtimeSteps = [];
   mocks.useFakeRuntime = false;
+  mocks.useRealGatewayClient = false;
   mocks.fakeRuntimeWorkerHosting = false;
   mocks.fakeRuntimeWorkerHostingDisabledReason = undefined;
   mocks.runnerCapacityChanged = undefined;
@@ -247,10 +266,11 @@ export function resetRunnerTestState() {
   mocks.runtimeClient = undefined;
   vi.clearAllMocks();
   mocks.loadNodeHostConfig.mockReset().mockResolvedValue(null);
-  mocks.loadDeviceAuthTokenReadOnly.mockReset().mockReturnValue(null);
+  mocks.loadDeviceAuthTokenReadOnly.mockReset().mockResolvedValue(null);
+  mocks.loadDeviceIdentityIfPresent.mockReset().mockReturnValue(null);
   mocks.getRuntimeConfig.mockReturnValue({
     gateway: { handshakeTimeoutMs: 1_000 },
   });
 }
 
-export { mocks, runNodeHost, startNodeHostMcpManager };
+export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManager };

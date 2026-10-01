@@ -8,6 +8,7 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import {
+  createChannelAccountSecretOwner,
   createChannelSecretTargetRegistryEntries,
   getChannelRecord,
 } from "./channel-secret-basic-runtime.js";
@@ -83,6 +84,15 @@ export function loadOfficialExternalChannelSecretContractApi(
           // env fallbacks. Materialize only into the ephemeral runtime config.
           channel[field.activationField] = activationEnvValue;
         }
+        const { accounts: _accounts, ...defaultAccount } = channel;
+        const sharedChannel = Object.fromEntries(
+          Object.entries(defaultAccount).filter(
+            ([key]) =>
+              !contract.fields.some(
+                (credential) => key === credential.field || key === credential.activationField,
+              ),
+          ),
+        );
         collectSecretInputAssignment({
           value: channel[field.field],
           path: `channels.${contract.channelId}.${field.field}`,
@@ -99,6 +109,13 @@ export function loadOfficialExternalChannelSecretContractApi(
               allowEnv: true,
             }),
           inactiveReason: `external channel is disabled or ${field.activationField ?? "its credential surface"} is not configured.`,
+          owner: createChannelAccountSecretOwner(
+            contract.channelId,
+            "default",
+            channel,
+            defaultAccount,
+            defaultAccount,
+          ),
           apply: (value) => {
             channel[field.field] = value;
           },
@@ -128,6 +145,13 @@ export function loadOfficialExternalChannelSecretContractApi(
                 allowEnv: false,
               }),
             inactiveReason: `external channel account is disabled or ${field.activationField ?? "its credential surface"} is not configured.`,
+            owner: createChannelAccountSecretOwner(
+              contract.channelId,
+              accountId,
+              channel,
+              account,
+              { channel: sharedChannel, account },
+            ),
             apply: (value) => {
               account[field.field] = value;
             },

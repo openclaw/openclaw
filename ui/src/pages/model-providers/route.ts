@@ -15,16 +15,23 @@ export type ModelProvidersRouteData = {
   /** Concrete agent whose credential store populated the auth snapshot. */
   agentId: string | null;
   selectionIntentRevision: number;
+  /** An explicit connection entry from a saved setup link. */
+  connect?: boolean;
+  provider?: string;
 };
 
 async function loadModelProvidersRouteData(
   context: Pick<ApplicationContext, "gateway" | "agents" | "settingsAgentSelection">,
   options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
+  const search = new URLSearchParams(options.location.search);
+  const connect = search.get("connect") === "1";
+  const provider = search.get("provider")?.trim() ?? "";
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const selection = context.settingsAgentSelection;
   const selectionIntentRevision = selection.intentRevision;
+  const owner = { gateway, gatewaySnapshot, selectionIntentRevision, connect, provider };
   let agentId = selection.state.selectedId;
   const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
@@ -41,43 +48,32 @@ async function loadModelProvidersRouteData(
       selection.state.selectedId === agentId
     );
   };
-  if (!client || !isCurrent()) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      data: EMPTY_MODEL_PROVIDERS_DATA,
-      client: null,
-      agentId,
-      selectionIntentRevision,
-    };
-  }
-  if (!agentId) {
-    await context.agents.ensureList();
-    // The selection owner validates pending cold-link intent against the roster.
-    agentId = selection.state.selectedId;
-  }
-  if (!agentId || !isCurrent()) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      data: EMPTY_MODEL_PROVIDERS_DATA,
-      client: null,
-      agentId,
-      selectionIntentRevision,
-    };
+  if (client && isCurrent()) {
+    if (!agentId) {
+      await context.agents.ensureList();
+      // The selection owner validates pending cold-link intent against the roster.
+      agentId = selection.state.selectedId;
+    }
+    if (agentId && isCurrent()) {
+      return {
+        ...owner,
+        data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
+        client,
+        agentId,
+      };
+    }
   }
   return {
-    gateway,
-    gatewaySnapshot,
-    data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
-    client,
+    ...owner,
+    data: EMPTY_MODEL_PROVIDERS_DATA,
+    client: null,
     agentId,
-    selectionIntentRevision,
   };
 }
 
 export const page = definePage({
   ...routePageSpec("model-providers"),
+  loaderDeps: (_context, location) => location.search,
   loader: loadModelProvidersRouteData,
   component: () =>
     import("./model-providers-page.ts").then(() => ({

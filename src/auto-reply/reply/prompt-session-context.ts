@@ -6,7 +6,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -44,17 +44,6 @@ export type PreparedReplyConversation = {
 function normalizePromptRouteChannel(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalString(raw);
   return normalized && normalized !== "none" ? normalized : undefined;
-}
-
-function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
-  return normalizePromptRouteChannel(sessionDeliveryChannel(entry));
-}
-
-function resolvePersistedPromptSurface(entry?: SessionEntry): string | undefined {
-  return (
-    normalizePromptRouteChannel(sessionDeliveryOrigin(entry)?.surface) ??
-    resolvePersistedPromptProvider(entry)
-  );
 }
 
 /** Prepares descriptive conversation facts without borrowing execution or sender authority. */
@@ -129,14 +118,15 @@ export function prepareReplyConversation(params: {
     GroupSpace: ctx.GroupSpace,
   };
   if (isSystemEvent) {
+    const persistedProvider = normalizePromptRouteChannel(sessionDeliveryChannel(inherited));
+    const originatingChannel = normalizePromptRouteChannel(ctx.OriginatingChannel);
     fields.Provider =
-      normalizePromptRouteChannel(ctx.Provider) ??
-      normalizePromptRouteChannel(ctx.OriginatingChannel) ??
-      resolvePersistedPromptProvider(inherited);
+      normalizePromptRouteChannel(ctx.Provider) ?? originatingChannel ?? persistedProvider;
     fields.Surface =
       normalizePromptRouteChannel(ctx.Surface) ??
-      normalizePromptRouteChannel(ctx.OriginatingChannel) ??
-      resolvePersistedPromptSurface(inherited);
+      originatingChannel ??
+      normalizePromptRouteChannel(origin?.surface) ??
+      persistedProvider;
     fields.ChatType = chatType;
     fields.OriginatingChannel ??= inherited ? (route?.channel ?? persisted?.channel) : undefined;
     fields.OriginatingTo ??= inherited ? (route?.to ?? persisted?.to) : undefined;

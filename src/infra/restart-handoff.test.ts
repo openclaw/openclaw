@@ -112,9 +112,16 @@ function insertHandoffRow(
 }
 
 function expectWrittenHandoff(
-  opts: Parameters<typeof writeGatewayRestartHandoffSync>[0],
+  opts: Omit<Parameters<typeof writeGatewayRestartHandoffSync>[0], "restartKind"> & {
+    restartKind?: GatewayRestartHandoff["restartKind"];
+  },
 ): GatewayRestartHandoff {
-  const handoff = writeGatewayRestartHandoffSync(opts);
+  const handoff = writeGatewayRestartHandoffSync({
+    pid: 12_345,
+    restartKind: "full-process",
+    supervisorMode: "external",
+    ...opts,
+  });
   if (handoff === null) {
     throw new Error("Expected gateway restart handoff to be written");
   }
@@ -185,9 +192,6 @@ describe("gateway restart handoff", () => {
     const env = createHandoffEnv();
     const handoff = expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
     });
     closeOpenClawStateDatabaseForTest();
@@ -221,8 +225,6 @@ describe("gateway restart handoff", () => {
       env,
       pid: 1,
       reason: `${"a".repeat(199)}😀tail`,
-      restartKind: "full-process",
-      supervisorMode: "external",
     });
 
     expect(handoff.reason).toHaveLength(199);
@@ -267,37 +269,11 @@ describe("gateway restart handoff", () => {
     expect(Buffer.from(handoff?.intentId ?? "").toString()).toBe(handoff?.intentId);
   });
 
-  it("persists restart trace timing for supervised process handoff", () => {
-    const env = createHandoffEnv();
-
-    const handoff = expectWrittenHandoff({
-      env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "launchd",
-      createdAt: 1_000,
-      restartTrace: {
-        startedAt: 10_000,
-        lastAt: 10_250,
-      },
-    });
-
-    expect(handoff.restartTrace).toStrictEqual({
-      startedAt: 10_000,
-      lastAt: 10_250,
-    });
-    expect(readGatewayRestartHandoffSync(env, 1_500)?.restartTrace).toStrictEqual({
-      startedAt: 10_000,
-      lastAt: 10_250,
-    });
-  });
-
   it("canonicalizes fractional restart trace timing before persistence", () => {
     const env = createHandoffEnv();
 
     const handoff = expectWrittenHandoff({
       env,
-      pid: 12_345,
       restartKind: "update-process",
       supervisorMode: "systemd",
       createdAt: 1_000,
@@ -337,8 +313,6 @@ describe("gateway restart handoff", () => {
 
     const handoff = expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
       supervisorMode: "launchd",
       createdAt: 1_000,
       restartTrace: {
@@ -371,8 +345,6 @@ describe("gateway restart handoff", () => {
     expectWrittenHandoff({
       env,
       pid: 111,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
       ttlMs: 1_000,
     });
@@ -392,9 +364,6 @@ describe("gateway restart handoff", () => {
 
     expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
     });
     expectWrittenHandoff({
       env,
@@ -420,10 +389,7 @@ describe("gateway restart handoff", () => {
     const env = createHandoffEnv();
     const handoff = expectWrittenHandoff({
       env,
-      pid: 12_345,
       reason: "gateway.restart",
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
     });
 
@@ -454,9 +420,6 @@ describe("gateway restart handoff", () => {
     const env = createHandoffEnv();
     expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
     });
 
@@ -490,9 +453,6 @@ describe("gateway restart handoff", () => {
       insert: (env: NodeJS.ProcessEnv) =>
         expectWrittenHandoff({
           env,
-          pid: 12_345,
-          restartKind: "full-process",
-          supervisorMode: "external",
           createdAt: 1_000,
           ttlMs: 1_000,
         }),
@@ -523,9 +483,6 @@ describe("gateway restart handoff", () => {
       insert: (env: NodeJS.ProcessEnv) =>
         expectWrittenHandoff({
           env,
-          pid: 12_345,
-          restartKind: "full-process",
-          supervisorMode: "external",
           createdAt: 2_000,
         }),
       now: 1_500,
@@ -552,9 +509,6 @@ describe("gateway restart handoff", () => {
     const env = createHandoffEnv();
     const handoff = expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
     });
     closeOpenClawStateDatabaseForTest();
@@ -611,9 +565,6 @@ describe("gateway restart handoff", () => {
     const env = createHandoffEnv();
     expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
       ttlMs: 1_000,
     });

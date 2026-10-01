@@ -1,6 +1,6 @@
-// Slack plugin module implements client behavior.
 import { hash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { SlackLookupClientOptions, SlackProxyDispatcher } from "./client-options.js";
 import {
   resolveSlackLookupClientOptions,
@@ -10,6 +10,7 @@ import {
   SLACK_DEFAULT_RETRY_OPTIONS,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
+import { readLruMapEntry } from "./monitor/lru-map-cache.js";
 
 const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
 const SLACK_STARTUP_AUTH_TIMEOUT_MS = 10_000;
@@ -30,18 +31,29 @@ export {
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
-export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
+export function createSlackWebClient(
+  token: string,
+  options: WebClientOptions = {},
+  assertDirectAdapterHandoff?: () => void,
+) {
   // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
   // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
-  return new WebClient(token, resolveSlackWebClientOptions(options));
+  return new WebClient(
+    token,
+    resolveSlackWebClientOptions(options, undefined, assertDirectAdapterHandoff),
+  );
 }
 
 export function createSlackReadClient(
   token: string,
   options: WebClientOptions = {},
   dispatcher?: SlackProxyDispatcher,
+  assertDirectAdapterHandoff?: () => void,
 ) {
-  return new WebClient(token, resolveSlackReadClientOptions(options, dispatcher));
+  return new WebClient(
+    token,
+    resolveSlackReadClientOptions(options, dispatcher, assertDirectAdapterHandoff),
+  );
 }
 
 function createSlackStartupAuthFetch(baseFetch: SlackFetch): SlackFetch {
@@ -82,12 +94,26 @@ export function createSlackStartupAuthClient(token: string, options: WebClientOp
   });
 }
 
-export function createSlackLookupClient(token: string, options: SlackLookupClientOptions = {}) {
-  return new WebClient(token, resolveSlackLookupClientOptions(options));
+export function createSlackLookupClient(
+  token: string,
+  options: SlackLookupClientOptions = {},
+  assertDirectAdapterHandoff?: () => void,
+) {
+  return new WebClient(
+    token,
+    resolveSlackLookupClientOptions(options, undefined, assertDirectAdapterHandoff),
+  );
 }
 
-export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {
-  return new WebClient(token, resolveSlackWriteClientOptions(options));
+export function createSlackWriteClient(
+  token: string,
+  options: WebClientOptions = {},
+  assertDirectAdapterHandoff?: () => void,
+) {
+  return new WebClient(
+    token,
+    resolveSlackWriteClientOptions(options, undefined, assertDirectAdapterHandoff),
+  );
 }
 
 export function createSlackTokenCacheKey(token: string): string {
@@ -107,20 +133,13 @@ export function getSlackWriteClient(
 ): WebClient {
   const resolvedOptions = resolveSlackWriteClientOptions(options);
   const tokenKey = slackWriteClientCacheKey(token, resolvedOptions);
-  const cached = slackWriteClientCache.get(tokenKey);
+  const cached = readLruMapEntry(slackWriteClientCache, tokenKey);
   if (cached) {
-    slackWriteClientCache.delete(tokenKey);
-    slackWriteClientCache.set(tokenKey, cached);
     return cached;
   }
   const client = new WebClient(token, resolvedOptions);
-  if (slackWriteClientCache.size >= SLACK_WRITE_CLIENT_CACHE_MAX) {
-    const oldestTokenKey = slackWriteClientCache.keys().next().value;
-    if (oldestTokenKey) {
-      slackWriteClientCache.delete(oldestTokenKey);
-    }
-  }
   slackWriteClientCache.set(tokenKey, client);
+  pruneMapToMaxSize(slackWriteClientCache, SLACK_WRITE_CLIENT_CACHE_MAX);
   return client;
 }
 

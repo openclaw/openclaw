@@ -39,6 +39,12 @@ If the request includes an OpenResponses `user` string, the Gateway derives a st
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).
 
+Continuation mappings survive Gateway restarts in the shared state database's core keyed store (`core:openresponses`, namespace `response-sessions`) for up to 30 days, capped at the newest 5,000 responses across the Gateway. This matches the default session maintenance age and count; it does not extend the lifetime of the underlying session or transcript. Mappings contain only response/session identifiers, the auth subject (an installation-keyed bearer HMAC or verified proxy identity), agent and requested-session scope, and store-managed timestamps. No response content is copied, and no separate table or schema migration is required. The keyed store rejects expired mappings immediately on lookup and removes expired rows on subsequent writes and through the shared plugin-state maintenance sweep, which runs once per minute in bounded batches. If continuity persistence fails after an otherwise successful run, the endpoint returns HTTP `500` or a streaming `response.failed`, rather than reporting a success whose response ID cannot be continued.
+
+An unknown, expired, evicted, or out-of-scope `previous_response_id` returns the same HTTP `400` with `invalid_request_error`, including when `stream: true`. To recover, resend the full input history and omit `previous_response_id`; the Gateway never silently starts a new conversation for an unresolved continuation. Responses issued before this storage change cannot be recovered after the old Gateway exits.
+
+Incognito responses never create continuation mappings. Continue them explicitly with the same `x-openclaw-session-key` while the Incognito session is alive; using their response ID returns the same `400` as an unknown ID.
+
 ### Explicit incognito session continuation
 
 Explicitly selecting or continuing an incognito conversation with `x-openclaw-session-key` (the `sessionKey` override) requires effective `operator.admin` authority. This rule follows authority, not ingress: it denies both trusted-proxy callers without owner/admin authority and private `gateway.auth.mode="none"` callers that explicitly narrow `x-openclaw-scopes` below admin (for example, to `operator.write`). Either receives HTTP `403` with a `forbidden` error. A profile-less private no-auth caller on this path gets `missing scope: operator.admin`; for a profile-backed caller, the response hides the private target with this error shape (where `<sessionKey>` is the requested override):
@@ -143,8 +149,9 @@ Current behavior:
 
 - Text inferred from otherwise untyped bytes retains its detected encoding, including UTF-16 and Windows-1252. Declared text charsets remain supported.
 - File content is decoded and added to the **system prompt**, not the user message, so it stays ephemeral (not persisted in session history).
-- Decoded file text is wrapped as **untrusted external content** before it is added, so file bytes are treated as data, not trusted instructions. The injected block uses explicit boundary markers (`<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>`) and a `Source: External` metadata line. It intentionally omits the long `SECURITY NOTICE:` banner to preserve prompt budget; the boundary markers and metadata still apply.
+- Decoded file text is wrapped as **untrusted external content** before it is added, so file bytes are treated as data, not trusted instructions. The injected block uses explicit boundary markers (`<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>`) and a `Source: External` metadata line. It intentionally omits the one-line data-boundary note to preserve prompt budget; the boundary markers and metadata still apply.
 - PDFs are parsed for text first. If little text is found, the first pages are rasterized into images and passed to the model, and the injected file block uses the placeholder `[PDF content rendered to images]`.
+- When page, text, or image limits make extraction partial, the injected file block starts with a bounded `[Partial document: ...]` marker outside the untrusted file-content boundary.
 
 PDF parsing is provided by the bundled `document-extract` plugin, which uses `clawpdf` and its packaged PDFium WebAssembly runtime for text extraction and page rendering.
 

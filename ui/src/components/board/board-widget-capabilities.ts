@@ -19,26 +19,21 @@ export function renderBoardPendingCapabilities(options: {
       ${
         netOrigins.length > 0 || tools.length > 0
           ? html`<div class="board-widget__grant-groups">
-              ${
-                netOrigins.length > 0
+              ${(
+                [
+                  ["board.widget.networkAccess", netOrigins],
+                  ["board.widget.hostTools", tools],
+                ] as const
+              ).map(([label, capabilities]) =>
+                capabilities.length > 0
                   ? html`<section>
-                      <strong>${t("board.widget.networkAccess")}</strong>
+                      <strong>${t(label)}</strong>
                       <ul class="board-widget__grant-summary">
-                        ${netOrigins.map((origin) => html`<li>${origin}</li>`)}
+                        ${capabilities.map((capability) => html`<li>${capability}</li>`)}
                       </ul>
                     </section>`
-                  : nothing
-              }
-              ${
-                tools.length > 0
-                  ? html`<section>
-                      <strong>${t("board.widget.hostTools")}</strong>
-                      <ul class="board-widget__grant-summary">
-                        ${tools.map((tool) => html`<li>${tool}</li>`)}
-                      </ul>
-                    </section>`
-                  : nothing
-              }
+                  : nothing,
+              )}
             </div>`
           : widget.declaredSummary?.length
             ? html`<ul class="board-widget__grant-summary">
@@ -73,6 +68,7 @@ export function renderBoardPendingCapabilities(options: {
 
 export function renderBoardGrantedCapabilities(
   widget: BoardWidget,
+  presentation: "tooltip" | "details" = "tooltip",
 ): TemplateResult | typeof nothing {
   if (widget.grantState !== "granted" || !widget.declared) {
     return nothing;
@@ -87,6 +83,18 @@ export function renderBoardGrantedCapabilities(
   ];
   if (capabilities.length === 0) {
     return nothing;
+  }
+  if (presentation === "details") {
+    return html`<div
+      class="board-widget__menu-capabilities"
+      role="note"
+      aria-label=${t("board.widget.activeCapabilities")}
+    >
+      <strong>${t("board.widget.activeCapabilities")}</strong>
+      <ul>
+        ${capabilities.map((capability) => html`<li>${capability}</li>`)}
+      </ul>
+    </div>`;
   }
   return html`
     <openclaw-tooltip

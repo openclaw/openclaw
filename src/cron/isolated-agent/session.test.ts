@@ -1,5 +1,5 @@
 // Isolated agent session tests cover session creation and metadata for cron runs.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
@@ -17,20 +17,6 @@ vi.mock("../../config/sessions/reset-policy.js", () => ({
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
-vi.mock("../../agents/bootstrap-cache.js", () => ({
-  clearBootstrapSnapshot: vi.fn(),
-  clearBootstrapSnapshotOnSessionBoundary: vi.fn(({ sessionKey, boundaryAppended }) => {
-    if (sessionKey && boundaryAppended) {
-      clearBootstrapSnapshot(sessionKey);
-    }
-  }),
-  clearBootstrapSnapshotOnSessionRollover: vi.fn(({ sessionKey, previousSessionId }) => {
-    if (sessionKey && previousSessionId) {
-      clearBootstrapSnapshot(sessionKey);
-    }
-  }),
-}));
-
 vi.mock("../../agents/sessions/reset-boundary.js", () => ({
   appendSessionResetBoundary: vi.fn(() => ({
     boundaryEntryId: "cron-reset-boundary",
@@ -38,7 +24,6 @@ vi.mock("../../agents/sessions/reset-boundary.js", () => ({
   })),
 }));
 
-import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
 import { resolveCronSession } from "./session.js";
 
@@ -82,6 +67,7 @@ function resolveWithStoredEntry(params?: {
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
     store,
+    lifecycleTimestamps: {},
   });
   return {
     ...result,
@@ -93,10 +79,6 @@ function resolveWithStoredEntry(params?: {
 }
 
 describe("resolveCronSession", () => {
-  beforeEach(() => {
-    vi.mocked(clearBootstrapSnapshot).mockReset();
-  });
-
   it("preserves modelOverride and providerOverride from existing session entry", () => {
     const result = resolveWithStoredEntry({
       sessionKey: "agent:main:cron:test-job",
@@ -182,7 +164,6 @@ describe("resolveCronSession", () => {
         forceNew: true,
       }),
     ).toThrow('Session "agent:main:main" is archived. Restore it before starting new work.');
-    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
   });
 
   it("rolls an archived isolated heartbeat session into a fresh run", () => {
@@ -220,7 +201,6 @@ describe("resolveCronSession", () => {
     ).toThrow(
       'Session "agent:main:main:heartbeat" is still initializing. Retry after initialization completes.',
     );
-    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
   });
 
   it("keeps an archived isolated heartbeat read-only without forceNew", () => {
@@ -241,6 +221,84 @@ describe("resolveCronSession", () => {
 
   // New tests for session reuse behavior (#18027)
   describe("session reuse for webhooks/cron", () => {
+    it.each([
+      { name: "forced rollover", fresh: true, forceNew: true },
+      { name: "stale reset", fresh: false, forceNew: false },
+    ])("retains prior usage instances across $name", ({ fresh, forceNew }) => {
+      const sessionKey = "agent:main:cron:usage-history";
+      const entry = {
+        sessionId: "previous-run",
+        updatedAt: NOW_MS - 1_000,
+        usageFamilyKey: sessionKey,
+        usageFamilySessionIds: ["first-run", "previous-run"],
+        createdVia: "cron" as const,
+        createdActor: { type: "system" as const },
+      };
+      const result = resolveWithStoredEntry({ sessionKey, entry, fresh, forceNew });
+
+      expect(result.sessionEntry.usageFamilyKey).toBe(sessionKey);
+      expect(result.sessionEntry.usageFamilySessionIds).toEqual([
+        ...entry.usageFamilySessionIds,
+        ...(forceNew ? [result.sessionEntry.sessionId] : []),
+      ]);
+      expect(result.sessionEntry.createdActor).toEqual(entry.createdActor);
+      expect(entry.usageFamilySessionIds).toEqual(["first-run", "previous-run"]);
+    });
+
+    it.each([true, false])(
+      "keeps a different source's usage history out of a fresh target (forceNew=%s)",
+      (forceNew) => {
+        const result = resolveWithStoredEntry({
+          sessionKey: "agent:main:cron:separate-target",
+          sourceSessionKey: "agent:main:chat",
+          entry: {
+            sessionId: "source-instance",
+            updatedAt: NOW_MS,
+            usageFamilyKey: "agent:main:chat",
+            usageFamilySessionIds: ["source-old", "source-instance"],
+          },
+          forceNew,
+        });
+
+        expect(result.sessionEntry.usageFamilyKey).toBeUndefined();
+        expect(result.sessionEntry.usageFamilySessionIds).toBeUndefined();
+      },
+    );
+
+    it("extends the target's history rather than a different preference source's history", () => {
+      const sessionKey = "agent:main:cron:existing-target";
+      const sourceSessionKey = "agent:main:chat";
+      const result = resolveCronSession({
+        cfg: {},
+        sessionKey,
+        sourceSessionKey,
+        agentId: "main",
+        nowMs: NOW_MS,
+        forceNew: true,
+        lifecycleTimestamps: {},
+        store: {
+          [sessionKey]: {
+            sessionId: "target-last",
+            updatedAt: NOW_MS,
+            usageFamilySessionIds: ["target-first", "target-last"],
+          },
+          [sourceSessionKey]: {
+            sessionId: "source-last",
+            updatedAt: NOW_MS,
+            usageFamilySessionIds: ["source-first", "source-last"],
+          },
+        },
+      });
+
+      expect(result.sessionEntry.usageFamilyKey).toBe(sessionKey);
+      expect(result.sessionEntry.usageFamilySessionIds).toEqual([
+        "target-first",
+        "target-last",
+        result.sessionEntry.sessionId,
+      ]);
+      expect(result.sessionEntry.createdActor).toBeUndefined();
+    });
+
     it("reuses existing sessionId when session is fresh", () => {
       const lastInteractionAt = NOW_MS - 30 * 60_000;
       const result = resolveWithStoredEntry({
@@ -258,7 +316,6 @@ describe("resolveCronSession", () => {
       expect(result.isNewSession).toBe(false);
       expect(result.previousSessionId).toBeUndefined();
       expect(result.systemSent).toBe(true);
-      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it("appends a boundary without changing sessionId when session is stale", () => {
@@ -290,7 +347,6 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sendPolicy).toBe("allow");
       expect(result.sessionEntry).not.toHaveProperty("sessionFile");
       expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
-      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -336,7 +392,6 @@ describe("resolveCronSession", () => {
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
-      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
     it("preserves pin state when rolling to a fresh session", () => {
@@ -620,6 +675,32 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
       expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+    });
+
+    it("retains workspace binding and restrictions across a persistent rollover but not a detached run", () => {
+      const boundContext = {
+        spawnedBy: "agent:main:parent",
+        spawnedCwd: "/repo/task",
+        spawnedWorkspaceDir: "/repo/task",
+        sessionRoot: "/repo/task",
+        permissionMode: "read-only" as const,
+        sandboxMode: "off" as const,
+        inheritedToolPolicyVersion: 1 as const,
+        inheritedToolAllow: ["read"],
+        inheritedToolDeny: ["exec"],
+        spawnDepth: 2,
+        subagentRole: "leaf" as const,
+        subagentControlScope: "none" as const,
+        worktree: { id: "worktree-1", branch: "task", repoRoot: "/repo" },
+        projectId: "project",
+      };
+      const entry = { sessionId: "bound", updatedAt: NOW_MS - 1000, ...boundContext };
+      const persistent = resolveWithStoredEntry({ entry, fresh: false });
+      expect(persistent.sessionEntry).toMatchObject(boundContext);
+      const detached = resolveWithStoredEntry({ entry, forceNew: true });
+      for (const field of Object.keys(boundContext)) {
+        expect(detached.sessionEntry).not.toHaveProperty(field);
+      }
     });
 
     it("preserves non-delivery ambient session context for non-isolated expiration rollovers", () => {

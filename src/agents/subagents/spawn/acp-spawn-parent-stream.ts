@@ -1,12 +1,10 @@
-/** Relays child ACP session stream updates back into the requester parent session. */
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asFiniteNumber, resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   isAcpTagVisible,
   resolveAcpProjectionSettings,
-  type AcpProjectionSettings,
 } from "../../../auto-reply/reply/acp-stream-settings.js";
 import {
   resolveChannelStreamingProgressCommentary,
@@ -15,18 +13,18 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { onAgentEventForRun } from "../../../infra/agent-events.js";
 import {
-  type EventSessionRoutingPolicy,
   resolveEventSessionKeyForPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
+  type EventSessionRoutingPolicy,
 } from "../../../infra/event-session-routing.js";
 import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
+import { resolveSystemEventQueueKey } from "../../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveChannelAccountEntry } from "../../../routing/account-lookup.js";
-import { normalizeAccountId } from "../../../routing/session-key.js";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { normalizeAssistantPhase } from "../../../shared/chat-message-content.js";
 import { truncateUtf16WithEllipsis as truncate } from "../../../shared/text-truncate.js";
-import { recordTaskRunProgressByRunId } from "../../../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import {
   recordAcpParentStreamEvents,
@@ -60,13 +58,6 @@ function normalizeStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
-function formatProxyEnvSummary(keys: string[]): string {
-  if (keys.length === 0) {
-    return "proxy env: none";
-  }
-  return `proxy env: ${keys.join(", ")}`;
-}
-
 function mergeStreamingConfig(base: unknown, override: unknown): unknown {
   const baseRecord = asObjectRecord(base);
   const overrideRecord = asObjectRecord(override);
@@ -92,20 +83,6 @@ function mergeStreamingConfig(base: unknown, override: unknown): unknown {
   return merged;
 }
 
-function mergeStreamingEntry(
-  base: AcpParentProgressStreamingConfig,
-  override: StreamingCompatEntry | undefined,
-): StreamingCompatEntry {
-  if (!override) {
-    return base;
-  }
-  return {
-    ...base,
-    ...override,
-    streaming: mergeStreamingConfig(base.streaming, override.streaming),
-  };
-}
-
 function resolveParentProgressStreamingEntry(params: {
   cfg: OpenClawConfig | undefined;
   deliveryContext: DeliveryContext | undefined;
@@ -127,35 +104,19 @@ function resolveParentProgressStreamingEntry(params: {
     channelId,
     normalizeAccountId,
   );
-  return mergeStreamingEntry(channelCfg, accountCfg);
+  return accountCfg
+    ? {
+        ...channelCfg,
+        ...accountCfg,
+        streaming: mergeStreamingConfig(channelCfg.streaming, accountCfg.streaming),
+      }
+    : channelCfg;
 }
 
-function resolveParentProgressCommentary(params: {
-  cfg: OpenClawConfig | undefined;
-  deliveryContext: DeliveryContext | undefined;
-}): boolean {
-  return resolveChannelStreamingProgressCommentary(
-    resolveParentProgressStreamingEntry(params),
-    true,
-  );
-}
-
-function shouldRelayAcpStatusProgress(params: {
-  eventType: string | undefined;
-  tag: string | undefined;
-  text: string | undefined;
-  projectionSettings: AcpProjectionSettings;
-}): boolean {
-  if (params.eventType !== "status" || !params.text) {
-    return false;
-  }
-  return isAcpTagVisible(params.projectionSettings, params.tag);
-}
-
-/** Starts a bounded parent-session relay for child ACP output and progress notices. */
 export function startAcpSpawnParentStreamRelay(params: {
   runId: string;
   parentSessionKey: string;
+  requesterAgentId?: string;
   childSessionKey: string;
   childSessionId?: string;
   agentId: string;
@@ -194,22 +155,24 @@ export function startAcpSpawnParentStreamRelay(params: {
     };
   }
 
-  const streamFlushMs =
-    typeof params.streamFlushMs === "number" && Number.isFinite(params.streamFlushMs)
-      ? Math.max(0, Math.floor(params.streamFlushMs))
-      : DEFAULT_STREAM_FLUSH_MS;
-  const noOutputNoticeMs =
-    typeof params.noOutputNoticeMs === "number" && Number.isFinite(params.noOutputNoticeMs)
-      ? Math.max(0, Math.floor(params.noOutputNoticeMs))
-      : DEFAULT_NO_OUTPUT_NOTICE_MS;
-  const noOutputPollMs =
-    typeof params.noOutputPollMs === "number" && Number.isFinite(params.noOutputPollMs)
-      ? Math.max(250, Math.floor(params.noOutputPollMs))
-      : DEFAULT_NO_OUTPUT_POLL_MS;
-  const maxRelayLifetimeMs =
-    typeof params.maxRelayLifetimeMs === "number" && Number.isFinite(params.maxRelayLifetimeMs)
-      ? Math.max(1_000, Math.floor(params.maxRelayLifetimeMs))
-      : DEFAULT_MAX_RELAY_LIFETIME_MS;
+  const streamFlushMs = resolveIntegerOption(params.streamFlushMs, DEFAULT_STREAM_FLUSH_MS, {
+    min: 0,
+  });
+  const noOutputNoticeMs = resolveIntegerOption(
+    params.noOutputNoticeMs,
+    DEFAULT_NO_OUTPUT_NOTICE_MS,
+    {
+      min: 0,
+    },
+  );
+  const noOutputPollMs = resolveIntegerOption(params.noOutputPollMs, DEFAULT_NO_OUTPUT_POLL_MS, {
+    min: 250,
+  });
+  const maxRelayLifetimeMs = resolveIntegerOption(
+    params.maxRelayLifetimeMs,
+    DEFAULT_MAX_RELAY_LIFETIME_MS,
+    { min: 1_000 },
+  );
 
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
@@ -314,10 +277,13 @@ export function startAcpSpawnParentStreamRelay(params: {
     scheduleLogFlush();
   };
   const shouldSurfaceUpdates = params.surfaceUpdates !== false;
-  const shouldRelayProgressCommentary = resolveParentProgressCommentary({
-    cfg: params.cfg,
-    deliveryContext: params.deliveryContext,
-  });
+  const shouldRelayProgressCommentary = resolveChannelStreamingProgressCommentary(
+    resolveParentProgressStreamingEntry({
+      cfg: params.cfg,
+      deliveryContext: params.deliveryContext,
+    }),
+    true,
+  );
   const acpProjectionSettings = resolveAcpProjectionSettings(params.cfg ?? {});
   const eventRouting = params.eventRouting ?? {
     mainKey: params.mainKey,
@@ -349,20 +315,16 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     enqueueSystemEvent(cleaned, {
-      sessionKey: resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting),
+      sessionKey: resolveSystemEventQueueKey(
+        resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting),
+        resolveAgentIdFromSessionKey(parentSessionKey, params.requesterAgentId),
+      ),
       contextKey,
       deliveryContext: params.deliveryContext,
     });
     wake();
   };
   const emitStartNotice = () => {
-    recordTaskRunProgressByRunId({
-      runId,
-      runtime: "acp",
-      sessionKey: params.childSessionKey,
-      lastEventAt: Date.now(),
-      eventSummary: "Started.",
-    });
     emit(
       `Started ${relayLabel} session ${params.childSessionKey}. Streaming progress updates to parent session.`,
       `${contextPrefix}:start`,
@@ -416,22 +378,13 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (disposed || flushTimer || streamFlushMs <= 0) {
       return;
     }
-    flushTimer = setTimeout(() => {
-      flushPending();
-    }, streamFlushMs);
+    flushTimer = setTimeout(flushPending, streamFlushMs);
     flushTimer.unref?.();
   };
 
   const appendVisibleProgress = (delta: string, kind: string) => {
     if (stallNotified) {
       stallNotified = false;
-      recordTaskRunProgressByRunId({
-        runId,
-        runtime: "acp",
-        sessionKey: params.childSessionKey,
-        lastEventAt: Date.now(),
-        eventSummary: "Resumed output.",
-      });
       emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
     }
 
@@ -480,29 +433,17 @@ export function startAcpSpawnParentStreamRelay(params: {
   const buildNoOutputNotice = () => {
     const seconds = Math.round(noOutputNoticeMs / 1000);
     if (!promptSubmittedAt) {
-      return {
-        summary: `No prompt submission observed for ${seconds}s after child start.`,
-        text: `${relayLabel} session started but no prompt submission was observed for ${seconds}s.`,
-      };
+      return `${relayLabel} session started but no prompt submission was observed for ${seconds}s.`;
     }
     if (!firstRuntimeEventAt) {
-      const proxySummary = formatProxyEnvSummary(proxyEnvKeysAtPrompt);
-      return {
-        summary: `Prompt submitted but no ACP runtime event for ${seconds}s (${proxySummary}).`,
-        text: `${relayLabel} prompt was submitted but no ACP runtime event arrived for ${seconds}s (${proxySummary}). Check upstream connectivity, auth, or proxy/network access in the gateway child environment.`,
-      };
+      const proxySummary = `proxy env: ${proxyEnvKeysAtPrompt.join(", ") || "none"}`;
+      return `${relayLabel} prompt was submitted but no ACP runtime event arrived for ${seconds}s (${proxySummary}). Check upstream connectivity, auth, or proxy/network access in the gateway child environment.`;
     }
     if (!firstVisibleOutputAt) {
       const lastEvent = lastRuntimeEventType ? ` Last ACP event: ${lastRuntimeEventType}.` : "";
-      return {
-        summary: `ACP runtime active but no visible assistant output for ${seconds}s.${lastEvent}`,
-        text: `${relayLabel} has ACP runtime activity but no visible assistant output for ${seconds}s.${lastEvent} It may be working, blocked on a tool, or failing before visible output.`,
-      };
+      return `${relayLabel} has ACP runtime activity but no visible assistant output for ${seconds}s.${lastEvent} It may be working, blocked on a tool, or failing before visible output.`;
     }
-    return {
-      summary: `No visible output for ${seconds}s. It may be waiting for input.`,
-      text: `${relayLabel} has produced no visible output for ${seconds}s. It may be waiting for interactive input.`,
-    };
+    return `${relayLabel} has produced no visible output for ${seconds}s. It may be waiting for interactive input.`;
   };
 
   const noOutputWatcherTimer = setInterval(() => {
@@ -516,15 +457,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     stallNotified = true;
-    const notice = buildNoOutputNotice();
-    recordTaskRunProgressByRunId({
-      runId,
-      runtime: "acp",
-      sessionKey: params.childSessionKey,
-      lastEventAt: Date.now(),
-      eventSummary: notice.summary,
-    });
-    emit(notice.text, `${contextPrefix}:stall`);
+    emit(buildNoOutputNotice(), `${contextPrefix}:stall`);
   }, noOutputPollMs);
   noOutputWatcherTimer.unref?.();
 
@@ -551,18 +484,16 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     if (event.stream === "assistant") {
       const data = event.data;
-      const assistantPhase = normalizeAssistantPhase(
-        (data as { phase?: unknown } | undefined)?.phase,
-      );
-      const textCandidate = (data as { text?: unknown } | undefined)?.text;
-      const deltaCandidate = (data as { delta?: unknown } | undefined)?.delta;
+      const assistantPhase = normalizeAssistantPhase(data.phase);
+      const textCandidate = data.text;
+      const deltaCandidate = data.delta;
       const snapshot =
         typeof textCandidate === "string"
           ? textCandidate
           : typeof deltaCandidate === "string"
             ? deltaCandidate
             : undefined;
-      if ((data as { replaceable?: unknown } | undefined)?.replaceable === true) {
+      if (data.replaceable === true) {
         if (snapshot?.trim()) {
           replaceableAssistantSnapshot = snapshot;
           lastProgressAt = Date.now();
@@ -594,13 +525,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (event.stream === "item") {
-      const data = event.data as
-        | {
-            itemId?: unknown;
-            kind?: unknown;
-            progressText?: unknown;
-          }
-        | undefined;
+      const data = event.data;
       const itemId = normalizeOptionalString(data?.itemId);
       const kind = normalizeOptionalString(data?.kind);
       const progressText = normalizeOptionalString(data?.progressText);
@@ -614,16 +539,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (event.stream === "acp") {
-      const data = event.data as
-        | {
-            phase?: unknown;
-            at?: unknown;
-            eventType?: unknown;
-            tag?: unknown;
-            text?: unknown;
-            proxyEnvKeys?: unknown;
-          }
-        | undefined;
+      const data = event.data;
       const phase = normalizeOptionalString(data?.phase);
       logEvent("acp", { phase: phase ?? "unknown", data: event.data });
       if (phase === "prompt_submitted") {
@@ -641,12 +557,9 @@ export function startAcpSpawnParentStreamRelay(params: {
         lastRuntimeEventType = eventType;
         if (
           shouldRelayProgressCommentary &&
-          shouldRelayAcpStatusProgress({
-            eventType,
-            tag,
-            text,
-            projectionSettings: acpProjectionSettings,
-          })
+          eventType === "status" &&
+          text &&
+          isAcpTagVisible(acpProjectionSettings, tag)
         ) {
           appendVisibleProgress(`${text}\n\n`, "acp:status");
           return;
@@ -661,15 +574,13 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
-    const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
+    const phase = normalizeOptionalString(event.data.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
       flushReplaceableAssistantSnapshot();
       flushPending();
-      const startedAt = asFiniteNumber(
-        (event.data as { startedAt?: unknown } | undefined)?.startedAt,
-      );
-      const endedAt = asFiniteNumber((event.data as { endedAt?: unknown } | undefined)?.endedAt);
+      const startedAt = asFiniteNumber(event.data.startedAt);
+      const endedAt = asFiniteNumber(event.data.endedAt);
       const durationMs =
         startedAt != null && endedAt != null && endedAt >= startedAt
           ? endedAt - startedAt
@@ -689,9 +600,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (phase === "error") {
       flushReplaceableAssistantSnapshot();
       flushPending();
-      const errorText = normalizeOptionalString(
-        (event.data as { error?: unknown } | undefined)?.error,
-      );
+      const errorText = normalizeOptionalString(event.data.error);
       if (errorText) {
         emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
       } else {

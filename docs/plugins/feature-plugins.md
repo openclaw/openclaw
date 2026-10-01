@@ -48,9 +48,11 @@ including local development plugins. The equivalent config is:
 }
 ```
 
-Restart the Gateway and reload connected browser tabs after changing this
-setting. Disabling it prevents custom native UI from loading; it does not
-uninstall plugins or disable their backend operations, tools, or services.
+Changes apply without restarting the Gateway, and connected Control UI pages
+refresh their plugin views automatically. Disabling it prevents custom native UI
+from loading and removes its views. Reload browser tabs to clear plugin
+JavaScript that already ran. This does not uninstall plugins or disable their
+backend operations, tools, or services.
 Ordinary plugin APIs, sandboxed dashboard widgets, and MCP Apps are unaffected.
 
 Native UI shipped with OpenClaw remains available for enabled bundled plugins,
@@ -74,14 +76,14 @@ openclaw plugins install .
 
 The scaffold includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
-open **Plugins → Customize UI** and choose Draft composer. Choose Built-in to
+open **Plugins → Advanced → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
 it is not a persistent configuration setting.
 
-Customization controls live on the Plugins page. There is no floating
-customization button. If a workspace replacement hides navigation, open
-`/plugins` under your Control UI base URL to choose Built-in; the Plugins page
-always uses the built-in workspace.
+Customization controls are the first section in **Plugins → Advanced**. If a
+workspace replacement hides navigation, open
+`/settings/plugins?tab=advanced` under your Control UI base URL to choose Built-in; plugin settings
+always use the built-in workspace.
 
 The project has three public SDK imports:
 
@@ -185,9 +187,23 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
-The host also exposes session and agent snapshots and operations, plugin page
-navigation, authenticated requests, and subscriptions. Session and agent
-`refresh()` operations fetch new snapshots and reject on failure, so a plugin
+### Host capabilities
+
+Use the host for shared application behavior:
+
+| Capability              | Purpose                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`            | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`            | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
+| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+
+Session and agent `refresh()` operations fetch new snapshots and reject on failure, so a plugin
 can display an error and offer Retry. `host.sessions.rows` is the current
 filtered, paginated session list. `host.sessions.refresh()` preserves that
 list's filters. Use `host.sessions.observe(query, onChange)` to maintain an
@@ -225,6 +241,21 @@ options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
 With `searchable: true`, lists longer than eight options show a search field.
 The picker matches option labels, values, and descriptions.
 
+### Dock a conversation
+
+Check `host.dock` before offering a dock action. From a mounted view, use
+`context.host.dock.openSession({ sessionKey, agentId, label, context })` to open
+the named conversation alongside your plugin page. `label` supplies the dock
+tab title; the optional `context` is `{ page, detail? }`, where `page` can be
+your plugin page id and `detail` contains string reference fields.
+
+The host reuses the Home dock's placement controls, chat pane, drafts, and
+attachments. Page navigation keeps the conversation dock open; ending the
+plugin activation closes a dock that activation still owns. Use
+`host.subscribe(...)` to refresh your action when `host.dock.openSessionKey`
+changes. See the [dock contract](/plugins/sdk-subpaths#control-ui-conversation-dock)
+for replacement, visibility, access, and context limits.
+
 ## Build and reload
 
 `package.json` names the browser **source**:
@@ -260,7 +291,7 @@ limits. TypeScript sources, source maps, and hidden files are excluded. Keep all
 dependencies inside that directory; traversal is limited to eight nested directory
 levels and 128 entries, counting both files and directories.
 
-After browser-only edits, rebuild the installed plugin and open **Plugins →
+After browser-only edits, rebuild the installed plugin and open **Plugins → Advanced →
 Customize UI → Reload plugin UI** as an administrator. The Gateway captures a fresh asset revision and
 notifies connected browsers. Asset loading or activation failures are reported
 in the UI customization controls; the previous working activation is retained

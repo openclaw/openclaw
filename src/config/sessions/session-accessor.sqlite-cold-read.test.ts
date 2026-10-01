@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { visitSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import {
@@ -10,16 +11,20 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { createVerifiedSqliteSnapshot } from "../../infra/sqlite-snapshot.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
+  createOpenClawTestState,
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
@@ -37,7 +42,6 @@ import {
   loadTranscriptEventsFromDatabase,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   readTranscriptEventAtSeqSync,
   readTranscriptEventRows,
   readTranscriptStatsBatchReadOnlySync,
@@ -45,6 +49,7 @@ import {
   readTranscriptStorageRows,
 } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import {
   getSessionColdStorageStatus,
@@ -54,11 +59,32 @@ import {
 import * as sqliteTargets from "./session-sqlite-target.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-async function prepareRace(state: OpenClawTestState) {
+let seed:
+  | (Awaited<ReturnType<typeof createHotRaceSeed>> & { state: OpenClawTestState })
+  | undefined;
+
+beforeAll(async () => {
+  const state = await createOpenClawTestState({ label: "cold-read-seed" });
+  try {
+    const prepared = await createHotRaceSeed(state);
+    await state.restoreEnv();
+    seed = { ...prepared, state };
+  } catch (error) {
+    await state.cleanup();
+    throw error;
+  }
+});
+
+afterAll(async () => {
+  await seed?.state.cleanup();
+  seed = undefined;
+});
+
+async function createHotRaceSeed(state: OpenClawTestState) {
   const scope = {
     agentId: "main",
     env: state.env,
@@ -115,6 +141,42 @@ async function prepareRace(state: OpenClawTestState) {
       .where("session_id", "=", scope.sessionId),
   )!;
   await restoreSessionColdTranscript(scope);
+  expect(descriptor.storage).toBe("file");
+  await waitForSessionTranscriptIndexReconcile(options);
+  await closeOpenClawAgentDatabaseByPathAsync(database.path, scope.agentId);
+  const snapshotPath = state.path("hot-seed.sqlite");
+  await createVerifiedSqliteSnapshot({
+    sourcePath: database.path,
+    targetPath: snapshotPath,
+    requireNonEmptySource: true,
+    preserveRowIds: true,
+  });
+  return {
+    snapshotPath,
+    archivePath: resolveSessionColdArchivePath(database.path, descriptor.archive_name),
+    descriptor,
+  };
+}
+
+async function prepareRace(state: OpenClawTestState) {
+  if (!seed) {
+    throw new Error("Cold read seed was not prepared");
+  }
+  const scope = {
+    agentId: "main",
+    env: state.env,
+    sessionId: "cold-race",
+    sessionKey: "agent:main:cold-race",
+  };
+  const options = { agentId: scope.agentId, env: state.env };
+  const storePath = resolveOpenClawAgentSqlitePath(options);
+  const descriptor = structuredClone(seed.descriptor);
+  const archivePath = resolveSessionColdArchivePath(storePath, descriptor.archive_name);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.copyFile(seed.snapshotPath, storePath, fs.constants.COPYFILE_EXCL);
+  await fs.mkdir(path.dirname(archivePath), { recursive: true });
+  await fs.copyFile(seed.archivePath, archivePath, fs.constants.COPYFILE_EXCL);
+  const database = openOpenClawAgentDatabase(options);
   const writer = new DatabaseSync(database.path);
   writer.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
   let committed = false;
@@ -201,7 +263,6 @@ const readers: Array<{ name: string; read: (race: Race) => unknown }> = [
       }),
   },
   { name: "header", read: ({ scope }) => loadTranscriptHeaderSync(scope) },
-  { name: "tail", read: ({ scope }) => loadTranscriptTailEventsSync(scope, 2) },
   { name: "checkpoint suffix", read: ({ scope }) => loadTranscriptEventRowsAfterSeqSync(scope, 0) },
   { name: "checkpoint row", read: ({ scope }) => readTranscriptEventAtSeqSync(scope, 1) },
   {
@@ -290,8 +351,10 @@ it("identifies a slow transcript matcher while retaining its hot read snapshot",
       expect(holds).toEqual([
         {
           async: false,
+          database: race.database.path,
           elapsedMs: 1_200,
           isMainThread,
+          mode: "deferred",
           operation: "session transcript match read",
           pid: process.pid,
           threadId,

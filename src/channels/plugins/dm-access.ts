@@ -1,61 +1,35 @@
-/**
- * Channel DM access helpers.
- *
- * Reads, writes, migrates, and normalizes direct-message policy and allowFrom fields.
- */
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
-/**
- * Selects whether canonical DM fields live at the top level or under `dm`.
- */
 export type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
 
-/**
- * Supported direct-message policy values for channel account config.
- */
 export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
-/**
- * Normalized DM access view consumed by channel setup and reply gates.
- */
 export type ChannelDmAccess = {
   dmPolicy?: ChannelDmPolicy;
   allowFrom?: Array<string | number>;
 };
 
-/**
- * Mutable config record used while migrating channel account DM fields.
- */
 export type DmAccessRecord = Record<string, unknown>;
 
 type DmFieldKind = "policy" | "allowFrom";
 
+type DmFieldPath = readonly [string] | readonly [string, string];
+
 type DmFieldPaths = {
-  canonicalPath: readonly string[];
-  legacyPath: readonly string[];
+  canonicalPath: DmFieldPath;
+  legacyPath: DmFieldPath;
 };
 
-/**
- * Result returned by compatibility helpers after optional DM config mutation.
- */
 export type CompatMutationResult = {
   entry: DmAccessRecord;
   changed: boolean;
 };
 
-/**
- * Narrows a raw string to a supported channel DM policy.
- */
 export function normalizeChannelDmPolicy(value: string | undefined): ChannelDmPolicy | undefined {
   return value === "pairing" || value === "allowlist" || value === "open" || value === "disabled"
     ? value
     : undefined;
-}
-
-function cloneDm(entry: DmAccessRecord): DmAccessRecord | null {
-  const dm = asObjectRecord(entry.dm);
-  return dm ? { ...dm } : null;
 }
 
 function resolveDmFieldPaths(mode: ChannelDmAllowFromMode, kind: DmFieldKind): DmFieldPaths {
@@ -87,20 +61,14 @@ function readPath(entry: DmAccessRecord | null | undefined, path: readonly strin
   return current;
 }
 
-function deletePath(entry: DmAccessRecord, path: readonly string[]): boolean {
+function deletePath(entry: DmAccessRecord, path: DmFieldPath): boolean {
   const [head, tail] = path;
-  if (head === undefined) {
-    return false;
-  }
-  if (path.length === 1) {
+  if (tail === undefined) {
     if (entry[head] === undefined) {
       return false;
     }
     delete entry[head];
     return true;
-  }
-  if (tail === undefined) {
-    return false;
   }
   const parent = asObjectRecord(entry[head]);
   if (!parent || parent[tail] === undefined) {
@@ -115,16 +83,10 @@ function deletePath(entry: DmAccessRecord, path: readonly string[]): boolean {
   return true;
 }
 
-function writePath(entry: DmAccessRecord, path: readonly string[], value: unknown): void {
+function writePath(entry: DmAccessRecord, path: DmFieldPath, value: unknown): void {
   const [head, tail] = path;
-  if (head === undefined) {
-    return;
-  }
-  if (path.length === 1) {
-    entry[head] = value;
-    return;
-  }
   if (tail === undefined) {
+    entry[head] = value;
     return;
   }
   const existingParent = asObjectRecord(entry[head]);
@@ -158,9 +120,6 @@ function readCanonicalOrLegacy(
   return readPath(entry, paths.canonicalPath) ?? readPath(entry, paths.legacyPath);
 }
 
-/**
- * Resolves the effective DM policy from account, parent account, and default policy.
- */
 export function resolveChannelDmPolicy(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -175,9 +134,6 @@ export function resolveChannelDmPolicy(params: {
   return typeof value === "string" ? normalizeChannelDmPolicy(value) : undefined;
 }
 
-/**
- * Resolves the effective DM allowlist from account or parent account config.
- */
 export function resolveChannelDmAllowFrom(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -190,9 +146,6 @@ export function resolveChannelDmAllowFrom(params: {
   return Array.isArray(value) ? (value as Array<string | number>) : undefined;
 }
 
-/**
- * Resolves policy and allowlist together for channel access checks.
- */
 export function resolveChannelDmAccess(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -205,9 +158,6 @@ export function resolveChannelDmAccess(params: {
   };
 }
 
-/**
- * Writes a canonical DM allowlist and removes the matching legacy alias.
- */
 export function setCanonicalDmAllowFrom(params: {
   entry: DmAccessRecord;
   mode: ChannelDmAllowFromMode;
@@ -226,98 +176,65 @@ export function setCanonicalDmAllowFrom(params: {
   params.changes?.push(`- ${formatPath(params.pathPrefix, paths.canonicalPath)}: ${params.reason}`);
 }
 
-/**
- * Migrates legacy `dm.*` aliases into the canonical DM access fields.
- */
 export function normalizeLegacyDmAliases(params: {
   entry: DmAccessRecord;
   pathPrefix: string;
   changes: string[];
   promoteAllowFrom?: boolean;
 }): CompatMutationResult {
-  let changed = false;
-  let updated: DmAccessRecord = params.entry;
-  const rawDm = updated.dm;
-  const dm = cloneDm(updated);
-  let dmChanged = false;
-
-  // Preserve an explicit canonical value when it exists, but remove a matching
-  // legacy alias so doctor does not keep reporting the same repair.
-  const topDmPolicy = updated.dmPolicy;
-  const legacyDmPolicy = dm?.policy;
-  if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
-    updated = { ...updated, dmPolicy: legacyDmPolicy };
-    changed = true;
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-    }
-    params.changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
-  } else if (
-    topDmPolicy !== undefined &&
-    legacyDmPolicy !== undefined &&
-    topDmPolicy === legacyDmPolicy
-  ) {
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-      params.changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
-    }
+  const rawDm = asObjectRecord(params.entry.dm);
+  if (!rawDm) {
+    return { entry: params.entry, changed: false };
   }
-
-  if (params.promoteAllowFrom !== false) {
-    // `allowFrom` promotion is optional because some channels keep nested DM
-    // allowlists as the canonical shape until their config schema moves.
-    const topAllowFrom = updated.allowFrom;
-    const legacyAllowFrom = dm?.allowFrom;
-    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
-      updated = { ...updated, allowFrom: legacyAllowFrom };
-      changed = true;
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-      }
+  const dm = { ...rawDm };
+  let updated = { ...params.entry };
+  let changed = false;
+  // Canonical values win; equal aliases are removed so Doctor repairs are idempotent.
+  // Some channels still use nested allowlists and opt out of their promotion.
+  for (const [topKey, legacyKey] of [
+    ["dmPolicy", "policy"],
+    ["allowFrom", "allowFrom"],
+  ] as const) {
+    if (topKey === "allowFrom" && params.promoteAllowFrom === false) {
+      continue;
+    }
+    const canonical = updated[topKey];
+    const legacy = dm[legacyKey];
+    if (legacy === undefined) {
+      continue;
+    }
+    if (canonical === undefined) {
+      updated[topKey] = legacy;
       params.changes.push(
-        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
+        `Moved ${params.pathPrefix}.dm.${legacyKey} → ${params.pathPrefix}.${topKey}.`,
       );
     } else if (
-      topAllowFrom !== undefined &&
-      legacyAllowFrom !== undefined &&
-      allowFromListsMatch(topAllowFrom, legacyAllowFrom)
+      topKey === "dmPolicy" ? canonical === legacy : allowFromListsMatch(canonical, legacy)
     ) {
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-        params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
-      }
-    }
-  }
-
-  if (dm && asObjectRecord(rawDm) && dmChanged) {
-    const keys = Object.keys(dm);
-    if (keys.length === 0) {
-      if (updated.dm !== undefined) {
-        const { dm: _ignored, ...rest } = updated;
-        updated = rest;
-        changed = true;
-        params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
-      }
+      params.changes.push(`Removed ${params.pathPrefix}.dm.${legacyKey} (${topKey} already set).`);
     } else {
-      updated = { ...updated, dm };
-      changed = true;
+      continue;
     }
+    delete dm[legacyKey];
+    changed = true;
   }
-
-  return { entry: updated, changed };
+  if (!changed) {
+    return { entry: params.entry, changed: false };
+  }
+  if (Object.keys(dm).length === 0) {
+    const { dm: _ignored, ...rest } = updated;
+    updated = rest;
+    params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
+  } else {
+    updated = { ...updated, dm };
+  }
+  return { entry: updated, changed: true };
 }
 
 function hasWildcard(list?: Array<string | number>) {
   return list?.some((value) => String(value).trim() === "*") ?? false;
 }
 
-/**
- * Ensures `dmPolicy="open"` has the wildcard allowlist required by access gates.
- */
 export function ensureOpenDmPolicyAllowFromWildcard(params: {
   entry: DmAccessRecord;
   mode: ChannelDmAllowFromMode;

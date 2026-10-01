@@ -9,7 +9,10 @@ vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
 // Node daemon tests cover node daemon command runtime behavior and errors.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceInstallArgs,
+} from "../../daemon/service-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   runNodeDaemonInstall,
@@ -44,7 +47,9 @@ const mocks = vi.hoisted(() => {
       exit: vi.fn(),
     },
     service,
-    buildNodeInstallPlan: vi.fn(async () => ({
+    buildNodeInstallPlan: vi.fn<
+      typeof import("../../commands/node-daemon-install-helpers.js").buildNodeInstallPlan
+    >(async () => ({
       programArguments: ["node", "node-host"],
       environment: {},
       environmentValueSources: {},
@@ -62,8 +67,14 @@ const mocks = vi.hoisted(() => {
     runServiceStart: vi.fn(),
     runServiceStop: vi.fn(),
     runServiceUninstall: vi.fn(),
+    runExec: vi.fn(),
   };
 });
+
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runExec: mocks.runExec,
+}));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
@@ -153,6 +164,16 @@ describe("runNodeDaemonInstall", () => {
     mocks.runtime.writeJson.mockClear();
     mocks.runtime.exit.mockClear();
     vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
+    vi.stubEnv("OPENCLAW_WRAPPER", undefined);
+    mocks.runExec.mockReset().mockResolvedValue({
+      stdout: JSON.stringify({
+        nodeVersion: "26.8.1",
+        bunVersion: "1.4.2",
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      }),
+      stderr: "",
+    });
     mocks.service.readCommand.mockReset().mockResolvedValue(null);
     mocks.service.install.mockReset().mockResolvedValue(undefined);
     mocks.service.isLoaded.mockReset().mockResolvedValue(false);
@@ -177,6 +198,50 @@ describe("runNodeDaemonInstall", () => {
       linger: "no",
     });
   });
+
+  it.each([
+    { recorded: "node", runtime: undefined, probe: "supported" },
+    { recorded: "bun", runtime: undefined, probe: "supported" },
+    { recorded: "bun", runtime: "node", probe: "supported" },
+    { recorded: "bun", runtime: "bun", probe: "supported" },
+    { recorded: "bun", runtime: undefined, probe: "unsupported" },
+    { recorded: "bun", runtime: undefined, probe: "ENOENT" },
+    { recorded: "bun", runtime: undefined, probe: "EACCES" },
+  ] as const)(
+    "reinstalls recorded $recorded ($probe) with runtime=$runtime without a pin",
+    async ({ recorded, runtime, probe }) => {
+      const recordedPath = `/opt/recorded/bin/${recorded}`;
+      if (probe === "unsupported") {
+        mocks.runExec.mockResolvedValue({
+          stdout: JSON.stringify({
+            bunVersion: "1.3.0",
+            sqliteVersion: "3.53.4",
+            sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+          }),
+          stderr: "",
+        });
+      } else if (probe !== "supported") {
+        mocks.runExec.mockRejectedValue(Object.assign(new Error(probe), { code: probe }));
+      }
+      mocks.service.isLoaded.mockResolvedValue(true);
+      mocks.service.readCommand.mockResolvedValue({
+        programArguments: [recordedPath, "/fixture/openclaw.mjs", "node", "run"],
+      });
+      await runNodeDaemonInstall({ force: true, runtime });
+      const retained = runtime === undefined && probe === "supported";
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      const plan = mocks.buildNodeInstallPlan.mock.calls[0]?.[0];
+      expect(plan?.runtime).toBe(runtime ?? (retained ? recorded : "node"));
+      expect(plan?.runtimeExplicit).toBe(runtime !== undefined);
+      expect(plan?.pinnedRuntimePath).toBeUndefined();
+      expect(plan?.runtimePath).toBe(retained ? recordedPath : undefined);
+      expect(mocks.service.install).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: { expected: { revision: "empty", stored: false }, pin: undefined },
+        }),
+      );
+    },
+  );
 
   it.each(["preserve", "replace", "reset"] as const)(
     "handles a runtime pin during %s node reinstall",
@@ -563,6 +628,143 @@ describe("runNodeDaemonInstall", () => {
     await runNodeDaemonInstall({ force: true });
 
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "preserves plan, native, and linger warning order (json=%s)",
+    async (json) => {
+      useLinuxPlatform();
+      mocks.service.isLoaded.mockResolvedValue(true);
+      mocks.buildNodeInstallPlan.mockImplementationOnce(async ({ warn }) => {
+        warn?.("", "ignored plan title");
+        warn?.("repeat");
+        warn?.("repeat", "another ignored title");
+        return { programArguments: ["node", "node-host"], environment: {} };
+      });
+      mocks.service.install.mockImplementationOnce(async (args: GatewayServiceInstallArgs) => {
+        args.warn?.("native warning");
+      });
+      await runNodeDaemonInstall({ force: true, json });
+
+      const warnings = [
+        "",
+        "repeat",
+        "repeat",
+        "native warning",
+        "Systemd lingering is disabled for pi. The node service will stop when you log out. Run: sudo loginctl enable-linger pi",
+      ];
+      expect(mocks.runtime.log.mock.calls).toEqual(
+        json ? [] : warnings.map((message) => [message]),
+      );
+      expect(mocks.runtime.writeJson.mock.calls.map(([value]) => JSON.stringify(value))).toEqual(
+        json
+          ? [
+              JSON.stringify({
+                action: "install",
+                ok: true,
+                result: "installed",
+                service: {
+                  label: "Node service",
+                  loaded: true,
+                  loadedText: "loaded",
+                  notLoadedText: "not loaded",
+                },
+                warnings,
+              }),
+            ]
+          : [],
+      );
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      expect(mocks.service.install).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "orders linger warning, already-installed result, and reinstall hint (json=%s)",
+    async (json) => {
+      useLinuxPlatform();
+      mocks.service.isLoaded.mockResolvedValue(true);
+      await runNodeDaemonInstall({ json });
+      const warning =
+        "Systemd lingering is disabled for pi. The node service will stop when you log out. Run: sudo loginctl enable-linger pi";
+      const message = "Node service already loaded.";
+      expect(mocks.runtime.log.mock.calls).toEqual(
+        json ? [] : [[warning], [message], ["Reinstall with: openclaw node install --force"]],
+      );
+      expect(mocks.runtime.writeJson.mock.calls.map(([value]) => JSON.stringify(value))).toEqual(
+        json
+          ? [
+              JSON.stringify({
+                action: "install",
+                ok: true,
+                result: "already-installed",
+                message,
+                service: {
+                  label: "Node service",
+                  loaded: true,
+                  loadedText: "loaded",
+                  notLoadedText: "not loaded",
+                },
+                warnings: [warning],
+              }),
+            ]
+          : [],
+      );
+      expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+      expect(mocks.service.install).not.toHaveBeenCalled();
+    },
+  );
+
+  it("propagates a plan-warning sink failure before native installation", async () => {
+    const failure = new Error("output unavailable");
+    mocks.runtime.log.mockImplementationOnce(() => {
+      throw failure;
+    });
+    mocks.buildNodeInstallPlan.mockImplementationOnce(async ({ warn }) => {
+      warn?.("plan warning", "ignored title");
+      return { programArguments: ["node", "node-host"], environment: {} };
+    });
+    await expect(runNodeDaemonInstall({ force: true })).rejects.toBe(failure);
+    expect(mocks.runtime.log.mock.calls).toEqual([["plan warning"]]);
+    expect(mocks.service.install).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("converts a native-install warning sink failure without reporting success", async () => {
+    useLinuxPlatform();
+    mocks.service.isLoaded.mockResolvedValue(true);
+    mocks.runtime.log.mockImplementationOnce(() => {
+      throw new Error("output unavailable");
+    });
+    mocks.service.install.mockImplementationOnce(async (args: GatewayServiceInstallArgs) => {
+      args.warn?.("native warning");
+    });
+    await runNodeDaemonInstall({ force: true });
+    expect(mocks.runtime.log.mock.calls).toEqual([["native warning"]]);
+    expect(mocks.runtime.error.mock.calls).toEqual([
+      ["Node install failed: Error: output unavailable"],
+    ]);
+    expect(mocks.runtime.exit.mock.calls).toEqual([[1]]);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+  });
+
+  it("propagates the final JSON sink failure without a second result", async () => {
+    useLinuxPlatform();
+    mocks.service.isLoaded.mockResolvedValue(true);
+    const failure = new Error("JSON output unavailable");
+    mocks.runtime.writeJson.mockImplementationOnce(() => {
+      throw failure;
+    });
+    await expect(runNodeDaemonInstall({ force: true, json: true })).rejects.toBe(failure);
+    expect(mocks.service.install).toHaveBeenCalledOnce();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledOnce();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+    expect(mocks.runtime.log).not.toHaveBeenCalled();
   });
 });
 

@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { Selectable } from "kysely";
+import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -48,25 +50,10 @@ export type ConversationDeliveryStoreScope = {
   storePath?: string;
 };
 
-type ConversationDeliveryRow = {
+type ConversationDeliveryRow = Selectable<
+  OpenClawAgentKyselyDatabase["conversation_deliveries"]
+> & {
   channel: string;
-  conversation_id: string;
-  created_at: number;
-  message_hash: string;
-  operation_kind: string;
-  operation_id: string;
-  platform_message_id: string | null;
-  prepared_message_id: string | null;
-  queue_id: string | null;
-  rejection_error: string | null;
-  reply_message_id: string | null;
-  reply_text: string | null;
-  reply_thread_id: string | null;
-  reply_timestamp: number | null;
-  reply_to_id: string | null;
-  source_session_key: string | null;
-  status: string;
-  updated_at: number;
 };
 
 function resolveDatabaseOptions(scope: ConversationDeliveryStoreScope) {
@@ -175,13 +162,9 @@ function assertConversationDeliveryInput(
   }
 }
 
-function selectOperation(
-  database: ReturnType<typeof openOpenClawAgentDatabase>,
-  operationId: string,
-): ConversationDeliveryRecord | undefined {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQuerySync(
-    database.db,
+function createOperationQuery(database: ReturnType<typeof openOpenClawAgentDatabase>["db"]) {
+  const db = getSessionKysely(database);
+  return prepareSqliteQuerySync<string>(database, (parameter) =>
     // Session pruning removes only session_conversations. The canonical
     // conversation row owns this delivery by foreign key and retains channel
     // identity even when no local session remains linked.
@@ -194,8 +177,29 @@ function selectOperation(
       )
       .selectAll("delivery")
       .select("conversation.channel as channel")
-      .where("delivery.operation_id", "=", operationId),
-  ).rows[0] as ConversationDeliveryRow | undefined;
+      .where(
+        "delivery.operation_id",
+        "=",
+        parameter((operationId) => operationId),
+      ),
+  );
+}
+
+const operationQueryByDatabase = new WeakMap<
+  ReturnType<typeof openOpenClawAgentDatabase>["db"],
+  ReturnType<typeof createOperationQuery>
+>();
+
+function selectOperation(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  operationId: string,
+): ConversationDeliveryRecord | undefined {
+  let query = operationQueryByDatabase.get(database.db);
+  if (!query) {
+    query = createOperationQuery(database.db);
+    operationQueryByDatabase.set(database.db, query);
+  }
+  const row = query(operationId).rows[0] as ConversationDeliveryRow | undefined;
   return row ? mapRow(row) : undefined;
 }
 

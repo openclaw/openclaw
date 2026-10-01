@@ -1,4 +1,3 @@
-// Shared config loading and account-line formatting helpers for channel commands.
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -153,9 +152,4 @@ export function buildChannelAccountLine(
     channelLabel: opts?.channelLabel,
   });
   return `- ${labelText}: ${bits.join(", ")}`;
-}
-
-/** Return true when the command should use its interactive wizard path. */
-export function shouldUseWizard(params?: { hasFlags?: boolean }) {
-  return params?.hasFlags === false;
 }

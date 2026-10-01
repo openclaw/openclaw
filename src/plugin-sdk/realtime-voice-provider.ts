@@ -1,6 +1,11 @@
 // Private provider primitives; session runtimes and provider registries stay outside this leaf.
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
+  InternalRealtimeVoiceBrowserSessionCreateRequest,
+  InternalRealtimeVoiceProviderApi,
+  InternalRealtimeVoiceProviderCapabilities,
+} from "../talk/provider-internal.js";
+export type {
   OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
@@ -34,7 +39,10 @@ export {
   pcmToMulaw,
   resamplePcm,
 } from "../talk/audio-codec.js";
-export { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
+export {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
+} from "../talk/agent-consult-tool.js";
 
 export { canonicalizeBase64 } from "@openclaw/media-core/base64";
 export { rawDataToString } from "../infra/ws.js";
@@ -49,3 +57,11 @@ export { sleepWithAbort } from "../infra/backoff.js";
 
 export { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { buildRealtimeVoiceAgentControlSpeechMessage } from "../talk/agent-run-control-shared.js";
+
+export {
+  createRealtimeVoiceAudioPortSender,
+  type RealtimeVoiceAudioOutputPort,
+  type RealtimeVoiceAudioOutputMessage,
+} from "../talk/audio-output-port.js";
+export { isRealtimeVoiceAudioAudible } from "../talk/audio-energy.js";
+export { createRealtimeVoiceOutputActivityTracker } from "../talk/output-activity-tracker.js";

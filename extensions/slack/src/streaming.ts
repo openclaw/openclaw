@@ -1,34 +1,15 @@
-/**
- * Slack native text streaming helpers.
- *
- * Uses the Slack SDK's `ChatStreamer` (via `client.chatStream()`) to stream
- * text responses word-by-word in a single updating message, matching Slack's
- * "Agents & AI Apps" streaming UX.
- *
- * @see https://docs.slack.dev/ai/developing-ai-apps#streaming
- * @see https://docs.slack.dev/reference/methods/chat.startStream
- * @see https://docs.slack.dev/reference/methods/chat.appendStream
- * @see https://docs.slack.dev/reference/methods/chat.stopStream
- */
-
 import type { AnyChunk, MessageMetadata } from "@slack/types";
 import type { WebClient, WebClientOptions } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSlackListenerWriteClient } from "./client.js";
+import { buildSlackMessageIdentityPayload } from "./post-message-identity.js";
 import type { SlackSendIdentity } from "./send.js";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export type SlackStreamSession = {
-  /** The SDK ChatStreamer instance managing this stream. */
   streamer: ChatStreamer;
-  /** Channel this stream lives in. */
   channel: string;
-  /** Thread timestamp (required for streaming). */
   threadTs: string;
   /** True once stopped locally, by Slack, or after an ambiguous delivery failure. */
   stopped: boolean;
@@ -48,11 +29,8 @@ type StartSlackStreamParams = {
   clientOptions?: WebClientOptions;
   channel: string;
   threadTs: string;
-  /** Optional initial markdown text to include in the stream start. */
   text?: string;
-  /** Optional structured Slack stream chunks to include in the stream start. */
   chunks?: AnyChunk[];
-  /** Native Slack task display mode for task_update chunks. */
   taskDisplayMode?: "plan" | "timeline";
   /** Optional custom authorship supported by chat.startStream. */
   identity?: SlackSendIdentity;
@@ -78,7 +56,6 @@ type AppendSlackStreamParams = {
 
 type StopSlackStreamParams = {
   session: SlackStreamSession;
-  /** Optional final stream chunks to append before stopping. */
   chunks?: AnyChunk[];
   metadata?: MessageMetadata;
 };
@@ -101,10 +78,6 @@ export class SlackStreamNotDeliveredError extends Error {
     this.slackCode = slackCode;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Stream lifecycle
-// ---------------------------------------------------------------------------
 
 type SlackClientStreams = {
   sessions: Set<SlackStreamSession>;
@@ -162,30 +135,11 @@ export function markSlackStreamsStopped(
   pruneMapToMaxSize(state.stopped, SLACK_STOPPED_STREAMS_MAX);
 }
 
-/**
- * Start a new Slack text stream.
- *
- * Returns a {@link SlackStreamSession} that should be passed to
- * {@link appendSlackStream} and {@link stopSlackStream}.
- *
- * The first chunk of text can optionally be included via `text`.
- */
 export async function startSlackStream(
   params: StartSlackStreamParams,
 ): Promise<SlackStreamSession> {
   const { client, channel, threadTs, text, chunks, taskDisplayMode, teamId, userId, identity } =
     params;
-  const identityPayload = identity?.iconUrl
-    ? { ...(identity.username ? { username: identity.username } : {}), icon_url: identity.iconUrl }
-    : identity?.iconEmoji
-      ? {
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_emoji: identity.iconEmoji,
-        }
-      : identity?.username
-        ? { username: identity.username }
-        : {};
-
   logVerbose(
     `slack-stream: starting stream in ${channel} thread=${threadTs}${teamId ? ` team=${teamId}` : ""}${userId ? ` user=${userId}` : ""}`,
   );
@@ -206,7 +160,7 @@ export async function startSlackStream(
     ...(taskDisplayMode ? { task_display_mode: taskDisplayMode } : {}),
     ...(teamId ? { recipient_team_id: teamId } : {}),
     ...(userId ? { recipient_user_id: userId } : {}),
-    ...identityPayload,
+    ...buildSlackMessageIdentityPayload(identity),
   });
 
   const session: SlackStreamSession = {
@@ -222,44 +176,10 @@ export async function startSlackStream(
   state.sessions.add(session);
   stateBySession.set(session, state);
 
-  if (text || chunks?.length) {
-    if (text) {
-      session.pendingText += text;
-    }
-    // Slack SDK ChatStreamer keeps short markdown_text chunks in a local buffer
-    // and returns null until buffer_size is reached. Structured chunks force a
-    // flush. Only a non-null response means Slack acknowledged
-    // startStream/appendStream.
-    try {
-      const result = await streamer.append({
-        ...(text ? { markdown_text: text } : {}),
-        ...(chunks ? { chunks } : {}),
-      });
-      if (result) {
-        session.delivered = true;
-        session.pendingText = "";
-      }
-      applySlackStreamStop(session);
-      logVerbose(
-        `slack-stream: appended initial payload (${text?.length ?? 0} chars, ${
-          chunks?.length ?? 0
-        } chunks, ${result ? "flushed" : "buffered"})`,
-      );
-    } catch (err) {
-      if (applySlackStreamStop(session)) {
-        return session;
-      }
-      releaseSlackStream(session);
-      throwSlackStreamFailure(session, err);
-    }
-  }
-
+  await appendSlackStream({ session, text, chunks });
   return session;
 }
 
-/**
- * Append markdown text to an active Slack stream.
- */
 export async function appendSlackStream(params: AppendSlackStreamParams): Promise<void> {
   const { session, text, chunks } = params;
 
@@ -276,8 +196,8 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     session.pendingText += text;
   }
   try {
-    // Same SDK contract as startSlackStream: null means local-only buffer,
-    // non-null means Slack accepted the pending buffer/chunks and it is visible.
+    // Short markdown chunks stay buffered in the SDK until buffer_size is reached;
+    // structured chunks force a flush. Only a non-null response acknowledges delivery.
     const result = await session.streamer.append({
       ...(text ? { markdown_text: text } : {}),
       ...(chunks ? { chunks } : {}),
@@ -301,39 +221,10 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
   }
 }
 
-/** Result of {@link stopSlackStream}. */
 type StopSlackStreamResult = {
-  /**
-   * The Slack `ts` of the finalized streamed message, when `chat.stopStream`
-   * reports it. Used to populate `MessageSentEvent.messageId` for the
-   * streaming reply path. Undefined when the stream was already stopped or
-   * Slack omitted the timestamp.
-   */
   messageId?: string;
 };
 
-/**
- * Stop (finalize) a Slack stream.
- *
- * After calling this the stream message becomes a normal Slack message.
- * Optionally include final chunks to append before stopping.
- *
- * If Slack's `chat.stopStream` responds with a definitive recipient/channel
- * rejection while text is still buffered locally, this function throws a
- * {@link SlackStreamNotDeliveredError} carrying that pending text so the caller
- * can deliver it through the normal Slack reply path. Ambiguous failures
- * propagate unchanged because Slack may have committed the request.
- *
- * If Slack responds with a known benign finalize error (see
- * {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) after prior `append` calls already
- * landed, the error is swallowed and the session is marked stopped - the
- * already-delivered text stays visible.
- *
- * Errors without buffered text propagate unchanged.
- *
- * On success, returns the finalized message's Slack `ts` (when reported) so the
- * caller can emit the `message_sent` hook with a populated `messageId`.
- */
 export async function stopSlackStream(
   params: StopSlackStreamParams,
 ): Promise<StopSlackStreamResult> {
@@ -384,18 +275,8 @@ export async function stopSlackStream(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Finalize error classification
-// ---------------------------------------------------------------------------
-
-/**
- * Slack API error codes that indicate `chat.stopStream` (or the
- * `chat.startStream` call the SDK issues inside `stop()` when the buffer
- * never flushed) cannot finalize the stream for the current recipient or
- * team. Either the caller falls back to a normal message (see
- * {@link SlackStreamNotDeliveredError}) or, if prior appends already
- * delivered text, the error is logged verbosely and swallowed.
- */
+// Definitive rejections permit buffered-text fallback; already-delivered streams
+// can treat these finalize failures as stopped. Ambiguous errors must propagate.
 const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   // Slack Connect recipients: finalize fails because the external user id
   // is not resolvable in the host workspace (#70295).

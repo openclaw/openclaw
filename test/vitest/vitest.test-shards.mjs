@@ -95,7 +95,6 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.media.config.ts",
       "test/vitest/vitest.media-understanding.config.ts",
       "test/vitest/vitest.shared-core.config.ts",
-      "test/vitest/vitest.tasks.config.ts",
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",

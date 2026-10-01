@@ -1,7 +1,15 @@
-import { IncomingMessage, ServerResponse, type ClientRequest } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  IncomingMessage,
+  ServerResponse,
+  type ClientRequest,
+  type IncomingHttpHeaders,
+} from "node:http";
 import { Agent, request as httpsRequest } from "node:https";
+import type { AddressInfo } from "node:net";
 import { Socket } from "node:net";
-import { Writable, type Readable } from "node:stream";
+import { PassThrough, Writable, type Readable } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { resolveSecretSentinel, sealSecretSentinel } from "../sentinel.js";
@@ -157,5 +165,163 @@ describe("secret egress forwarding resource ownership", () => {
       response.destroy();
       agent.destroy();
     }
+  });
+});
+
+describe("secret egress forwarded response heads", () => {
+  // Serves one real loopback request through the proxy forwarder. The upstream
+  // response is emitted on a later tick, like the real client, so a throw from
+  // writeHead would escape instead of landing in the forwarder's own try block.
+  async function forwardThroughLoopback(
+    upstreamHeaders: IncomingHttpHeaders,
+    options: { statusCode?: number; prepare?: (response: ServerResponse) => void } = {},
+  ) {
+    const uncaught: unknown[] = [];
+    let failClient: (error: unknown) => void = () => {};
+    const onUncaught = (error: unknown) => {
+      uncaught.push(error);
+      failClient(error);
+    };
+    const resources: Array<Readable | Writable> = [];
+    const agent = new Agent();
+    vi.mocked(httpsRequest).mockImplementationOnce(((...args: unknown[]) => {
+      const callback = args.find((entry) => typeof entry === "function") as (
+        message: IncomingMessage,
+      ) => void;
+      const upstreamResponse = new IncomingMessage(new Socket());
+      upstreamResponse.statusCode = options.statusCode ?? 200;
+      upstreamResponse.headers = upstreamHeaders;
+      upstreamResponse.on("error", () => {});
+      process.nextTick(() => {
+        callback(upstreamResponse);
+        if (!upstreamResponse.destroyed) {
+          upstreamResponse.push("file");
+          upstreamResponse.push(null);
+        }
+      });
+      return new PassThrough() as unknown as ClientRequest;
+    }) as never);
+    const server = createServer((request, response) => {
+      options.prepare?.(response);
+      forwardSecretEgressRequest({
+        request,
+        response,
+        host: "localhost",
+        upstreamTlsAgent: agent,
+        prepareRequest: () => ({
+          target: new URL("https://localhost:1/"),
+          headers: {},
+          substituted: false,
+        }),
+        acquireBody: createSecretEgressBodyBudget(),
+        isActive: () => true,
+        ownResource: (resource) => {
+          resources.push(resource);
+          return resource;
+        },
+        releaseResponse() {},
+        resolveSentinel() {
+          return undefined;
+        },
+        audit() {},
+      });
+    });
+    process.on("uncaughtException", onUncaught);
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const { port } = server.address() as AddressInfo;
+      const result = await new Promise<{
+        status?: number;
+        headers?: IncomingHttpHeaders;
+        body?: string;
+        clientError?: NodeJS.ErrnoException;
+      }>((resolve, reject) => {
+        failClient = reject;
+        httpRequest({ host: "127.0.0.1", port, path: "/", agent: false }, (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () =>
+            resolve({
+              status: response.statusCode,
+              headers: response.headers,
+              body: Buffer.concat(chunks).toString("utf8"),
+            }),
+          );
+          response.on("error", (clientError) =>
+            resolve({ status: response.statusCode, clientError }),
+          );
+        })
+          .on("error", (clientError) => resolve({ clientError }))
+          .end();
+      });
+      await setImmediate();
+      return { ...result, uncaught };
+    } finally {
+      process.off("uncaughtException", onUncaught);
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      for (const resource of resources) {
+        resource.destroy();
+      }
+      agent.destroy();
+    }
+  }
+
+  it("forwards a CJK attachment filename that follows Content-Length", async () => {
+    const received = Buffer.from("附件_2026-09-21.log", "utf8").toString("latin1");
+    const result = await forwardThroughLoopback({
+      "content-length": "4",
+      "content-disposition": `attachment; filename="${received}"`,
+      "content-type": "application/octet-stream",
+    });
+
+    expect(result.uncaught).toEqual([]);
+    expect(result.status).toBe(200);
+    expect(result.headers?.["content-disposition"]).toBe(
+      "attachment; filename=\"___2026-09-21.log\"; filename*=UTF-8''%E9%99%84%E4%BB%B6_2026-09-21.log",
+    );
+    expect(result.body).toBe("file");
+  });
+
+  it("answers 502 instead of crashing when the forwarded head is rejected", async () => {
+    const result = await forwardThroughLoopback(
+      { "content-length": "4" },
+      {
+        prepare: (response) => {
+          vi.spyOn(response, "writeHead").mockImplementationOnce(() => {
+            throw Object.assign(new TypeError("Invalid character in header content"), {
+              code: "ERR_INVALID_CHAR",
+            });
+          });
+        },
+      },
+    );
+
+    expect(result.uncaught).toEqual([]);
+    expect(result.status).toBe(502);
+    expect(result.body).toBe("Secret egress proxy could not forward the upstream response.\n");
+  });
+
+  // Node rejects a Trailer header on a non-chunked response partway through
+  // writeHead, after it has already recorded the status. The sanitizer cannot
+  // remove this failure, so it exercises recovery from a real rejected head.
+  it("answers 502 after Node rejects a forwarded head mid-write", async () => {
+    const result = await forwardThroughLoopback({ "content-length": "4", trailer: "Expires" });
+
+    expect(result.uncaught).toEqual([]);
+    expect(result.status).toBe(502);
+    expect(result.body).toBe("Secret egress proxy could not forward the upstream response.\n");
+  });
+
+  it("closes a rejected bodyless head instead of framing a 502 body", async () => {
+    const result = await forwardThroughLoopback({ trailer: "Expires" }, { statusCode: 304 });
+
+    expect(result.uncaught).toEqual([]);
+    expect(result.status).toBeUndefined();
+    expect(result.clientError?.code).toBe("ECONNRESET");
   });
 });

@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type {
   BootstrapBudgetAnalysis,
   BootstrapPromptWarning,
@@ -12,23 +12,6 @@ const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
 
 function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
-}
-
-export function normalizeBootstrapWarningSignatures(signatures?: string[]): string[] {
-  if (!Array.isArray(signatures) || signatures.length === 0) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const signature of signatures) {
-    const value = normalizeOptionalString(signature) ?? "";
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
 }
 
 function appendSeenSignature(signatures: string[], signature: string): string[] {
@@ -52,19 +35,13 @@ function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): s
       injectedChars: file.injectedChars,
       causes: file.causes.toSorted(),
     }))
-    .toSorted((a, b) => {
-      const pathCmp = a.path.localeCompare(b.path);
-      if (pathCmp !== 0) {
-        return pathCmp;
-      }
-      if (a.rawChars !== b.rawChars) {
-        return a.rawChars - b.rawChars;
-      }
-      if (a.injectedChars !== b.injectedChars) {
-        return a.injectedChars - b.injectedChars;
-      }
-      return a.causes.join("+").localeCompare(b.causes.join("+"));
-    });
+    .toSorted(
+      (a, b) =>
+        a.path.localeCompare(b.path) ||
+        a.rawChars - b.rawChars ||
+        a.injectedChars - b.injectedChars ||
+        a.causes.join("+").localeCompare(b.causes.join("+")),
+    );
   return JSON.stringify({
     bootstrapMaxChars: analysis.totals.bootstrapMaxChars,
     bootstrapTotalMaxChars: analysis.totals.bootstrapTotalMaxChars,
@@ -94,10 +71,7 @@ function formatBootstrapTruncationWarningLines(params: {
       file.rawChars > 0
         ? Math.round(((file.rawChars - file.injectedChars) / file.rawChars) * 100)
         : 0;
-    const causeText =
-      file.causes.length > 0
-        ? file.causes.map((cause) => formatWarningCause(cause)).join(", ")
-        : "";
+    const causeText = file.causes.map(formatWarningCause).join(", ");
     const nameLabel =
       (duplicateNameCounts.get(file.name) ?? 0) > 1 && file.path.trim().length > 0
         ? `${file.name} (${file.path})`
@@ -148,7 +122,7 @@ export function buildBootstrapPromptWarning(params: {
   maxFiles?: number;
 }): BootstrapPromptWarning {
   const signature = buildBootstrapTruncationSignature(params.analysis);
-  let seenSignatures = normalizeBootstrapWarningSignatures(params.seenSignatures);
+  let seenSignatures = normalizeUniqueTrimmedStringList(params.seenSignatures);
   if (params.previousSignature && !seenSignatures.includes(params.previousSignature)) {
     seenSignatures = appendSeenSignature(seenSignatures, params.previousSignature);
   }

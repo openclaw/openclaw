@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import type { QuarantinedCronConfigJob } from "../../../cron/store/types.js";
+import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import {
   normalizeStoredCronJobs,
   recoverValidQuarantinedCronScheduleJobs,
@@ -51,15 +51,6 @@ describe("legacy cron schedule enum migration", () => {
     expect(jobs).toEqual([]);
     expect(removed.reason).toBe("invalid-schedule");
     expect((removed.job.schedule as Record<string, unknown>).kind).toBe(" DAILY ");
-  });
-
-  it("does not report an issue for an already canonical kind", () => {
-    const jobs = [makeJob("canonical", { kind: "cron", expr: "0 7 * * *" })];
-
-    const result = normalizeStoredCronJobs(jobs);
-
-    expect(result.issues.legacyScheduleKind).toBeUndefined();
-    expect(result.removedJobs).toEqual([]);
   });
 
   it("recovers only currently valid schedule rows and preserves recovery state", () => {

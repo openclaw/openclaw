@@ -1,4 +1,4 @@
-// Googlechat API module exposes the plugin public contract.
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -25,6 +25,11 @@ const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB = 20;
 const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB * 1024 * 1024;
 
+type GoogleChatRequestHooks = Pick<
+  ChannelMessageActionContext,
+  "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+>;
+
 export class GoogleChatApiError extends Error {
   constructor(
     readonly status: number,
@@ -43,15 +48,6 @@ function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   return Math.min(GOOGLECHAT_MEDIA_TIMEOUT_GRACE_MS + transferMs, GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS);
 }
 
-async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
-  return readProviderJsonResponse<T>(response, label, {
-    maxBytes: GOOGLECHAT_JSON_RESPONSE_MAX_BYTES,
-    chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`${label}: response body stalled after ${chunkTimeoutMs}ms`),
-  });
-}
-
 async function readGoogleChatErrorResponse(response: Response, label: string): Promise<string> {
   const text =
     (await readResponseTextSnippet(response, {
@@ -66,22 +62,17 @@ async function readGoogleChatErrorResponse(response: Response, label: string): P
   return redactToolPayloadText(text);
 }
 
-const headersToObject = (headers?: HeadersInit): Record<string, string> =>
-  headers instanceof Headers
-    ? Object.fromEntries(headers.entries())
-    : Array.isArray(headers)
-      ? Object.fromEntries(headers)
-      : headers || {};
-
-async function withGoogleChatResponse<T>(params: {
-  account: ResolvedGoogleChatAccount;
-  url: string;
-  init?: RequestInit;
-  auditContext: string;
-  errorPrefix?: string;
-  timeoutMs?: number;
-  handleResponse: (response: Response) => Promise<T>;
-}): Promise<T> {
+async function withGoogleChatResponse<T>(
+  params: GoogleChatRequestHooks & {
+    account: ResolvedGoogleChatAccount;
+    url: string;
+    init?: Pick<RequestInit, "method" | "body"> & { headers?: Record<string, string> };
+    auditContext: string;
+    errorPrefix?: string;
+    timeoutMs?: number;
+    handleResponse: (response: Response) => Promise<T>;
+  },
+): Promise<T> {
   const {
     account,
     url,
@@ -90,19 +81,29 @@ async function withGoogleChatResponse<T>(params: {
     errorPrefix = "Google Chat API",
     timeoutMs = GOOGLECHAT_API_TIMEOUT_MS,
     handleResponse,
+    assertDirectAdapterHandoff,
+    onPlatformSendDispatch,
   } = params;
+  assertDirectAdapterHandoff?.();
   const token = await getGoogleChatAccessToken(account);
+  if (onPlatformSendDispatch) {
+    // Preparatory reads never mark a recipient-visible send as dispatched.
+    assertDirectAdapterHandoff?.();
+    await onPlatformSendDispatch();
+  }
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
       ...init,
       headers: {
-        ...headersToObject(init?.headers),
+        ...init?.headers,
         Authorization: `Bearer ${token}`,
       },
     },
     auditContext,
     timeoutMs,
+    // The guard checks again after network preparation and on each redirect.
+    beforeRequest: assertDirectAdapterHandoff,
   });
   try {
     if (!response.ok) {
@@ -126,54 +127,48 @@ async function withGoogleChatResponse<T>(params: {
 async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
   url: string,
-  init: RequestInit,
+  init: Pick<RequestInit, "method" | "body">,
+  hooks?: GoogleChatRequestHooks,
 ): Promise<T> {
   return await withGoogleChatResponse({
+    ...hooks,
     account,
     url,
     init: {
       ...init,
       headers: {
-        ...headersToObject(init.headers),
         "Content-Type": "application/json",
       },
     },
     auditContext: "googlechat.api.json",
     handleResponse: async (response) =>
-      await readGoogleChatJsonResponse<T>(response, "Google Chat API request failed"),
+      await readProviderJsonResponse<T>(response, "Google Chat API request failed", {
+        maxBytes: GOOGLECHAT_JSON_RESPONSE_MAX_BYTES,
+        chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(
+            `Google Chat API request failed: response body stalled after ${chunkTimeoutMs}ms`,
+          ),
+      }),
   });
 }
 
-async function fetchOk(
-  account: ResolvedGoogleChatAccount,
-  url: string,
-  init: RequestInit,
-): Promise<void> {
-  await withGoogleChatResponse({
-    account,
-    url,
-    init,
-    auditContext: "googlechat.api.ok",
-    handleResponse: async () => undefined,
-  });
-}
-
-async function fetchBuffer(
-  account: ResolvedGoogleChatAccount,
-  url: string,
-  init?: RequestInit,
-  options?: { maxBytes?: number },
-): Promise<{ buffer: Buffer; contentType?: string }> {
+export async function downloadGoogleChatMedia(params: {
+  account: ResolvedGoogleChatAccount;
+  resourceName: string;
+  maxBytes?: number;
+}): Promise<{ buffer: Buffer; contentType?: string }> {
+  const { account, resourceName, maxBytes: requestedMaxBytes } = params;
+  const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
   return await withGoogleChatResponse({
     account,
     url,
-    init,
     auditContext: "googlechat.api.buffer",
     // Media gets transfer time proportional to its accepted size, while a silent
     // response body is still bounded independently below.
-    timeoutMs: resolveGoogleChatMediaTimeoutMs(options?.maxBytes),
+    timeoutMs: resolveGoogleChatMediaTimeoutMs(requestedMaxBytes),
     handleResponse: async (res) => {
-      const maxBytes = options?.maxBytes ?? GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES;
+      const maxBytes = requestedMaxBytes ?? GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES;
       const lengthHeader = res.headers.get("content-length");
       if (lengthHeader) {
         const length = parseMediaContentLength(lengthHeader);
@@ -195,26 +190,21 @@ async function fetchBuffer(
   });
 }
 
-/**
- * A Google Chat `thread` must be a `spaces/{space}/threads/{thread}` resource
- * name that belongs to the target space. Reply routing sometimes yields other
- * shapes — a bare id, a `spaces/{space}/messages/{message}` name, or a thread
- * from a different (or wrongly-cased) space — and passing any of those makes the
- * Chat API reject the whole send with `400 INVALID_ARGUMENT`. Accept only a
- * well-formed, same-space thread name; callers drop the rest so the message
- * still delivers to the space (as a new thread) instead of failing outright.
- */
+// Invalid or cross-space thread names make Chat reject the entire send. Drop
+// them so the message still reaches the space as a new thread.
 function isUsableGoogleChatThreadName(thread: string, space: string): boolean {
   return /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread) && thread.startsWith(`${space}/threads/`);
 }
 
-export async function sendGoogleChatMessage(params: {
-  account: ResolvedGoogleChatAccount;
-  space: string;
-  text?: string;
-  thread?: string;
-  cardsV2?: GoogleChatCardV2[];
-}): Promise<{ messageName?: string; threadName?: string } | null> {
+export async function sendGoogleChatMessage(
+  params: GoogleChatRequestHooks & {
+    account: ResolvedGoogleChatAccount;
+    space: string;
+    text?: string;
+    thread?: string;
+    cardsV2?: GoogleChatCardV2[];
+  },
+): Promise<{ messageName?: string; threadName?: string } | null> {
   const { account, space, text, thread, cardsV2 } = params;
   const usableThread = thread && isUsableGoogleChatThreadName(thread, space) ? thread : undefined;
   if (
@@ -239,10 +229,15 @@ export async function sendGoogleChatMessage(params: {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();
-  const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(account, url, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(
+    account,
+    url,
+    { method: "POST", body: JSON.stringify(body) },
+    {
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
+    },
+  );
   return result ? { messageName: result.name, threadName: result.thread?.name } : null;
 }
 
@@ -281,29 +276,29 @@ export async function deleteGoogleChatMessage(params: {
 }): Promise<void> {
   const { account, messageName } = params;
   const url = `${CHAT_API_BASE}/${messageName}`;
-  await fetchOk(account, url, { method: "DELETE" });
-}
-
-export async function downloadGoogleChatMedia(params: {
-  account: ResolvedGoogleChatAccount;
-  resourceName: string;
-  maxBytes?: number;
-}): Promise<{ buffer: Buffer; contentType?: string }> {
-  const { account, resourceName, maxBytes } = params;
-  const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
-  return await fetchBuffer(account, url, undefined, { maxBytes });
+  await withGoogleChatResponse({
+    account,
+    url,
+    init: { method: "DELETE" },
+    auditContext: "googlechat.api.ok",
+    handleResponse: async () => undefined,
+  });
 }
 
 export async function findGoogleChatDirectMessage(params: {
   account: ResolvedGoogleChatAccount;
   userName: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<GoogleChatSpace | null> {
   const { account, userName } = params;
   const url = new URL(`${CHAT_API_BASE}/spaces:findDirectMessage`);
   url.searchParams.set("name", userName);
-  return await fetchJson<GoogleChatSpace>(account, url.toString(), {
-    method: "GET",
-  });
+  return await fetchJson<GoogleChatSpace>(
+    account,
+    url.toString(),
+    { method: "GET" },
+    { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff },
+  );
 }
 
 export async function getGoogleChatSpace(params: {

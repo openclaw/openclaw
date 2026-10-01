@@ -6,6 +6,7 @@ import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion
 import { sliceUtf16Safe } from "../utils.js";
 import type {
   SandboxBackendExecSpec,
+  SandboxBackendHandle,
   SandboxBackendWorkdirValidation,
   SandboxBackendWorkdirValidator,
 } from "./sandbox/backend-handle.types.js";
@@ -29,6 +30,7 @@ export type BashSandboxConfig = {
   /** Approved read-only skill mounts that may be selected as an exec workdir. */
   readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
   env?: Record<string, string>;
+  prepareProcessCleanup?: SandboxBackendHandle["prepareProcessCleanup"];
   buildExecSpec?: (params: {
     command: string;
     workdir?: string;
@@ -186,12 +188,4 @@ function stripQuotes(value: string): string {
     return trimmed.slice(1, -1);
   }
   return trimmed;
-}
-
-/** Right-pads a string for aligned plain-text process output. */
-export function padProcessStatus(str: string, width: number) {
-  if (str.length >= width) {
-    return str;
-  }
-  return str + " ".repeat(width - str.length);
 }

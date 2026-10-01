@@ -14,7 +14,7 @@ import { listNodePairing, projectNodePairing } from "../../infra/device-pairing-
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  formatNodeRunnerInventoryIssue,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   parseNodeRunnerInventoryDeclaration,
@@ -60,36 +60,26 @@ function safeNodeReadProjection(
     : safeNode;
 }
 
-function nodeReadCallerDeviceId(client: GatewayClient | null): string | undefined {
-  return normalizeOptionalString(client?.connect?.device?.id);
-}
-
 function respondRunnerInventoryRetry(respond: RespondFn, message: string): void {
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
-}
-
-function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
-  return node !== null;
 }
 
 async function listNodesForClient(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   nodeId?: string;
-  pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
-  pairedNodes: ReturnType<typeof projectNodePairing>["paired"];
-  pendingNodes: ReturnType<typeof projectNodePairing>["pending"];
-  connectedNodes: readonly NodeSession[];
-}): Promise<NodeListNode[]> {
-  const runtimeState = collectNodeCatalogRuntimeState(
-    params.context.nodeRegistry,
-    params.connectedNodes,
+}): Promise<{ nodes: NodeListNode[]; connectedNodes: NodeSession[] }> {
+  const devicePairing = await listDevicePairing();
+  const nodePairing = projectNodePairing(devicePairing.paired);
+  const connectedNodes = params.context.nodeRegistry.listConnectedForPairingStates(
+    projectPairedDeviceNodeBindings(devicePairing.paired),
   );
+  const runtimeState = collectNodeCatalogRuntimeState(params.context.nodeRegistry, connectedNodes);
   const catalog = createKnownNodeCatalog({
-    pairedDevices: params.pairedDevices,
-    pairedNodes: params.pairedNodes,
-    pendingNodes: params.pendingNodes,
-    connectedNodes: params.connectedNodes,
+    pairedDevices: devicePairing.paired,
+    pairedNodes: nodePairing.paired,
+    pendingNodes: nodePairing.pending,
+    connectedNodes,
     ...runtimeState,
   });
   const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
@@ -99,16 +89,21 @@ async function listNodesForClient(params: {
     return null;
   });
   const catalogNodes = params.nodeId
-    ? [getKnownNode(catalog, params.nodeId)].filter(isVisibleNode)
+    ? [getKnownNode(catalog, params.nodeId)].filter((node) => node !== null)
     : listKnownNodes(catalog);
   const nodes = catalogNodes.map((node) =>
     node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
   );
   if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
-    return nodes;
+    return { nodes, connectedNodes };
   }
-  const ownDeviceId = nodeReadCallerDeviceId(params.client);
-  return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
+  const ownDeviceId = normalizeOptionalString(params.client?.connect?.device?.id);
+  return {
+    nodes: nodes
+      .map((node) => safeNodeReadProjection(node, ownDeviceId))
+      .filter((node) => node !== null),
+    connectedNodes,
+  };
 }
 
 function normalizePluginSurfaceRefreshParams(
@@ -233,18 +228,9 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const devicePairing = await listDevicePairing();
-      const nodePairing = projectNodePairing(devicePairing.paired);
-      const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
-        projectPairedDeviceNodeBindings(devicePairing.paired),
-      );
-      const nodes = await listNodesForClient({
+      const { nodes, connectedNodes } = await listNodesForClient({
         client,
         context,
-        pairedDevices: devicePairing.paired,
-        pairedNodes: nodePairing.paired,
-        pendingNodes: nodePairing.pending,
-        connectedNodes,
       });
       const activeNodeId = context.nodeRegistry.getActiveNode(connectedNodes)?.nodeId;
       const nodesWithPresence = activeNodeId
@@ -264,19 +250,10 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const devicePairing = await listDevicePairing();
-      const nodePairing = projectNodePairing(devicePairing.paired);
-      const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
-        projectPairedDeviceNodeBindings(devicePairing.paired),
-      );
-      const nodes = await listNodesForClient({
+      const { nodes, connectedNodes } = await listNodesForClient({
         client,
         context,
         nodeId: id,
-        pairedDevices: devicePairing.paired,
-        pairedNodes: nodePairing.paired,
-        pendingNodes: nodePairing.pending,
-        connectedNodes,
       });
       const node = nodes[0];
       if (!node) {
@@ -377,13 +354,13 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          formatNodeRunnerUpdateRequired(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+          formatNodeRunnerInventoryIssue(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
         ),
       );
       return;
     }
     const connId = client?.connId;
-    const currentSession = nodeId ? context.nodeRegistry.get(nodeId) : undefined;
+    const currentSession = context.nodeRegistry.get(nodeId);
     const pairingGeneration =
       currentSession && currentSession.connId === connId
         ? currentSession.pairingGeneration
@@ -392,9 +369,9 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       // A registered session without a pairing generation usually means the
       // node's capability surface is still awaiting operator approval; name
       // that state and the exact approve command instead of a generic retry.
-      const pendingSurface = nodeId
-        ? (await listNodePairing()).pending.find((entry) => entry.nodeId === nodeId)
-        : undefined;
+      const pendingSurface = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === nodeId,
+      );
       respondRunnerInventoryRetry(
         respond,
         pendingSurface

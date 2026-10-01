@@ -11,12 +11,95 @@ import {
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
-import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import {
+  createPackageSwapFixture,
+  createRetainedPackageSwap,
+} from "./package-update-swap.test-support.js";
 import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("FreeBSD package replacement ownership", () => {
+  it.each([
+    { kind: "directory", ownership: "artifact" },
+    { kind: "symlink", ownership: "artifact" },
+    { kind: "symlink", ownership: "target" },
+    { kind: "directory", ownership: "unavailable" },
+  ] as const)(
+    "preserves pkg ownership when retiring a historical $kind ($ownership)",
+    async ({ kind, ownership }) => {
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      await withTestDir({ prefix: "openclaw-pkg-historical-backup-" }, async (base) => {
+        const checkout = path.join(base, "checkout");
+        await fs.mkdir(checkout);
+        await fs.writeFile(path.join(checkout, "sentinel"), "operator checkout");
+        const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
+        await withMockedPlatform("freebsd", async () => {
+          const { transaction, globalRoot, packageRoot } = await createRetainedPackageSwap(
+            base,
+            async ({ globalRoot: fixtureGlobalRoot }) => {
+              const historical = path.join(fixtureGlobalRoot, ".openclaw.package-backup-1-100");
+              if (kind === "symlink") {
+                await fs.symlink(checkout, historical, linkType);
+              } else {
+                await fs.mkdir(historical);
+                await fs.writeFile(path.join(historical, "sentinel"), "historical package");
+              }
+              const later = path.join(fixtureGlobalRoot, ".openclaw.package-backup-2-200");
+              await fs.mkdir(later);
+              await fs.writeFile(path.join(later, "sentinel"), "second historical package");
+            },
+          );
+          const historical = path.join(globalRoot, ".openclaw.package-backup-1-100");
+          const later = path.join(globalRoot, ".openclaw.package-backup-2-200");
+          const registered =
+            ownership === "target"
+              ? path.join(checkout, "sentinel")
+              : kind === "symlink"
+                ? historical
+                : path.join(historical, "sentinel");
+          // Package ownership can change after capture and successful activation.
+          query
+            .mockClear()
+            .mockResolvedValue(
+              ownership === "unavailable"
+                ? pkgQueryResult("", { code: 1 })
+                : pkgQueryResult(`${registered}\n`),
+            );
+
+          const completion = await transaction.complete({ activationVerified: true }, () => {});
+
+          if (ownership === "target") {
+            expect(completion).toBeUndefined();
+            await expect(fs.lstat(historical)).rejects.toMatchObject({ code: "ENOENT" });
+          } else {
+            expect(completion).toMatchObject({
+              advisory: {
+                kind: "recoverable-maintenance",
+                message: expect.stringContaining("FreeBSD pkg"),
+              },
+            });
+            await expect(fs.lstat(historical)).resolves.toBeDefined();
+          }
+          if (ownership === "unavailable") {
+            expect(query).toHaveBeenCalledOnce();
+            expect(await fs.readFile(path.join(later, "sentinel"), "utf8")).toBe(
+              "second historical package",
+            );
+          } else {
+            await expect(fs.lstat(later)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+          expect(await fs.readFile(path.join(checkout, "sentinel"), "utf8")).toBe(
+            "operator checkout",
+          );
+          expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+            '"version":"2.0.0"',
+          );
+        });
+      });
+    },
+  );
+
   it("retains the installed candidate and recovery copy when pkg claims a launcher before rollback", async () => {
     await withTestDir({ prefix: "openclaw-pkg-rollback-" }, async (base) => {
       const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
@@ -66,7 +149,7 @@ describe("FreeBSD package replacement ownership", () => {
           runStep,
         });
         expect(result.failedStep).toMatchObject({
-          name: "global install stage",
+          name: "package-stage",
           stderrTail: expect.stringContaining("cannot prepare the update"),
         });
       });

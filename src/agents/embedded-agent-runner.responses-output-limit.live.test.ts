@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
-import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import type {
+  Response as ResponsesResponse,
+  ResponseCreateParamsStreaming,
+  ResponseStreamEvent,
+} from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -14,11 +18,55 @@ import {
   type ContextEngineLogicalTurnLease,
 } from "./harness/context-engine-logical-turn.js";
 import { shellQuoteArgs } from "./harness/native-hook-relay-utils.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isLiveTestEnabled, logLiveProgress } from "./live-test-helpers.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const describeLive =
   isLiveTestEnabled() && process.env.OPENAI_API_KEY?.trim() ? describe : describe.skip;
+
+function observeTerminalResponse(
+  response: Response,
+  onTerminal: (terminal: ResponsesResponse) => void,
+): Response {
+  if (!response.body) {
+    throw new Error("Live Responses request returned no stream body");
+  }
+  const decoder = new TextDecoder();
+  let buffered = "";
+  // The SDK cancels its reader at the terminal event; observe before forwarding unchanged bytes.
+  const observer = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      buffered += decoder.decode(chunk, { stream: true });
+      let separator: RegExpExecArray | null;
+      while ((separator = /\r?\n\r?\n/.exec(buffered))) {
+        const frame = buffered.slice(0, separator.index);
+        buffered = buffered.slice(separator.index + separator[0].length);
+        const data = frame
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (!data || data === "[DONE]") {
+          continue;
+        }
+        const event = JSON.parse(data) as ResponseStreamEvent;
+        if (
+          event.type === "response.completed" ||
+          event.type === "response.incomplete" ||
+          event.type === "response.failed"
+        ) {
+          onTerminal(event.response);
+        }
+      }
+      controller.enqueue(chunk);
+    },
+  });
+  return new Response(response.body.pipeThrough(observer), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 describeLive("embedded Responses output-limit recovery live", () => {
   it("continues from a committed receipt after a real truncated tool call", async () => {
@@ -71,6 +119,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
       const sessionManager = SessionManager.inMemory(state.workspaceDir);
       const events: EmbeddedAgentEvent[] = [];
       const requests: ResponseCreateParamsStreaming[] = [];
+      const responses: ResponsesResponse[] = [];
       const host = getAiTransportHost();
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -87,10 +136,11 @@ describeLive("embedded Responses output-limit recovery live", () => {
             if (requests.length >= 3) {
               throw new Error("Live output-limit proof exceeded three Responses requests");
             }
-            if (typeof init?.body !== "string") {
-              throw new Error("Live output-limit proof expected a JSON Responses request");
-            }
-            const request = JSON.parse(init.body) as ResponseCreateParamsStreaming;
+            // Responses bodies are pre-encoded bytes; decode without consuming init.
+            const request = (await new Request(
+              input,
+              init,
+            ).json()) as ResponseCreateParamsStreaming;
             const requestNumber = requests.length + 1;
             const toolName = requestNumber === 1 ? "exec" : "write";
             if (requestNumber <= 2) {
@@ -102,9 +152,14 @@ describeLive("embedded Responses output-limit recovery live", () => {
               requestNumber <= 2 ? { type: "function", name: toolName } : "none";
             request.parallel_tool_calls = false;
             request.max_output_tokens = requestNumber === 2 ? 256 : 1024;
+            if (requestNumber === 2) {
+              // Spend the small cap on function arguments, not a reasoning-only turn.
+              request.reasoning = { effort: "none" };
+            }
             // Only request policy changes: the provider's stream and terminal facts stay intact.
             requests.push(request);
-            return fetchModel(input, { ...init, body: JSON.stringify(request) });
+            const response = await fetchModel(input, { ...init, body: JSON.stringify(request) });
+            return observeTerminalResponse(response, (terminal) => responses.push(terminal));
           };
         },
       });
@@ -144,6 +199,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
             `Set workdir to ${JSON.stringify(state.workspaceDir)}. Preserve its printed receipt.\n` +
             `Then use write to create ${JSON.stringify(unfinishedPath)} with the literal text ` +
             '"0123456789" repeated 4000 times. Supply the entire expanded string as content.\n' +
+            "The content argument must contain all 40,000 digits, without code, placeholders, ellipses, or repetition notation.\n" +
             "If writing is interrupted, do not retry either action. " +
             "Finish by reporting the exact receipt from the completed exec result.",
           timeoutMs: 180_000,
@@ -160,7 +216,28 @@ describeLive("embedded Responses output-limit recovery live", () => {
         expect(receipt).toMatch(/^RECEIPT_[0-9a-f-]{36}$/);
         await expect(fs.stat(unfinishedPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(requests).toHaveLength(3);
-        expect(requests[2]?.previous_response_id).toBeTypeOf("string");
+        const terminalFacts = responses.map((response) => ({
+          status: response.status,
+          incompleteReason: response.incomplete_details?.reason,
+          outputItems: response.output.map((item) => ({
+            type: item.type,
+            status: "status" in item ? item.status : undefined,
+          })),
+        }));
+        logLiveProgress(`Responses terminal facts: ${JSON.stringify(terminalFacts)}`);
+        expect(terminalFacts).toHaveLength(3);
+        expect(terminalFacts[1]).toMatchObject({
+          status: "incomplete",
+          incompleteReason: "max_output_tokens",
+          outputItems: expect.arrayContaining([{ type: "function_call", status: "incomplete" }]),
+        });
+        // Recovery may continue from provider state or replay the committed durable transcript.
+        // The latter deliberately omits previous_response_id, so prove the receipt survived instead.
+        expect(JSON.stringify(requests[2]?.input)).toContain(receipt);
+        expect(JSON.stringify(requests[2]?.input)).toContain(
+          "Split the remaining work into smaller tool calls",
+        );
+        expect(JSON.stringify(requests[2]?.input)).toContain("max_output_tokens");
         expect(result.payloads?.map((payload) => payload.text ?? "").join("\n")).toContain(receipt);
         expect(result.payloads?.some((payload) => payload.isError)).toBe(false);
         expect(
@@ -173,6 +250,9 @@ describeLive("embedded Responses output-limit recovery live", () => {
           .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
         const failures = messages.filter(
           (message) => message.role === "assistant" && message.errorCode === "incomplete_tool_call",
+        );
+        expect(messages).toContainEqual(
+          expect.objectContaining({ role: "custom", customType: "incomplete-tool-call" }),
         );
         expect(failures).toEqual([
           expect.objectContaining({

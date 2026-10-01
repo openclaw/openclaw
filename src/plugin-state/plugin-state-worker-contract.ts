@@ -1,12 +1,14 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type {
   PluginStateComparisonLimits,
   PluginStatePreparedComparison,
 } from "./plugin-state-store.comparison.js";
 import type { PluginStateSequencedJournalParams } from "./plugin-state-store.journal.js";
-import type { PluginStateRegisterEntryParams } from "./plugin-state-store.kernel.js";
+import type { PluginStateMoveEntriesParams } from "./plugin-state-store.mutations.js";
 import type { PluginStateKeyRangeParams } from "./plugin-state-store.reads.js";
+import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
   PluginStateEntry,
@@ -15,54 +17,75 @@ import type {
   PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 import type { PluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
+import type { RuntimeHealthClearSelection } from "./runtime-health-records.js";
 
 type Namespace = { pluginId: string; namespace: string };
 type Key = Namespace & { key: string };
-type Register = Omit<PluginStateRegisterEntryParams, "createdAtMs"> & { maxPluginEntries: number };
+type Register = Omit<PluginStateRegisterEntryParams, "createdAtMs">;
 
-export type PluginStateWorkerOperations = {
+export type PluginStateWorkerRequests = {
   "pluginState.appendJournal": {
     input: PluginStateSequencedJournalParams;
-    output: Result<number, PluginStateWorkerFailure>;
+    output: number;
   };
   "pluginState.entriesInKeyRange": {
     input: PluginStateKeyRangeParams;
-    output: Result<PluginStateEntry<unknown>[], PluginStateWorkerFailure>;
+    output: PluginStateEntry<unknown>[];
+  };
+  "pluginState.moveEntries": {
+    input: PluginStateMoveEntriesParams;
+    output: number;
   };
   "pluginState.observe": {
     input: Key;
-    output: Result<PluginStateObservation<unknown>, PluginStateWorkerFailure>;
+    output: PluginStateObservation<unknown>;
   };
   "pluginState.compareUpdate": {
     input: PluginStatePreparedComparison & PluginStateComparisonLimits & { operation: "update" };
-    output: Result<PluginStateCompareResult<unknown>, PluginStateWorkerFailure>;
+    output: PluginStateCompareResult<unknown>;
   };
   "pluginState.compareDelete": {
     input: PluginStatePreparedComparison & PluginStateComparisonLimits & { operation: "delete" };
-    output: Result<PluginStateCompareResult<unknown>, PluginStateWorkerFailure>;
+    output: PluginStateCompareResult<unknown>;
   };
-  "pluginState.register": { input: Register; output: Result<void, PluginStateWorkerFailure> };
+  "pluginState.register": { input: Register; output: void };
   "pluginState.registerIfAbsent": {
     input: Register;
-    output: Result<boolean, PluginStateWorkerFailure>;
+    output: boolean;
   };
   "pluginState.deleteIfEqual": {
     input: Key & { expected: string | number | boolean | null };
-    output: Result<boolean, PluginStateWorkerFailure>;
+    output: boolean;
   };
-  "pluginState.lookup": { input: Key; output: Result<unknown, PluginStateWorkerFailure> };
+  "pluginState.lookup": { input: Key; output: unknown };
   "pluginState.lookupMany": {
     input: Namespace & { keys: readonly string[] };
-    output: Result<Array<Result<unknown, PluginStateWorkerFailure>>, PluginStateWorkerFailure>;
+    output: Array<Result<unknown, PluginStateWorkerFailure>>;
   };
-  "pluginState.consume": { input: Key; output: Result<unknown, PluginStateWorkerFailure> };
-  "pluginState.delete": { input: Key; output: Result<boolean, PluginStateWorkerFailure> };
+  "pluginState.consume": { input: Key; output: unknown };
+  "pluginState.delete": { input: Key; output: boolean };
   "pluginState.entries": {
     input: Namespace;
-    output: Result<PluginStateEntry<unknown>[], PluginStateWorkerFailure>;
+    output: PluginStateEntry<unknown>[];
   };
-  "pluginState.count": { input: Namespace; output: Result<number, PluginStateWorkerFailure> };
-  "pluginState.clear": { input: Namespace; output: Result<void, PluginStateWorkerFailure> };
+  "pluginState.count": { input: Namespace; output: number };
+  "pluginState.clear": { input: Namespace; output: void };
+  "pluginState.clearRuntimeHealth": {
+    input: Namespace & { processId: number; selection: RuntimeHealthClearSelection };
+    output: void;
+  };
+  "pluginState.sweep": { input: undefined; output: number };
+};
+
+export type PluginStateWorkerOperations = {
+  [Request in keyof PluginStateWorkerRequests]: {
+    input: PluginStateWorkerRequests[Request]["input"] extends undefined
+      ? undefined
+      : PluginStateWorkerRequests[Request]["input"] & {
+          sessionEntryCurrentSource?: SessionEntryCurrentSource;
+        };
+    output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
+  };
 };
 
 export const pluginStateWorkerOperations = {
@@ -75,6 +98,11 @@ export const pluginStateWorkerOperations = {
     operation: "entries",
     code: "PLUGIN_STATE_READ_FAILED",
     message: "Failed to list plugin state entries by key range.",
+  },
+  "pluginState.moveEntries": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to move plugin state entries.",
   },
   "pluginState.observe": {
     operation: "lookup",
@@ -140,6 +168,16 @@ export const pluginStateWorkerOperations = {
     operation: "clear",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to clear plugin state namespace.",
+  },
+  "pluginState.clearRuntimeHealth": {
+    operation: "clear",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to clear runtime health records.",
+  },
+  "pluginState.sweep": {
+    operation: "sweep",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to sweep expired plugin state entries.",
   },
 } as const satisfies Record<
   keyof PluginStateWorkerOperations,

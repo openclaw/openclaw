@@ -15,7 +15,7 @@ import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js"
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
 import { registerDiscordMonitorListeners } from "./provider.startup.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const mocks = vi.hoisted(() => ({
   reportChannelRoomJoin: vi.fn(async () => ({ kind: "posted" as const })),

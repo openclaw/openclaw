@@ -20,7 +20,6 @@ import {
   dispatchClaudeCliStreamingToolEvent,
   dispatchClaudeCliThinking,
   dispatchGeminiCliStreamingToolEvent,
-  isClaudeToolUseBlockType,
   partitionLeadingTaggedReasoning,
   projectCliBackendEvent,
   projectCliTaggedReasoning,
@@ -29,22 +28,23 @@ import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
   isClaudeStreamJsonDialect,
-  isClaudeStreamJsonResult,
   isClaudeSyntheticNoResponse,
   isClaudeSubagentRecord,
+  isClaudeToolUseBlockType,
   isGeminiStreamJsonDialect,
-  isStreamJsonDialect,
   missingMessageBoundarySeparator,
   parseClaudeCliJsonlResult,
   parseClaudeCliStreamingDelta,
   pickCliResumeCheckpointId,
   pickCliSessionId,
   preferGeminiCliStreamJsonError,
+  readClaudeAttributedSubagentProgressId,
   preferStreamedClaudeTextOverResult,
   readCliUsage,
   readGeminiCliStreamJsonError,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
+import { appendCliResultText } from "./cli-output-results.js";
 import {
   CLI_STREAM_JSON_OUTPUT_LIMITS,
   frameBoundedCliJsonlChunk,
@@ -94,19 +94,18 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";
 
+  const appendAssistantText = (delta: string) => {
+    assistantText += delta;
+    params.onAssistantDelta({ text: assistantText, delta, sessionId, usage });
+  };
+
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
       return;
     }
     const delta = pendingClaudeText;
     pendingClaudeText = "";
-    assistantText = `${assistantText}${delta}`;
-    params.onAssistantDelta({
-      text: assistantText,
-      delta,
-      sessionId,
-      usage,
-    });
+    appendAssistantText(delta);
   };
 
   const flushPendingClaudeCommentaryText = () => {
@@ -149,9 +148,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     pendingMessageSeparator = false;
     sawToolUseSinceText = false;
-    const deltaText = `${separator}${delta}`;
-    assistantText = `${assistantText}${deltaText}`;
-    params.onAssistantDelta({ text: assistantText, delta: deltaText, sessionId, usage });
+    appendAssistantText(`${separator}${delta}`);
   };
 
   const routeTaggedReasoningDeltas = (
@@ -285,6 +282,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parseErrorText) {
       return;
     }
+    const attributedParentToolUseId = readClaudeAttributedSubagentProgressId(parsed);
+    if (attributedParentToolUseId) {
+      params.onAttributedSubagentProgress?.(attributedParentToolUseId);
+    }
     if (
       claudeStreamJson &&
       parsed.type === "system" &&
@@ -298,16 +299,16 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         return;
       }
     }
-    if (parsed.type === "result" && isStreamJsonDialect(params)) {
+    if (
+      parsed.type === "result" &&
+      parsed.openclaw_interim_result !== true &&
+      supportsCliJsonlToolEvents(params)
+    ) {
       sawTerminalResult = true;
     }
     observeSessionId(parsed);
     const nextUsage = readCliUsage(parsed);
-    const isClaudeTerminalResult =
-      isClaudeStreamJsonDialect({
-        backend: params.backend,
-        providerId: params.providerId,
-      }) && parsed.type === "result";
+    const isClaudeTerminalResult = claudeStreamJson && parsed.type === "result";
     if (isClaudeTerminalResult && nextUsage && usage) {
       diagnosticUsage = nextUsage;
     }
@@ -315,11 +316,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       params.onUsage?.(nextUsage, isClaudeTerminalResult);
     }
     const shouldUseUsage =
-      !isClaudeStreamJsonResult({
-        backend: params.backend,
-        providerId: params.providerId,
-        parsed,
-      }) || !usage;
+      !supportsCliJsonlToolEvents(params) || parsed.type !== "result" || !usage;
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
@@ -364,11 +361,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
 
-    if (classifyClaudeCommentary && parsed.type === "result") {
+    if (parsed.type === "result") {
       finishTaggedReasoningMessage();
-      flushPendingClaudeAssistantText();
-    } else if (parsed.type === "result") {
-      finishTaggedReasoningMessage();
+      if (classifyClaudeCommentary) {
+        flushPendingClaudeAssistantText();
+      }
     }
 
     let result = parseClaudeCliJsonlResult({
@@ -423,21 +420,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       const nextText = (
         keepStreamed ? preservedCandidate : result.text || streamedText || texts.join("\n").trim()
       ).trim();
-      const previousText = output?.text?.trim() ?? "";
-      // Claude Code may emit an interim result while background agents run, then
-      // a second result after task-notification. Preserve earlier result text
-      // when the later envelope does not already include it.
-      let text = nextText;
-      if (
-        previousText &&
-        nextText &&
-        previousText !== nextText &&
-        !nextText.startsWith(previousText)
-      ) {
-        text = `${previousText}\n${nextText}`;
-      } else if (!nextText) {
-        text = previousText;
-      }
+      const { text, textParts, completedText } = appendCliResultText(output, nextText);
       const syntheticNoResponse =
         sawClaudeSyntheticNoResponse &&
         parsed.subtype === "success" &&
@@ -448,6 +431,12 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       output = {
         ...result,
         text,
+        ...((textParts.length > 1 ||
+          output?.textParts ||
+          parsed.openclaw_interim_result === true) &&
+        !(stoppedTurn && !nextText)
+          ? { textParts }
+          : {}),
         ...(syntheticNoResponse
           ? {
               errorText: CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR,
@@ -464,6 +453,14 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
+      if (
+        parsed.openclaw_interim_result === true &&
+        completedText &&
+        !output.errorText &&
+        !output.terminalFailure
+      ) {
+        params.onCompletedReply?.(completedText, textParts.length - 1);
+      }
       // An interim result commits its segment. Rebase boundary state so later
       // text is judged on its own, while delta snapshots stay cumulative.
       segmentStart = assistantText.length;
@@ -578,13 +575,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ) {
         const deltaText = parsed.content;
         if (deltaText) {
-          assistantText = `${assistantText}${deltaText}`;
-          params.onAssistantDelta({
-            text: assistantText,
-            delta: deltaText,
-            sessionId,
-            usage,
-          });
+          appendAssistantText(deltaText);
         }
       } else if (
         isGeminiStreamJsonDialect(params) &&
@@ -701,7 +692,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (sawCustomJsonlEvent) {
         return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
       }
-      if (isStreamJsonDialect(params) && assistantText.trim()) {
+      if (supportsCliJsonlToolEvents(params) && assistantText.trim()) {
         return {
           text: assistantText.trim(),
           sessionId,
@@ -712,7 +703,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (isGeminiStreamJsonDialect(params) && sawGeminiStructuredOutput) {
         return { text: "", sessionId, usage };
       }
-      if (isStreamJsonDialect(params)) {
+      if (supportsCliJsonlToolEvents(params)) {
         return {
           text: "",
           sessionId,

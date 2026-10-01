@@ -189,47 +189,159 @@ describe("doctor Skill Workshop collection backup migration", () => {
     ).resolves.toMatchObject({ legacyBackupRootCount: 0 });
   });
 
-  it("keeps an unowned legacy collection backup as history-only", async () => {
-    const workspaceDir = await fs.realpath(
-      await tempDirs.make("openclaw-workshop-legacy-backup-workspace-"),
-    );
-    const backupContent =
-      "---\nname: legacy-collection-skill\ndescription: Legacy backup\n---\n\n# Before cleanup\n";
-    const resultContent =
-      "---\nname: legacy-collection-skill\ndescription: Current skill\n---\n\n# After cleanup\n";
-    const backupId = "2026-09-01T00-00-00.000Z-legacy1";
-    const legacyRoot = await seedLegacyCollectionBackup({
-      workspaceDir,
-      backupId,
-      backupContent,
-      resultContent,
-    });
-    const config = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-    };
-
-    const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
-
-    expect(result.changes.join("\n")).toContain("migrated 1 legacy collection backup root");
-    await expect(
-      restoreLatestSkillCollectionBackup({
+  it.each([
+    "complete",
+    "large-content",
+    "links",
+    "changed-link",
+    "source-alias",
+    "parent-alias",
+    "missing-history",
+    "changed-content",
+    "metadata",
+    "manifest",
+  ] as const)(
+    "verifies retained history-only backups after workspace retirement (%s)",
+    async (archiveState) => {
+      const workspaceDir = await fs.realpath(
+        await tempDirs.make("openclaw-workshop-legacy-backup-workspace-"),
+      );
+      const backupContent =
+        "---\nname: legacy-collection-skill\ndescription: Legacy backup\n---\n\n# Before cleanup\n";
+      const resultContent =
+        "---\nname: legacy-collection-skill\ndescription: Current skill\n---\n\n# After cleanup\n";
+      const backupId = "2026-09-01T00-00-00.000Z-legacy1";
+      const legacyRoot = await seedLegacyCollectionBackup({
         workspaceDir,
-        config,
-        agentId: "main",
+        backupId,
+        backupContent,
+        resultContent,
+      });
+      const config = {
+        agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+      };
+      const sourceBackupDir = path.join(legacyRoot, backupId);
+      const sourceManifest = await fs.readFile(path.join(sourceBackupDir, "manifest.json"), "utf8");
+      const sourceWorkspace = path.join(sourceBackupDir, "workspace");
+      const savedFiles = new Map([
+        [path.join("skills", "legacy-collection-skill", "SKILL.md"), backupContent],
+        [path.join(".openclaw", "trace.json"), "original\n"],
+      ]);
+      if (archiveState === "large-content") {
+        savedFiles.set(path.join("attachments", "payload.txt"), "x".repeat(9 * 1024 * 1024));
+      }
+      for (const [relativePath, contents] of savedFiles) {
+        const file = path.join(sourceWorkspace, relativePath);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, contents);
+      }
+      const hasLinks = archiveState === "links" || archiveState === "changed-link";
+      const linkTarget =
+        process.platform === "win32" ? path.join(sourceWorkspace, "missing") : "missing";
+      if (hasLinks) {
+        await fs.link(
+          path.join(sourceWorkspace, ".openclaw", "trace.json"),
+          path.join(sourceWorkspace, "hardlink.json"),
+        );
+        await fs.symlink(linkTarget, path.join(sourceWorkspace, "link"), "junction");
+      }
+      const sourceLink = hasLinks
+        ? await fs.readlink(path.join(sourceWorkspace, "link"))
+        : undefined;
+
+      const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
+
+      expect(result.changes.join("\n")).toContain("migrated 1 legacy collection backup root");
+      await expect(
+        restoreLatestSkillCollectionBackup({
+          workspaceDir,
+          config,
+          agentId: "main",
+          env: testState.env,
+        }),
+      ).rejects.toThrow("history-only");
+      await expect(fs.access(legacyRoot)).resolves.toBeUndefined();
+      await expect(
+        inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
+      ).resolves.toMatchObject({ legacyBackupRootCount: 0 });
+      await expect(
+        migrateLegacySkillWorkshopProposals({ config, env: testState.env }),
+      ).resolves.toEqual(expect.objectContaining({ changes: [], migrated: 0, warnings: [] }));
+      await expect(
+        inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
+      ).resolves.toMatchObject({ legacyBackupRootCount: 0 });
+      const destination = path.join(
+        resolveSkillCollectionBackupRoot(config, "main", testState.env),
+        backupId,
+      );
+      const historyWorkspace = path.join(destination, "history", "workspace");
+      if (archiveState === "missing-history") {
+        await fs.rm(historyWorkspace, { recursive: true });
+      } else if (archiveState === "source-alias" || archiveState === "parent-alias") {
+        const aliasPath =
+          archiveState === "source-alias" ? historyWorkspace : path.dirname(historyWorkspace);
+        await fs.rm(aliasPath, { recursive: true });
+        await fs.symlink(
+          archiveState === "source-alias" ? sourceWorkspace : sourceBackupDir,
+          aliasPath,
+          "junction",
+        );
+      } else if (archiveState === "changed-link") {
+        await fs.unlink(path.join(historyWorkspace, "link"));
+        await fs.symlink(sourceWorkspace, path.join(historyWorkspace, "link"), "junction");
+      } else if (archiveState === "changed-content") {
+        await fs.writeFile(
+          path.join(historyWorkspace, "skills", "legacy-collection-skill", "SKILL.md"),
+          "different\n",
+        );
+      } else if (archiveState === "metadata") {
+        await fs.writeFile(path.join(historyWorkspace, ".openclaw", "trace.json"), "different\n");
+      } else if (archiveState === "manifest") {
+        const manifestPath = path.join(destination, "manifest.json");
+        const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+        manifest.createdAt = "2026-08-01T00:00:00.000Z";
+        await fs.writeFile(manifestPath, JSON.stringify(manifest));
+      }
+      const retiredConfig = {
+        agents: { list: [{ id: "main", default: true, workspace: testState.workspaceDir }] },
+      };
+      const rerun = await migrateLegacySkillWorkshopProposals({
+        config: retiredConfig,
         env: testState.env,
-      }),
-    ).rejects.toThrow("history-only");
-    await expect(fs.access(legacyRoot)).resolves.toBeUndefined();
-    await expect(
-      inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
-    ).resolves.toMatchObject({ legacyBackupRootCount: 0 });
-    await expect(
-      migrateLegacySkillWorkshopProposals({ config, env: testState.env }),
-    ).resolves.toEqual(expect.objectContaining({ changes: [], migrated: 0, warnings: [] }));
-    await expect(
-      inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
-    ).resolves.toMatchObject({ legacyBackupRootCount: 0 });
-  });
+      });
+      expect(rerun.changes).toEqual([]);
+      const complete =
+        archiveState === "complete" || archiveState === "large-content" || archiveState === "links";
+      expect(rerun.warnings).toEqual(
+        complete ? [] : [expect.stringContaining("no verified owner")],
+      );
+      await expect(
+        inspectLegacySkillWorkshopMigration({ config: retiredConfig, env: testState.env }),
+      ).resolves.toMatchObject({ legacyBackupRootCount: complete ? 0 : 1 });
+      await expect(fs.readFile(path.join(sourceBackupDir, "manifest.json"), "utf8")).resolves.toBe(
+        sourceManifest,
+      );
+      for (const [relativePath, contents] of savedFiles) {
+        await expect(fs.readFile(path.join(sourceWorkspace, relativePath), "utf8")).resolves.toBe(
+          contents,
+        );
+        if (complete) {
+          await expect(
+            fs.readFile(path.join(historyWorkspace, relativePath), "utf8"),
+          ).resolves.toBe(contents);
+        }
+      }
+      if (hasLinks) {
+        await expect(fs.readlink(path.join(sourceWorkspace, "link"))).resolves.toBe(sourceLink);
+        await expect(
+          fs.readFile(path.join(sourceWorkspace, "hardlink.json"), "utf8"),
+        ).resolves.toBe("original\n");
+        await expect(
+          fs.readFile(path.join(historyWorkspace, "hardlink.json"), "utf8"),
+        ).resolves.toBe("original\n");
+      }
+    },
+  );
 
   it.each([
     { createdBy: "cli" as const, matchingReview: true },
@@ -270,7 +382,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
         path.join("skill-workshop", "proposals", record.id, "PROPOSAL.md"),
         proposalContent,
       );
-      seedLegacyV15ProposalRows(testState.env, [
+      await seedLegacyV15ProposalRows(testState.env, [
         {
           record,
           workspaceDir,
@@ -409,6 +521,33 @@ describe("doctor Skill Workshop collection backup migration", () => {
       copySpy.mockRestore();
     }
 
+    const retired = await migrateLegacySkillWorkshopProposals({
+      config: {
+        agents: { list: [{ id: "main", workspace: path.join(workspaceDir, "replacement") }] },
+      },
+      env: testState.env,
+    });
+    expect(retired.warnings).toEqual([expect.stringContaining("no verified owner")]);
+
+    const pendingBackup = backups.find(
+      (backup) => !copiedSources.includes(path.join(legacyRoot, backup.id, "workspace")),
+    )!;
+    const pendingManifestPath = path.join(legacyRoot, pendingBackup.id, "manifest.json");
+    const pendingManifestText = await fs.readFile(pendingManifestPath, "utf8");
+    const replacementWorkspace = path.join(workspaceDir, "replacement");
+    await fs.writeFile(
+      pendingManifestPath,
+      JSON.stringify({ ...JSON.parse(pendingManifestText), workspaceDir: replacementWorkspace }),
+    );
+    const mixedWorkspaces = await migrateLegacySkillWorkshopProposals({
+      config: { agents: { list: [{ id: "main", workspace: replacementWorkspace }] } },
+      env: testState.env,
+    });
+    expect(mixedWorkspaces.warnings).toEqual([
+      expect.stringContaining("does not map to exactly one configured agent"),
+    ]);
+    await fs.writeFile(pendingManifestPath, pendingManifestText);
+
     const resumed = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
     expect(resumed.warnings).toEqual([]);
     expect(resumed.changes.join("\n")).toContain("migrated 1 legacy collection backup root");
@@ -432,36 +571,6 @@ describe("doctor Skill Workshop collection backup migration", () => {
     await expect(
       inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
     ).resolves.toMatchObject({ legacyBackupRootCount: 0 });
-  });
-
-  it("migrates the result snapshot for a Workshop-owned legacy collection backup", async () => {
-    const { workspaceDir, config, backupId } = await seedOwnedLegacyCollectionBackup();
-
-    const migrated = await migrateLegacySkillWorkshopProposals({
-      config,
-      env: testState.env,
-    });
-    expect(migrated.changes.join("\n")).toContain(
-      "Relocated 1 Skill Workshop skill, retargeted 1 proposal, marked 0 stale, and migrated 1 legacy collection backup root.",
-    );
-    await expect(
-      restoreLatestSkillCollectionBackup({
-        workspaceDir,
-        config,
-        agentId: "main",
-        env: testState.env,
-      }),
-    ).resolves.toMatchObject({ backupId, restored: ["owned-legacy-backup"] });
-    await expect(
-      fs.readFile(
-        path.join(
-          resolveWorkshopSkillsDir(config, "main", testState.env),
-          "owned-legacy-backup",
-          "SKILL.md",
-        ),
-        "utf8",
-      ),
-    ).resolves.toContain("# Before cleanup");
   });
 
   it.each(["copy", "retirement"] as const)(

@@ -1,6 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import { MEMORY_INDEX_PROVENANCE_VERSION, type MemoryIndexMeta } from "./manager-reindex-state.js";
@@ -51,6 +56,7 @@ describe.each(versions)("memory search after a %s upgrade", (versionKey) => {
     }
     await manager.close();
     await closeAllMemorySearchManagers();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     if (oldVersion) {
       // Keep real indexed files unchanged, but reopen the publication as an older runtime's index.
@@ -121,6 +127,26 @@ describe.each(versions)("memory search after a %s upgrade", (versionKey) => {
     await manager.sync({ reason: "cli", force: true });
     expect(await manager.search("alpha", { lexicalOnly: true })).not.toEqual([]);
     expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion);
+  });
+
+  it("serves only compatible lexical rows when the older-version rebuild fails", async () => {
+    const cfg = createConfig();
+    const dbPath = await seedIndex(cfg);
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-12.md"),
+      "# Log\nAlpha memory line changed after the prior publication.",
+    );
+    fixture.provider.embedBatchPermanentFailure = new Error("embedding migration unavailable");
+    const manager = await fixture.getFreshManager(cfg);
+    const results = await manager.search("alpha", { lexicalOnly: true });
+    if (versionKey === "chunkingVersion") {
+      expect(results).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+    } else {
+      expect(results).toEqual([]);
+    }
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion - 1);
   });
 
   it("preserves configuration-only mismatch behavior", async () => {

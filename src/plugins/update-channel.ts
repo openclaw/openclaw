@@ -34,11 +34,7 @@ import {
 } from "./install-transaction.js";
 import { isUnavailableNpmTarget } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
-import {
-  buildNpmResolutionInstallFields,
-  recordPluginInstall,
-  resolveNpmInstallRecordSpec,
-} from "./installs.js";
+import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { formatClawHubInstallFailure, formatNpmInstallFailure } from "./update-attempt.js";
@@ -77,6 +73,9 @@ export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;
   channel: UpdateChannel;
   coreVersion?: string;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
+  skipIds?: ReadonlySet<string>;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
@@ -120,7 +119,7 @@ async function syncPluginsForUpdateChannelWithLease(
   const retainedLinks = new Set<string>();
   for (const [pluginId, record] of Object.entries(installs)) {
     const bundledInfo = bundled.get(pluginId);
-    if (record.source !== "path" || !bundledInfo) {
+    if (params.skipIds?.has(pluginId) || record.source !== "path" || !bundledInfo) {
       continue;
     }
     const linkedPath = loadHelpers.paths.find(
@@ -141,7 +140,7 @@ async function syncPluginsForUpdateChannelWithLease(
   if (params.channel === "dev") {
     for (const [pluginId, record] of Object.entries(installs)) {
       const bundledInfo = bundled.get(pluginId);
-      if (!bundledInfo || retainedLinks.has(pluginId)) {
+      if (!bundledInfo || retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
         continue;
       }
 
@@ -173,6 +172,13 @@ async function syncPluginsForUpdateChannelWithLease(
         continue;
       }
       const existing = resolveBridgeInstallRecord({ installs, bridge });
+      if (
+        params.skipIds?.has(bridge.bundledPluginId) ||
+        params.skipIds?.has(targetPluginId) ||
+        (existing && params.skipIds?.has(existing.pluginId))
+      ) {
+        continue;
+      }
       if (
         !isExternalizedBundledPluginEnabled({
           config: next,
@@ -211,6 +217,7 @@ async function syncPluginsForUpdateChannelWithLease(
           npmSpec && trustedSourceLinkedOfficialInstall
             ? await resolveNpmInstallSpecsForUpdateChannel({
                 spec: npmSpec,
+                timeoutMs: params.timeoutMs,
                 updateChannel: params.channel,
                 officialPackageName: resolveNpmSpecPackageName(npmSpec),
                 coreVersion: params.coreVersion,
@@ -270,6 +277,8 @@ async function syncPluginsForUpdateChannelWithLease(
           spec,
           config: next,
           mode: "update" as const,
+          timeoutMs: params.timeoutMs,
+          workTimeoutMs: params.workTimeoutMs,
           expectedPluginId: targetPluginId,
           logger,
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
@@ -385,11 +394,7 @@ async function syncPluginsForUpdateChannelWithLease(
         >;
         record = {
           source: "npm",
-          spec: resolveNpmInstallRecordSpec({
-            requestedSpec: channelNpmSpecs?.recordSpec ?? installSpec,
-            resolution: npmResult.npmResolution,
-            pinResolvedRegistrySpec: false,
-          }),
+          spec: channelNpmSpecs?.recordSpec ?? installSpec,
           installPath: result.targetDir,
           version: nextVersion,
           ...buildNpmResolutionInstallFields(npmResult.npmResolution),
@@ -417,7 +422,7 @@ async function syncPluginsForUpdateChannelWithLease(
 
     for (const [pluginId, record] of Object.entries(installs)) {
       const bundledInfo = bundled.get(pluginId);
-      if (!bundledInfo || retainedLinks.has(pluginId)) {
+      if (!bundledInfo || retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
         continue;
       }
 

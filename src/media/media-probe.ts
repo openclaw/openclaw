@@ -5,6 +5,7 @@ import {
   asSafeIntegerInRange,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -54,18 +55,6 @@ function parseDurationMs(value: unknown): number | undefined {
     return undefined;
   }
   return parsePositiveInteger(Math.round(seconds * 1000));
-}
-
-function normalizeCodecName(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized || undefined;
-}
-
-function parseStreamIndex(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function selectPlaybackStream(
@@ -124,12 +113,12 @@ function parseFfprobeMediaMetadata(
   )
     .map((sideData) => asSafeIntegerInRange(readRecord(sideData)?.rotation, {}))
     .find((rotation) => rotation !== undefined);
-  const audioCodec = normalizeCodecName(audioStream?.codec_name);
-  const videoCodec = normalizeCodecName(videoStream?.codec_name);
-  const videoPixelFormat = normalizeCodecName(videoStream?.pix_fmt);
-  const videoProfile = normalizeCodecName(videoStream?.profile);
-  const audioStreamIndex = parseStreamIndex(audioStream?.index);
-  const videoStreamIndex = parseStreamIndex(videoStream?.index);
+  const audioCodec = normalizeOptionalLowercaseString(audioStream?.codec_name);
+  const videoCodec = normalizeOptionalLowercaseString(videoStream?.codec_name);
+  const videoPixelFormat = normalizeOptionalLowercaseString(videoStream?.pix_fmt);
+  const videoProfile = normalizeOptionalLowercaseString(videoStream?.profile);
+  const audioStreamIndex = asSafeIntegerInRange(audioStream?.index, { min: 0 });
+  const videoStreamIndex = asSafeIntegerInRange(videoStream?.index, { min: 0 });
   return {
     ...(durationMs ? { durationMs } : {}),
     ...(kind === "video" && width && height ? { width, height } : {}),
@@ -273,7 +262,6 @@ export async function probePlaybackMediaFileDescriptor(
   return await probeMediaSource({ kind: "fileDescriptor", fd }, kind, options);
 }
 
-/** Positive display dimensions of the selected video stream. */
 type VideoDimensions = {
   width: number;
   height: number;

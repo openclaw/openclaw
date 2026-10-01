@@ -8,7 +8,9 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("spawn broker event order", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker event order", () => {
   it("keeps startup IPC ahead of messages arriving while its first write drains", async () => {
     const preload = path.join(tempDirs.make("openclaw-broker-event-order-"), "backpressure.mjs");
     await writeFile(

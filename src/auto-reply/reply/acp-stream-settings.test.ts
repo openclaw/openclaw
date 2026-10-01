@@ -37,7 +37,7 @@ describe("acp stream settings", () => {
     expect(settings.repeatSuppression).toBe(false);
     expect(settings.maxOutputChars).toBe(24_000);
     expect(settings.maxSessionUpdateChars).toBe(320);
-    expect(settings.tagVisibility.usage_update).toBe(true);
+    expect(isAcpTagVisible(settings, "usage_update")).toBe(true);
   });
 
   it("accepts explicit deliveryMode=live override", () => {
@@ -60,24 +60,6 @@ describe("acp stream settings", () => {
     expect(isAcpTagVisible(settings, "tool_call")).toBe(false);
     expect(isAcpTagVisible(settings, "tool_call_update")).toBe(false);
     expect(isAcpTagVisible(settings, "usage_update")).toBe(false);
-  });
-
-  it("respects tag visibility overrides", () => {
-    const settings = resolveAcpProjectionSettings(
-      createAcpTestConfig({
-        acp: {
-          enabled: true,
-          stream: {
-            tagVisibility: {
-              usage_update: true,
-              tool_call: false,
-            },
-          },
-        },
-      }),
-    );
-    expect(isAcpTagVisible(settings, "usage_update")).toBe(true);
-    expect(isAcpTagVisible(settings, "tool_call")).toBe(false);
   });
 
   it("resolves built-in ACP chunking and coalescing", () => {

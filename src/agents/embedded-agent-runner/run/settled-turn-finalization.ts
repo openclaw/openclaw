@@ -1,9 +1,10 @@
 import {
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
-import { isSilentReplyText } from "../../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -12,11 +13,13 @@ import {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { appendAssistantMirrorMessageByIdentity } from "../../../plugin-sdk/session-transcript-runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { runAgentHarnessSettledTurnFinalization } from "../../harness/selection.js";
 import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
 import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
+import { observeReplyDelivery } from "../../reply-completion.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
@@ -30,10 +33,7 @@ import {
 } from "../usage-accumulator.js";
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
-import {
-  resolveRuntimeModelAttempt,
-  runEmbeddedSettledTurnFinalizationWithBackend,
-} from "./backend.js";
+import { resolveRuntimeModelAttempt } from "./backend.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   resolveSettledToolBatchEvidence,
@@ -95,14 +95,32 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const initial = input.initial;
   let attempt = initial.attempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
+  const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
+  const observeSourceDelivery = () =>
+    observeReplyDelivery(
+      input.terminalBase.runParams.resolveReplyDelivery,
+      minimumAssistantMessageIndex,
+      (error) =>
+        log.warn(
+          `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
+        ),
+    );
+  const replyDeliveryState = await observeSourceDelivery();
   let prepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
+    replyDeliveryState,
     attempt,
     currentAttemptCompletedAssistant: initial.currentAttemptCompletedAssistant,
     sessionIdUsed: initial.sessionIdUsed,
     sessionFileUsed: initial.sessionFileUsed,
     lastRunPromptUsage,
     terminalState: initial.terminalState,
+  });
+  const preserveInitial = (finalizationOutcome: "not-attempted" | "failed") => ({
+    ...initial,
+    prepared,
+    lastRunPromptUsage,
+    finalizationOutcome,
   });
   const prompt = resolveSettledTurnFinalizationRequest({
     runParams: input.terminalBase.runParams,
@@ -115,16 +133,13 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: input.finalization.hasTerminalToolPresentation,
     terminalState: initial.terminalState,
+    replyDeliveryState,
     settledTurnFinalizationAvailable:
+      !input.terminalBase.runParams.providerReviewAcknowledgment &&
       typeof input.finalization.harness.finalizeSettledTurn === "function",
   });
   if (!prompt) {
-    return {
-      ...initial,
-      prepared,
-      lastRunPromptUsage,
-      finalizationOutcome: "not-attempted" as const,
-    };
+    return preserveInitial("not-attempted");
   }
   const assertFinalizationActive = resolveAdmittedRunActiveAssertion(
     input.finalization.preparedAttempt.admittedRunContext,
@@ -133,13 +148,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   if (!assertFinalizationActive) {
     throw new Error("admitted run authority is no longer active");
   }
-  const settledFailureSignal = prepared.failureSignal;
-  const settledTerminalToolFailure = prepared.terminalToolFailure;
-  const committedSessionTarget = resolveCommittedSessionTarget({
-    preparedAttempt: input.finalization.preparedAttempt,
-    sessionTarget: input.finalization.sessionTarget,
-    sessionWriterFence: input.finalization.sessionWriterFence,
-  });
+  const { preparedAttempt, sessionTarget, sessionWriterFence } = input.finalization;
+  const committedSessionTarget =
+    preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
+      ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
+      : undefined;
   const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
     attempt: input.finalization.preparedAttempt,
     sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
@@ -161,7 +174,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
   );
-  let finalizationOutcome: "answered" | "empty" | "failed" = "failed";
+  let finalizationOutcome: "answered" | "empty" | "failed" | "silent-fallback" = "failed";
   try {
     let finalization: Awaited<ReturnType<typeof runPreparedSettledTurnFinalization>>;
     let finalizationAttempt = 0;
@@ -192,8 +205,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         runParams.terminalReplyExpectation === "optional" &&
         !initial.attempt.lastToolError &&
         shouldTreatEmptyAssistantReplyAsSilent({
-          allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
-          terminalReplyExpectation: runParams.terminalReplyExpectation,
+          terminalReplyExpectation: "optional",
           onlyExplicitSilentReply: true,
           payloadCount: 0,
           aborted: input.finalization.abortSignal.aborted,
@@ -232,12 +244,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         `settled-turn finalization was cancelled: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — preserving cancellation`,
       );
-      return {
-        ...initial,
-        prepared,
-        lastRunPromptUsage,
-        finalizationOutcome: "failed" as const,
-      };
+      return preserveInitial("failed");
     }
     log.warn(
       `settled-turn finalization failed: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
@@ -249,15 +256,14 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       `settled-turn finalization was cancelled before terminal delivery: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
     );
-    return {
-      ...initial,
-      prepared,
-      lastRunPromptUsage,
-      finalizationOutcome: "failed" as const,
-    };
+    return preserveInitial("failed");
   }
   if (finalizationOutcome !== "answered" && terminalFallbackAllowed) {
+    // Scheduled runs have no useful announcement when only a host placeholder remains.
+    const fallbackText =
+      runParams.trigger === "cron" ? SILENT_REPLY_TOKEN : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
+      text: fallbackText,
       attempt: input.finalization.preparedAttempt,
       abortSignal: input.finalization.abortSignal,
       assertActive: assertFinalizationActive,
@@ -269,14 +275,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         `settled-turn fallback was cancelled during transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
       );
-      return {
-        ...initial,
-        prepared,
-        lastRunPromptUsage,
-        finalizationOutcome: "failed" as const,
-      };
+      return preserveInitial("failed");
     }
     attempt = buildSettledToolFallbackAttemptResult({
+      text: fallbackText,
       settledAttempt: initial.attempt,
       sourceAttempt: attempt,
       prompt,
@@ -284,6 +286,9 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       runtimePlan: input.finalization.preparedAttempt.runtimePlan,
       transcriptIdempotencyKey,
     });
+    if (runParams.trigger === "cron") {
+      finalizationOutcome = "silent-fallback";
+    }
   }
   // Only an actual recovery replaces a failed or timed-out turn's terminal ownership.
   const completion =
@@ -307,6 +312,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const finalizedPrepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
     ...completion,
+    replyDeliveryState: await observeSourceDelivery(),
     lastRunPromptUsage,
   });
   // Only a real finalizer answer may cross source-reply suppression. The
@@ -319,17 +325,26 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       setReplyPayloadMetadata(payload, { sessionWriterDeliveryAuthority });
     }
   });
-  // A failure-honest final answer cannot turn a settled cron denial into success.
+  // Tool-free finalization cannot resolve failures from the settled tools.
   prepared = {
     ...finalizedPrepared,
+    // Recovery can itself commit the source reply (notably WebChat history).
+    // Preserve supplements, but never hand an already-owned final to a second sender.
+    payloadsWithToolMedia:
+      finalizedPrepared.replyDeliveryState === "missing"
+        ? finalizedPrepared.payloadsWithToolMedia
+        : finalizedPrepared.payloadsWithToolMedia?.filter(
+            (payload) => !isReplyPayloadTerminalContent(payload),
+          ),
     // Do not offer the private diagnostic to stranded-reply recovery as an
     // undelivered model answer. Automatic-delivery callers retain their fallback.
     ...(finalizationOutcome !== "answered" &&
     runParams.sourceReplyDeliveryMode === "message_tool_only"
       ? { finalAssistantVisibleText: "", finalAssistantRawText: "" }
       : {}),
-    failureSignal: settledFailureSignal,
-    terminalToolFailure: settledTerminalToolFailure,
+    attemptToolSummary: prepared.attemptToolSummary,
+    failureSignal: prepared.failureSignal,
+    terminalToolFailure: prepared.terminalToolFailure,
   };
   return {
     ...completion,
@@ -371,22 +386,6 @@ function resolveSessionWriterDeliveryAuthority(input: {
   };
 }
 
-function resolveCommittedSessionTarget(input: {
-  preparedAttempt: EmbeddedRunAttemptParams;
-  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-  sessionWriterFence?: SessionTranscriptWriterFence;
-}): EmbeddedRunAttemptParams["sessionTarget"] {
-  const preparedTarget = input.preparedAttempt.sessionTarget;
-  if (!preparedTarget && !input.sessionTarget && !input.sessionWriterFence) {
-    return undefined;
-  }
-  return {
-    ...preparedTarget,
-    ...input.sessionTarget,
-    ...input.sessionWriterFence,
-  };
-}
-
 async function runPreparedSettledTurnFinalization(input: {
   attempt: EmbeddedRunAttemptParams;
   settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
@@ -414,7 +413,7 @@ async function runPreparedSettledTurnFinalization(input: {
       sessionKey: input.attempt.sessionKey,
     });
     const finalization = await withGatewayToolCallerIdentity(callerIdentity, () =>
-      runEmbeddedSettledTurnFinalizationWithBackend(
+      runAgentHarnessSettledTurnFinalization(
         {
           ...input.attempt,
           abortSignal: controls.abortSignal,
@@ -507,6 +506,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
 }
 
 function buildSettledToolFallbackAttemptResult(input: {
+  text: string;
   settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   sourceAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   prompt: string;
@@ -527,7 +527,7 @@ function buildSettledToolFallbackAttemptResult(input: {
   }
   const assistant = {
     ...sourceAssistant,
-    content: [{ type: "text" as const, text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }],
+    content: [{ type: "text" as const, text: input.text }],
     openclawDelivery: undefined,
     stopReason: "stop" as const,
     errorMessage: undefined,
@@ -537,7 +537,7 @@ function buildSettledToolFallbackAttemptResult(input: {
     timestamp: Date.now(),
   };
   return buildSettledTurnFinalizationAttemptResult({
-    outcome: "answered",
+    outcome: isSilentReplyText(input.text) ? "empty" : "answered",
     result: {
       assistant,
       usage: input.sourceAttempt.attemptUsage,
@@ -557,6 +557,7 @@ function buildSettledToolFallbackAttemptResult(input: {
 }
 
 async function persistSettledToolFallbackTranscript(input: {
+  text: string;
   attempt: EmbeddedRunAttemptParams;
   abortSignal: AbortSignal;
   assertActive: () => void;
@@ -608,7 +609,7 @@ async function persistSettledToolFallbackTranscript(input: {
           config: input.attempt.config,
           idempotencyKey,
           signal: input.abortSignal,
-          text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+          text: input.text,
         }),
     );
     if (input.abortSignal.aborted) {

@@ -49,10 +49,14 @@ import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
+  isChatGPTUsageLimitErrorMessage,
+  isOllamaUnavailableErrorMessage,
+  isAudioOnlyModelErrorMessage,
+  isUnsupportedThinkingToggleErrorMessage,
 } from "../agents/live-test-provider-drift.test-support.js";
 import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
+import { resolveBuiltInModelSuppressionFromManifest } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
@@ -132,14 +136,11 @@ import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import {
+  isolateLiveGatewayConfig,
+  type ProviderThinkingModelCompat,
+} from "./gateway-models.profiles.live.test-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
-import { READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
-import type { GatewayServer } from "./server-public.js";
-
-type ProviderThinkingModelCompat = {
-  thinkingFormat?: string;
-  supportedReasoningEfforts?: readonly string[] | null;
-};
 import {
   hasExpectedSingleNonce,
   hasExpectedToolNonce,
@@ -147,6 +148,8 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe.test-helpers.js";
+import { READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import type { GatewayServer } from "./server-public.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -1902,7 +1905,7 @@ describe("providerScopedModelRegistryProviders", () => {
         useExplicit: false,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" }]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p3-fast" }]);
   });
 
   it("loads explicit gateway model refs through dynamic discovery", () => {
@@ -2772,33 +2775,11 @@ function isAccountIdExtractionError(error: string): boolean {
   return /failed to extract accountid from token/i.test(error);
 }
 
-function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
-}
-
-function isOllamaUnavailableErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return (
-    msg.includes("ollama could not be reached") ||
-    (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
-    (msg.includes("localhost:11434") && msg.includes("econnrefused"))
-  );
-}
-
-function isAudioOnlyModelErrorMessage(raw: string): boolean {
-  return /requires that either input content or output modality contain audio/i.test(raw);
-}
-
 function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
   return (
     /does not support parameter reasoningeffort/i.test(raw) ||
     /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
   );
-}
-
-function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
-  return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
 function isInstructionsRequiredError(error: string): boolean {
@@ -4026,9 +4007,9 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   const childToken = `ULTRA-CHILD-${nonce}`;
   const parentToken = `ULTRA-PARENT-${nonce}`;
   const message = [
-    "Ultra orchestration live proof.",
     "Call sessions_spawn exactly once with these exact arguments:",
     JSON.stringify({
+      runtime: "subagent",
       task: `Reply exactly ${childToken} and nothing else.`,
       agentId: GATEWAY_LIVE_AGENT_ID,
       mode: "run",
@@ -4036,7 +4017,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
       model: params.modelKey,
       thinking: params.thinkingLevel,
     }),
-    "Pass only those six arguments. Omit visible, worktree, worktreeName, worktreeBaseRef, cwd, context, taskName, label, streamTo, lightContext, attachments, attachAs, and resumeSessionId.",
+    "Pass only those seven arguments. This is a native subagent proof, not an ACP task. Omit visible, worktree, worktreeName, worktreeBaseRef, cwd, context, taskName, label, streamTo, lightContext, attachments, attachAs, and resumeSessionId.",
     "Wait for the child completion to return before answering.",
     `Then reply exactly ${parentToken} ${childToken} and nothing else.`,
   ].join("\n");
@@ -4591,6 +4572,7 @@ type OpenAIUltraWireObservation = {
 };
 
 const OPENAI_ULTRA_WIRE_CAPTURE_LIMIT = 512;
+const OPENAI_ULTRA_UTILITY_MODEL = "openai/gpt-5.4-mini";
 const OPENAI_ULTRA_NORMAL_EFFORT = "medium";
 const openAIUltraRunsByClient = new WeakMap<GatewayClient, Map<string, string>>();
 
@@ -4711,7 +4693,16 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
       return ((input: RequestInfo | URL, init?: RequestInit) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        if (endpoints.has(url) && typeof init?.body === "string") {
+        // Responses bodies are pre-encoded bytes; decode synchronously so ownership
+        // is captured in the dispatching async context.
+        const rawBody = init?.body;
+        const body =
+          typeof rawBody === "string"
+            ? rawBody
+            : ArrayBuffer.isView(rawBody)
+              ? new TextDecoder().decode(rawBody)
+              : undefined;
+        if (init && endpoints.has(url) && body !== undefined) {
           if (observations.length >= OPENAI_ULTRA_WIRE_CAPTURE_LIMIT) {
             overflow = true;
           } else {
@@ -4741,7 +4732,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
               captureAgentRunLifecycleGeneration(runId) === context.lifecycleGeneration &&
               validateAgentRunDelegatedAuthority(authority);
             observations.push({
-              ...readOpenAIUltraWireObservation(init.body),
+              ...readOpenAIUltraWireObservation(body),
               ...(ownsRequest && typeof context.isHeartbeat === "boolean"
                 ? { owner: { diagnostic, isHeartbeat: context.isHeartbeat } }
                 : {}),
@@ -5787,7 +5778,7 @@ function buildLiveGatewayConfig(params: {
   } satisfies NonNullable<OpenClawConfig["agents"]>["entries"];
   const baseModels = params.cfg.models;
   return {
-    ...params.cfg,
+    ...isolateLiveGatewayConfig(params.cfg),
     bindings: undefined,
     broadcast: undefined,
     agents: {
@@ -5972,6 +5963,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               defaults: {
                 ...params.cfg.agents?.defaults,
                 thinkingDefault: OPENAI_ULTRA_NORMAL_EFFORT,
+                // Utility side calls (Activity recaps, titles) deliberately use low effort.
+                // The default OpenAI utility model is an Ultra candidate, so route them to a
+                // model outside the sweep instead of attributing them to Ultra runs.
+                utilityModel: OPENAI_ULTRA_UTILITY_MODEL,
               },
             },
           }
@@ -6256,10 +6251,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     modelKey,
                     message: strictReply
                       ? "OpenClaw live tool probe (local, safe): " +
-                        `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        `read the local file ${JSON.stringify(toolProbePath)} using the available file-reading tool. ` +
                         "Then reply with exactly the two test marker values from that file, separated by one space. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
-                        `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        `read the local file ${JSON.stringify(toolProbePath)} using the available file-reading tool. ` +
                         "Then reply with the two test marker values you read (include both).",
                     thinkingLevel,
                     context: `${progressLabel}: tool-read`,
@@ -6352,14 +6349,16 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     modelKey,
                     message: strictReply
                       ? "OpenClaw live tool probe (local, safe): " +
-                        "use the tool named `exec` (or `Exec`) to run this command: " +
+                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        "use the available shell-execution tool to run this command: " +
                         `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                        `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                        `Then read the local file ${JSON.stringify(toolWritePath)} using the available file-reading tool. ` +
                         "Then reply with exactly the nonce text from that file. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
-                        "use the tool named `exec` (or `Exec`) to run this command: " +
+                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        "use the available shell-execution tool to run this command: " +
                         `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                        `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                        `Then read the local file ${JSON.stringify(toolWritePath)} using the available file-reading tool. ` +
                         "Finally reply including the nonce text you read back.",
                     thinkingLevel,
                     context: `${progressLabel}: tool-exec`,
@@ -7036,7 +7035,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const candidates: PreparedGatewayLiveModelCandidate[] = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
-          if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
+          if (
+            resolveBuiltInModelSuppressionFromManifest({ provider: model.provider, id: model.id })
+              ?.suppress
+          ) {
             continue;
           }
           if (!targetMatcher.matchesProvider(model.provider)) {

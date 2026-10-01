@@ -31,7 +31,6 @@ const disconnected = {
   pending: null,
 } as const;
 function mount(scopes: string[], profileId: string | null, request: ReturnType<typeof vi.fn>) {
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const snapshot = {
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
@@ -64,10 +63,7 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
     navigate: vi.fn(),
     gateway: {
       snapshot,
-      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      subscribe: () => () => undefined,
     },
     agents,
     settingsAgentSelection,
@@ -85,12 +81,6 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
   return {
     element,
     context,
-    update: (patch: Partial<ApplicationGatewaySnapshot>) => {
-      Object.assign(snapshot, patch);
-      for (const listener of listeners) {
-        listener({ ...snapshot });
-      }
-    },
   };
 }
 afterEach(() => {
@@ -251,23 +241,38 @@ it("distinguishes a failed System lookup from unverified credentials", async () 
   await waitForFast(() => expect(row()?.textContent).toContain("Connection status unavailable"));
   expect(row()?.textContent).not.toContain("Not verified");
   expect(row()?.textContent).not.toContain("No credentials");
+  expect(row()?.textContent).not.toContain("OS account running the Gateway");
   expect(element.textContent).toContain("Retry");
 });
 
 it.each([
-  ["unverified", "Not verified"],
-  ["unavailable", "No credentials"],
-] as const)("preserves an authoritative %s credential result", async (credentialState, label) => {
-  const request = vi.fn(async () => ({
-    personal: disconnected,
-    system: { ...system, account: null, credentialState },
-  }));
-  const { element } = mount(["operator.read"], "profile-a", request);
-  await waitForFast(() =>
-    expect(element.querySelector('[data-github-connection="system"]')?.textContent).toContain(
-      label,
-    ),
-  );
-  expect(element.textContent).not.toContain("Connection status unavailable");
-  expect(element.textContent).toContain("Connect My GitHub");
-});
+  ["native", "available", "Verified"],
+  ["native", "unverified", "Not verified"],
+  ["native", "unavailable", "No credentials"],
+  ["native", "rate_limited", "Rate limited"],
+  ["managed-pat", "configured_unavailable", "Configured, but unavailable"],
+  ["managed-oauth", "available", "Verified"],
+] as const)(
+  "shows %s %s without extra native-account explanation",
+  async (credentialKind, credentialState, label) => {
+    const request = vi.fn(async () => ({
+      personal: disconnected,
+      system: {
+        ...system,
+        source: credentialKind === "native" ? "system-detected" : "system-configured",
+        credentialKind,
+        credentialState,
+        account: credentialState === "available" ? system.account : null,
+      },
+    }));
+    const { element } = mount(["operator.read"], "profile-a", request);
+    const row = () => element.querySelector('[data-github-connection="system"]');
+    await waitForFast(() => expect(row()?.textContent).toContain(label));
+    expect(row()?.textContent).not.toContain("OS account running the Gateway");
+    if (credentialState !== "unavailable") {
+      expect(row()?.textContent).not.toContain("No credentials");
+    }
+    expect(element.textContent).not.toContain("Connection status unavailable");
+    expect(element.textContent).toContain("Connect My GitHub");
+  },
+);

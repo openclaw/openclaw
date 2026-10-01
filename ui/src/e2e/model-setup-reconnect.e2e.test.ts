@@ -9,6 +9,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI model setup same-client reconnect",
@@ -312,19 +313,32 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(String(error)));
-      const gateway = await installMockGateway(page, {
+      const discoveredModel = (name: string) => ({
+        ...detection("provider/configured-model"),
+        candidates: [
+          {
+            kind: "provider-auto:provider",
+            label: name,
+            detail: "Available on this Gateway",
+            modelRef: `provider/${name}`,
+            credentials: true,
+            recommended: false,
+          },
+        ],
+      });
+      const gateway = await installSetupGateway(page, {
         featureMethods: ["openclaw.setup.detect"],
-        methodResponses: { "openclaw.setup.detect": detection("provider/original-model") },
+        methodResponses: { "openclaw.setup.detect": discoveredModel("original-model") },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+      const response = await openModelSetup(page, suite.server.baseUrl);
       expect(response?.status()).toBe(200);
       await page.getByText("original-model", { exact: true }).waitFor();
       const initialDetections = (await gateway.getRequests("openclaw.setup.detect")).length;
       const initialConnections = (await gateway.getRequests("connect")).length;
       await gateway.setMethodResponse(
         "openclaw.setup.detect",
-        detection("provider/reconnected-model"),
+        discoveredModel("reconnected-model"),
       );
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "model setup reconnect proof");
@@ -342,7 +356,7 @@ suite.define(() => {
       expect(pageErrors).toEqual([]);
 
       if (captureUiProofEnabled) {
-        await page.locator("openclaw-model-setup-page").screenshot({
+        await page.screenshot({
           animations: "disabled",
           path: path.join(artifactDir, "00-reconnected-model-visible.png"),
         });

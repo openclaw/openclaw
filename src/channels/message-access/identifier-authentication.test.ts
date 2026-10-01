@@ -5,7 +5,7 @@ import {
   type IdentifierAuthentication,
 } from "./identifier-authentication.js";
 import type { ResolveStableChannelMessageIngressParams } from "./runtime-types.js";
-import { resolveStableChannelMessageIngress } from "./runtime.js";
+import { resolveStableChannelIngressPolicy } from "./runtime.js";
 
 const strengths: IdentifierAuthentication[] = ["mutable", "unverified", "asserted", "verified"];
 
@@ -58,7 +58,7 @@ describe("identifier authentication", () => {
       },
     };
 
-    const strong = await resolveStableChannelMessageIngress(
+    const strong = await resolveStableChannelIngressPolicy(
       base({
         identity,
         subject,
@@ -66,7 +66,7 @@ describe("identifier authentication", () => {
         policy: { minIdentifierAuthentication: "verified" },
       }),
     );
-    const weak = await resolveStableChannelMessageIngress(
+    const weak = await resolveStableChannelIngressPolicy(
       base({
         identity,
         subject,
@@ -96,7 +96,7 @@ describe("identifier authentication", () => {
   });
 
   it("does not cross-bind same-kind authentication between identity fields", async () => {
-    const result = await resolveStableChannelMessageIngress(
+    const result = await resolveStableChannelIngressPolicy(
       base({
         identity: {
           key: "primary-email",
@@ -134,8 +134,8 @@ describe("identifier authentication", () => {
       subject: { stableId: "display-name" },
       allowFrom: ["display-name"],
     });
-    const disabled = await resolveStableChannelMessageIngress(params);
-    const enabled = await resolveStableChannelMessageIngress({
+    const disabled = await resolveStableChannelIngressPolicy(params);
+    const enabled = await resolveStableChannelIngressPolicy({
       ...params,
       policy: { mutableIdentifierMatching: "enabled" },
     });
@@ -146,7 +146,7 @@ describe("identifier authentication", () => {
   });
 
   it("floors an alias missing from a supplied authentication map to unverified", async () => {
-    const result = await resolveStableChannelMessageIngress(
+    const result = await resolveStableChannelIngressPolicy(
       base({
         identity: {
           authentication: "verified",
@@ -172,7 +172,7 @@ describe("identifier authentication", () => {
   });
 
   it("preserves verified static strength when the authentication map is absent", async () => {
-    const result = await resolveStableChannelMessageIngress(
+    const result = await resolveStableChannelIngressPolicy(
       base({
         identity: { authentication: "verified" },
         policy: { minIdentifierAuthentication: "verified" },
@@ -192,7 +192,7 @@ describe("identifier authentication", () => {
   it.each(["disabled", "enabled"] as const)(
     "keeps mutable alias matching %s with only the primary claim supplied",
     async (mutableIdentifierMatching) => {
-      const result = await resolveStableChannelMessageIngress(
+      const result = await resolveStableChannelIngressPolicy(
         base({
           identity: {
             key: "member-id",
@@ -213,7 +213,7 @@ describe("identifier authentication", () => {
   );
 
   it("does not let a wildcard without an exact primary identifier claim verified", async () => {
-    const result = await resolveStableChannelMessageIngress(
+    const result = await resolveStableChannelIngressPolicy(
       base({
         identity: { authentication: "verified" },
         subject: {},
@@ -236,7 +236,7 @@ describe("identifier authentication", () => {
         allowFrom: [],
         groupAllowFrom: ["sender-1"],
       },
-      check: (result: Awaited<ReturnType<typeof resolveStableChannelMessageIngress>>) =>
+      check: (result: Awaited<ReturnType<typeof resolveStableChannelIngressPolicy>>) =>
         result.senderAccess.allowed,
     },
     {
@@ -248,7 +248,7 @@ describe("identifier authentication", () => {
           commandOwnerAllowFrom: ["sender-1"],
         },
       },
-      check: (result: Awaited<ReturnType<typeof resolveStableChannelMessageIngress>>) =>
+      check: (result: Awaited<ReturnType<typeof resolveStableChannelIngressPolicy>>) =>
         result.commandAccess.authorized,
     },
     {
@@ -263,7 +263,7 @@ describe("identifier authentication", () => {
           senderAllowFrom: ["sender-1"],
         },
       },
-      check: (result: Awaited<ReturnType<typeof resolveStableChannelMessageIngress>>) =>
+      check: (result: Awaited<ReturnType<typeof resolveStableChannelIngressPolicy>>) =>
         result.routeAccess.allowed && result.senderAccess.allowed,
     },
   ])("applies the exact-pair threshold to $name gates", async ({ patch, check }) => {
@@ -275,12 +275,12 @@ describe("identifier authentication", () => {
       },
       policy: { minIdentifierAuthentication: "verified" as const },
     };
-    const result = await resolveStableChannelMessageIngress(base({ ...patch, ...common }));
+    const result = await resolveStableChannelIngressPolicy(base({ ...patch, ...common }));
     expect(check(result)).toBe(false);
   });
 
   it("preserves exact-pair authentication through inherited route lists", async () => {
-    const result = await resolveStableChannelMessageIngress(
+    const result = await resolveStableChannelIngressPolicy(
       base({
         conversation: { kind: "group", id: "room-1" },
         identity: { authentication: "verified" },
@@ -311,7 +311,7 @@ describe("identifier authentication", () => {
   });
 
   it("namespaces exact pairs from inherited route lists", async () => {
-    const result = await resolveStableChannelMessageIngress(
+    const result = await resolveStableChannelIngressPolicy(
       base({
         conversation: { kind: "group", id: "room-1" },
         identity: {
@@ -340,7 +340,7 @@ describe("identifier authentication", () => {
   });
 
   it("does not cross-bind same-kind origin-subject fields", async () => {
-    const result = await resolveStableChannelMessageIngress(
+    const result = await resolveStableChannelIngressPolicy(
       base({
         identity: {
           key: "primary-email",
@@ -378,7 +378,7 @@ describe("identifier authentication", () => {
   });
 
   it("applies the threshold to access-group and origin-subject gates", async () => {
-    const accessGroup = await resolveStableChannelMessageIngress(
+    const accessGroup = await resolveStableChannelIngressPolicy(
       base({
         identity: { authentication: "verified" },
         subject: {
@@ -392,7 +392,7 @@ describe("identifier authentication", () => {
         policy: { minIdentifierAuthentication: "verified" },
       }),
     );
-    const origin = await resolveStableChannelMessageIngress(
+    const origin = await resolveStableChannelIngressPolicy(
       base({
         identity: { authentication: "verified" },
         subject: {
@@ -446,7 +446,7 @@ describe("identifier authentication", () => {
       },
     },
   ])("fails $name access-group matches closed at a verified minimum", async ({ patch }) => {
-    const result = await resolveStableChannelMessageIngress(
+    const result = await resolveStableChannelIngressPolicy(
       base({
         ...patch,
         allowFrom: ["accessGroup:audience"],

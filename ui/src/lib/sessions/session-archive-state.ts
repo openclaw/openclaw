@@ -116,8 +116,23 @@ export function createSessionArchiveState(
         fields.archiveReason = current.archiveReason;
       }
     }
+    const entries = Object.entries(fields);
+    const values: Record<string, unknown> = row;
+    if (
+      entries.every(([name, value]) => {
+        const observed = provenance.fieldObservation(row, name);
+        return (
+          values[name] === value &&
+          Object.hasOwn(values, name) === (value !== undefined) &&
+          mergeSessionFieldObservations(observed, current.observation).observation === observed
+        );
+      })
+    ) {
+      // Preserve unrelated writer normalization through the existing self-merge owner.
+      return provenance.mergeRow(row, row);
+    }
     const offered = provenance.inheritRow({ ...row, ...fields }, row);
-    for (const [name, value] of Object.entries(fields)) {
+    for (const [name, value] of entries) {
       if (value === undefined) {
         Reflect.deleteProperty(offered, name);
       }
@@ -175,11 +190,16 @@ export function createSessionArchiveState(
     visibility: (key: string): SessionArchiveVisibility | undefined => {
       const normalizedKey = key.trim();
       const pendingArchive = pending.get(normalizedKey);
+      const archive = confirmed.get(normalizedKey);
+      // Ordinary rows and confirmed restores need no incarnation check. Avoid
+      // scanning the published roster for every visible sidebar row.
+      if (!pendingArchive && !archive?.archived) {
+        return undefined;
+      }
       const row = publishedRow(normalizedKey);
       if (pendingArchive && (!row || row.sessionId === pendingArchive.sessionId)) {
         return "pending";
       }
-      const archive = confirmed.get(normalizedKey);
       if (!archive?.archived) {
         return undefined;
       }

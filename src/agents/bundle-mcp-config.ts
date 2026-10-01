@@ -15,6 +15,7 @@ import {
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
 type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
@@ -30,6 +31,26 @@ const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   sse: "sse",
   stdio: "stdio",
 };
+
+/** Session-shared harness connections must exclude requester-owned credentials. */
+export function loadStaticBundleMcpConfig(
+  params: Parameters<typeof loadMergedBundleMcpConfig>[0],
+): MergedBundleMcpConfig & { requesterScopedServerNames: string[] } {
+  const loaded = loadMergedBundleMcpConfig(params);
+  const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope(
+    loaded.config.mcpServers,
+  );
+  return {
+    ...loaded,
+    config: { mcpServers: staticServers },
+    prepareDataDirsByServer: Object.fromEntries(
+      Object.entries(loaded.prepareDataDirsByServer).filter(([name]) =>
+        Object.hasOwn(staticServers, name),
+      ),
+    ),
+    requesterScopedServerNames,
+  };
+}
 
 export function prepareOwnedBundleMcpDataDirs(params: {
   config: BundleMcpConfig;
@@ -63,11 +84,11 @@ export function prepareOwnedBundleMcpDataDirs(params: {
  * OpenClaw `transport` shape directly.
  */
 export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
-  const next = { ...server } as Record<string, unknown>;
+  const next = { ...server };
   const rawTransport = next.transport;
   delete next.transport;
   if (typeof next.type === "string") {
-    return next as BundleMcpServerConfig;
+    return next;
   }
   if (typeof rawTransport === "string") {
     const mapped = OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE[rawTransport];
@@ -75,7 +96,7 @@ export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): Bundl
       next.type = mapped;
     }
   }
-  return next as BundleMcpServerConfig;
+  return next;
 }
 
 /** Loads enabled bundled MCP servers and overlays user config by server name. */
@@ -127,13 +148,13 @@ export function loadMergedBundleMcpConfig(params: {
         ...Object.fromEntries(
           Object.entries(enabledBundleMcp).map(([name, server]) => [
             name,
-            mapConfiguredServer(server as BundleMcpServerConfig, name),
+            mapConfiguredServer(server, name),
           ]),
         ),
         ...Object.fromEntries(
           Object.entries(enabledConfiguredMcp).map(([name, server]) => [
             name,
-            mapConfiguredServer(server as BundleMcpServerConfig, name),
+            mapConfiguredServer(server, name),
           ]),
         ),
       } satisfies BundleMcpConfig["mcpServers"],

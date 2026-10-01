@@ -266,20 +266,6 @@ function normalizeClaudeAssistantMessage(
   };
 }
 
-function hasTextContent(messages: readonly Record<string, unknown>[]): boolean {
-  return messages.some(
-    (message) =>
-      Array.isArray(message.content) &&
-      message.content.some(
-        (block) =>
-          isRecord(block) &&
-          block.type === "text" &&
-          typeof block.text === "string" &&
-          block.text.length > 0,
-      ),
-  );
-}
-
 function appendOutputTruncationMarker(messages: Record<string, unknown>[]): void {
   const marker = { type: "text", text: TRUNCATED_CONTENT_SUFFIX };
   if (messages.length < MAX_CAPTURED_OUTPUT_MESSAGES) {
@@ -314,11 +300,7 @@ function failureKindForClaudeCli(
   if (isFailoverError(error) && error.reason === "timeout") {
     return "timeout";
   }
-  const inferred = diagnosticErrorFailureKind(error);
-  if (inferred) {
-    return inferred;
-  }
-  return abortSignal?.aborted ? "aborted" : undefined;
+  return diagnosticErrorFailureKind(error) ?? (abortSignal?.aborted ? "aborted" : undefined);
 }
 
 function usageField(usage: CliUsage | undefined): { usage?: CliUsage } {
@@ -351,6 +333,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
   const trace = freezeDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope());
   const baseFields = {
     runId: params.context.params.runId,
+    ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     callId: `${params.context.params.runId}:claude-cli:${crypto.randomUUID()}`,
     ...(params.context.params.sessionKey ? { sessionKey: params.context.params.sessionKey } : {}),
     sessionId: params.context.params.sessionId,
@@ -427,7 +410,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
     const messages = capturedAssistantMessages.slice();
     const responseText = output?.rawText ?? output?.text;
     if (
-      !hasTextContent(messages) &&
+      !messages.some(assistantMessageHasText) &&
       responseText &&
       messages.length < MAX_CAPTURED_OUTPUT_MESSAGES
     ) {

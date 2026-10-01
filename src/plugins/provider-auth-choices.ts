@@ -35,8 +35,12 @@ type ProviderOnboardAuthFlag = {
   description: string;
 };
 
-type ProviderAuthChoiceCandidate = ProviderAuthChoiceMetadata & {
+type ProviderAuthChoiceCandidate = Pick<
+  ProviderAuthChoiceMetadata,
+  "pluginId" | "providerId" | "methodId" | "choiceId"
+> & {
   origin: PluginOrigin;
+  declaration?: PluginManifestProviderAuthChoice;
 };
 type ManifestProviderAuthChoiceParams = {
   /** Bind post-dispatch metadata to the selected runtime plugin owner. */
@@ -74,18 +78,35 @@ function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefine
   return PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
 }
 
-function toProviderAuthChoiceCandidate(params: {
-  pluginId: string;
-  origin: PluginOrigin;
-  choice: NonNullable<PluginManifestRecord["providerAuthChoices"]>[number];
-}): ProviderAuthChoiceCandidate {
-  const { pluginId, origin, choice } = params;
-  const { provider, method, choiceId, choiceLabel, ...metadata } = choice;
+function projectProviderAuthChoice(
+  candidate: ProviderAuthChoiceCandidate,
+): ProviderAuthChoiceMetadata {
+  const { pluginId, providerId, methodId, choiceId, declaration } = candidate;
+  if (!declaration) {
+    const providerLabel = formatDescriptorLabel(providerId);
+    const methodLabel = formatDescriptorLabel(methodId);
+    return {
+      pluginId,
+      providerId,
+      methodId,
+      choiceId,
+      choiceLabel:
+        methodId === "api-key" ? `${providerLabel} API key` : `${providerLabel} ${methodLabel}`,
+      groupId: providerId,
+      groupLabel: providerLabel,
+    };
+  }
+  const {
+    provider: _provider,
+    method: _method,
+    choiceId: _choiceId,
+    choiceLabel,
+    ...metadata
+  } = declaration;
   return {
     pluginId,
-    origin,
-    providerId: provider,
-    methodId: method,
+    providerId,
+    methodId,
     choiceId,
     choiceLabel: choiceLabel ?? choiceId,
     ...metadata,
@@ -112,27 +133,6 @@ function normalizeManifestAuthDescriptorId(value: string): string {
   return sanitizeForLog(value).trim();
 }
 
-function toSetupProviderAuthChoiceCandidate(params: {
-  plugin: PluginManifestRecord;
-  providerId: string;
-  methodId: string;
-}): ProviderAuthChoiceCandidate {
-  const providerLabel = formatDescriptorLabel(params.providerId);
-  const methodLabel = formatDescriptorLabel(params.methodId);
-  const choiceLabel =
-    params.methodId === "api-key" ? `${providerLabel} API key` : `${providerLabel} ${methodLabel}`;
-  return {
-    pluginId: params.plugin.id,
-    origin: params.plugin.origin,
-    providerId: params.providerId,
-    methodId: params.methodId,
-    choiceId: `${params.providerId}-${params.methodId}`,
-    choiceLabel,
-    groupId: params.providerId,
-    groupLabel: providerLabel,
-  };
-}
-
 function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
   if (plugin.setup?.requiresRuntime !== false && plugin.setupSource) {
     return [];
@@ -149,19 +149,14 @@ function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
       .map(normalizeManifestAuthDescriptorId)
       .filter(Boolean)
       .filter((methodId) => !explicitProviderMethods.has(`${providerId}::${methodId}`))
-      .map((methodId) =>
-        toSetupProviderAuthChoiceCandidate({
-          plugin,
-          providerId,
-          methodId,
-        }),
-      );
+      .map((methodId) => ({
+        pluginId: plugin.id,
+        origin: plugin.origin,
+        providerId,
+        methodId,
+        choiceId: `${providerId}-${methodId}`,
+      }));
   });
-}
-
-function stripChoiceOrigin(choice: ProviderAuthChoiceCandidate): ProviderAuthChoiceMetadata {
-  const { origin: _origin, ...metadata } = choice;
-  return metadata;
 }
 
 function resolveManifestProviderAuthChoiceCandidates(
@@ -207,13 +202,14 @@ function resolveManifestProviderAuthChoiceCandidates(
       ) {
         continue;
       }
-      choices.push(
-        toProviderAuthChoiceCandidate({
-          pluginId: plugin.id,
-          origin: plugin.origin,
-          choice,
-        }),
-      );
+      choices.push({
+        pluginId: plugin.id,
+        origin: plugin.origin,
+        providerId: choice.provider,
+        methodId: choice.method,
+        choiceId: choice.choiceId,
+        declaration: choice,
+      });
     }
     if (!declaredOnly) {
       choices.push(...listSetupProviderAuthChoiceCandidates(plugin));
@@ -275,7 +271,7 @@ function resolvePreferredManifestAuthChoiceMetadata(params: {
     params.matches,
   );
   const preferred = pickPreferredManifestAuthChoice(candidates);
-  return preferred ? stripChoiceOrigin(preferred) : undefined;
+  return preferred ? projectProviderAuthChoice(preferred) : undefined;
 }
 
 export function resolveManifestProviderAuthChoices(
@@ -283,7 +279,7 @@ export function resolveManifestProviderAuthChoices(
 ): ProviderAuthChoiceMetadata[] {
   return resolvePreferredManifestAuthChoicesByChoiceId(
     resolveManifestProviderAuthChoiceCandidates(params),
-  ).map(stripChoiceOrigin);
+  ).map(projectProviderAuthChoice);
 }
 
 /** Executable declarations exclude workspace code and honor current plugin policy. */
@@ -294,7 +290,7 @@ export function resolveManifestDeclaredProviderAuthChoices(
     { ...params, includeWorkspacePlugins: false },
     true,
   );
-  return resolvePreferredManifestAuthChoicesByChoiceId(candidates).map(stripChoiceOrigin);
+  return resolvePreferredManifestAuthChoicesByChoiceId(candidates).map(projectProviderAuthChoice);
 }
 
 export function resolveManifestProviderAuthChoice(
@@ -328,42 +324,44 @@ export function resolveManifestDeprecatedProviderAuthChoice(
   }
   return resolvePreferredManifestAuthChoiceMetadata({
     config: params,
-    matches: (choice) => choice.deprecatedChoiceIds?.includes(normalized) === true,
+    matches: (choice) => choice.declaration?.deprecatedChoiceIds?.includes(normalized) === true,
   });
 }
 
 function resolveManifestProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
-  const preferredByFlag = new Map<string, ProviderAuthChoiceCandidate>();
+  const preferredByFlag = new Map<
+    string,
+    { origin: PluginOrigin; flag: ProviderOnboardAuthFlag }
+  >();
 
-  for (const choice of resolveManifestProviderAuthChoiceCandidates(params)) {
-    if (!choice.optionKey || !choice.cliFlag || !choice.cliOption) {
+  for (const candidate of resolveManifestProviderAuthChoiceCandidates(params)) {
+    const choice = candidate.declaration;
+    if (!choice?.optionKey || !choice.cliFlag || !choice.cliOption) {
       continue;
     }
     const dedupeKey = `${choice.optionKey}::${choice.cliFlag}`;
     const existing = preferredByFlag.get(dedupeKey);
     if (
       existing &&
-      resolveProviderAuthChoiceOriginPriority(choice.origin) >=
+      resolveProviderAuthChoiceOriginPriority(candidate.origin) >=
         resolveProviderAuthChoiceOriginPriority(existing.origin)
     ) {
       continue;
     }
-    preferredByFlag.set(dedupeKey, choice);
-  }
-
-  const flags: ProviderOnboardAuthFlag[] = [];
-  for (const choice of preferredByFlag.values()) {
-    flags.push({
-      optionKey: choice.optionKey!,
-      authChoice: choice.choiceId,
-      cliFlag: choice.cliFlag!,
-      cliOption: choice.cliOption!,
-      description: choice.cliDescription ?? choice.choiceLabel,
+    preferredByFlag.set(dedupeKey, {
+      origin: candidate.origin,
+      flag: {
+        optionKey: choice.optionKey,
+        authChoice: candidate.choiceId,
+        cliFlag: choice.cliFlag,
+        cliOption: choice.cliOption,
+        description: choice.cliDescription ?? choice.choiceLabel ?? candidate.choiceId,
+      },
     });
   }
-  return flags;
+  return [...preferredByFlag.values()].map(({ flag }) => flag);
 }
 
 function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthFlag[] {

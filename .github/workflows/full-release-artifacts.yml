@@ -57,7 +57,7 @@ env:
 jobs:
   admit:
     name: Validate artifact producer request
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
       request_sha256: ${{ steps.request.outputs.request_sha256 }}
@@ -67,6 +67,12 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
       - id: request
         name: Bind exact active validation parent
         env:
@@ -117,7 +123,7 @@ jobs:
     name: Seal artifact producer receipt
     needs: [admit, npm, candidate, docker]
     if: ${{ !cancelled() && needs.admit.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Require successful artifact stage
@@ -129,6 +135,12 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
       - id: receipt
         name: Record immutable artifact outputs
         env:

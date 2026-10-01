@@ -23,30 +23,20 @@ import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credenti
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { listPotentialMultiUserSignals } from "./audit-extra.sync.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-
-/** Lightweight audit finding shape used by summary-only audit helpers. */
-type SecurityAuditFinding = {
-  checkId: string;
-  severity: "info" | "warn" | "critical";
-  title: string;
-  detail: string;
-  remediation?: string;
-};
+import type { SecurityAuditFinding } from "./audit.types.js";
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
 
 function summarizeGroupPolicy(cfg: OpenClawConfig): {
   open: number;
   allowlist: number;
-  other: number;
 } {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
-    return { open: 0, allowlist: 0, other: 0 };
+    return { open: 0, allowlist: 0 };
   }
   let open = 0;
   let allowlist = 0;
-  let other = 0;
   for (const value of Object.values(channels)) {
     if (!value || typeof value !== "object") {
       continue;
@@ -57,11 +47,9 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
       open += 1;
     } else if (policy === "allowlist") {
       allowlist += 1;
-    } else {
-      other += 1;
     }
   }
-  return { open, allowlist, other };
+  return { open, allowlist };
 }
 
 function extractAgentIdFromSource(source: string): string | null {
@@ -96,14 +84,6 @@ function resolveToolPolicies(params: {
   });
 }
 
-function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return hasConfiguredWebSearchCredential({
-    config: cfg,
-    env,
-    origin: "bundled",
-  });
-}
-
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
   if (enabled === false) {
@@ -112,15 +92,7 @@ function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolea
   if (enabled === true) {
     return true;
   }
-  return hasWebSearchKey(cfg, env);
-}
-
-function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
-  const enabled = cfg.tools?.web?.fetch?.enabled;
-  if (enabled === false) {
-    return false;
-  }
-  return true;
+  return hasConfiguredWebSearchCredential({ config: cfg, env, origin: "bundled" });
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
@@ -259,9 +231,7 @@ export function collectSmallModelRiskFindings(params: {
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectAuditModelRefs(params.cfg).filter(
-    (entry) => !entry.source.includes("imageModel"),
-  );
+  const models = collectAuditModelRefs(params.cfg);
   if (models.length === 0) {
     return findings;
   }
@@ -305,7 +275,10 @@ export function collectSmallModelRiskFindings(params: {
     ) {
       exposed.push("web_search");
     }
-    if (isWebFetchEnabled(params.cfg) && isToolAllowedByPolicies("web_fetch", policies)) {
+    if (
+      params.cfg.tools?.web?.fetch?.enabled !== false &&
+      isToolAllowedByPolicies("web_fetch", policies)
+    ) {
       exposed.push("web_fetch");
     }
     if (isBrowserEnabled(params.cfg) && isToolAllowedByPolicies("browser", policies)) {

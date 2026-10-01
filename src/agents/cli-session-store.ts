@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
+import type { CliSessionBinding, InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -9,10 +9,12 @@ import {
   assertCliSessionBindingResultCommitAllowed,
   clearCliSession,
   getCliSessionBinding,
+  setCliSessionBinding,
 } from "./cli-session.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 
 type CliSessionStoreTarget = {
+  agentId: string;
   provider: string;
   sessionKey?: string;
   storePath?: string;
@@ -37,7 +39,7 @@ async function patchCliSessionBindingInStore(
   const expected = { ...params.expectedSession };
   let committed: SessionEntry | undefined;
   await patchSessionEntryCore(
-    { sessionKey, storePath },
+    { agentId: params.agentId, sessionKey, storePath },
     (entry) => {
       // Native ids can survive reset. Publication belongs to the exact local lifecycle/writer.
       if (
@@ -72,6 +74,76 @@ async function patchCliSessionBindingInStore(
     },
   );
   return committed;
+}
+
+type CliSessionForkStoreParams = Required<CliSessionStoreTarget> & {
+  expectedCliSessionId: string;
+  assertCommitAllowed?: () => void;
+};
+
+async function patchCliSessionForkBinding(
+  params: CliSessionForkStoreParams,
+  updateBinding: (binding: CliSessionBinding) => CliSessionBinding | undefined,
+): Promise<SessionEntry | undefined> {
+  const { provider, sessionKey, sessionStore, expectedCliSessionId } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry || entry.cliSessionBindings?.[provider]?.sessionId !== expectedCliSessionId) {
+    return undefined;
+  }
+  return await patchCliSessionBindingInStore({
+    ...params,
+    expectedSession: entry,
+    update: (current) => {
+      const binding = current.cliSessionBindings?.[provider];
+      if (binding?.sessionId !== expectedCliSessionId) {
+        return false;
+      }
+      const nextBinding = updateBinding(binding);
+      if (!nextBinding) {
+        return false;
+      }
+      setCliSessionBinding(current, provider, nextBinding);
+      return true;
+    },
+  });
+}
+
+/** Clears the one-shot fork marker before the resumed CLI process starts. */
+export async function consumeCliSessionForkInStore(
+  params: CliSessionForkStoreParams,
+): Promise<SessionEntry | undefined> {
+  return await patchCliSessionForkBinding(params, (binding) => {
+    if (binding.forkNextResume !== true) {
+      return undefined;
+    }
+    const { forkNextResume: _forkNextResume, ...consumedBinding } = binding;
+    return consumedBinding;
+  });
+}
+
+/** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
+export async function restoreCliSessionForkInStore(
+  params: CliSessionForkStoreParams,
+): Promise<SessionEntry | undefined> {
+  return await patchCliSessionForkBinding(params, (binding) =>
+    binding.forkNextResume === true ? undefined : { ...binding, forkNextResume: true },
+  );
+}
+
+/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
+export async function persistCliSessionForkSuccessorInStore(
+  params: CliSessionForkStoreParams & {
+    successorCliSessionId: string;
+  },
+): Promise<SessionEntry | undefined> {
+  if (params.successorCliSessionId === params.expectedCliSessionId) {
+    return undefined;
+  }
+  return await patchCliSessionForkBinding(params, (binding) =>
+    binding.forkNextResume === true
+      ? undefined
+      : { ...binding, sessionId: params.successorCliSessionId, forceReuse: true },
+  );
 }
 
 /** A rejected continuity write cannot erase completed effects or reopen model fallback. */

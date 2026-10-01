@@ -1,8 +1,119 @@
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type TestContext } from "vitest";
 import WebSocket from "ws";
-import { MARKER, startQuotaProvider } from "./quota-reset.test-support.js";
+import * as testInstance from "../../../helpers/openclaw-test-instance.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { createQuotaResetFixture, MARKER, startQuotaProvider } from "./quota-reset.test-support.js";
+
+it("trusts only the fixture certificate for auxiliary HTTPS requests", async (context) => {
+  const root = useAutoCleanupTempDirTracker(context.onTestFinished).make("quota-provider-tls-");
+  const key = join(root, "key.pem");
+  const cert = join(root, "cert.pem");
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      key,
+      "-out",
+      cert,
+      "-days",
+      "1",
+      "-subj",
+      "/CN=localhost",
+      "-addext",
+      "subjectAltName=IP:127.0.0.1",
+      "-addext",
+      "basicConstraints=critical,CA:FALSE",
+    ],
+    { stdio: "ignore" },
+  );
+  const provider = await startQuotaProvider("codex_rate_limits", MARKER, {
+    key: readFileSync(key),
+    cert: readFileSync(cert),
+  });
+  context.onTestFinished(() => provider.stop());
+  await expect(fetch(`${provider.baseUrl}/v1/responses`)).rejects.toMatchObject({
+    cause: { code: "DEPTH_ZERO_SELF_SIGNED_CERT" },
+  });
+  const response = await provider.fetch("/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "gpt-5.6-luna", input: [] }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain('"type":"response.completed"');
+  expect(provider.errors).toEqual([]);
+});
+
+it("prints bounded readiness receipts from the quota failure hook before Gateway logs", async (context) => {
+  const instance = await testInstance.createOpenClawTestInstance({
+    name: "quota-failure-receipt",
+    port: 1,
+  });
+  context.onTestFinished(() => instance.cleanup());
+  const diagnostic: testInstance.GatewayReadinessDiagnostic = {
+    probe: "GET /readyz",
+    startedAtMs: 0,
+    deadlineMs: 29,
+    elapsedMs: 29,
+    outcome: "timeout",
+    attempts: 3,
+    probes: [],
+    omittedProbes: 0,
+    lastProbe: { attempt: 3, phase: "headers", elapsedMs: 9, error: "timeout" },
+    lastFailedResponse: {
+      attempt: 1,
+      phase: "body",
+      elapsedMs: 0,
+      status: 502,
+      error: "invalid-json",
+    },
+    child: { pid: null, exitCode: null, signalCode: null },
+    logs: { stdout: "retained-only log", stderr: "" },
+  };
+  const failure = new Error("synthetic startup failure");
+  const gateway = {
+    ...instance,
+    readiness: [diagnostic],
+    startGateway: vi.fn<typeof instance.startGateway>().mockRejectedValue(failure),
+  };
+  instance.stdout.push("quota fixture stdout");
+  const createInstance = vi
+    .spyOn(testInstance, "createOpenClawTestInstance")
+    .mockResolvedValue(gateway);
+  const failed = vi.fn<TestContext["onTestFailed"]>();
+  const print = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await expect(
+      createQuotaResetFixture({ ...context, onTestFailed: failed }, { source: "wham" }),
+    ).rejects.toBe(failure);
+    expect(failed).toHaveBeenCalledOnce();
+    await failed.mock.calls[0]![0](context);
+    expect(print.mock.calls).toEqual([
+      [testInstance.formatGatewayReadinessDiagnostic(diagnostic)],
+      [gateway.logs()],
+    ]);
+    const receipt = String(print.mock.calls[0]![0]);
+    expect(Buffer.byteLength(receipt)).toBeLessThan(1_024);
+    expect(receipt).toContain('"status":502');
+    expect(receipt).toContain('"error":"invalid-json"');
+    expect(receipt).toContain('"error":"timeout"');
+    expect(receipt).not.toContain("retained-only log");
+    expect(receipt).not.toContain("probes");
+  } finally {
+    createInstance.mockRestore();
+    print.mockRestore();
+  }
+});
 
 it.each(["http", "websocket"] as const)(
   "keeps the catalog held through auxiliary %s success until the primary reply",
@@ -10,8 +121,8 @@ it.each(["http", "websocket"] as const)(
     const provider = await startQuotaProvider("codex_rate_limits", MARKER);
     const hold = provider.holdNextCatalog();
     const catalog = fetch(`${provider.baseUrl}/catalog/models`).then((response) => response.json());
-    const request = async (model: string, path = "/v1/responses") => {
-      const body = JSON.stringify({ type: "response.create", model, input: [] });
+    const request = async (model: string, path = "/v1/responses", generate?: boolean) => {
+      const body = JSON.stringify({ type: "response.create", model, input: [], generate });
       if (transport === "http") {
         const response = await fetch(`${provider.baseUrl}${path}`, {
           method: "POST",
@@ -59,6 +170,12 @@ it.each(["http", "websocket"] as const)(
       await request("gpt-5.5", "/quota-backup/responses");
       expect(observed).not.toHaveBeenCalled();
       expect(captured.releasedAt).toBeUndefined();
+
+      if (transport === "websocket") {
+        await request("gpt-5.5", "/v1/responses", false);
+        expect(observed).not.toHaveBeenCalled();
+        expect(captured.releasedAt).toBeUndefined();
+      }
 
       await request("gpt-5.5", "/v1/responses?fixture=primary");
       expect(observed).toHaveBeenCalledTimes(1);

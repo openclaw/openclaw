@@ -1,11 +1,9 @@
-// Builds base config schema metadata shared across generated config surfaces.
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import {
   asSchemaObject,
-  cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
   type ConfigSchemaResponse,
 } from "./schema.shared.js";
@@ -48,11 +46,7 @@ function applyFieldDocumentation(node: JsonSchemaObject, prefixes: readonly stri
     if (itemsObj) {
       const itemPrefixes = Array.from(
         new Set(
-          prefixes.flatMap((prefix) => {
-            const arrayPath = prefix ? `${prefix}[]` : "[]";
-            const wildcardAlias = prefix ? `${prefix}.*` : "*";
-            return wildcardAlias === arrayPath ? [arrayPath] : [wildcardAlias, arrayPath];
-          }),
+          prefixes.flatMap((prefix) => (prefix ? [`${prefix}.*`, `${prefix}[]`] : ["*", "[]"])),
         ),
       );
       applyNodeDocumentation(itemsObj, itemPrefixes);
@@ -141,8 +135,8 @@ export function computeBaseConfigSchemaResponse(params?: {
 }): ConfigSchemaResponse {
   const stablePayload = computeBaseConfigSchemaStablePayload();
   return {
-    schema: cloneSchema(stablePayload.schema),
-    uiHints: cloneSchema(stablePayload.uiHints),
+    schema: structuredClone(stablePayload.schema),
+    uiHints: structuredClone(stablePayload.uiHints),
     version: stablePayload.version,
     generatedAt: params?.generatedAt ?? new Date().toISOString(),
   };

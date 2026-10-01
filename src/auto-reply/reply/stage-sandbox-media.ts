@@ -2,23 +2,28 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { root as fsRoot, FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
-import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import { retryAsync } from "../../infra/retry.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
-import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import {
+  buildInboundMediaUriFromPath,
+  resolveInboundMediaReference,
+} from "../../media/media-reference.js";
+import {
+  STAGED_INPUT_MAX_BYTES,
   ensureStagedInputDirectory,
   stagedInputDirectory,
   stagedInputFileName,
@@ -29,7 +34,7 @@ import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
 /** Maximum size of one file copied into an agent sandbox or staging workspace. */
-export const SANDBOX_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
+export const SANDBOX_MEDIA_MAX_BYTES = STAGED_INPUT_MAX_BYTES;
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // Attachment indexes are the staging identity. Callers use this map to detect
@@ -61,7 +66,14 @@ export async function stageSandboxMedia(params: {
     return EMPTY_STAGE_RESULT;
   }
 
-  const forceRemoteCache = ctx.MediaRemoteHost && params.remoteMediaMode === "cache";
+  const remoteWorkspace = getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments");
+  if (remoteWorkspace?.prepareTurnAttachments && !ctx.MediaRemoteHost) {
+    // Keep managed originals on Gateway; the admitted turn transfers them to the Harness.
+    return EMPTY_STAGE_RESULT;
+  }
+  const forceRemoteCache =
+    ctx.MediaRemoteHost &&
+    (remoteWorkspace?.prepareTurnAttachments || params.remoteMediaMode === "cache");
   const sandbox = forceRemoteCache
     ? null
     : await ensureSandboxWorkspaceForSession({
@@ -89,7 +101,7 @@ export async function stageSandboxMedia(params: {
 
   const usedNames = new Set<string>();
   const staged = new Map<number, string>();
-  const stagedUrlAliases = new Set<number>();
+  const stagedUrls = new Map<number, string>();
   const inputDirectory = stagedInputDirectory(crypto.randomUUID());
   let stagingReady = false;
   const prepareDestination = async () => {
@@ -154,15 +166,21 @@ export async function stageSandboxMedia(params: {
     // For sandbox use relative path, for remote cache use absolute path
     const stagedPath = sandbox ? relativeDest : dest;
     staged.set(entry.index, stagedPath);
-    if (
-      await isUrlAliasForStagedSource({
-        url: media[entry.index]?.url,
-        sourcePath: entry.path,
-        source,
-        mediaRemoteHost: ctx.MediaRemoteHost,
-      })
-    ) {
-      stagedUrlAliases.add(entry.index);
+    const originalUrl = media[entry.index]?.url;
+    const rewritesUrl = await isUrlAliasForStagedSource({
+      url: originalUrl,
+      sourcePath: entry.path,
+      source,
+      mediaRemoteHost: ctx.MediaRemoteHost,
+    });
+    // Keep the managed original fetchable after history redacts the runner's
+    // private staged path. A remote host's path is not a local store reference.
+    const inboundUri =
+      !ctx.MediaRemoteHost && (!originalUrl || rewritesUrl)
+        ? buildInboundMediaUriFromPath(source)
+        : undefined;
+    if (inboundUri || rewritesUrl) {
+      stagedUrls.set(entry.index, inboundUri ?? stagedPath);
     }
   }
 
@@ -180,7 +198,7 @@ export async function stageSandboxMedia(params: {
       nextMedia[index] = {
         ...fact,
         path: stagedPath,
-        ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
+        ...(stagedUrls.has(index) ? { url: stagedUrls.get(index) } : {}),
         workspaceDir: effectiveWorkspaceDir,
         staged: true,
       };

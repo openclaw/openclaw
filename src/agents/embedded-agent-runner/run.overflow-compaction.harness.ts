@@ -1,11 +1,14 @@
 /**
  * Test harness mocks for embedded-run overflow compaction coverage.
  */
+
 import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
+import type { ClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
@@ -98,17 +101,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   byPluginId: new Map(),
   normalizePluginId: (pluginId: string) => pluginId,
   declaredProviderOwners: new Map(),
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    modelIdNormalizationPolicies: new Map(),
-  },
+  owners: makeEmptyPluginMetadataOwners(),
   metrics: {
     registrySnapshotMs: 0,
     manifestRegistryMs: 0,
@@ -137,7 +130,7 @@ export const mockedGlobalHookRunner = {
   runBeforeAgentReply: vi.fn(
     async (
       _eventValue: { cleanedBody: string },
-      _ctx: PluginHookAgentContext,
+      _ctx: PluginHookAgentContext & ClaimingHookAdmission,
     ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
   ),
   runBeforeAgentFinalize: vi.fn(
@@ -347,7 +340,6 @@ const mockedIsAuthAssistantError = vi.fn(() => false);
 const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
-const mockedIsFailoverErrorMessage = vi.fn(() => false);
 function matchesCanonicalOverflowFixture(msg?: string): boolean {
   const raw = msg ?? "";
   return (
@@ -584,8 +576,6 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsCompactionFailureError.mockReturnValue(false);
   mockedIsFailoverAssistantError.mockReset();
   mockedIsFailoverAssistantError.mockReturnValue(false);
-  mockedIsFailoverErrorMessage.mockReset();
-  mockedIsFailoverErrorMessage.mockReturnValue(false);
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation(matchesCanonicalOverflowFixture);
   mockedParseImageSizeError.mockReset();
@@ -907,7 +897,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isCompactionFailureError: mockedIsCompactionFailureError,
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
-    isFailoverErrorMessage: mockedIsFailoverErrorMessage,
     parseImageSizeError: mockedParseImageSizeError,
     parseImageDimensionError: mockedParseImageDimensionError,
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,

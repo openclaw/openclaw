@@ -1,8 +1,3 @@
-/**
- * Channel configuration presence detection.
- *
- * Finds channels made available by config, env, persisted auth, or plugin discovery signals.
- */
 import fs from "node:fs";
 import os from "node:os";
 import {
@@ -26,6 +21,8 @@ export type AmbientEnvTriggerPolicy = "allow" | "suppress";
 
 type ChannelPresenceOptions = {
   channelIds?: readonly string[];
+  /** Canonical channel ids whose persisted credentials may be probed. */
+  persistedAuthChannelIds?: ReadonlySet<string>;
   discovery?: PluginDiscoveryResult;
   includePersistedAuthState?: boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
@@ -110,8 +107,6 @@ export function listPotentialConfiguredChannelPresenceSignals(
     seenSignals.add(key);
     signals.push({ channelId, source });
   };
-  const channelIds = options.channelIds ?? listBundledChannelIds(env, options.discovery);
-  const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   const scopedChannelIds = options.channelIds
     ? new Set(
         options.channelIds
@@ -119,6 +114,9 @@ export function listPotentialConfiguredChannelPresenceSignals(
           .filter((channelId): channelId is string => Boolean(channelId)),
       )
     : undefined;
+  const channelEnvPrefixes = listChannelEnvPrefixes(
+    options.channelIds ?? listBundledChannelIds(env, options.discovery),
+  );
   const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars().filter(
     ({ channelId }) => !scopedChannelIds || scopedChannelIds.has(channelId),
   );
@@ -158,6 +156,12 @@ export function listPotentialConfiguredChannelPresenceSignals(
     // Persisted auth can make a channel usable even when config/env is empty, but only probe it
     // when the state directory exists to keep startup/status checks cheap.
     for (const channelId of listBundledChannelIdsWithPersistedAuthState(options.discovery)) {
+      if (
+        options.persistedAuthChannelIds &&
+        !options.persistedAuthChannelIds.has(normalizeOptionalLowercaseString(channelId) ?? "")
+      ) {
+        continue;
+      }
       if (
         hasBundledChannelPersistedAuthState({
           channelId,

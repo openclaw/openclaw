@@ -8,13 +8,6 @@ import type { GatewayRunOpts } from "./run-options.js";
 import { resolveGatewayRunOptions } from "./run-options.js";
 import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
-const GATEWAY_AUTH_MODES = ["none", "token", "password", "trusted-proxy"] as const;
-const GATEWAY_TAILSCALE_MODES = ["off", "serve", "funnel"] as const;
-
-function formatModeChoices(modes: readonly string[]): string {
-  return modes.map((mode) => `"${mode}"`).join("|");
-}
-
 type GatewayRunCommandHooks = {
   beforeRun?: (opts: Pick<GatewayRunOpts, "force" | "reset">) => Promise<void> | void;
 };
@@ -30,13 +23,10 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
       "--token <token>",
       "Shared token required in connect.params.auth.token (default: OPENCLAW_GATEWAY_TOKEN env if set)",
     )
-    .option("--auth <mode>", `Gateway auth mode (${formatModeChoices(GATEWAY_AUTH_MODES)})`)
+    .option("--auth <mode>", 'Gateway auth mode ("none"|"token"|"password"|"trusted-proxy")')
     .option("--password <password>", "Password for auth mode=password")
     .option("--password-file <path>", "Read gateway password from file")
-    .option(
-      "--tailscale <mode>",
-      `Tailscale exposure mode (${formatModeChoices(GATEWAY_TAILSCALE_MODES)})`,
-    )
+    .option("--tailscale <mode>", 'Tailscale exposure mode ("off"|"serve"|"funnel")')
     .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
     .option(
       "--allow-unconfigured",
@@ -72,15 +62,19 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
     .action(async (opts, command) => {
       const resolved = resolveGatewayRunOptions(opts, command);
-      try {
-        await hooks.beforeRun?.(resolved);
-        const { runGatewayCommand } = await import("./run.js");
-        await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
-      } catch (error) {
-        const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
-        if (!(await handleGatewayStartupMaintenance(error))) {
-          throw error;
+      const { withAgentDatabaseStartupAdmission } =
+        await import("../../state/agent-database-startup.js");
+      return withAgentDatabaseStartupAdmission(async () => {
+        try {
+          await hooks.beforeRun?.(resolved);
+          const { runGatewayCommand } = await import("./run.js");
+          await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
+        } catch (error) {
+          const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
+          if (!(await handleGatewayStartupMaintenance(error))) {
+            throw error;
+          }
         }
-      }
+      });
     });
 }

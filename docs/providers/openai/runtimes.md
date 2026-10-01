@@ -1,5 +1,6 @@
 ---
-summary: "Which runtime runs an openai/* turn, and how native Codex resolves auth"
+summary: "Choose an OpenAI runtime and understand native Codex auth"
+doc-schema-version: 1
 read_when:
   - You need to know whether a turn runs on OpenClaw or the native Codex harness
   - You are mapping the openai, codex, and agentRuntime names to layers

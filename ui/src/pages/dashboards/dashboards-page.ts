@@ -9,10 +9,11 @@ import {
 import { completePanelRefresh, failPanelRefresh } from "../../components/panel-refresh-status.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
+import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { dashboardSessionListQuery, dashboardsRouteData } from "./route.ts";
+import { dashboardsRouteData } from "./route.ts";
 import {
   renderDashboards,
   type DashboardGalleryFilters,
@@ -90,7 +91,7 @@ class DashboardsPage extends OpenClawLightDomElement {
     this.unsubscribeList?.();
     this.observedSessions = sessions;
     this.observedScopeId = scopeId;
-    const query = dashboardSessionListQuery(context);
+    const query = dashboardSessionListQuery(context.agentSelection.state.scopeId);
     const apply = (snapshot: ReturnType<typeof sessions.listSnapshot>) => {
       if (
         this.context !== context ||
@@ -179,6 +180,7 @@ class DashboardsPage extends OpenClawLightDomElement {
         onSortChange: (sort) => {
           this.filters = { ...this.filters, sort };
         },
+        onNavigate: this.context?.navigate,
       },
       this.context?.gateway.snapshot,
       this.previewError,

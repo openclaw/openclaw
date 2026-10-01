@@ -41,14 +41,20 @@ export function createAbortAwareDispatcher(params: {
     (send: (payload: ReplyPayload) => boolean) =>
     (payload: ReplyPayload): boolean =>
       params.isAborted() ? false : send(payload);
-  const { getCancelledCounts, prepareReplyPayload } = params.dispatcher;
-  const dispatcher: ReplyDispatcher = {
+  const { getCancelledCounts, prepareReplyPayload, sendPreparedReply } = params.dispatcher;
+  return {
     ...(prepareReplyPayload
       ? { prepareReplyPayload: prepareReplyPayload.bind(params.dispatcher) }
       : {}),
     sendToolResult: sendIfActive(params.dispatcher.sendToolResult),
     sendBlockReply: sendIfActive(params.dispatcher.sendBlockReply),
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
+    ...(sendPreparedReply
+      ? {
+          sendPreparedReply: (kind, plan) =>
+            params.isAborted() ? false : sendPreparedReply(kind, plan),
+        }
+      : {}),
     ...(params.dispatcher.supportsSettledReceipt ? { supportsSettledReceipt: true } : {}),
     waitForIdle: () => params.dispatcher.waitForIdle(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
@@ -60,5 +66,4 @@ export function createAbortAwareDispatcher(params: {
       }
     },
   };
-  return dispatcher;
 }

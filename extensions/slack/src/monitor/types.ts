@@ -1,10 +1,7 @@
-// Slack type declarations define plugin contracts.
+import type { SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type {
-  AgentSessionStoppedEvent,
-  AgentSessionTitleChangedEvent,
   AppContextChangedEvent,
   AppHomeOpenedEvent,
-  ChannelCreatedEvent,
   ChannelIDChangedEvent,
   ChannelRenameEvent,
   MemberJoinedChannelEvent,
@@ -17,10 +14,38 @@ import type {
   ReactionRemovedEvent,
 } from "@slack/types";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginCommandReplyOptions } from "openclaw/plugin-sdk/plugin-command-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackAppContext } from "../agent-context.js";
 import type { SlackMessageEvent } from "../types.js";
+import type { SlackEventScope } from "./event-scope.js";
+
+export type SlackCommandInvocation = {
+  command: Pick<
+    SlackCommandMiddlewareArgs["command"],
+    "user_id" | "user_name" | "channel_id" | "channel_name"
+  > &
+    Partial<Pick<SlackCommandMiddlewareArgs["command"], "trigger_id">>;
+  threadTs?: string;
+  eventTs?: string;
+  builtInCommand?: "stop";
+  sessionTarget?: ResolvedAgentRoute;
+  onAdmitted?: () => boolean | void;
+  isSessionTargetCurrent?: () => boolean;
+  ack: SlackCommandMiddlewareArgs["ack"];
+  respond: (message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0]) => Promise<unknown>;
+  responseTransport?: "response-url" | "web-api";
+  body?: unknown;
+  eventScope?: SlackEventScope;
+  senderAuthentication?: "verified" | "asserted";
+  prompt: string;
+  commandArgs?: CommandArgs;
+  commandDefinition?: ChatCommandDefinition;
+  pluginCommandReplyOptions?: PluginCommandReplyOptions;
+};
 
 export type MonitorSlackOpts = {
   botToken?: string;
@@ -47,9 +72,6 @@ export type SlackReactionEvent = LooseSlackEvent<ReactionAddedEvent | ReactionRe
 export type SlackMemberChannelEvent = LooseSlackEvent<
   MemberJoinedChannelEvent | MemberLeftChannelEvent
 >;
-export type SlackChannelCreatedEvent = Omit<LooseSlackEvent<ChannelCreatedEvent>, "channel"> & {
-  channel?: Partial<ChannelCreatedEvent["channel"]>;
-};
 export type SlackChannelRenamedEvent = Omit<LooseSlackEvent<ChannelRenameEvent>, "channel"> & {
   channel?: Partial<ChannelRenameEvent["channel"]>;
 };
@@ -61,8 +83,6 @@ export type SlackAppContextChangedEvent = Omit<
   LooseSlackEvent<AppContextChangedEvent>,
   "context"
 > & { context?: SlackAppContext };
-export type SlackAgentSessionStoppedEvent = AgentSessionStoppedEvent;
-export type SlackAgentSessionTitleChangedEvent = AgentSessionTitleChangedEvent;
 export type SlackPinEvent = LooseSlackEvent<PinAddedEvent | PinRemovedEvent>;
 
 type SlackMessageSubtypeMessage = Pick<

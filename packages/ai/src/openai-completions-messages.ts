@@ -7,14 +7,15 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { isImageWithMediaPayload } from "./media-payload.js";
 import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
 import type { ProviderMessage } from "./provider-types.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
-  isImageWithMediaPayload,
 } from "./providers/tool-result-text.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
+import { sanitizeNonEmptyTransportPayloadText } from "./transports/transport-stream-shared.js";
 import type { Context, Model, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
 import {
@@ -23,16 +24,10 @@ import {
   stripSystemPromptRelocatableBoundary,
 } from "./utils/system-prompt-cache-boundary.js";
 
-const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 type ChatCompletionContentPartVideo = {
   type: "video_url";
   video_url: { url: string };
 };
-
-function sanitizeToolResultText(text: string, fallback: string): string {
-  const sanitized = sanitizeSurrogates(text);
-  return sanitized.trim().length > 0 ? sanitized : fallback;
-}
 
 /** Whether replayed messages require a tools marker for proxy compatibility. */
 export function hasToolCallHistory(messages: Context["messages"]): boolean {
@@ -71,8 +66,10 @@ export function convertMessages(
     return id;
   };
 
-  const transformedMessages = transformMessages(context.messages, model, (id) =>
-    normalizeToolCallId(id),
+  const transformedMessages = transformMessages(
+    context.messages,
+    model,
+    normalizeToolCallId,
   ) as ProviderMessage[];
 
   // Local chat templates can place tools after system content. Move only the
@@ -113,16 +110,12 @@ export function convertMessages(
     }
 
     if (msg.role === "user") {
-      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+      let userParam: ChatCompletionMessageParam;
       if (typeof msg.content === "string") {
-        const userParam: ChatCompletionMessageParam = {
+        userParam = {
           role: "user",
           content: sanitizeSurrogates(msg.content),
         };
-        if (isRuntimeContextCarrier) {
-          options.cacheOptOutIndexes?.add(params.length);
-        }
-        params.push(userParam);
       } else {
         const content: Array<ChatCompletionContentPart | ChatCompletionContentPartVideo> =
           msg.content.map((item) => {
@@ -146,12 +139,12 @@ export function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        const userParam = { role: "user", content } as ChatCompletionMessageParam;
-        if (isRuntimeContextCarrier) {
-          options.cacheOptOutIndexes?.add(params.length);
-        }
-        params.push(userParam);
+        userParam = { role: "user", content } as ChatCompletionMessageParam;
       }
+      if (msg.runtimeContextCarrier === true) {
+        options.cacheOptOutIndexes?.add(params.length);
+      }
+      params.push(userParam);
     } else if (msg.role === "assistant") {
       const assistantMsg: ChatCompletionAssistantMessageParam = {
         role: "assistant",
@@ -254,10 +247,7 @@ export function convertMessages(
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
-        const content = sanitizeToolResultText(
-          textResult,
-          mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
-        );
+        const content = sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder);
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",
           content,

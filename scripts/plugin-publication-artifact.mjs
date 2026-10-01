@@ -6,6 +6,9 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync, inflateRawSync } from "node:zlib";
 import {
+  boundedLimit,
+  compareCodeUnits,
+  hasControlCharacters,
   downloadActionsArtifactArchive,
   describeActionsArtifactFiles,
   inspectActionsArtifactZip,
@@ -76,8 +79,8 @@ const ROUTES = new Set([
   "clawhub-token-bootstrap",
   "clawhub-readback",
 ]);
-const NPM_TAGS = new Set(["latest", "alpha", "beta", "extended-stable"]);
-const CLAWHUB_TAGS = new Set(["latest", "alpha", "beta"]);
+const NPM_TAGS = new Set(["latest", "beta", "extended-stable"]);
+const CLAWHUB_TAGS = new Set(["latest", "beta"]);
 const META_PACKAGE = "@openclaw/meta-provider";
 const META_PACKAGE_DIR = "extensions/meta";
 
@@ -93,10 +96,6 @@ function npmShasum(bytes) {
   return createHash("sha1").update(bytes).digest("hex");
 }
 
-function compareCodeUnits(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function assertString(value, label) {
   if (typeof value !== "string" || value.trim() !== value || value.length === 0) {
     throw new Error(`${label} must be a non-empty trimmed string.`);
@@ -109,16 +108,6 @@ function assertPositiveInteger(value, label) {
     throw new Error(`${label} must be a safe positive integer.`);
   }
   return value;
-}
-
-function hasControlCharacters(value) {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    if (codePoint <= 0x1f || codePoint === 0x7f) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function normalizeManualOverrideReason(value) {
@@ -205,43 +194,33 @@ function normalizePublisherPolicy(value) {
   return { policyId, schema, sha256: policySha256 };
 }
 
-function boundedTarLimit(value, fallback, label) {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isSafeInteger(value) || value <= 0 || value > fallback) {
-    throw new Error(`${label} must be a positive safe integer no larger than ${fallback}.`);
-  }
-  return value;
-}
-
 function normalizeTarInspectionOptions(options = {}) {
-  const maxArchiveBytes = boundedTarLimit(
+  const maxArchiveBytes = boundedLimit(
     options.maxArchiveBytes,
     MAX_ARCHIVE_BYTES,
     "Plugin tarball byte limit",
   );
-  const maxExpandedBytes = boundedTarLimit(
+  const maxExpandedBytes = boundedLimit(
     options.maxExpandedBytes,
     MAX_EXPANDED_BYTES,
     "Plugin tarball expanded-byte limit",
   );
-  const maxEntryBytes = boundedTarLimit(
+  const maxEntryBytes = boundedLimit(
     options.maxEntryBytes,
     maxExpandedBytes,
     "Plugin tarball per-entry byte limit",
   );
-  const maxTotalFileBytes = boundedTarLimit(
+  const maxTotalFileBytes = boundedLimit(
     options.maxTotalFileBytes,
     Math.min(MAX_TAR_TOTAL_FILE_BYTES, maxExpandedBytes),
     "Plugin tarball total-file byte limit",
   );
-  const maxEntries = boundedTarLimit(
+  const maxEntries = boundedLimit(
     options.maxEntries,
     MAX_TAR_ENTRIES,
     "Plugin tarball entry-count limit",
   );
-  const maxPathBytes = boundedTarLimit(
+  const maxPathBytes = boundedLimit(
     options.maxPathBytes,
     MAX_TAR_PATH_BYTES,
     "Plugin tarball path-byte limit",
@@ -623,6 +602,13 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
 }
 
 export function validatePluginPackageManifest(params, packageManifest) {
+  if (
+    params.route !== "npm-readback" &&
+    params.route !== "clawhub-readback" &&
+    (params.version?.includes("-alpha.") || packageManifest.version?.includes("-alpha."))
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (packageManifest.name !== params.packageName || packageManifest.version !== params.version) {
     throw new Error(
       `Packed plugin identity ${String(packageManifest.name)}@${String(packageManifest.version)} does not match ${params.packageName}@${params.version}.`,
@@ -699,11 +685,20 @@ function normalizePublicationParams(params) {
     throw new Error(`${route} must not carry npm publisher-policy controls.`);
   }
   const publishTag = assertString(params.publishTag, "publish tag");
+  const historicalReadback = route === "npm-readback" || route === "clawhub-readback";
+  const alphaVersion = version.includes("-alpha.");
+  if (!historicalReadback && (alphaVersion || publishTag === "alpha")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const allowedTags = route.startsWith("npm-") ? NPM_TAGS : CLAWHUB_TAGS;
-  if (!allowedTags.has(publishTag)) {
+  if (!allowedTags.has(publishTag) && !(historicalReadback && publishTag === "alpha")) {
     throw new Error(`Unsupported ${route} publish tag: ${publishTag}`);
   }
-  if (route.startsWith("npm-")) {
+  if (historicalReadback && alphaVersion) {
+    if (publishTag !== "alpha") {
+      throw new Error("Historical alpha readback requires the alpha tag.");
+    }
+  } else if (route.startsWith("npm-")) {
     const override = publishTag === "extended-stable" ? publishTag : undefined;
     const publishPlan = resolveNpmPublishPlan(version, undefined, override);
     if (publishPlan.publishTag !== publishTag) {
@@ -712,11 +707,7 @@ function normalizePublicationParams(params) {
       );
     }
   } else {
-    const expectedTag = version.includes("-alpha.")
-      ? "alpha"
-      : version.includes("-beta.")
-        ? "beta"
-        : "latest";
+    const expectedTag = version.includes("-beta.") ? "beta" : "latest";
     if (publishTag !== expectedTag) {
       throw new Error(
         `${packageName}@${version}: ClawHub publish tag ${publishTag} must be ${expectedTag}.`,
@@ -1133,6 +1124,18 @@ export function verifyPluginPublicationArtifact(params) {
   if (!statSync(outputPath).isFile()) {
     throw new Error(`Verified plugin tarball was not written: ${outputPath}`);
   }
+  if (params.verificationOutput) {
+    if (!normalized.sourcePackageJsonSha256) {
+      throw new Error("A publication qualification receipt requires the exact source manifest.");
+    }
+    // Carry the consumed tuple, including retained producer attempts. Parent
+    // verification must not rediscover a different artifact or trust local paths.
+    writeFileSync(
+      params.verificationOutput,
+      `${JSON.stringify({ ...normalized, ...expectedBinding })}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+  }
   return {
     artifactDigest: expectedArtifactDigest,
     artifactId,
@@ -1251,6 +1254,7 @@ export function main(argv = process.argv.slice(2)) {
     workflowRunMetadataPath: values.workflowRunMetadata,
     runStatePolicy: values.runStatePolicy,
     workflowSha: values.workflowSha,
+    verificationOutput: values.verificationOutput,
   });
   if (values.githubOutput) {
     appendGithubOutput(values.githubOutput, {

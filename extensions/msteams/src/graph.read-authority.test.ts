@@ -6,6 +6,7 @@ const transport = vi.hoisted(() => ({
   origin: "",
   prepareSdk: vi.fn<() => Promise<void>>(),
   acquireToken: vi.fn<(scope: string) => Promise<string>>(),
+  acquireDelegatedToken: vi.fn<() => Promise<string | undefined>>(),
   authority: undefined as (() => void) | undefined,
   beforeLookup: undefined as (() => void | Promise<void>) | undefined,
   afterRead: undefined as (() => void) | undefined,
@@ -25,6 +26,11 @@ vi.mock("./sdk.js", () => ({
   createMSTeamsTokenProvider() {
     return { getAccessToken: transport.acquireToken };
   },
+}));
+
+vi.mock("./token.js", async (original) => ({
+  ...(await original<typeof import("./token.js")>()),
+  resolveDelegatedAccessToken: transport.acquireDelegatedToken,
 }));
 
 vi.mock("../runtime-api.js", async (original) => {
@@ -66,8 +72,9 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (original) => {
   };
 });
 
+import { msteamsPlugin } from "./channel.js";
 import { getMemberInfoMSTeams } from "./graph-members.js";
-import { getMessageMSTeams, listPinsMSTeams } from "./graph-messages.js";
+import { getMessageMSTeams } from "./graph-messages.js";
 import { listChannelsMSTeams } from "./graph-teams.js";
 import { fetchGraphAbsoluteUrl, fetchGraphJson } from "./graph.js";
 
@@ -104,16 +111,19 @@ function createReader() {
 
 let server: Server;
 let requests: string[];
+let requestAuthorizations: Array<string | undefined>;
 let respond: (url: string, response: ServerResponse) => void;
 
 beforeEach(async () => {
   transport.prepareSdk.mockReset().mockResolvedValue(undefined);
   transport.acquireToken.mockReset().mockResolvedValue(graphToken);
+  transport.acquireDelegatedToken.mockReset().mockResolvedValue(undefined);
   transport.authority = undefined;
   transport.beforeLookup = undefined;
   transport.afterRead = undefined;
   transport.releases = 0;
   requests = [];
+  requestAuthorizations = [];
   respond = (_url, response) => {
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(message));
@@ -121,6 +131,7 @@ beforeEach(async () => {
   server = createServer((request, response) => {
     const url = request.url ?? "/";
     requests.push(`${request.method} ${url}`);
+    requestAuthorizations.push(request.headers.authorization);
     request.resume();
     respond(url, response);
   });
@@ -143,7 +154,6 @@ afterEach(async () => {
 
 describe("Teams Graph read authority", () => {
   it.each([
-    ["sdk", false],
     ["sdk", true],
     ["token", false],
     ["token", true],
@@ -232,45 +242,90 @@ describe("Teams Graph read authority", () => {
     },
   );
 
-  it.each(["pins", "channels", "members"] as const)(
-    "stops the next %s lookup after revocation",
+  it.each(["channels", "members"] as const)(
+    "rejects the %s response revoked before body consumption and releases it",
     async (kind) => {
       const reader = createReader();
       transport.authority = reader.assert;
-      respond = (url, response) => {
+      respond = (_url, response) => {
         reader.revoke();
         response.setHeader("content-type", "application/json");
         response.end(
-          JSON.stringify(
-            kind === "members"
-              ? url.includes("membershipType")
-                ? { membershipType: "standard" }
-                : { value: [] }
-              : {
-                  value: [],
-                  ...(!url.includes("second")
-                    ? { "@odata.nextLink": "https://graph.microsoft.com/v1.0/second" }
-                    : {}),
-                },
-          ),
+          JSON.stringify(kind === "members" ? { membershipType: "standard" } : { value: [] }),
         );
       };
-      const read = async () => {
-        if (kind === "pins") {
-          return listPinsMSTeams({ cfg, to: chatId });
-        }
-        if (kind === "channels") {
-          return listChannelsMSTeams({ cfg, teamId });
-        }
-        return getMemberInfoMSTeams({
-          cfg,
-          to: `${teamId}/${channelId}`,
-          userId: "44444444-4444-4444-4444-444444444444",
-        });
-      };
-      await expect(read()).rejects.toThrow("Teams read authority revoked");
+      const result =
+        kind === "channels"
+          ? listChannelsMSTeams({ cfg, teamId })
+          : getMemberInfoMSTeams({
+              cfg,
+              to: `${teamId}/${channelId}`,
+              userId: "44444444-4444-4444-4444-444444444444",
+            });
+      await expect(result).rejects.toThrow("Teams read authority revoked");
       expect(requests).toHaveLength(1);
       expect(transport.releases).toBe(1);
+    },
+  );
+});
+
+describe("Teams Graph mutation currentness", () => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+  ] as const)(
+    "rechecks a delegated token wait before success or fallback (fallback=%s, revoked=%s)",
+    async (fallback, revoked) => {
+      const caller = new AbortController();
+      const started = createDeferred<void>();
+      const finish = createDeferred<void>();
+      const delegatedToken = "synthetic-delegated-graph-token";
+      transport.acquireDelegatedToken.mockImplementationOnce(async () => {
+        started.resolve();
+        await finish.promise;
+        return fallback ? undefined : delegatedToken;
+      });
+      const result = msteamsPlugin.actions!.handleAction!({
+        channel: "msteams",
+        action: "react",
+        cfg: {
+          channels: {
+            msteams: { ...cfg.channels.msteams, delegatedAuth: { enabled: true } },
+          },
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        params: { target: chatId, messageId: message.id, emoji: "like" },
+        toolContext: {
+          currentChannelProvider: "msteams",
+          currentChannelId: chatId,
+          currentChatType: "direct",
+        },
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      });
+      const expected = revoked
+        ? expect(result).rejects.toThrow("Teams mutation caller revoked")
+        : expect(result).resolves.toMatchObject({
+            details: { ok: true, channel: "msteams", action: "react", reactionType: "like" },
+          });
+      await started.promise;
+      if (revoked) {
+        caller.abort(new Error("Teams mutation caller revoked"));
+      }
+      finish.resolve();
+      await expected;
+      expect(requests).toEqual(
+        revoked
+          ? []
+          : [`POST /beta/chats/${encodeURIComponent(chatId)}/messages/${message.id}/setReaction`],
+      );
+      expect(requestAuthorizations).toEqual(
+        revoked ? [] : [`Bearer ${fallback ? graphToken : delegatedToken}`],
+      );
+      expect(transport.acquireDelegatedToken).toHaveBeenCalledOnce();
+      expect(transport.prepareSdk).toHaveBeenCalledTimes(fallback && !revoked ? 1 : 0);
+      expect(transport.acquireToken).toHaveBeenCalledTimes(fallback && !revoked ? 1 : 0);
     },
   );
 });

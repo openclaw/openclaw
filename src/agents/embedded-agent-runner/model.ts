@@ -15,13 +15,13 @@ import {
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
-import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { AuthStorage } from "../sessions/auth-storage.js";
+import { ModelRegistry } from "../sessions/model-registry.js";
 import { mergeModelMediaInput } from "./model.compat.js";
 import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   resolveConfiguredProviderConfig,
-  type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
 import {
   normalizeResolvedModel,
@@ -40,11 +40,11 @@ import {
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
-import { staticModelIdMatches } from "./model.static-id.js";
 
 export { resolveModelWithRegistry } from "./model.registry-resolution.js";
 
 type CommonModelResolutionOptions = {
+  assertCurrent?: () => void;
   authStorage?: AuthStorage;
   modelRegistry?: ModelRegistry;
   agentId?: string;
@@ -57,6 +57,7 @@ type CommonModelResolutionOptions = {
 };
 
 type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
+  abortSignal?: AbortSignal;
   /** Selected executable IDs must not pass through input aliases again. */
   modelIdSource?: "input" | "selected";
   allowBundledStaticCatalogFallback?: boolean;
@@ -123,6 +124,7 @@ export async function resolveModelAsync(
   cfg?: OpenClawConfig,
   options?: AsyncModelResolutionOptions,
 ): Promise<ModelResolution> {
+  options?.assertCurrent?.();
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const derivedWorkspaceDir = resolveModelWorkspaceDir(
     cfg,
@@ -157,6 +159,7 @@ export async function resolveModelAsync(
   // Route-projected cfg owns transport/auth; the snapshot contributes generation facts only.
   const preparedModelRuntime = explicitPreparedRuntime ?? preparedSnapshot;
   const resolve = async () => {
+    options?.assertCurrent?.();
     const workspaceDir =
       options?.workspaceDir ?? preparedModelRuntime?.workspaceDir ?? derivedWorkspaceDir;
     const normalizedRef = normalizeProviderModelRef({
@@ -177,25 +180,15 @@ export async function resolveModelAsync(
     }
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
-    let staticCatalogModel: StaticCatalogFallbackModel | undefined;
+    let staticCatalogModel: ProviderRuntimeModel | undefined;
     const getManifestStaticCatalogModel = () => {
       if (!staticCatalogResolved) {
         staticCatalogResolved = true;
         staticCatalogModel =
-          preparedModelRuntime?.configuredRuntimeModels?.find(
-            ({ modelId: candidateId, provider: rowProvider }) =>
-              candidateId === normalizedRef.model &&
-              normalizeProviderId(rowProvider) === normalizeProviderId(normalizedRef.provider),
-          )?.model ??
-          preparedModelRuntime?.configuredRuntimeModels?.find(
-            ({ modelId: candidateId, provider: rowProvider }) =>
-              staticModelIdMatches({
-                candidateId,
-                rowProvider,
-                provider: normalizedRef.provider,
-                modelId: normalizedRef.model,
-              }),
-          )?.model ??
+          preparedModelRuntime?.findConfiguredRuntimeModel(
+            normalizedRef.provider,
+            normalizedRef.model,
+          ) ??
           resolveBundledStaticCatalogModel({
             provider: normalizedRef.provider,
             modelId: normalizedRef.model,
@@ -209,41 +202,37 @@ export async function resolveModelAsync(
       }
       return staticCatalogModel;
     };
-    const explicitModel = resolveExplicitModelWithRegistry({
+    const registryParams = {
+      abortSignal: options?.abortSignal,
+      assertCurrent: options?.assertCurrent,
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
+      ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
       manifestAlias: normalizedRef.manifestAlias,
       workspaceDir,
+      authProfileId: options?.authProfileId,
+      authProfileMode: options?.authProfileMode,
+      preferredProfile: options?.preferredProfile,
       runtimeHooks,
+      getStaticCatalogModel: getManifestStaticCatalogModel,
+    };
+    const explicitModel = resolveExplicitModelWithRegistry({
+      ...registryParams,
       // Inline rows carry configured transport and headers; only their captured config can reuse them.
       preparedInlineProviderModels:
         cfg === preparedModelRuntime?.config
           ? preparedModelRuntime?.inlineProviderModels
           : undefined,
-      getStaticCatalogModel: getManifestStaticCatalogModel,
     });
     if (explicitModel && explicitModel.kind !== "resolved") {
       const suppressedRuntimeModel =
         explicitModel.kind === "suppressed"
-          ? resolveRuntimePreferredSuppressedModel({
-              provider: normalizedRef.provider,
-              modelId: normalizedRef.model,
-              modelRegistry,
-              cfg,
-              agentDir: resolvedAgentDir,
-              ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
-              manifestAlias: normalizedRef.manifestAlias,
-              workspaceDir,
-              authProfileId: options?.authProfileId,
-              authProfileMode: options?.authProfileMode,
-              preferredProfile: options?.preferredProfile,
-              runtimeHooks,
-              getStaticCatalogModel: getManifestStaticCatalogModel,
-            })
+          ? await resolveRuntimePreferredSuppressedModel(registryParams)
           : undefined;
+      options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
         return { model: suppressedRuntimeModel, logicalRef, authStorage, modelRegistry };
       }
@@ -282,6 +271,7 @@ export async function resolveModelAsync(
     };
     const resolveStaticCatalogFallbackModel = async () => {
       const catalogModel = await resolveStaticCatalogModel();
+      options?.assertCurrent?.();
       if (!catalogModel) {
         return undefined;
       }
@@ -312,15 +302,8 @@ export async function resolveModelAsync(
       });
     };
     const resolveDynamicAttempt = async () => {
-      const authProfile = resolveDynamicModelAuthProfile({
-        provider: normalizedRef.provider,
-        modelId: normalizedRef.model,
-        cfg,
-        agentDir: resolvedAgentDir,
-        authProfileId: options?.authProfileId,
-        authProfileMode: options?.authProfileMode,
-        preferredProfile: options?.preferredProfile,
-      });
+      const authProfile = await resolveDynamicModelAuthProfile(registryParams);
+      options?.assertCurrent?.();
       const preparedDynamicModel = options?.deferProviderDynamicModelPreparation
         ? undefined
         : await runtimeHooks.prepareProviderDynamicModel({
@@ -339,39 +322,25 @@ export async function resolveModelAsync(
               ...authProfile,
             },
           });
+      options?.assertCurrent?.();
       return resolveModelWithPreparedRegistry({
-        provider: normalizedRef.provider,
-        modelId: normalizedRef.model,
-        modelRegistry,
-        cfg,
-        agentDir: resolvedAgentDir,
-        ...(options?.agentRuntimeId ? { agentRuntimeId: options.agentRuntimeId } : {}),
-        manifestAlias: normalizedRef.manifestAlias,
-        workspaceDir,
-        authProfileId: options?.authProfileId,
-        authProfileMode: options?.authProfileMode,
-        preferredProfile: options?.preferredProfile,
-        runtimeHooks,
+        ...registryParams,
+        preparedAuthProfile: authProfile,
         ...(preparedDynamicModel ? { preparedDynamicModel } : {}),
-        getStaticCatalogModel: getManifestStaticCatalogModel,
         ...(options?.allowBundledStaticCatalogFallback ? { skipConfiguredFallback: true } : {}),
       });
     };
-    const providerRuntimeMetadataShouldWin = shouldCompareProviderRuntimeResolvedModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      agentDir: resolvedAgentDir,
-      workspaceDir,
-      runtimeHooks,
-    });
+    const providerRuntimeMetadataShouldWin =
+      shouldCompareProviderRuntimeResolvedModel(registryParams);
     let model =
       explicitModel?.kind === "resolved" && !providerRuntimeMetadataShouldWin
         ? explicitModel.model
         : undefined;
     model ??= await resolveDynamicAttempt();
+    options?.assertCurrent?.();
     if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
       model = await resolveStaticCatalogFallbackModel();
+      options?.assertCurrent?.();
     }
     if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
       model = buildConfiguredFallbackModel({
@@ -388,6 +357,7 @@ export async function resolveModelAsync(
     }
     if (model && options?.allowBundledStaticCatalogFallback) {
       const staticMediaInput = (await resolveStaticCatalogModel())?.mediaInput;
+      options?.assertCurrent?.();
       const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
       const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
       if (mediaInput) {
@@ -423,16 +393,8 @@ export async function resolveModelAsync(
     : await resolve();
 }
 
-/**
- * Build a more helpful error when the model is not found.
- *
- * Some provider plugins only become available after setup/auth has registered
- * them. When users point `agents.defaults.model.primary` at one of those
- * providers before setup, the raw `Unknown model` error is too vague. Provider
- * plugins can append a targeted recovery hint here.
- *
- * See: https://github.com/openclaw/openclaw/issues/17328
- */
+// Providers registered by setup/auth can explain an otherwise opaque model miss.
+// See https://github.com/openclaw/openclaw/issues/17328.
 function buildUnknownModelError(params: {
   provider: string;
   modelId: string;
@@ -500,13 +462,8 @@ function buildMissingProviderModelRegistrationHint(params: {
   if (!configuredEntry) {
     return undefined;
   }
-  // Models bound to an agent runtime (e.g. "codex") draw their catalog from that
-  // runtime and its linked account, not from models.providers[].models[].
-  // Advising a models.providers[] registration here is actively misleading: it
-  // makes resolution "succeed" only for the request to be rejected later by the
-  // runtime/provider (e.g. OpenAI returns 400 "model is not supported when using
-  // Codex with a ChatGPT account" once a deprecated model id is no longer
-  // offered). Point the user at the runtime's live catalog instead.
+  // Runtime-bound models use the harness/account catalog; registering a retired
+  // model in models.providers would hide the miss until the provider rejects it.
   const agentRuntimeId = configuredEntry.agentRuntime?.id;
   if (agentRuntimeId) {
     return `Found agents.defaults.models["${agentModelKey}"] bound to the "${agentRuntimeId}" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["${params.provider}"].models[] — registering it there will not make it usable. Confirm "${params.modelId}" is still offered by the "${agentRuntimeId}" runtime and switch agents.defaults.model.primary to a currently available model (run \`openclaw models list --refresh --provider ${params.provider}\` to list them). See https://docs.openclaw.ai/concepts/model-providers.`;

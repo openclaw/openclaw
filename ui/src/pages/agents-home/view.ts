@@ -1,28 +1,20 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
+import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import "../../styles/agents-home.css";
 
 registerAgentsHomeEnglish();
 
-type AgentCard = {
-  id: string;
-  name: string;
-  role?: string;
-  model?: string;
-  avatar: string | null;
-  textAvatar: string | null;
-  activeNow: boolean;
-  lastActiveAt: number;
-  preview?: string | null;
+type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey" | "unreadCount"> & {
   target: { href: string; options: ApplicationNavigationOptions };
 };
 
@@ -38,7 +30,7 @@ type AgentsHomeProps = {
 
 export function renderAgentsHome(props: AgentsHomeProps) {
   const { context } = props;
-  const navigate = (event: MouseEvent, route: string, options?: ApplicationNavigationOptions) => {
+  const navigate = (event: MouseEvent, route: RouteId, options?: ApplicationNavigationOptions) => {
     if (shouldHandleNavigationClick(event)) {
       event.preventDefault();
       context.navigate(route, options);

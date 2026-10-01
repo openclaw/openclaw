@@ -8,7 +8,6 @@ import {
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
-  type FailoverReason,
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
@@ -16,10 +15,12 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  hasRecordedModelFallbackStop,
   isCliTerminalStopCode,
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
@@ -83,6 +84,9 @@ export async function handleEmbeddedPromptFailure(input: {
   traceAttempts: TraceAttempt[];
   previousRetryFailoverReason: FailoverReason | null;
 }): Promise<PromptFailureOutcome> {
+  if (hasRecordedModelFallbackStop(input.promptError)) {
+    throw input.promptError;
+  }
   // Only the local precheck owns this recovery; provider text cannot request it.
   if (
     input.promptErrorSource === "precheck" &&
@@ -273,7 +277,7 @@ export async function handleEmbeddedPromptFailure(input: {
   }
   if (failoverDecision.action === "fallback_model") {
     const fallbackReason = failoverDecision.reason;
-    const status = resolveFailoverStatus(fallbackReason);
+    const status = resolveFailoverStatus(fallbackReason, promptErrorDetails.code);
     input.traceAttempts.push({
       provider: input.provider,
       model: input.modelId,

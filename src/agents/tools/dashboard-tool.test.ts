@@ -236,7 +236,11 @@ describe("dashboard tool", () => {
       }),
       expect.objectContaining({
         method: "sessions.patch",
-        params: { key: "agent:main:main", boardPresentation: "expanded" },
+        params: {
+          key: "agent:main:main",
+          boardFace: "dashboard",
+          boardPresentation: "expanded",
+        },
       }),
     ]);
     expect(replacement.requests).toEqual([]);
@@ -414,7 +418,12 @@ describe("dashboard tool", () => {
       expect(harness.calls).toEqual([
         [
           "sessions.patch",
-          { key: "agent:main:main", agentId: "main", boardPresentation: presentation },
+          {
+            key: "agent:main:main",
+            agentId: "main",
+            boardFace: "dashboard",
+            boardPresentation: presentation,
+          },
         ],
       ]);
       expect(result.details).toEqual({
@@ -460,10 +469,7 @@ describe("dashboard tool", () => {
     expect(result.details).toEqual({ ok: true, delivered: 2 });
   });
 
-  it.each([
-    ["focus_tab", { tabId: "notes" }],
-    ["set_presentation", { presentation: "expanded" }],
-  ])("reports %s as unavailable when no Control UI is connected", async (action, args) => {
+  it("reports commands as unavailable when no Control UI is connected", async () => {
     const broadcastToConnIds = vi.fn();
     const context = {
       broadcastToConnIds,
@@ -473,7 +479,7 @@ describe("dashboard tool", () => {
       { context, isWebchatConnect: () => false },
       async () => {
         const tool = createDashboardTool({ agentSessionKey: "agent:main:main" });
-        const result = await tool.execute("command", { action, ...args });
+        const result = await tool.execute("command", { action: "focus_tab", tabId: "notes" });
         expect(result.details).toEqual({
           status: "unavailable",
           code: "UNAVAILABLE",

@@ -1,8 +1,3 @@
-/**
- * Extension loader - loads TypeScript extension modules using jiti.
- *
- */
-
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -14,7 +9,12 @@ import type { createJiti } from "jiti/static";
 // The virtualModules option then makes them available to extensions.
 import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
+import * as bundledTypeboxError from "typebox/error";
 import * as bundledTypeboxFormat from "typebox/format";
+import * as bundledTypeboxGuard from "typebox/guard";
+import * as bundledTypeboxSchema from "typebox/schema";
+import * as bundledTypeboxSystem from "typebox/system";
+import * as bundledTypeboxType from "typebox/type";
 import * as bundledTypeboxValue from "typebox/value";
 import * as bundledAgentCore from "../../../plugin-sdk/agent-core.js";
 import * as bundledLlm from "../../../plugin-sdk/llm.js";
@@ -37,7 +37,6 @@ import type {
   ExtensionShortcut,
   LoadExtensionsResult,
   MessageRenderer,
-  ProviderConfig,
   RegisteredCommand,
   ToolDefinition,
 } from "./types.js";
@@ -46,7 +45,12 @@ import type {
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
+  "typebox/error": bundledTypeboxError,
   "typebox/format": bundledTypeboxFormat,
+  "typebox/guard": bundledTypeboxGuard,
+  "typebox/schema": bundledTypeboxSchema,
+  "typebox/system": bundledTypeboxSystem,
+  "typebox/type": bundledTypeboxType,
   "typebox/value": bundledTypeboxValue,
   "@sinclair/typebox": bundledTypebox,
   "@sinclair/typebox/compile": bundledTypeboxCompile,
@@ -73,7 +77,6 @@ const EXTENSION_LOADER_ALIAS_IMPORT_PATTERN =
   /(?:@openclaw\/plugin-sdk|openclaw\/plugin-sdk|@sinclair\/typebox|typebox)(?:\/[A-Za-z0-9_-]+)?/u;
 const RELATIVE_EXTENSION_IMPORT_PATTERN =
   /(?:import\s*(?:[^'"]*?\s*from\s*)?["']\.{1,2}\/|export\s*(?:[^'"]*?\s*from\s*)["']\.{1,2}\/|import\s*\(\s*["']\.{1,2}\/|require\s*\(\s*["']\.{1,2}\/)/u;
-const COMMONJS_EXTENSION_EXPORT_PATTERN = /\b(?:module\.exports|exports\.)/u;
 
 async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
   if (createJitiLoaderFactory) {
@@ -89,12 +92,8 @@ async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
-function normalizeUnicodeSpaces(str: string): string {
-  return str.replace(UNICODE_SPACES, " ");
-}
-
 function expandPath(p: string): string {
-  const normalized = normalizeUnicodeSpaces(p);
+  const normalized = p.replace(UNICODE_SPACES, " ");
   if (normalized.startsWith("~/")) {
     return path.join(os.homedir(), normalized.slice(2));
   }
@@ -112,7 +111,7 @@ function resolvePath(extPath: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
-type HandlerFn = (...args: unknown[]) => Promise<unknown>;
+type HandlerFn = NonNullable<ReturnType<Extension["handlers"]["get"]>>[number];
 
 type ExtensionCacheScope = {
   cwd: string;
@@ -157,10 +156,10 @@ export function createExtensionRuntime(): ExtensionRuntime {
       "Extension runtime not initialized. Action methods cannot be called during extension loading.",
     );
   };
-  const state: { staleMessage?: string } = {};
+  let staleMessage: string | undefined;
   const assertActive = () => {
-    if (state.staleMessage) {
-      throw new Error(state.staleMessage);
+    if (staleMessage) {
+      throw new Error(staleMessage);
     }
   };
 
@@ -184,7 +183,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
     pendingProviderRegistrations: [],
     assertActive,
     invalidate: (message) => {
-      state.staleMessage ??=
+      staleMessage ??=
         message ??
         "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().";
     },
@@ -214,7 +213,11 @@ function createExtensionAPI(
   cwd: string,
   eventBus: EventBus,
 ): ExtensionAPI {
-  const api = {
+  const activeRuntime = () => {
+    runtime.assertActive();
+    return runtime;
+  };
+  return {
     // Registration methods - write to extension
     on(event: string, handler: HandlerFn): void {
       runtime.assertActive();
@@ -277,91 +280,44 @@ function createExtensionAPI(
       return runtime.flagValues.get(name);
     },
 
-    // Action methods - delegate to shared runtime
-    sendMessage(message, options): void {
-      runtime.assertActive();
-      runtime.sendMessage(message, options);
+    sendMessage: (message, options) => {
+      activeRuntime().sendMessage(message, options);
     },
-
-    sendUserMessage(content, options): void {
-      runtime.assertActive();
-      runtime.sendUserMessage(content, options);
+    sendUserMessage: (content, options) => {
+      activeRuntime().sendUserMessage(content, options);
     },
-
-    appendEntry(customType: string, data?: unknown): void {
-      runtime.assertActive();
-      runtime.appendEntry(customType, data);
+    appendEntry: (customType, data) => {
+      activeRuntime().appendEntry(customType, data);
     },
-
-    setSessionName(name: string): void {
-      runtime.assertActive();
-      runtime.setSessionName(name);
+    setSessionName: (name) => {
+      activeRuntime().setSessionName(name);
     },
-
-    getSessionName(): string | undefined {
-      runtime.assertActive();
-      return runtime.getSessionName();
+    getSessionName: () => activeRuntime().getSessionName(),
+    setLabel: (entryId, label) => {
+      activeRuntime().setLabel(entryId, label);
     },
-
-    setLabel(entryId: string, label: string | undefined): void {
-      runtime.assertActive();
-      runtime.setLabel(entryId, label);
-    },
-
     exec(command: string, args: string[], options?: ExecOptions) {
       runtime.assertActive();
       return execCommand(command, args, options?.cwd ?? cwd, options);
     },
-
-    getActiveTools(): string[] {
-      runtime.assertActive();
-      return runtime.getActiveTools();
+    getActiveTools: () => activeRuntime().getActiveTools(),
+    getAllTools: () => activeRuntime().getAllTools(),
+    setActiveTools: (toolNames) => {
+      activeRuntime().setActiveTools(toolNames);
     },
-
-    getAllTools() {
-      runtime.assertActive();
-      return runtime.getAllTools();
+    getCommands: () => activeRuntime().getCommands(),
+    setModel: (model) => activeRuntime().setModel(model),
+    getThinkingLevel: () => activeRuntime().getThinkingLevel(),
+    setThinkingLevel: (level) => activeRuntime().setThinkingLevel(level),
+    registerProvider: (name, config) => {
+      activeRuntime().registerProvider(name, config, extension.path);
     },
-
-    setActiveTools(toolNames: string[]): void {
-      runtime.assertActive();
-      runtime.setActiveTools(toolNames);
-    },
-
-    getCommands() {
-      runtime.assertActive();
-      return runtime.getCommands();
-    },
-
-    setModel(model) {
-      runtime.assertActive();
-      return runtime.setModel(model);
-    },
-
-    getThinkingLevel() {
-      runtime.assertActive();
-      return runtime.getThinkingLevel();
-    },
-
-    setThinkingLevel(level) {
-      runtime.assertActive();
-      runtime.setThinkingLevel(level);
-    },
-
-    registerProvider(name: string, config: ProviderConfig) {
-      runtime.assertActive();
-      runtime.registerProvider(name, config, extension.path);
-    },
-
-    unregisterProvider(name: string) {
-      runtime.assertActive();
-      runtime.unregisterProvider(name, extension.path);
+    unregisterProvider: (name) => {
+      activeRuntime().unregisterProvider(name, extension.path);
     },
 
     events: eventBus,
   } as ExtensionAPI;
-
-  return api;
 }
 
 function resolveExtensionFactory(module: unknown): ExtensionFactory | undefined {
@@ -380,13 +336,8 @@ function resolveExtensionFactory(module: unknown): ExtensionFactory | undefined 
 }
 
 function isJavaScriptExtensionPath(extensionPath: string): boolean {
-  switch (path.extname(extensionPath).toLowerCase()) {
-    case ".cjs":
-    case ".mjs":
-      return true;
-    default:
-      return false;
-  }
+  const extension = path.extname(extensionPath).toLowerCase();
+  return extension === ".cjs" || extension === ".mjs";
 }
 
 function extensionSourceNeedsJitiAliasResolution(extensionPath: string): boolean {
@@ -394,9 +345,7 @@ function extensionSourceNeedsJitiAliasResolution(extensionPath: string): boolean
     const source = fs.readFileSync(extensionPath, "utf8");
     return (
       EXTENSION_LOADER_ALIAS_IMPORT_PATTERN.test(source) ||
-      RELATIVE_EXTENSION_IMPORT_PATTERN.test(source) ||
-      (path.extname(extensionPath).toLowerCase() === ".js" &&
-        COMMONJS_EXTENSION_EXPORT_PATTERN.test(source))
+      RELATIVE_EXTENSION_IMPORT_PATTERN.test(source)
     );
   } catch {
     return true;
@@ -472,9 +421,6 @@ async function loadExtensionModule(
   return factory;
 }
 
-/**
- * Create an Extension object with empty collections.
- */
 function createExtension(extensionPath: string, resolvedPath: string): Extension {
   const source =
     extensionPath.startsWith("<") && extensionPath.endsWith(">")
@@ -524,9 +470,6 @@ async function loadExtension(
   }
 }
 
-/**
- * Create an Extension from an inline factory function.
- */
 export async function loadExtensionFromFactory(
   factory: ExtensionFactory,
   cwd: string,
@@ -540,9 +483,6 @@ export async function loadExtensionFromFactory(
   return extension;
 }
 
-/**
- * Load extensions from paths.
- */
 export async function loadExtensionsCached(
   paths: string[],
   cwd: string,

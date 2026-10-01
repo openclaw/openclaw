@@ -12,15 +12,12 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-/** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { headersToRecord } from "../utils/headers.js";
-import { notifyProviderHttpResponse, transportAbortError } from "./transport-stream-shared.js";
+import { notifyProviderHttpResponse } from "./transport-stream-shared.js";
 
 export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
 
-const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
-const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OPENAI_RESPONSE_MODEL_HEADER_NAMES = new Set(["openai-model", "x-openai-model"]);
 const OPENAI_RESPONSE_MODEL_EVENT_TYPES = new Set([
   "response.created",
@@ -221,24 +218,23 @@ function appendOpenAICompletionsReasoningDelta(
     batch.hasVisibleText = true;
   }
   const previous = batch.deltas[batch.deltas.length - 1];
-  if (!previous || previous.kind !== next.kind) {
+  if (
+    !previous ||
+    previous.kind !== next.kind ||
+    (next.kind === "thinking" &&
+      previous.kind === "thinking" &&
+      previous.signature !== next.signature)
+  ) {
     batch.deltas.push(next);
     if (next.kind === "thinking") {
       batch.mirroredThinking.push(next.text);
     }
     return;
   }
-  if (next.kind === "thinking" && previous.kind === "thinking") {
-    if (previous.signature !== next.signature) {
-      batch.deltas.push(next);
-      batch.mirroredThinking.push(next.text);
-      return;
-    }
-    previous.text += next.text;
-    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
-    return;
-  }
   previous.text += next.text;
+  if (next.kind === "thinking") {
+    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
+  }
 }
 
 function createOpenAICompletionsReasoningBatch(): MutableOpenAICompletionsReasoningBatch {
@@ -385,16 +381,6 @@ export function createOpenAIProviderAcceptanceHook(
   return () => notifyProviderHttpResponse({ options, response, model });
 }
 
-type ModelStreamCooperativeScheduler = {
-  afterEvent: () => Promise<void>;
-};
-
-export function throwIfModelStreamAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw transportAbortError(signal);
-  }
-}
-
 /** Measure one UTF-8 append without double-counting a surrogate pair split across chunks. */
 export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chunk: string) {
   let bytes = Buffer.byteLength(chunk, "utf8");
@@ -410,33 +396,6 @@ export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chu
   return {
     bytes,
     endsWithHighSurrogate: finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff,
-  };
-}
-
-export function createModelStreamCooperativeScheduler(
-  signal?: AbortSignal,
-): ModelStreamCooperativeScheduler {
-  let lastYieldedAt = Date.now();
-  let eventsSinceYield = 0;
-  return {
-    async afterEvent() {
-      throwIfModelStreamAborted(signal);
-      eventsSinceYield += 1;
-      const now = Date.now();
-      if (
-        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
-        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
-      ) {
-        return;
-      }
-      eventsSinceYield = 0;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      throwIfModelStreamAborted(signal);
-      // Time waiting for the yield does not consume the next work budget.
-      lastYieldedAt = Date.now();
-    },
   };
 }
 

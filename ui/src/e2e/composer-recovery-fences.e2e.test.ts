@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatReplyTarget } from "../lib/chat/chat-types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
@@ -159,12 +159,13 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 700 } },
       async ({ page }) => {
         await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate(() => {
+        // The shell opens the Control UI database at startup.
+        await page.addInitScript(() => {
           IDBFactory.prototype.open = () => {
             throw new DOMException("Storage unavailable", "UnknownError");
           };
         });
+        await page.goto(`${suite.server.baseUrl}settings`);
         await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
         await page.evaluate(() => {
           const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
@@ -178,13 +179,14 @@ suite.define(() => {
               chatQueue: [],
             },
             identity: "storage-error",
+            id: "storage-error-recovery",
           });
           const stage = document.createElement("main");
           stage.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--bg)";
           stage.append(component);
           document.body.append(stage);
         });
-        const notice = page.locator(".chat-outbox-recovery");
+        const notice = page.locator("#storage-error-recovery .chat-outbox-recovery");
         await notice.locator("summary").click();
         await notice.getByRole("alert").waitFor();
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
@@ -356,7 +358,7 @@ suite.define(() => {
     );
   });
 
-  it.each(["incognito", "toggle-incognito", "replacement", "reconnect"])(
+  it.each(["incognito", "toggle-incognito", "replacement", "reconnect", "reply"])(
     "fences recovery confirmation after %s at the rendered owner boundary",
     async (change) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
@@ -364,7 +366,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings`);
         await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
         const hostHandle = await page.evaluateHandle((initialIncognito) => {
+          const replyState: { chatReplyTarget: ChatReplyTarget | null } = { chatReplyTarget: null };
           const host = {
+            ...replyState,
             settings: { gatewayUrl: "ws://recovery-fence.test" },
             connected: true,
             client: { recoveryScopeReady: true, recoveryScope: "owner" },
@@ -416,6 +420,8 @@ suite.define(() => {
                 currentHost.currentSessionId = "incarnation-b";
               } else if (retirement === "reconnect") {
                 currentHost.connectionEpoch++;
+              } else if (retirement === "reply") {
+                currentHost.chatReplyTarget = { messageId: "newer-quote", text: "Keep this quote" };
               } else {
                 currentHost.selectedChatSessionIncognito = true;
               }
@@ -447,6 +453,12 @@ suite.define(() => {
         });
         expect(records.sessions).toEqual({});
         expect(Object.keys(records.recovery)).toHaveLength(1);
+        if (change === "reply") {
+          expect(await hostHandle.evaluate((host) => host.chatReplyTarget)).toEqual({
+            messageId: "newer-quote",
+            text: "Keep this quote",
+          });
+        }
         await notice.getByText("Retained confirmation draft", { exact: true }).waitFor();
       });
     },

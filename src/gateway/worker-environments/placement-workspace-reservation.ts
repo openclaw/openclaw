@@ -1,7 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { find } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
@@ -86,6 +88,7 @@ function assertReconciled(
 }
 
 export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRuntime) {
+  const signal = getGatewayRestartDrainSignal();
   const withReservation = async <T>(
     scope: string,
     sessionId: string,
@@ -99,6 +102,7 @@ export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRu
         leaseMs: 60000,
         waitMs: 0,
         leaseLabel: "session publication exclusion",
+        signal,
       },
       async (lease) => await run(() => lease.assertOwned()),
     );
@@ -122,12 +126,7 @@ export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRu
             assertOwned();
             assertReconciled(runtime.read(), identity, workspace);
             const current = find(runtime.read(), identity.sessionId);
-            if (
-              current?.generation !== initial?.generation ||
-              current?.state !== initial?.state ||
-              current?.environmentId !== initial?.environmentId ||
-              current?.activeOwnerEpoch !== initial?.activeOwnerEpoch
-            ) {
+            if (!matchesWorkerPlacementTarget(current, initial)) {
               throw new Error("The session workspace placement changed during publication.");
             }
           };

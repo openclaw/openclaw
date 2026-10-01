@@ -1,22 +1,73 @@
-// Emits session lifecycle hooks for channel plugins and agent runtimes.
+import type { SessionFreshness } from "../../config/sessions/reset.js";
+import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
+import {
+  createSessionResetBoundaryId,
+  type SessionResetBoundaryRequest,
+} from "../../config/sessions/session-reset-boundary-event.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { createResetBoundaryTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
 import type {
   PluginHookSessionEndEvent,
   PluginHookSessionEndReason,
   PluginHookSessionStartEvent,
 } from "../../plugins/hook-types.js";
+import type { HookRunner } from "../../plugins/hooks.js";
+import {
+  attachSessionEndTranscriptSource,
+  type SessionEndTranscriptSource,
+} from "../../plugins/session-end-transcript.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 
-/** Session identity attached to plugin session hook payloads. */
+type ReplySessionEndReason = Extract<
+  PluginHookSessionEndReason,
+  "new" | "reset" | "idle" | "daily" | "unknown"
+>;
+
+export function resolveExplicitSessionEndReason(
+  matchedResetTriggerLower?: string,
+): Extract<ReplySessionEndReason, "new" | "reset"> {
+  return matchedResetTriggerLower === "/reset" ? "reset" : "new";
+}
+
+export function resolveStaleSessionEndReason(params: {
+  entry: SessionEntry | undefined;
+  freshness?: SessionFreshness;
+}): ReplySessionEndReason | undefined {
+  return params.entry ? params.freshness?.staleReason : undefined;
+}
+
+export function createReplySessionResetBoundary(params: {
+  cwd: string;
+  explicitReason: Extract<SessionResetBoundaryRequest["reason"], "new" | "reset">;
+  previousReason?: ReplySessionEndReason;
+  resetTriggered: boolean;
+}): SessionResetBoundaryWrite {
+  const continuityReason =
+    params.previousReason === "idle" || params.previousReason === "daily"
+      ? params.previousReason
+      : "reset";
+  return params.resetTriggered
+    ? {
+        boundaryId: createSessionResetBoundaryId(),
+        context: "clear",
+        cwd: params.cwd,
+        reason: params.explicitReason,
+      }
+    : {
+        boundaryId: createSessionResetBoundaryId(),
+        context: "preserve-tail",
+        cwd: params.cwd,
+        reason: continuityReason,
+      };
+}
+
 type SessionHookContext = {
   sessionId: string;
   sessionKey: string;
   agentId: string;
 };
 
-function buildSessionHookContext(params: {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-}): SessionHookContext {
+function buildSessionHookContext(params: SessionHookContext): SessionHookContext {
   return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -24,13 +75,11 @@ function buildSessionHookContext(params: {
   };
 }
 
-/** Builds the payload for plugin session-start hooks. */
-export function buildSessionStartHookPayload(params: {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  resumedFrom?: string;
-}): {
+export function buildSessionStartHookPayload(
+  params: SessionHookContext & {
+    resumedFrom?: string;
+  },
+): {
   event: PluginHookSessionStartEvent;
   context: SessionHookContext;
 } {
@@ -40,30 +89,30 @@ export function buildSessionStartHookPayload(params: {
       sessionKey: params.sessionKey,
       resumedFrom: params.resumedFrom,
     },
-    context: buildSessionHookContext({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-    }),
+    context: buildSessionHookContext(params),
   };
 }
 
-/** Builds the payload for plugin session-end hooks. */
-export function buildSessionEndHookPayload(params: {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  messageCount?: number;
-  durationMs?: number;
-  reason?: PluginHookSessionEndReason;
-  sessionFile?: string;
-  transcriptArchived?: boolean;
-  nextSessionId?: string;
-  nextSessionKey?: string;
-}): {
+export function buildSessionEndHookPayload(
+  params: SessionHookContext & {
+    messageCount?: number;
+    durationMs?: number;
+    reason?: PluginHookSessionEndReason;
+    sessionFile?: string;
+    transcriptArchived?: boolean;
+    nextSessionId?: string;
+    nextSessionKey?: string;
+    endedTranscript?: SessionEndTranscriptSource;
+  },
+): {
   event: PluginHookSessionEndEvent;
   context: SessionHookContext;
 } {
+  const context = buildSessionHookContext(params);
+  attachSessionEndTranscriptSource(
+    context,
+    params.endedTranscript ?? { available: false, reason: "unsupported-source" },
+  );
   return {
     event: {
       sessionId: params.sessionId,
@@ -76,10 +125,35 @@ export function buildSessionEndHookPayload(params: {
       nextSessionId: params.nextSessionId,
       nextSessionKey: params.nextSessionKey,
     },
-    context: buildSessionHookContext({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-    }),
+    context,
   };
+}
+
+export function emitReplySessionEndHook(params: {
+  hookRunner: HookRunner;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  storePath: string;
+  reason?: PluginHookSessionEndReason;
+  sessionFile?: string;
+  transcriptArchived?: boolean;
+  nextSessionId?: string;
+  resetBoundaryId?: string;
+}): void {
+  const endedTranscript = params.resetBoundaryId
+    ? createResetBoundaryTranscriptSource(
+        {
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        },
+        params.resetBoundaryId,
+      )
+    : { available: false as const, reason: "unsupported-source" as const };
+  const payload = buildSessionEndHookPayload({ ...params, endedTranscript });
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await params.hookRunner.runSessionEnd(payload.event, payload.context);
+  }, "hooks:session-end").catch(() => {});
 }

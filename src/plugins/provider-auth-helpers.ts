@@ -1,4 +1,3 @@
-// Builds provider auth credentials from config and plugin metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -21,7 +20,7 @@ import {
 } from "../config/types.secrets.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
@@ -45,7 +44,7 @@ function buildEnvSecretRef(id: string): SecretRef {
 }
 
 function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
-  const envVars = getProviderEnvVars(provider, {
+  const envVars = getProviderEnvVarsCore(provider, {
     ...(config ? { config } : {}),
     includeUntrustedWorkspacePlugins: false,
   });
@@ -104,18 +103,10 @@ export function buildApiKeyCredential(
   metadata?: Record<string, string>;
 } {
   const secretInput = resolveApiKeySecretInput(provider, input, options);
-  if (typeof secretInput === "string") {
-    return {
-      type: "api_key",
-      provider,
-      key: secretInput,
-      ...(metadata ? { metadata } : {}),
-    };
-  }
   return {
     type: "api_key",
     provider,
-    keyRef: secretInput,
+    ...(typeof secretInput === "string" ? { key: secretInput } : { keyRef: secretInput }),
     ...(metadata ? { metadata } : {}),
   };
 }
@@ -304,16 +295,12 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => path.join(agentsRoot, entry.name, "agent"));
 
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const dir of [normalized, ...discovered]) {
-    const real = safeRealpathSync(path.resolve(dir));
-    if (real && !seen.has(real)) {
-      seen.add(real);
-      result.push(real);
-    }
-  }
-  return result;
+  return uniqueStrings(
+    [normalized, ...discovered].flatMap((dir) => {
+      const real = safeRealpathSync(path.resolve(dir));
+      return real ? [real] : [];
+    }),
+  );
 }
 
 export async function writeOAuthCredentials(

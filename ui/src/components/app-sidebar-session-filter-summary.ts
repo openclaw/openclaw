@@ -3,6 +3,7 @@ import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile
 import { t } from "../i18n/index.ts";
 import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { icons } from "./icons.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 import { renderSessionOwnerAvatar, sessionSelfOwner } from "./session-owner-chip.ts";
 
 /**
@@ -11,7 +12,7 @@ import { renderSessionOwnerAvatar, sessionSelfOwner } from "./session-owner-chip
  * filters) turns into the clear icon on hover so the row spends no width on a
  * second affordance.
  */
-export function renderSessionFilterSummary(host: SessionListHost) {
+function renderSessionFilterSummary(host: SessionListHost) {
   const ownerId = host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null;
   const owner = ownerId
     ? host.sessionOwnerOptions.find((option) => option.id === ownerId)
@@ -27,11 +28,13 @@ export function renderSessionFilterSummary(host: SessionListHost) {
   const parts = [
     ...(ownerId ? [owner?.label ?? ownerId] : []),
     ...(host.sessionInvolvingMeFilterActive ? [t("sessionsView.involvingMe")] : []),
-    ...(host.sessionsStatusFilter === "archived"
-      ? [t("sessionsView.archived")]
-      : host.sessionsStatusFilter === "all"
-        ? [t("sessionsView.all")]
-        : []),
+    ...(host.sessionsStatusFilter === "snoozed"
+      ? [t("sessionsView.snoozed")]
+      : host.sessionsStatusFilter === "archived"
+        ? [t("sessionsView.archived")]
+        : host.sessionsStatusFilter === "all"
+          ? [t("sessionsView.all")]
+          : []),
   ];
   const summaryText = parts.join(" · ");
   const showAll = t("chat.sidebar.showAllSessions");
@@ -66,26 +69,31 @@ export function renderSessionFilterSummary(host: SessionListHost) {
   </button>`;
 }
 
+type SessionFilterHost = Pick<
+  SessionListHost,
+  "sessionOwnerFilterActive" | "sessionInvolvingMeFilterActive" | "sessionsStatusFilter"
+>;
+
+/** Only Owners and Status filter sessions; the other panel rows are display choices. */
+export function countSidebarSessionFilters(host: SessionFilterHost) {
+  return (
+    Number(host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive) +
+    Number(host.sessionsStatusFilter !== "active")
+  );
+}
+
 export function renderSidebarSessionFilter(
-  host: Pick<
-    SessionListHost,
-    | "sidebarMenus"
-    | "sessionOwnerFilterActive"
-    | "sessionInvolvingMeFilterActive"
-    | "sessionsStatusFilter"
-  >,
+  host: SessionFilterHost & Pick<SessionListHost, "sidebarMenus">,
   className: string,
 ) {
-  const filtered =
-    host.sessionOwnerFilterActive ||
-    host.sessionInvolvingMeFilterActive ||
-    host.sessionsStatusFilter !== "active";
+  const count = countSidebarSessionFilters(host);
   return html`<button
     type="button"
-    class="${className} sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
+    class="${className} sidebar-session-sort ${count > 0 ? "sidebar-session-sort--filtered" : ""}"
     title=${t("chat.sidebar.sortSessions")}
     aria-label=${t("chat.sidebar.sortSessions")}
-    aria-haspopup="menu"
+    aria-description=${count > 0 ? t("chat.sidebar.activeFilterCount", { count: String(count) }) : nothing}
+    aria-haspopup="dialog"
     aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
     @click=${(event: MouseEvent) => {
       if (event.currentTarget instanceof HTMLElement) {
@@ -95,4 +103,71 @@ export function renderSidebarSessionFilter(
   >
     ${icons.listFilter}
   </button>`;
+}
+
+export function renderSessionListToolbar(host: SessionListHost) {
+  const newSessionAccess = host.readNewSessionAccess();
+  const filtered =
+    host.sessionOwnerFilterActive ||
+    host.sessionInvolvingMeFilterActive ||
+    host.sessionsStatusFilter !== "active";
+  return html`
+    <div class="sidebar-session-toolbar">
+      <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
+      ${filtered ? renderSessionFilterSummary(host) : nothing}
+      ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
+      ${renderNewSessionLink({
+        basePath: host.basePath,
+        agentId: host.expandedAgentId(),
+        className: "sidebar-session-toolbar__button sidebar-new-session",
+        label: t("agentChip.newConversation"),
+        showShortcut: true,
+        disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+      })}
+    </div>
+  `;
+}
+
+export function renderSessionMutationError(host: Pick<SessionListHost, "sessionData">) {
+  return host.sessionData.sessionMutationError
+    ? html`
+        <div
+          class="sidebar-session-error callout danger callout--dismissible"
+          role="alert"
+          data-sidebar-session-error
+        >
+          <span class="callout__content">${host.sessionData.sessionMutationError}</span>
+          <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
+            <button
+              class="callout__dismiss"
+              type="button"
+              @click=${() => host.sessionData.dismissSessionMutationError()}
+              aria-label=${t("chat.actions.dismissError")}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      `
+    : nothing;
+}
+
+/** Each list supplies settlement from its own request owner, not its sibling's cache. */
+export function renderPersonalSessionEmpty(
+  host: Pick<
+    SessionListHost,
+    "sessionsStatusFilter" | "sessionOwnerFilterActive" | "sessionInvolvingMeFilterActive"
+  >,
+  empty: boolean,
+  settled: boolean,
+) {
+  return empty &&
+    settled &&
+    host.sessionsStatusFilter === "active" &&
+    (host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive)
+    ? html`<span class="sidebar-session-empty-hint"
+        >${t("chat.sidebar.noActiveSessionsForFilter")}</span
+      >`
+    : nothing;
 }

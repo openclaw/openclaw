@@ -132,20 +132,17 @@ export function normalizeCompatibilityConfigValues(
       "The GitHub Copilot discovery switch was retired and has been removed. Configured Copilot access now refreshes its model list automatically. Use the model allow list (agents.defaults.modelPolicy.allow) to hide Copilot models; it does not stop discovery requests.",
     );
   }
-  let contextBudgetConfig = copilotConfig;
-  let contextBudgetWarnings: string[];
-  if (options.sourceConfigBeforeMigrations === undefined) {
-    const migration = migrateLegacyContextBudgetConfig(copilotConfig);
-    contextBudgetConfig = migration.config;
-    changes.push(...migration.changes.map(({ message }) => message));
-    contextBudgetWarnings = migration.warnings.map(({ message }) => message);
-  } else {
-    const migration = migrateLegacyContextBudgetConfig(options.sourceConfigBeforeMigrations);
-    changes.push(...migration.changes.map(({ message }) => message));
-    contextBudgetWarnings = migration.warnings.map(({ message }) => message);
-  }
+  const contextBudget =
+    options.sourceConfigBeforeMigrations === undefined
+      ? migrateLegacyContextBudgetConfig(copilotConfig)
+      : {
+          ...migrateLegacyContextBudgetConfig(options.sourceConfigBeforeMigrations),
+          config: copilotConfig,
+        };
+  changes.push(...contextBudget.changes.map(({ message }) => message));
+  const contextBudgetWarnings = contextBudget.warnings.map(({ message }) => message);
   const reservedMcpServerNames = migrateReservedMcpServerNames(
-    contextBudgetConfig,
+    contextBudget.config,
     options.sourceRaw,
   );
   changes.push(...reservedMcpServerNames.changes);
@@ -165,11 +162,11 @@ export function normalizeCompatibilityConfigValues(
     options.blockedModelIdentities,
   );
   const tuningCandidate = structuredClone(next);
-  if (stripRetiredTuningKnobs(tuningCandidate)) {
+  if (stripRetiredTuningKnobs(tuningCandidate, changes)) {
     next = tuningCandidate;
-    changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
   }
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  contextBudgetWarnings.push(...(channelMigrations.warnings ?? []));
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);

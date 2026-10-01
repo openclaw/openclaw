@@ -1,4 +1,3 @@
-// Matrix plugin module implements sync lifecycle behavior.
 import type { MatrixClient } from "../sdk.js";
 import { isMatrixTerminalSyncState, type MatrixSyncState } from "../sync-state.js";
 import type { MatrixMonitorStatusController } from "./status.js";
@@ -10,9 +9,6 @@ function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Erro
   const message = typeof error === "string" && error.trim() ? error.trim() : undefined;
   if (state === "STOPPED") {
     return new Error(message ?? "Matrix sync stopped unexpectedly");
-  }
-  if (state === "ERROR") {
-    return new Error(message ?? "Matrix sync entered ERROR unexpectedly");
   }
   return new Error(message ?? `Matrix sync entered ${state} unexpectedly`);
 }

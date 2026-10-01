@@ -75,7 +75,10 @@ export function resolveFastModeForElapsed(params: {
   const fastAutoOnSeconds =
     normalizeFastModeAutoOnSeconds(params.fastAutoOnSeconds) ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
   const thresholdMs = fastAutoOnSeconds * 1000;
-  const enabled = params.mode === "auto" ? elapsedMs <= thresholdMs : params.mode === true;
+  const enabled =
+    params.mode === "auto"
+      ? elapsedMs <= thresholdMs
+      : params.mode === true || params.mode === "ultrafast";
   const elapsedSeconds = Math.floor(elapsedMs / 1000);
   return {
     mode: params.mode,
@@ -98,8 +101,17 @@ export function formatFastModeAutoProgressText(params: {
   return `💨Fast: auto-off(${params.elapsedSeconds}s>=${fastAutoOnSeconds}s)`;
 }
 
-export function formatFastModeValue(mode: FastMode | undefined): "auto" | "on" | "off" {
-  return mode === "auto" ? "auto" : mode === true ? "on" : "off";
+export function formatFastModeValue(
+  mode: FastMode | undefined,
+): "auto" | "ultrafast" | "on" | "off" {
+  return mode === "auto" || mode === "ultrafast" ? mode : mode === true ? "on" : "off";
+}
+
+export function formatFastModeConfirmation(mode: FastMode | undefined): string {
+  if (mode === "ultrafast") {
+    return "Ultrafast mode enabled.";
+  }
+  return mode === "auto" ? "Fast mode set to auto." : `Fast mode ${mode ? "enabled" : "disabled"}.`;
 }
 
 export function formatFastModeAutoLabel(params?: { fastAutoOnSeconds?: number }): string {
@@ -119,7 +131,7 @@ export function formatFastModeStatusValue(params: {
 }
 
 export function formatFastModeCommandOptions(params?: { fastAutoOnSeconds?: number }): string {
-  return `on, off, ${formatFastModeAutoLabel({
+  return `on, off, ultrafast, ${formatFastModeAutoLabel({
     fastAutoOnSeconds: params?.fastAutoOnSeconds,
   })}, default, status`;
 }

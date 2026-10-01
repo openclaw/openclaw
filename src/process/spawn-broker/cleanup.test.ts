@@ -4,7 +4,9 @@ import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { createSpawnBrokerHost } from "./host.js";
 
-describe.skipIf(process.platform === "win32")("spawn broker forced shutdown", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker forced shutdown", () => {
   it("retains child cleanup when a stopped broker requires forced shutdown", async () => {
     const host = createSpawnBrokerHost();
     let childPid: number | undefined;

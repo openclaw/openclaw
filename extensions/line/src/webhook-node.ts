@@ -1,7 +1,7 @@
-// Line plugin module implements webhook node behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveSingleWebhookTarget } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -15,7 +15,7 @@ const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
-export async function readLineWebhookRequestBody(
+async function readLineWebhookRequestBody(
   req: IncomingMessage,
   maxBytes = LINE_WEBHOOK_MAX_BODY_BYTES,
   timeoutMs = LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
@@ -37,7 +37,7 @@ type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) =
  * and only the owner can still write: responding directly would race the teardown and LINE
  * would see a reset instead of the status.
  */
-export async function rejectLineWebhookRequest(
+async function rejectLineWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
   error: unknown,
@@ -58,18 +58,37 @@ export async function rejectLineWebhookRequest(
   return true;
 }
 
-export function createLineNodeWebhookHandler(params: {
+type LineWebhookTarget = {
   channelSecret: string;
   bot: Pick<ReturnType<typeof createLineBot>, "handleWebhook">;
+};
+
+function sendLineWebhookJson(
+  res: ServerResponse,
+  statusCode: number,
+  body: { error: string } | { status: "ok" },
+): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(body));
+}
+
+export function createLineNodeWebhookHandler(params: {
+  getTargets: () => readonly LineWebhookTarget[];
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
-  onRequestAuthenticated?: () => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
   const readBody = params.readBody ?? readLineWebhookRequestBody;
 
   return async (req: IncomingMessage, res: ServerResponse) => {
+    const targets = params.getTargets();
+    if (req.method !== "POST" && targets.length === 0) {
+      res.statusCode = 404;
+      res.end("Not Found");
+      return;
+    }
     if (req.method === "GET" || req.method === "HEAD") {
       if (req.method === "HEAD") {
         res.statusCode = 204;
@@ -83,10 +102,8 @@ export function createLineNodeWebhookHandler(params: {
     }
 
     if (req.method !== "POST") {
-      res.statusCode = 405;
       res.setHeader("Allow", "GET, HEAD, POST");
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Method Not Allowed" }));
+      sendLineWebhookJson(res, 405, { error: "Method Not Allowed" });
       return;
     }
 
@@ -101,9 +118,7 @@ export function createLineNodeWebhookHandler(params: {
 
       if (!signature) {
         logVerbose("line: webhook missing X-Line-Signature header");
-        res.statusCode = 400;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
+        sendLineWebhookJson(res, 400, { error: "Missing X-Line-Signature header" });
         return;
       }
 
@@ -113,40 +128,43 @@ export function createLineNodeWebhookHandler(params: {
         LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
       );
 
-      if (!validateLineSignature(rawBody, signature, params.channelSecret)) {
+      const match = resolveSingleWebhookTarget(targets, (target) =>
+        validateLineSignature(rawBody, signature, target.channelSecret),
+      );
+      if (match.kind === "none") {
         logVerbose("line: webhook signature validation failed");
-        res.statusCode = 401;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Invalid signature" }));
+        sendLineWebhookJson(res, 401, { error: "Invalid signature" });
+        return;
+      }
+
+      if (match.kind === "ambiguous") {
+        logVerbose("line: webhook signature matched multiple accounts");
+        sendLineWebhookJson(res, 401, { error: "Ambiguous webhook target" });
         return;
       }
 
       const body = parseLineWebhookBody(rawBody);
 
       if (!body) {
-        res.statusCode = 400;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Invalid webhook payload" }));
+        sendLineWebhookJson(res, 400, { error: "Invalid webhook payload" });
         return;
       }
 
-      params.onRequestAuthenticated?.();
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        await params.bot.handleWebhook(body);
+        // Only the admission owner can distinguish queued events from ignored standby deliveries.
+        if ((await match.target.bot.handleWebhook(body)) === "durable") {
+          res.setHeader("x-openclaw-delivery-accepted", "durable");
+        }
       }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ status: "ok" }));
+      sendLineWebhookJson(res, 200, { status: "ok" });
     } catch (err) {
       if (await rejectLineWebhookRequest(req, res, err)) {
         return;
       }
       params.runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
       if (!res.headersSent) {
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Internal server error" }));
+        sendLineWebhookJson(res, 500, { error: "Internal server error" });
       }
     }
   };

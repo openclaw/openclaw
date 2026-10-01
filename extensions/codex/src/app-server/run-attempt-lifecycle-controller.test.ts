@@ -71,7 +71,7 @@ function createTerminalReleaseHarness() {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "interrupted" },
+          turn: { id: "turn-1", status: "interrupted", items: [] },
         },
       });
     }
@@ -188,7 +188,7 @@ describe("Codex terminal dynamic-tool release", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-peer",
-          turn: { id: "peer-turn", status: "completed" },
+          turn: { id: "peer-turn", status: "completed", items: [] },
         },
       });
       await yieldImmediate();
@@ -197,7 +197,7 @@ describe("Codex terminal dynamic-tool release", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", status: "interrupted" },
+          turn: { id: "turn-1", status: "interrupted", items: [] },
         },
       });
       await expect(nativeCleanup).resolves.toBe(true);
@@ -213,6 +213,9 @@ describe("Codex terminal dynamic-tool release", () => {
     const harness = createTerminalReleaseHarness();
     // The RPC receives a remaining budget; keep this exact-value assertion on one clock tick.
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    // The deadline now reads performance.now(); alias it to the mocked wall clock so
+    // the exact-value timeoutMs assertion stays on a single tick.
+    const monotonic = vi.spyOn(performance, "now").mockReturnValue(1_000);
     try {
       harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
       await new Promise<void>((resolve) => {
@@ -240,6 +243,7 @@ describe("Codex terminal dynamic-tool release", () => {
     } finally {
       harness.completeTurn();
       await yieldImmediate();
+      monotonic.mockRestore();
       clock.mockRestore();
     }
   });

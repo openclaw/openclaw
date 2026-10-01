@@ -1,4 +1,3 @@
-// Provides schema hint metadata for config docs and UI labels.
 import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
@@ -7,6 +6,7 @@ import type { z } from "zod";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
+import { INHERITED_DEFAULT_PLACEHOLDERS } from "./schema.inherited-defaults.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyConfigTierHints } from "./schema.tiers.js";
 import { walkConfigSchema } from "./schema.walk.js";
@@ -99,7 +99,10 @@ const SECTION_DOCS_URLS = {
 } as const satisfies Record<string, string>;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "plugins.entries.*.hooks.timeoutMs": "Automatic (per hook)",
+  "plugins.entries.*.hooks.timeouts.*": "Automatic (plugin or hook default)",
   "gateway.cliAgents.enabled": "Default (enabled)",
+  "nodeHost.autoUpdate.enabled": "Default (enabled)",
   "tools.loopDetection.enabled": "Default (post-compaction protection only)",
   "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
@@ -111,28 +114,18 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
-  "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.entries.*.identity.avatar": "avatars/openclaw.png",
 };
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
-
-function isKernelOwnedChannelHintPath(path: string): boolean {
-  if (path === "channels") {
-    return true;
-  }
-  const channelKey = path.startsWith(CHANNEL_NAMESPACE_PREFIX)
-    ? path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0]
-    : undefined;
-  return channelKey !== undefined && isKernelOwnedChannelConfigKey(channelKey);
-}
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
 function isPluginOwnedChannelHintPath(path: string): boolean {
   if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
     return false;
   }
-  return !isKernelOwnedChannelHintPath(path);
+  const channelKey = path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0];
+  return channelKey === undefined || !isKernelOwnedChannelConfigKey(channelKey);
 }
 
 /** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */
@@ -152,6 +145,7 @@ export function buildBaseHints(): ConfigUiHints {
     [FIELD_LABELS, "label"],
     [FIELD_HELP, "help"],
     [FIELD_PLACEHOLDERS, "placeholder"],
+    [INHERITED_DEFAULT_PLACEHOLDERS, "placeholder"],
   ] as const) {
     for (const [path, value] of Object.entries(metadata)) {
       if (!isPluginOwnedChannelHintPath(path)) {

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { defineToolOutputSchema } from "./schema/tool-output-schema.js";
 
@@ -111,6 +112,20 @@ const ProcessControlOutputSchema = Type.Union([
   ProcessFailureSchema,
   Type.Object({ status: Type.Literal("completed"), name: Type.Optional(Type.String()) }, closed),
 ]);
+
+/** Poll is the only process action that returns an aggregate for one session. */
+export function isProcessPollResultDetails(value: unknown): boolean {
+  const details = asOptionalRecord(value);
+  return Boolean(
+    details &&
+    typeof details.sessionId === "string" &&
+    (details.status === "running" || details.status === "completed") &&
+    (typeof details.aggregated === "string" ||
+      (details.persistedDetailsTruncated === true &&
+        Array.isArray(details.originalDetailKeys) &&
+        details.originalDetailKeys.includes("aggregated"))),
+  );
+}
 
 /** Structured process details, shared by eager and lazy tool construction. */
 export const ProcessToolOutputSchema = defineToolOutputSchema({

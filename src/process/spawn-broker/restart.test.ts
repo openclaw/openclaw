@@ -1,6 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
@@ -10,7 +9,9 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("spawn broker recovery budget", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker recovery budget", () => {
   it("recovers after more than five independently healthy generations", async () => {
     let onRecovered: ((pid: number) => void) | undefined;
     const host = createSpawnBrokerHost({ onReady: (pid) => onRecovered?.(pid) });
@@ -80,7 +81,12 @@ describe.skipIf(process.platform === "win32")("spawn broker recovery budget", ()
         { timeout: 7000 },
       );
       await expect(host.ready()).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
-      await delay(2500);
+      await host.waitForCleanup();
+      // A generation failure can reject while another recovery is pending.
+      // Exhaustion also rejects the replacement readiness promise.
+      await expect(
+        withTestTimeout(host.ready(), 2500, "Broker recovery budget did not settle"),
+      ).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
       expect(await starts()).toBe(6);
     } finally {
       await host.close();

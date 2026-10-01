@@ -3,8 +3,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasLegacyAcpMigrationProvenanceColumn } from "../../state/openclaw-agent-legacy-acp-schema.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../../state/openclaw-agent-progress-card-schema.js";
@@ -18,6 +20,8 @@ import { deleteSessionPendingInputs } from "./session-accessor.sqlite-pending-in
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { mergeParticipantAggregate } from "./session-participant-identity.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+
+type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
 /** Logical-node facts survive history cleanup and are fenced at final entry deletion. */
 export function readSessionNodeArtifactFingerprint(
@@ -59,6 +63,14 @@ export function readSessionNodeArtifactFingerprint(
       .orderBy("state")
       .orderBy("created_at")
       .orderBy("id"),
+    session_reactions: db
+      .selectFrom("session_reactions")
+      .selectAll()
+      .where("session_key", "=", sessionKey)
+      .orderBy("session_id")
+      .orderBy("message_id")
+      .orderBy("emoji")
+      .orderBy("identity_id"),
   };
   for (const [table, query] of Object.entries(inventories)) {
     fingerprint.update(table).update("\n");
@@ -118,6 +130,12 @@ export function clearSessionCollaborationForKey(
     executeSqliteQuerySync(
       database.db,
       db.deleteFrom("session_suggestions").where("session_key", "=", sessionKey),
+    );
+  }
+  if (options.clearSuggestions !== false && presentTables.has("session_reactions")) {
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_reactions").where("session_key", "=", sessionKey),
     );
   }
 }
@@ -281,6 +299,24 @@ export function copySessionNodeArtifactsForRepair(
       }
     }
   }
+  if (sourceTables.has("session_reactions") && destinationTables.has("session_reactions")) {
+    for (const reaction of executeSqliteQuerySync(
+      source.db,
+      sourceDb.selectFrom("session_reactions").selectAll().where("session_key", "in", keys),
+    ).rows) {
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .insertInto("session_reactions")
+          .values({ ...reaction, session_key: canonicalKey })
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_key", "session_id", "message_id", "emoji", "identity_id"])
+              .doNothing(),
+          ),
+      );
+    }
+  }
   if (sourceTables.has("heartbeat_outcomes") && destinationTables.has("heartbeat_outcomes")) {
     for (const heartbeat of executeSqliteQuerySync(
       source.db,
@@ -402,6 +438,21 @@ export function deleteSessionDeliveryArtifacts(
       (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key.trim())),
     );
   }
+  const cache = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    cache
+      .deleteFrom("cache_entries")
+      .where("scope", "=", "conversation-progress")
+      .where(
+        "key",
+        "in",
+        db
+          .selectFrom("conversation_deliveries")
+          .select("operation_id")
+          .where("source_session_key", "in", sessionKeys),
+      ),
+  );
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("conversation_deliveries").where("source_session_key", "in", sessionKeys),
@@ -431,6 +482,7 @@ export function deleteSessionNodeArtifacts(
     "session_progress_cards",
     "session_members",
     "session_suggestions",
+    "session_reactions",
   ] as const) {
     if (!presentTables.has(table)) {
       continue;
@@ -456,6 +508,7 @@ function readSessionNodeArtifactTables(database: Pick<OpenClawAgentDatabase, "db
           "session_participants",
           "session_progress_cards",
           "session_suggestions",
+          "session_reactions",
         ]),
     ).rows.flatMap((row) => (row.name ? [row.name] : [])),
   );

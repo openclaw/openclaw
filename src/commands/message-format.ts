@@ -1,4 +1,3 @@
-/** Human-readable formatter for `openclaw message` action results. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getTerminalTableWidth,
@@ -192,10 +191,6 @@ function renderReactions(payload: unknown, opts: FormatOpts): string | null {
   }).trimEnd();
 }
 
-/**
- * Emit a muted hint when the provider payload signals more results are available
- * beyond the current page (e.g. hasMore, nextBatch, @odata.nextLink).
- */
 function renderPaginationHint(payload: unknown, muted: (text: string) => string): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -237,14 +232,16 @@ export function formatMessageCliText(
     const rows = results.map((entry) => ({
       Channel: resolveChannelLabel(entry.channel),
       Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
-      Status: entry.ok ? "ok" : "error",
+      Status: entry.ok ? "ok" : entry.attempted === false ? "not attempted" : "error",
       Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
     }));
     const okCount = results.filter((entry) => entry.ok).length;
+    const notAttemptedCount = results.filter((entry) => entry.attempted === false).length;
+    const failedCount = results.length - okCount - notAttemptedCount;
     const total = results.length;
     const successful = outcome.ok;
     const headingLine = (successful ? ok : fail)(
-      `${successful ? "✅ Broadcast complete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${total - okCount} failed)`,
+      `${successful ? "✅ Broadcast complete" : notAttemptedCount ? "❌ Broadcast incomplete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${failedCount} failed${notAttemptedCount ? `, ${notAttemptedCount} not attempted` : ""})`,
     );
     return [
       headingLine,
@@ -324,33 +321,25 @@ export function formatMessageCliText(
   // Channel actions share the generic plugin-action payload shape, so format
   // known read/reaction shapes first and fall back to a compact object table.
   const payload = result.payload;
-  const lines: string[] = [];
-
   if (result.action === "react") {
     const added = (payload as { added?: unknown }).added;
     const removed = (payload as { removed?: unknown }).removed;
     if (typeof added === "string" && added.trim()) {
-      lines.push(ok(`✅ Reaction added: ${added.trim()}`));
-      return lines;
+      return [ok(`✅ Reaction added: ${added.trim()}`)];
     }
     if (typeof removed === "string" && removed.trim()) {
-      lines.push(ok(`✅ Reaction removed: ${removed.trim()}`));
-      return lines;
+      return [ok(`✅ Reaction removed: ${removed.trim()}`)];
     }
     if (Array.isArray(removed)) {
       const list = normalizeStringEntries(removed).join(", ");
-      lines.push(ok(`✅ Reactions removed${list ? `: ${list}` : ""}`));
-      return lines;
+      return [ok(`✅ Reactions removed${list ? `: ${list}` : ""}`)];
     }
-    lines.push(ok("✅ Reaction updated."));
-    return lines;
+    return [ok("✅ Reaction updated.")];
   }
 
   const reactionsTable = renderReactions(payload, formatOpts);
   if (reactionsTable !== null && result.action === "reactions") {
-    lines.push(heading("Reactions"));
-    lines.push(reactionsTable);
-    return lines;
+    return [heading("Reactions"), reactionsTable];
   }
 
   if (result.action === "read" || result.action === "list-pins") {
@@ -361,8 +350,7 @@ export function formatMessageCliText(
         : undefined;
     if (Array.isArray(messages)) {
       const table = renderMessageList(messages, formatOpts, read ? "No messages." : "No pins.");
-      lines.push(heading(read ? "Messages" : "Pinned messages"));
-      lines.push(table);
+      const lines = [heading(read ? "Messages" : "Pinned messages"), table];
       const hint = renderPaginationHint(payload, muted);
       if (hint) {
         lines.push(hint);
@@ -375,8 +363,7 @@ export function formatMessageCliText(
     const results = (payload as { results?: unknown }).results;
     const list = extractDiscordSearchResultsMessages(results);
     if (list) {
-      lines.push(heading("Search results"));
-      lines.push(renderMessageList(list, formatOpts, "No results."));
+      const lines = [heading("Search results"), renderMessageList(list, formatOpts, "No results.")];
       // Discord's approximate result count cannot prove another page exists.
       const hint = renderPaginationHint(payload, muted) ?? renderPaginationHint(results, muted);
       if (hint) {
@@ -386,12 +373,11 @@ export function formatMessageCliText(
     }
   }
 
-  // Generic success + compact details table.
-  lines.push(ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`));
-  const summary = renderObjectSummary(payload, formatOpts);
-  lines.push("");
-  lines.push(summary);
-  lines.push("");
-  lines.push(muted("Tip: use --json for full output."));
-  return lines;
+  return [
+    ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`),
+    "",
+    renderObjectSummary(payload, formatOpts),
+    "",
+    muted("Tip: use --json for full output."),
+  ];
 }

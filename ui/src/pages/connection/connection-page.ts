@@ -1,5 +1,3 @@
-// Settings page owning this browser's Gateway connection draft (URL, credential,
-// default session) and the live handshake summary.
 import "../../styles/connection.css";
 import { consume } from "@lit/context";
 import { html } from "lit";
@@ -12,11 +10,16 @@ import {
   resolveGatewayCredentialsForUrlEdit,
   type UiSettings,
 } from "../../app/settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { formatGatewayHost } from "../../lib/gateway-host.ts";
+import { readSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -31,7 +34,6 @@ import {
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "./system-info.ts";
 import { renderConnection } from "./view.ts";
 
-const DIAGNOSTICS_POLL_INTERVAL_MS = 5_000;
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
 
 export class ConnectionPage extends OpenClawLightDomElement {
@@ -58,29 +60,22 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   private readonly diagnosticsPolling = new PollController(
     this,
-    DIAGNOSTICS_POLL_INTERVAL_MS,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
     () => this.refreshDiagnostics(),
     false,
   );
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    invalidateRequests: () => {
-      this.systemInfoLoading = false;
-      this.resetDiagnostics();
-    },
+    invalidateRequests: () => this.resetDiagnostics(),
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
     onPageActivation: () => this.syncDiagnosticsPolling(),
   });
 
   override disconnectedCallback() {
     this.resetDiagnostics();
-    this.resetSensitiveUi();
-    super.disconnectedCallback();
-  }
-
-  private resetSensitiveUi() {
     this.gatewaySecretVisible = false;
+    super.disconnectedCallback();
   }
 
   private handleGatewaySnapshot({
@@ -103,7 +98,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
     } else if (snapshot.phase !== "connected") {
-      this.resetSensitiveUi();
+      this.gatewaySecretVisible = false;
       this.systemInfo = null;
     }
     if (snapshot.phase === "connected" && snapshot.hello) {
@@ -193,7 +188,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
         "last-heartbeat",
         {},
         {
-          timeoutMs: DIAGNOSTICS_POLL_INTERVAL_MS,
+          timeoutMs: SYSTEM_INFO_POLL_INTERVAL_MS,
           signal: request.signal,
         },
       );
@@ -240,25 +235,25 @@ export class ConnectionPage extends OpenClawLightDomElement {
       this.context.gateway === gatewaySource &&
       this.gateway.isCurrent(scope);
     try {
-      const response = await scope.client.request<SystemInfoResult>(
-        "system.info",
-        {},
-        {
-          timeoutMs: DIAGNOSTICS_POLL_INTERVAL_MS,
-          signal: request.signal,
-        },
-      );
+      const sample = await readSystemInfo(gatewaySource, request.signal);
       if (!isCurrent()) {
         return;
       }
-      this.systemInfo = response;
-      this.statusHistory = [
-        ...this.statusHistory.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
-        {
-          at: Date.now(),
-          status: { eventLoop: response.eventLoop, processMemory: response.processMemory },
-        },
-      ];
+      this.systemInfo = sample.value;
+      this.diagnosticsPolling.stop();
+      this.diagnosticsPolling.start();
+      if (this.statusHistory.at(-1)?.at !== sample.at) {
+        this.statusHistory = [
+          ...this.statusHistory.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
+          {
+            at: sample.at,
+            status: {
+              eventLoop: sample.value.eventLoop,
+              processMemory: sample.value.processMemory,
+            },
+          },
+        ];
+      }
       this.statusFailed = false;
     } catch (error) {
       if (!isCurrent()) {
@@ -281,7 +276,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     const { gatewayUrl, token, password } = this.context.gateway.connection;
     this.settings = { ...this.settings, gatewayUrl, token };
     this.password = password;
-    this.resetSensitiveUi();
+    this.gatewaySecretVisible = false;
   }
 
   private resetSessionDraft() {
@@ -297,12 +292,27 @@ export class ConnectionPage extends OpenClawLightDomElement {
     this.sessionSaved = true;
   }
 
-  private connect() {
-    this.context.gateway.connect({
-      gatewayUrl: this.settings.gatewayUrl,
-      token: this.settings.token,
-      password: this.password,
+  private async forgetDevice() {
+    const gateway = this.context.gateway;
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    const confirmed = await showConfirmDialog({
+      title: t("connection.browser.confirmTitle"),
+      message: t("connection.browser.confirmMessage", {
+        gateway: formatGatewayHost(gatewayUrl),
+      }),
+      confirmLabel: t("connection.browser.confirmLabel"),
+      danger: true,
     });
+    // A confirmation for one Gateway must never reset a newly selected Gateway.
+    if (
+      confirmed &&
+      this.isConnected &&
+      this.context.gateway === gateway &&
+      gateway.connection.gatewayUrl === gatewayUrl
+    ) {
+      gateway.forgetDeviceToken?.();
+      this.requestUpdate();
+    }
   }
 
   private updateConnection(patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) {
@@ -345,6 +355,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
       sessionDirty: this.settings.sessionKey.trim() !== gateway.sessionKey,
       sessionSaved: this.sessionSaved,
       showGatewaySecret: this.gatewaySecretVisible,
+      canForgetDevice: this.context.gateway.hasStoredDeviceToken?.() ?? false,
+      onForgetDevice: () => void this.forgetDevice(),
       onConnectionChange: (patch) => this.updateConnection(patch),
       onSecretChange: (token) => {
         this.password = "";
@@ -360,16 +372,21 @@ export class ConnectionPage extends OpenClawLightDomElement {
       onToggleGatewaySecretVisibility: () => {
         this.gatewaySecretVisible = !this.gatewaySecretVisible;
       },
-      onConnect: () => this.connect(),
+      onConnect: () =>
+        this.context.gateway.connect({
+          gatewayUrl: this.settings.gatewayUrl,
+          token: this.settings.token,
+          password: this.password,
+        }),
       onDiscardConnection: () => this.resetConnectionDraft(),
       onReconnect: () => this.context.gateway.connect(),
       onSaveSession: () => this.saveSession(),
       onDiscardSession: () => this.resetSessionDraft(),
     });
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
-          <div class="page-title">${titleForRoute("connection")}</div>
+          <h1 class="page-title">${titleForRoute("connection")}</h1>
           <div class="page-subtitle">
             ${subtitleForRoute("connection")} ${renderLearnMoreLink(CONNECTION_DOCS_URL)}
           </div>

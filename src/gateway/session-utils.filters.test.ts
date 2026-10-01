@@ -1,20 +1,29 @@
 import { Value } from "typebox/value";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   SessionsListParamsSchema,
   type SessionsListParams,
 } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runSynchronousWork } from "../shared/synchronous-work.js";
+import {
+  requestContext,
+  sessionReadHandlers,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import * as sessionIdentity from "./session-identity-projection.js";
+import { filterSessionEntries } from "./session-list-filters.js";
 import { listSessionFixture } from "./session-list.test-support.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
-import * as titleReader from "./session-transcript-title-reader.js";
+import { prepareSessionRowSelection } from "./session-utils-list.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
   getUserProfileDisplay: vi.fn((id: string) => ({
-    id,
+    id: id === "profile-merged-ada" ? "profile-ada" : id,
     displayName: id,
     hasAvatar: false,
     avatarRevision: "1",
@@ -30,6 +39,78 @@ function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { sessionId: "inventory-session", updatedAt: 1, ...overrides };
 }
 
+it("reuses involvement facts until session replacement or profile publication", () => {
+  const identityProjection = sessionIdentity.createSessionIdentityProjection();
+  const rowContext = { ...buildSessionListRowMetadataContext({ now: 1 }), identityProjection };
+  const profiles = rowContext.userProfileIdentityById;
+  const key = "agent:main:involved";
+  const state = { profiles: { "profile-merged-ada": { hidden: false, updatedAt: 1 } } };
+  const readInvolvement = vi.fn(() => state);
+  const original = entry();
+  Object.defineProperty(original, "profileInvolvement", { get: readInvolvement, enumerable: true });
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    storePath,
+    store: { [key]: original },
+    rowContext,
+  });
+  onTestFinished(() => projection.dispose());
+  const select = (id = "profile-ada") =>
+    runSynchronousWork(
+      filterSessionEntries({
+        ...prepareSessionRowSelection(projection, {}),
+        involvingActorId: id,
+      }),
+    ).entries.map(([sessionKey]) => sessionKey);
+  expect(select()).toEqual([key]);
+  readInvolvement.mockClear();
+  for (let i = 0; i < 3; i++) {
+    expect(select()).toEqual([key]);
+    expect(select("profile-bob")).toEqual([]);
+  }
+  expect(readInvolvement).not.toHaveBeenCalled();
+
+  // Profile publications can move an alias without replacing session metadata.
+  profiles.set("profile-merged-ada", undefined);
+  identityProjection.invalidate();
+  expect(select()).toEqual([]);
+  expect(select("profile-merged-ada")).toEqual([key]);
+  projection.setEntry(key, {
+    ...entry(),
+    profileInvolvement: {
+      key: "inventory-session",
+      profiles: {
+        "profile-merged-ada": { hidden: true, updatedAt: 2 },
+      },
+    },
+  });
+  expect(select("profile-merged-ada")).toEqual([]);
+});
+
+it("expires cached child owners without a session or registry publication", () => {
+  const now = Date.UTC(2026, 8, 27);
+  const key = "agent:main:subagent:child";
+  const parent = "agent:main:dashboard:parent";
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    storePath,
+    store: {
+      [key]: entry({ updatedAt: now, spawnedBy: parent }),
+    },
+  });
+  onTestFinished(() => projection.dispose());
+  const select = (clock: number) =>
+    runSynchronousWork(
+      filterSessionEntries({
+        ...prepareSessionRowSelection(projection, { spawnedBy: parent }, { now: clock }),
+      }),
+    ).entries.map(([sessionKey]) => sessionKey);
+  expect(select(now)).toEqual([key]);
+  expect(select(now + 3_600_000)).toEqual([key]);
+  expect(select(now + 3_600_001)).toEqual([]);
+  expect(select(now)).toEqual([key]);
+});
+
 it("accepts the metadata query contract and rejects mistyped selectors", () => {
   expect(
     Value.Check(SessionsListParamsSchema, {
@@ -37,6 +118,7 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
       workspaceDir: "/workspace/task",
       group: "",
       pinned: false,
+      activityPulseBoundaries: [0, 86_400_000],
       profileRelation: { profileId: "profile-ada", relationship: "involving" },
     }),
   ).toBe(true);
@@ -45,9 +127,245 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
     { workspaceDir: "" },
     { group: false },
     { pinned: "false" },
+    { activityPulseBoundaries: [] },
+    { activityPulseBoundaries: [0] },
+    { activityPulseBoundaries: Array.from({ length: 65 }, (_, index) => index) },
+    { activityPulseBoundaries: [-1, 0] },
+    { activityPulseBoundaries: [0, "1"] },
     { profileRelation: { profileId: "", relationship: "involving" } },
   ]) {
     expect(Value.Check(SessionsListParamsSchema, invalid), JSON.stringify(invalid)).toBe(false);
+  }
+});
+
+it.each([
+  [0, 0],
+  [1, 0],
+  [0, 2, 1],
+])(
+  "rejects non-ascending activity boundaries before reading session rows: %j",
+  async (...activityPulseBoundaries) => {
+    const respond = vi.fn();
+    await sessionReadHandlers["sessions.list"]!({
+      req: { type: "req", id: "pulse-boundaries", method: "sessions.list" },
+      params: { activityPulseBoundaries },
+      context: requestContext(cfg),
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("activityPulseBoundaries: must be strictly ascending"),
+      }),
+    );
+  },
+);
+
+it("aggregates the selected time window after person filtering and before pagination", async () => {
+  const since = Date.UTC(2026, 8, 27);
+  const now = since + 12 * 3_600_000;
+  const activeMinutes = 7 * 24 * 60;
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const person = (id: string) => ({ identity: { type: "profile" as const, id } });
+  const result = await listSessionFixture({
+    cfg,
+    storePath,
+    store: {
+      "agent:main:midnight": entry({
+        lastActivityAt: since,
+        createdAt: now - activeMinutes * 60_000 - 1,
+        participants: [person("profile-ada")],
+      }),
+      "agent:main:morning": entry({
+        lastActivityAt: since + 3_600_000,
+        lastInteractionAt: since + 2 * 3_600_000,
+        createdAt: since,
+        participants: [person("profile-merged-ada"), person("profile-bob")],
+      }),
+      "agent:main:clock-skew": entry({
+        lastActivityAt: since + 25 * 3_600_000,
+        createdAt: since + 24 * 3_600_000,
+        participants: [person("profile-ada")],
+      }),
+      "agent:main:three-days-ago": entry({
+        lastActivityAt: since - 3 * 86_400_000,
+        updatedAt: since + 30 * 3_600_000,
+        createdAt: now - activeMinutes * 60_000,
+        participants: [person("profile-ada"), person("profile-earlier")],
+      }),
+      "agent:main:outside-window": entry({
+        lastActivityAt: now - activeMinutes * 60_000 - 1,
+        participants: [person("profile-ada"), person("profile-excluded")],
+      }),
+      "agent:main:other-person": entry({
+        lastActivityAt: since + 5 * 3_600_000,
+        createdAt: since,
+        participants: [person("profile-carol")],
+      }),
+    },
+    opts: {
+      activityPulseBoundaries: Array.from({ length: 25 }, (_, index) => since + index * 3_600_000),
+      activeMinutes,
+      includePeople: true,
+      involvingProfileId: "profile-ada",
+      sortBy: "activity",
+      limit: 1,
+    },
+  });
+  expect(result.sessions).toHaveLength(1);
+  expect(result.totalCount).toBe(4);
+  expect(result.activityPulse).toEqual({
+    since,
+    until: since + 24 * 3_600_000,
+    buckets: [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    sessions: 4,
+    started: 3,
+    running: 0,
+    people: 3,
+  });
+});
+
+it("buckets nonuniform intervals half-open while counting every filtered running session", () => {
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store: {
+      "agent:main:before": entry({ lastActivityAt: 99 }),
+      "agent:main:first": entry({ lastActivityAt: 100 }),
+      "agent:main:second": entry({ lastActivityAt: 200, createdAt: 0 }),
+      "agent:main:last": entry({ lastActivityAt: 499 }),
+      "agent:main:after": entry({ lastActivityAt: 500 }),
+    },
+  });
+  onTestFinished(projection.dispose);
+  const result = runSynchronousWork(
+    filterSessionEntries({
+      ...prepareSessionRowSelection(projection, { activityPulseBoundaries: [100, 200, 500] }),
+      projectActiveRun: () => ({ active: true }),
+    }),
+  );
+  expect(result.activityPulse).toEqual({
+    since: 100,
+    until: 500,
+    buckets: [1, 2],
+    sessions: 5,
+    running: 5,
+  });
+  const recent = runSynchronousWork(
+    filterSessionEntries({
+      ...prepareSessionRowSelection(
+        projection,
+        { activityPulseBoundaries: [100, 200, 500], activeMinutes: 1 },
+        { now: 500 },
+      ),
+    }),
+  );
+  expect(recent.activityPulse?.started).toBe(1);
+});
+
+it("omits the activity pulse when boundaries are absent", async () => {
+  const result = await listSessionFixture({
+    cfg,
+    storePath,
+    store: { "agent:main:one": entry() },
+    opts: {},
+  });
+  expect(result).not.toHaveProperty("activityPulse");
+});
+
+it("accepts epoch zero and omits unrequested people and all-time started counts", async () => {
+  const result = await listSessionFixture({
+    cfg,
+    storePath,
+    store: {
+      "agent:main:one": entry({
+        createdAt: 0,
+        participants: [{ identity: { type: "profile", id: "profile-ada" } }],
+      }),
+    },
+    opts: { activityPulseBoundaries: [0, 100] },
+  });
+  expect(result.activityPulse).toEqual({
+    since: 0,
+    until: 100,
+    buckets: [1],
+    sessions: 1,
+    running: 0,
+  });
+});
+
+it("keeps system provenance and named conversations distinct in projected lists", async () => {
+  const cases: { key: string; fields: Partial<SessionEntry>; visible: boolean }[] = [
+    {
+      key: "agent:main:system",
+      fields: { createdActor: { type: "system" }, label: "Named probe" },
+      visible: false,
+    },
+    {
+      key: "agent:main:human",
+      fields: { createdVia: "run", createdActor: { type: "human", source: "unknown" } },
+      visible: true,
+    },
+    {
+      key: "agent:main:label",
+      fields: { createdVia: "run", label: "Operator label" },
+      visible: true,
+    },
+    {
+      key: "agent:main:display-name",
+      fields: { createdVia: "internal", displayName: "Operator title" },
+      visible: true,
+    },
+    {
+      key: "agent:main:subject",
+      fields: { createdVia: "run", subject: "Conversation subject" },
+      visible: true,
+    },
+    {
+      key: "agent:main:whitespace",
+      fields: { createdVia: "internal", label: " ", displayName: "\t", subject: "\n" },
+      visible: false,
+    },
+    { key: "agent:main:legacy", fields: {}, visible: true },
+    { key: "agent:main:main", fields: {}, visible: true },
+    {
+      key: "agent:main:main:heartbeat",
+      fields: { heartbeatIsolatedBaseSessionKey: "agent:main:main" },
+      visible: false,
+    },
+    {
+      key: "agent:main:ops:heartbeat",
+      fields: { heartbeatIsolatedBaseSessionKey: "agent:main:ops", label: "Named lane" },
+      visible: true,
+    },
+    { key: "agent:main:alerts:heartbeat", fields: { label: "My heartbeat" }, visible: true },
+    {
+      key: "agent:main:cron:nightly",
+      fields: { createdVia: "internal", createdActor: { type: "system" } },
+      visible: true,
+    },
+  ];
+  const store = Object.fromEntries(
+    cases.map(({ key, fields }, index) => [
+      key,
+      entry({ sessionId: key, updatedAt: cases.length - index, ...fields }),
+    ]),
+  );
+  for (const excludeSystem of [true, false, undefined]) {
+    const result = await listSessionFixture({
+      cfg,
+      storePath,
+      store,
+      opts: { excludeSystem },
+    });
+    const expected = cases
+      .filter(({ visible }) => excludeSystem !== true || visible)
+      .map(({ key }) => key);
+    expect(result.sessions.map((row) => row.key)).toEqual(expected);
+    expect(result.totalCount).toBe(expected.length);
   }
 });
 
@@ -160,6 +478,48 @@ it("preserves visible owner facets for the authenticated involvingMe filter", as
   expect(explicitRelation.owners?.map((owner) => owner.id)).toEqual(["profile-ada"]);
 });
 
+it.each(["viewer", "relation", "both"] as const)(
+  "does not project extra participants when canonical owners satisfy the %s filter",
+  async (filter) => {
+    const participants = vi.spyOn(sessionIdentity, "projectSessionParticipants");
+    const store = Object.fromEntries(
+      Array.from({ length: 32 }, (_, index) => [
+        `agent:main:owned-${index}`,
+        entry({
+          sessionId: `owned-${index}`,
+          updatedAt: index + 1,
+          createdActor: { type: "human", source: "profile", id: "profile-merged-ada" },
+          participants: [{ identity: { type: "profile", id: "profile-bob" } }],
+        }),
+      ]),
+    );
+    const query = { cfg, storePath, store, opts: { limit: 1 } };
+    const all = await listSessionFixture(query);
+    const unfilteredWork = participants.mock.calls.length;
+    participants.mockClear();
+
+    const filtered = await listSessionFixture({
+      ...query,
+      opts: {
+        ...query.opts,
+        ...(filter !== "viewer"
+          ? { profileRelation: { profileId: "profile-ada", relationship: "involving" as const } }
+          : {}),
+      },
+      ...(filter !== "relation" ? { involvingActorId: "profile-ada" } : {}),
+    });
+
+    expect(filtered.sessions.map((row) => row.key)).toEqual(all.sessions.map((row) => row.key));
+    expect(filtered.owners).toEqual(all.owners);
+    expect(filtered.totalCount).toBe(32);
+    expect(filtered.sessions[0]?.owner?.actor.identity).toEqual({
+      type: "profile",
+      id: "profile-ada",
+    });
+    expect(participants.mock.calls.length).toBeLessThanOrEqual(unfilteredWork);
+  },
+);
+
 it.each([true, false])("filters canonical pin state before pagination: %s", async (pinned) => {
   const result = await listSessionFixture({
     cfg,
@@ -180,8 +540,7 @@ it.each([true, false])("filters canonical pin state before pagination: %s", asyn
   expect(result).toMatchObject({ totalCount: pinned ? 1 : 4, hasMore: !pinned });
 });
 
-it("finds sparse metadata matches beyond 200 rows before facets and pagination without transcripts", async () => {
-  const readTitles = vi.spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch");
+it("finds sparse metadata matches beyond 200 rows before facets and pagination", async () => {
   const store: Record<string, SessionEntry> = Object.fromEntries(
     Array.from({ length: 205 }, (_, index) => [
       `agent:main:unrelated-${index}`,
@@ -229,7 +588,6 @@ it("finds sparse metadata matches beyond 200 rows before facets and pagination w
   const second = await listSessionFixture({ cfg, storePath, store, opts: { ...opts, offset: 2 } });
   expect(second.sessions.map((row) => row.sessionId)).toEqual(["match-2"]);
   expect(second).toMatchObject({ totalCount: 3, nextOffset: null, hasMore: false });
-  expect(readTitles).not.toHaveBeenCalled();
 });
 
 it("distinguishes profile involvement from creation and uses participants beyond the display summary", async () => {

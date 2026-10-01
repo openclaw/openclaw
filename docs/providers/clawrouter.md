@@ -161,13 +161,18 @@ model blindly. A successful `/readyz` response means the gateway can serve
 requests; it does not claim that ClawRouter, the ClawRouter key, or an
 upstream provider is ready. The model probe and agent canary are the inference proofs.
 
-For live diagnosis, issue the canary and inspect the gateway's standard logs.
-The existing metadata-only model transport diagnostics emit lines shaped like:
+For live diagnosis, enable `OPENCLAW_DEBUG_MODEL_TRANSPORT=1` in the gateway
+process, issue the canary, and inspect the gateway's logs. The metadata-only
+model transport diagnostics emit lines shaped like:
 
 ```text
 [model-fetch] start provider=clawrouter api=openai-responses model=openai/gpt-5.5 method=POST url=https://clawrouter.internal.example/v1/responses
 [model-fetch] response provider=clawrouter api=openai-responses model=openai/gpt-5.5 status=200
 ```
+
+Without targeted debug flags, start and fast successful response records use
+`debug`; non-2xx responses and responses taking at least one second stay at
+`info`. See [model transport diagnostics](/logging#targeted-model-transport-diagnostics).
 
 The plugin sends bounded `X-ClawRouter-Client`, `X-ClawRouter-Agent-Id`, and
 `X-ClawRouter-Session-Id` headers when those identifiers are available. It also

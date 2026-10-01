@@ -1,5 +1,9 @@
 import type { SessionsListResult } from "../../api/types.ts";
-import type { SessionListScope, SessionListSnapshot } from "./session-capability.ts";
+import type {
+  SessionConnectionOwner,
+  SessionListScope,
+  SessionListSnapshot,
+} from "./session-capability.ts";
 import { normalizeAgentId } from "./session-key.ts";
 import {
   isPrimarySessionListQuery,
@@ -37,7 +41,91 @@ export function createSessionPrimaryWindows(
     }
   };
 
+  /** Subscribe through the managed owner, retiring any independent primary presentation lease. */
+  const subscribe = (
+    entry: ManagedSessionList,
+    listener: (snapshot: SessionListSnapshot) => void,
+    pageActive: boolean,
+  ) => {
+    const subscribed = (snapshot: SessionListSnapshot) => listener(snapshot);
+    entry.listeners.add(subscribed);
+    // Observed queries own independent membership rather than a primary warm lease.
+    retireWarmLists((candidate) => candidate === entry);
+    entry.coordinator.setActive(pageActive);
+    return () => {
+      entry.listeners.delete(subscribed);
+      if (entry.listeners.size > 0 || managedLists.get(entry.key) !== entry) {
+        return;
+      }
+      // Keep invalidation dormant until observed again, without runnable queued work.
+      entry.coordinator.setActive(false, entry.queued !== null);
+      entry.queued = null;
+      const release = () => {
+        if (
+          !entry.warmPrimary &&
+          entry.listeners.size === 0 &&
+          managedLists.get(entry.key) === entry
+        ) {
+          entry.coordinator.dispose();
+          managedLists.delete(entry.key);
+        }
+      };
+      // Route replacement may briefly remove every subscriber while this query still owns a request.
+      if (entry.pending) {
+        void entry.pending.finally(release);
+      } else {
+        release();
+      }
+    };
+  };
+
   return {
+    subscribe,
+    /** Own an observed query subscription and fence explicit refresh against disposal. */
+    observe(
+      entry: ManagedSessionList,
+      listener: (snapshot: SessionListSnapshot) => void,
+      pageActive: boolean,
+      connectionOwner: SessionConnectionOwner,
+      refresh: () => Promise<unknown>,
+    ) {
+      const unsubscribe = subscribe(entry, listener, pageActive);
+      let disposed = false;
+      const check = () => {
+        if (disposed || managedLists.get(entry.key) !== entry) {
+          throw new Error("This session query has been disposed.");
+        }
+      };
+      try {
+        listener(entry.snapshot);
+      } catch (error) {
+        unsubscribe();
+        throw error;
+      }
+      return {
+        async refresh() {
+          check();
+          const connection = connectionOwner.capture();
+          if (!connection) {
+            throw new Error("The session query is unavailable while disconnected. Try again.");
+          }
+          await refresh();
+          check();
+          if (!connectionOwner.isCurrent(connection)) {
+            throw new Error("The session query connection changed. Try again.");
+          }
+          if (entry.snapshot.error) {
+            throw new Error(entry.snapshot.error);
+          }
+        },
+        dispose() {
+          if (!disposed) {
+            disposed = true;
+            unsubscribe();
+          }
+        },
+      };
+    },
     retire: retireWarmLists,
     get revision() {
       return invalidationRevision;
@@ -96,45 +184,5 @@ export function createSessionPrimaryWindows(
       }
       return null;
     },
-  };
-}
-
-/** Subscribe through the managed owner, retiring any independent primary presentation lease. */
-export function subscribeManagedSessionList(
-  entry: ManagedSessionList,
-  listener: (snapshot: SessionListSnapshot) => void,
-  managedLists: Map<string, ManagedSessionList>,
-  pageActive: boolean,
-  retireWarmLists: (matches: (entry: ManagedSessionList) => boolean) => void,
-) {
-  const subscribed = (snapshot: SessionListSnapshot) => listener(snapshot);
-  entry.listeners.add(subscribed);
-  // Observed queries own independent membership rather than a primary warm lease.
-  retireWarmLists((candidate) => candidate === entry);
-  entry.coordinator.setActive(pageActive);
-  return () => {
-    entry.listeners.delete(subscribed);
-    if (entry.listeners.size > 0 || managedLists.get(entry.key) !== entry) {
-      return;
-    }
-    // Keep invalidation dormant until observed again, without runnable queued work.
-    entry.coordinator.setActive(false, entry.queued !== null);
-    entry.queued = null;
-    const release = () => {
-      if (
-        !entry.warmPrimary &&
-        entry.listeners.size === 0 &&
-        managedLists.get(entry.key) === entry
-      ) {
-        entry.coordinator.dispose();
-        managedLists.delete(entry.key);
-      }
-    };
-    // Route replacement may briefly remove every subscriber while this query still owns a request.
-    if (entry.pending) {
-      void entry.pending.finally(release);
-    } else {
-      release();
-    }
   };
 }

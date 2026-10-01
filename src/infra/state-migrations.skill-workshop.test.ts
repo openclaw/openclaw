@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, aroundEach, beforeEach, describe, expect, it } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import {
   inspectLegacySkillWorkshopMigration,
@@ -17,7 +17,7 @@ import {
   proposeCreateSkill,
 } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
-import { readStoredProposal } from "../skills/workshop/store-sqlite-record.js";
+import { readStoredProposal } from "../skills/workshop/store-client.js";
 import {
   importLegacySkillProposal,
   readSkillProposalRollback,
@@ -28,6 +28,7 @@ import {
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -36,11 +37,14 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 
-describe("automatic Skill Workshop migration", () => {
+describe("Skill Workshop migration ownership", () => {
   let state: OpenClawTestState;
+
+  aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "workshop-startup-migration" });
@@ -69,6 +73,88 @@ describe("automatic Skill Workshop migration", () => {
     await state.writeText(`${relativeDir}/PROPOSAL.md`, content);
     return { record, file, metadata };
   }
+
+  it("leaves legacy Workshop artifacts untouched at startup and repairs them only in Doctor", async () => {
+    const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    await state.writeConfig(config);
+    const pending = await seedSidecar("pending", state.workspaceDir);
+    const draftPath = path.join(path.dirname(pending.file), "PROPOSAL.md");
+    const draft = await fs.readFile(draftPath, "utf8");
+    const content =
+      "---\nname: installed-procedure\ndescription: Saved procedure\n---\n\n# Installed procedure\n";
+    const applied = createAppliedLegacyProposal({
+      id: "installed-20260901-1234567890",
+      title: "Installed procedure",
+      description: "Saved procedure",
+      content,
+      target: {
+        skillKey: "installed-procedure",
+        skillDir: path.join(state.workspaceDir, "skills", "installed-procedure"),
+      },
+    });
+    const support = Buffer.from([0x00, 0x7f, 0x80, 0xff]);
+    await fs.mkdir(path.join(applied.target.skillDir, "assets"), { recursive: true });
+    await fs.writeFile(applied.target.skillFile, content);
+    await fs.writeFile(path.join(applied.target.skillDir, "assets", "fixture.bin"), support);
+    await importLegacySkillProposal({
+      record: applied,
+      ownerAgentId: "main",
+      store: { env: state.env },
+    });
+    const storedBefore = await readStoredProposal(applied.id, { env: state.env });
+    const destination = path.join(
+      resolveWorkshopSkillsDir(config, "main", state.env),
+      applied.target.skillKey,
+    );
+    const options = {
+      cfg: config,
+      env: state.env,
+      homedir: () => state.home,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    };
+
+    const automatic = await autoMigrateLegacyState(options);
+    expect(await readStoredProposal(applied.id, { env: state.env })).toEqual(storedBefore);
+    expect(await readStoredProposal(pending.record.id, { env: state.env })).toBeNull();
+    await expect(fs.readFile(pending.file, "utf8")).resolves.toBe(pending.metadata);
+    await expect(fs.readFile(draftPath, "utf8")).resolves.toBe(draft);
+    await expect(fs.readFile(applied.target.skillFile, "utf8")).resolves.toBe(content);
+    await expect(
+      fs.readFile(path.join(applied.target.skillDir, "assets", "fixture.bin")),
+    ).resolves.toEqual(support);
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(automatic.warnings).toEqual([]);
+    expect(automatic.stepReceipts.some((receipt) => receipt.id === "skill-workshop")).toBe(false);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const doctor = await autoMigrateLegacyState({ ...options, doctorOnlyStateMigrations: true });
+      expect(doctor.warnings).toEqual([]);
+      expect(doctor.stepReceipts.find((receipt) => receipt.id === "skill-workshop")).toMatchObject({
+        outcome: attempt === 0 ? "completed" : "skipped",
+      });
+      expect((await readStoredProposal(applied.id, { env: state.env }))?.record).toMatchObject({
+        id: applied.id,
+        status: "applied",
+        target: {
+          skillDir: destination,
+          skillFile: path.join(destination, "SKILL.md"),
+          source: "openclaw-workshop",
+        },
+      });
+      await expect(
+        inspectSkillProposal(pending.record.id, { config, agentId: "main", env: state.env }),
+      ).resolves.toMatchObject({
+        content: draft,
+        record: { status: "pending", target: { source: "openclaw-workshop" } },
+      });
+      await expect(fs.readFile(path.join(destination, "SKILL.md"), "utf8")).resolves.toBe(content);
+      await expect(fs.readFile(path.join(destination, "assets", "fixture.bin"))).resolves.toEqual(
+        support,
+      );
+      await expect(fs.access(applied.target.skillDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(pending.file)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
 
   it.each([
     { scenario: "moved workspace", mainMatches: 3, opsMatches: 0, missingWorkspace: false },
@@ -158,7 +244,6 @@ describe("automatic Skill Workshop migration", () => {
             : await migrateLegacySkillWorkshopProposals({
                 config,
                 env: state.env,
-                retireMissingDrafts: true,
               });
         const receipt =
           "stepReceipts" in result
@@ -235,12 +320,13 @@ describe("automatic Skill Workshop migration", () => {
       } else {
         await fs.unlink(proposal.file);
         if (source === "sqlite" || source === "sqlite-no-rollback") {
-          importLegacySkillProposal({
+          await importLegacySkillProposal({
             record: ownedRecord,
             ownerAgentId: "main",
             store: { env: state.env },
           });
           if (source === "sqlite-no-rollback") {
+            await closeOpenClawStateDatabaseAsync();
             openOpenClawStateDatabase({ env: state.env }).db.exec(
               "DROP TABLE skill_workshop_proposal_rollbacks",
             );
@@ -342,7 +428,7 @@ describe("automatic Skill Workshop migration", () => {
         action: "create",
         supportFiles: [],
       };
-      importLegacySkillProposal({
+      await importLegacySkillProposal({
         record: proposal.record,
         rollback,
         ownerAgentId: "main",
@@ -374,13 +460,13 @@ describe("automatic Skill Workshop migration", () => {
       if (recoveryKind === "connected") {
         await fs.mkdir(connected.target.skillDir, { recursive: true });
         await fs.writeFile(connected.target.skillFile, connectedContent);
-        importLegacySkillProposal({
+        await importLegacySkillProposal({
           record: connected,
           ownerAgentId: "main",
           store: { env: state.env },
         });
       }
-      const before = readStoredProposal(proposal.record.id, { env: state.env });
+      const before = await readStoredProposal(proposal.record.id, { env: state.env });
       const result = await autoMigrateLegacyState({
         cfg: config,
         env: state.env,
@@ -389,7 +475,7 @@ describe("automatic Skill Workshop migration", () => {
         legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
       expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
-      expect(readStoredProposal(proposal.record.id, { env: state.env })).toEqual(before);
+      expect(await readStoredProposal(proposal.record.id, { env: state.env })).toEqual(before);
       expect(result.warnings.join("\n")).toContain("unfinished apply recovery");
       expect(
         openOpenClawStateDatabase({ env: state.env })
@@ -402,7 +488,9 @@ describe("automatic Skill Workshop migration", () => {
         ).resolves.toEqual(rollback);
       }
       if (recoveryKind === "connected") {
-        expect(readStoredProposal(connected.id, { env: state.env })?.record).toEqual(connected);
+        expect((await readStoredProposal(connected.id, { env: state.env }))?.record).toEqual(
+          connected,
+        );
         await expect(fs.access(connected.target.skillFile)).resolves.toBeUndefined();
       }
     },
@@ -482,10 +570,25 @@ describe("automatic Skill Workshop migration", () => {
     },
   );
 
-  it("discovers unreadable backup roots before importing sidecars", async () => {
+  it("defers unreadable backup root discovery to Doctor before importing sidecars", async () => {
     const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    await state.writeConfig(config);
     const eligible = await seedSidecar("eligible", state.workspaceDir);
-    await state.writeText("skill-workshop/collection-backups", "not a directory");
+    const backupRoot = await state.writeText(
+      "skill-workshop/collection-backups",
+      "not a directory",
+    );
+
+    const automatic = await autoMigrateLegacyState({
+      cfg: config,
+      env: state.env,
+      homedir: () => state.home,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+    await expect(fs.readFile(backupRoot, "utf8")).resolves.toBe("not a directory");
+    await expect(fs.readFile(eligible.file, "utf8")).resolves.toBe(eligible.metadata);
+    expect(automatic.warnings).toEqual([]);
+    expect(automatic.stepReceipts.some((receipt) => receipt.id === "skill-workshop")).toBe(false);
 
     await expect(
       migrateLegacySkillWorkshopProposals({ config, env: state.env }),
@@ -623,6 +726,7 @@ describe("automatic Skill Workshop migration", () => {
         store: { config, agentId: "main", env: state.env },
       });
       const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       if (schemaVersion === 15) {
         const legacy = openNodeSqliteDatabase(databasePath);
@@ -655,6 +759,7 @@ describe("automatic Skill Workshop migration", () => {
         cfg: config,
         env: state.env,
         homedir: () => state.home,
+        doctorOnlyStateMigrations: true,
         legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
       expect(migration.warnings).toEqual([]);

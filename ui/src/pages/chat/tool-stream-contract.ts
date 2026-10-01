@@ -1,3 +1,4 @@
+import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 // Leaf contract for the tool-stream lane: the host-state shape and event
 // payload types shared by tool-stream, its status/preamble modules, and the
 // chat state owners. Keep this module import-light so the lane stays acyclic.
@@ -22,6 +23,7 @@ export type AgentEventPayload = {
 };
 
 export type ToolStreamEntry = {
+  activity?: AgentActivityItem[];
   toolCallId: string;
   parentToolCallId?: string;
   runId: string;

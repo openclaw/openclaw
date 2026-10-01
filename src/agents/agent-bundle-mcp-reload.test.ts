@@ -9,6 +9,10 @@ import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
@@ -19,11 +23,16 @@ import {
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const startAuthorization = vi.hoisted(() => vi.fn(async () => ({ status: "authorized" })));
-const readAuthorization = vi.hoisted(() => vi.fn(async () => ({ state: "unauthenticated" })));
+const readAuthorization = vi.hoisted(() =>
+  vi.fn(async (identities: readonly McpOAuthIdentity[]) =>
+    identities.map(() => ({ state: "unauthenticated" })),
+  ),
+);
 vi.mock("./mcp-oauth.js", () => ({
-  readMcpOAuthCredentialsStatus: readAuthorization,
+  readMcpOAuthCredentialsStatuses: readAuthorization,
   startMcpOAuthAuthorization: startAuthorization,
 }));
 
@@ -40,12 +49,16 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   cleanupTempDirs(tempDirs);
   startAuthorization.mockClear();
-  readAuthorization.mockReset().mockResolvedValue({ state: "unauthenticated" });
+  readAuthorization
+    .mockReset()
+    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+      identities.map(() => ({ state: "unauthenticated" })),
+    );
 });
 
-async function fixture(now?: () => number) {
+async function fixture(scheduler = createTestGatewayScheduler()) {
   const source = await createMcpProbeFixture(tempDirs);
-  const manager = createSessionMcpRuntimeManager({ enableIdleSweepTimer: false, now });
+  const manager = createSessionMcpRuntimeManager({ scheduler });
   managers.push(manager);
   return { ...source, manager };
 }
@@ -145,7 +158,6 @@ it.each(["creating", "queued"])(
     const released = createDeferred();
     releaseHeld.push(() => released.resolve());
     const manager = createSessionMcpRuntimeManager({
-      enableIdleSweepTimer: false,
       async createRuntime(input) {
         started.resolve();
         await released.promise;
@@ -384,8 +396,8 @@ it("rotates one requester's changed server while retaining sibling connections a
         }),
       });
     }
-    let nowMs = 100_000;
-    const { manager, params } = await fixture(() => nowMs);
+    const clock = createGatewaySchedulerClock(100_000);
+    const { manager, params } = await fixture(createTestGatewayScheduler(clock.clock));
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
       mcp: {
@@ -406,7 +418,7 @@ it("rotates one requester's changed server while retaining sibling connections a
       probe(bob, "second"),
     ]);
     generation++;
-    nowMs += 300_000;
+    clock.setTime(clock.clock.now() + 300_000);
     const nextAlice = await manager.getOrCreate(aliceParams);
     const nextBob = await manager.getOrCreate(bobParams);
     const after = await Promise.all([
@@ -550,7 +562,6 @@ it("retains plugin retirement across a later config-only publication during crea
     let firstConnection: Awaited<ReturnType<typeof probe>> | undefined;
     releaseHeld.push(() => released.resolve());
     const manager = createSessionMcpRuntimeManager({
-      enableIdleSweepTimer: false,
       async createRuntime(input) {
         const runtime = createSessionMcpRuntime(input);
         if (input.requesterScope && !retired) {
@@ -665,7 +676,6 @@ it("reconciles a second publication arriving while a pending owner is retiring a
   const releaseCreate = createDeferred();
   releaseHeld.push(() => releaseCreate.resolve());
   const manager = createSessionMcpRuntimeManager({
-    enableIdleSweepTimer: false,
     async createRuntime(input) {
       const runtime = createSessionMcpRuntime(input);
       await runtime.getCatalog();

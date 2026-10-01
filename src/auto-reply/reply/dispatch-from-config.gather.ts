@@ -43,7 +43,6 @@ import {
 import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-defaults.js";
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import {
   loadPreparedModelRuntime,
   loadRuntimePlugins,
@@ -169,6 +168,9 @@ export async function gatherDispatchRequest(
     messageId,
     sessionKey,
     sessionId: lifecycleSessionId,
+    // The target agent ingests the prompt for this turn even when a command
+    // retargets execution to another session's agent.
+    agentId: targetAgentId,
     source: "dispatch",
     processingReason: "message_start",
     startedAtMs: startTime,
@@ -199,13 +201,18 @@ export async function gatherDispatchRequest(
     });
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
-      replyHotPathTiming.logIfSlow({
-        channel,
-        messageId,
-        sessionKey,
-        outcome,
-        reason: opts?.reason,
-      });
+      replyHotPathTiming.logIfSlow(
+        {
+          channel,
+          messageId,
+          runId: params.replyOptions?.runId,
+          sessionId: lifecycleSessionId,
+          sessionKey,
+          outcome,
+          reason: opts?.reason,
+        },
+        { beforeReplyResolver: agentDispatchStartedAt === 0 },
+      );
     }
     messageLifecycle.markProcessed(outcome, opts);
   };
@@ -228,7 +235,13 @@ export async function gatherDispatchRequest(
       return;
     }
     agentDispatchStartedAt = Date.now();
-    replyHotPathTiming.logPreparationIfSlow({ channel, messageId, sessionKey });
+    replyHotPathTiming.logPreparationIfSlow({
+      channel,
+      messageId,
+      runId: params.replyOptions?.runId,
+      sessionId: lifecycleSessionId,
+      sessionKey,
+    });
     logMessageDispatchStarted({
       channel,
       sessionKey: acpDispatchSessionKey,
@@ -237,11 +250,8 @@ export async function gatherDispatchRequest(
   };
 
   const recordAgentDispatchCompleted = (
-    outcome: "completed" | "skipped" | "error",
-    opts?: {
-      reason?: string;
-      error?: string;
-    },
+    outcome: DispatchProcessedOutcome,
+    opts?: DispatchProcessedOptions,
   ) => {
     if (!diagnosticsEnabled || agentDispatchStartedAt <= 0) {
       return;
@@ -257,20 +267,12 @@ export async function gatherDispatchRequest(
     });
   };
 
-  const markProcessing = () => {
-    messageLifecycle.markProcessing();
-  };
-
-  const markIdle = (reason: string) => {
-    messageLifecycle.markIdle(reason);
-  };
-
   const markInboundDedupeReplayUnsafe = () => {
     replayUnsafeActivity = true;
   };
 
   const boundAcpDispatchSessionKey = state.allowInboundHandlers
-    ? resolveBoundAcpDispatchSessionKey({ ctx, cfg })
+    ? await resolveBoundAcpDispatchSessionKey({ ctx, cfg })
     : undefined;
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
@@ -445,28 +447,7 @@ export async function gatherDispatchRequest(
     routeThreadId,
     sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
-  const {
-    completeDispatchReplyOperation,
-    dispatchHookDispatcher,
-    ensureDispatchReplyOperation,
-    failDispatchReplyOperation,
-    getAgentRunId,
-    getAgentRunTerminalOutcome,
-    getDispatchAbortOperation,
-    getDispatchAbortSignal,
-    getDispatchReplyOperation,
-    getObservedReplyDelivery,
-    getPreDispatchAbortSignal,
-    getReplyOptions,
-    isDispatchOperationAborted,
-    isPreDispatchOperationAborted,
-    markObservedReplyDelivery,
-    releasePreDispatchLifecycleAdmission,
-    runWithDispatchLifecycleAdmission,
-    throwIfDispatchOperationAborted,
-    trackDispatchLifecycleWork,
-    turnLedger,
-  } = replyOperationCoordinator;
+  const { getDispatchReplyOperation, getPreDispatchAbortSignal } = replyOperationCoordinator;
   const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
     getReplyOperation: getDispatchReplyOperation,
     hasInboundAudio: () =>
@@ -560,7 +541,7 @@ export async function gatherDispatchRequest(
       originalMediaTypes: hookContext.mediaTypes,
     };
   };
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     ctx,
     cfg,
     dispatcher,
@@ -569,8 +550,8 @@ export async function gatherDispatchRequest(
     recordProcessed,
     recordAgentDispatchStarted,
     recordAgentDispatchCompleted,
-    markProcessing,
-    markIdle,
+    markProcessing: () => messageLifecycle.markProcessing(),
+    markIdle: (reason: string) => messageLifecycle.markIdle(reason),
     markInboundDedupeReplayUnsafe,
     acpDispatchSessionKey,
     dispatchKind,
@@ -592,26 +573,7 @@ export async function gatherDispatchRequest(
     preparedReplyDispatchRuntime,
     pluginRegistry,
     replyOperationRunState,
-    completeDispatchReplyOperation,
-    dispatchHookDispatcher,
-    ensureDispatchReplyOperation,
-    failDispatchReplyOperation,
-    getAgentRunId,
-    getAgentRunTerminalOutcome,
-    getDispatchAbortOperation,
-    getDispatchAbortSignal,
-    getDispatchReplyOperation,
-    getObservedReplyDelivery,
-    getPreDispatchAbortSignal,
-    getReplyOptions,
-    isDispatchOperationAborted,
-    isPreDispatchOperationAborted,
-    markObservedReplyDelivery,
-    releasePreDispatchLifecycleAdmission,
-    runWithDispatchLifecycleAdmission,
-    throwIfDispatchOperationAborted,
-    trackDispatchLifecycleWork,
-    turnLedger,
+    ...replyOperationCoordinator,
     maybeApplyTtsWithFinalizationLease,
     hookRunner,
     timestamp,

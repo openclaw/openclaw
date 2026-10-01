@@ -1,4 +1,3 @@
-// CLI container targeting: parse --container and re-exec the command inside Docker/Podman.
 import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -64,39 +63,18 @@ export function resolveCliContainerTarget(
   return parsed.container ?? normalizeOptionalString(env.OPENCLAW_CONTAINER) ?? null;
 }
 
-function isContainerRunning(params: {
-  runtime: ContainerRuntime;
-  containerName: string;
-  deps: Pick<ContainerTargetDeps, "spawnSync">;
-}): boolean {
-  const result = params.deps.spawnSync(
-    params.runtime,
-    ["inspect", "--format", "{{.State.Running}}", params.containerName],
-    {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS,
-    },
-  );
-  return result.status === 0 && result.stdout.trim() === "true";
-}
-
 function resolveRunningContainer(params: {
   containerName: string;
   deps: Pick<ContainerTargetDeps, "spawnSync">;
 }): ContainerRuntime | null {
-  const matches: ContainerRuntime[] = [];
-  for (const runtime of CONTAINER_RUNTIMES) {
-    if (
-      isContainerRunning({
-        runtime,
-        containerName: params.containerName,
-        deps: params.deps,
-      })
-    ) {
-      matches.push(runtime);
-    }
-  }
+  const matches = CONTAINER_RUNTIMES.filter((runtime) => {
+    const result = params.deps.spawnSync(
+      runtime,
+      ["inspect", "--format", "{{.State.Running}}", params.containerName],
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS },
+    );
+    return result.status === 0 && result.stdout.trim() === "true";
+  });
   if (matches.length === 0) {
     return null;
   }
@@ -255,7 +233,8 @@ export function maybeRunCliInContainer(
   if (!parsed.ok) {
     throw new Error(parsed.error);
   }
-  const containerName = resolveCliContainerTarget(argv, resolvedDeps.env);
+  const containerName =
+    parsed.container ?? normalizeOptionalString(resolvedDeps.env.OPENCLAW_CONTAINER);
   if (!containerName) {
     return { handled: false, argv: parsed.argv };
   }

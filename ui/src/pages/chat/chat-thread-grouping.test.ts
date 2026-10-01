@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -33,6 +33,76 @@ function cachedGroups(messages: unknown[]) {
     showToolCalls: true,
   }).filter((item) => item.kind === "group");
 }
+
+describe("queued input group continuity", () => {
+  beforeEach(() => resetChatThreadState());
+
+  it("keeps each queued message in the same row through acceptance and persistence", () => {
+    const queue: ChatQueueItem[] = ["First queued input", "Second queued input"].map(
+      (text, index) => ({
+        id: `local-${index}`,
+        text,
+        createdAt: index + 1,
+        sendRunId: `send-${index}`,
+        sendState: "waiting-reconnect",
+        sendAttempts: 1,
+      }),
+    );
+    const pendingInputs = queue.map((item, index) => ({
+      id: `accepted-${index}`,
+      runId: item.sendRunId,
+      state: "queued" as const,
+      acceptedAt: index + 1,
+      message: {
+        role: "user",
+        content: item.text,
+        timestamp: index + 1,
+        __openclaw: { id: `pending:accepted-${index}` },
+      },
+    }));
+    const persisted = queue.map((item, index) => ({
+      role: "user",
+      content: item.text,
+      timestamp: index + 1,
+      __openclaw: {
+        id: `persisted-${index}`,
+        seq: index + 1,
+        idempotencyKey: `${item.sendRunId}:user`,
+        runId: `execution-${index}`,
+      },
+    }));
+    const render = (
+      input: Pick<Parameters<typeof buildCachedChatItems>[0], "messages" | "pendingInputs">,
+    ) =>
+      buildCachedChatItems({
+        paneId: "queued-input-continuity",
+        sessionKey: "agent:main:dashboard:queued-inputs",
+        toolMessages: [],
+        streamSegments: [],
+        stream: null,
+        streamStartedAt: null,
+        showToolCalls: true,
+        queue,
+        ...input,
+      }).filter((item) => item.kind === "group");
+    const initial = render({ messages: [] });
+    const rowKeys = initial.map((group) => group.key);
+    const messageKeys = initial.map((group) => group.messages[0]?.key);
+
+    expect(initial.map((group) => group.messages.length)).toEqual([1, 1]);
+    for (const input of [
+      { messages: [], pendingInputs: pendingInputs.slice(0, 1) },
+      { messages: [], pendingInputs },
+      { messages: persisted.slice(0, 1), pendingInputs: pendingInputs.slice(1) },
+      { messages: persisted, pendingInputs: [] },
+    ]) {
+      const groups = render(input);
+      expect(groups.map((group) => group.key)).toEqual(rowKeys);
+      expect(groups.map((group) => group.messages.length)).toEqual([1, 1]);
+      expect(groups.map((group) => group.messages[0]?.key)).toEqual(messageKeys);
+    }
+  });
+});
 
 describe("message client attribution", () => {
   beforeEach(() => resetChatThreadState());
@@ -79,11 +149,14 @@ describe("message client attribution", () => {
     expect(groups[0]?.messages).toHaveLength(2);
   });
 
-  it("refreshes cached source attribution after an in-place history projection changes", () => {
+  it("refreshes cached source attribution after a history message is replaced", () => {
     const message = messageFrom([cli]);
     const initial = cachedGroups([message]);
-    message["__openclaw"].transport.clients = [web];
-    const refreshed = cachedGroups([message]);
+    const replacement = {
+      ...message,
+      __openclaw: { ...message["__openclaw"], transport: { clients: [web] } },
+    };
+    const refreshed = cachedGroups([replacement]);
     expect(initial[0]?.sourceClients).toEqual([cli]);
     expect(refreshed[0]?.sourceClients).toEqual([web]);
     expect(refreshed[0]).not.toBe(initial[0]);
@@ -194,6 +267,25 @@ describe("forwarded source-session grouping", () => {
     ]);
   });
 
+  it("keeps distinct automation labels on identical reports from the same source session", () => {
+    const groups = cachedGroups(
+      ["Daily report", "Renamed report"].map((label) =>
+        Object.assign(forwardedMessage("agent:main:cron:daily:run:first"), {
+          senderSession: { sessionKey: "agent:main:cron:daily:run:first", agentId: "main", label },
+        }),
+      ),
+    );
+
+    expect(groups.map((group) => group.senderSession?.label)).toEqual([
+      "Daily report",
+      "Renamed report",
+    ]);
+    expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
+      undefined,
+      undefined,
+    ]);
+  });
+
   it.each([
     { senderSession: { sessionKey: "agent:main:main", agentId: "main" } },
     { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
@@ -220,16 +312,39 @@ describe("forwarded source-session grouping", () => {
   it.each([
     { sessionKey: "agent:main:dashboard:other", agentId: "main" },
     { sessionKey: "agent:main:main", agentId: "updated" },
+    { sessionKey: "agent:main:main", agentId: "main", label: "Automation name" },
   ])("refreshes cached attribution when the source changes to %o", (senderSession) => {
     const message = forwardedMessage("agent:main:main");
     const initial = cachedGroups([message]);
-    message.senderSession = senderSession;
-
-    const refreshed = cachedGroups([message]);
+    const refreshed = cachedGroups([{ ...message, senderSession }]);
 
     expect(refreshed[0]?.senderSession).toEqual(senderSession);
     expect(refreshed[0]).not.toBe(initial[0]);
   });
+
+  it.each(["Renamed report", undefined])(
+    "refreshes the displayed automation label after a rename or removal: %s",
+    (label) => {
+      const senderSession: { sessionKey: string; agentId: string; label?: string } = {
+        sessionKey: "agent:main:cron:daily:run:first",
+        agentId: "main",
+        label: "Daily report",
+      };
+      const message = {
+        ...forwardedMessage("agent:main:cron:daily:run:first"),
+        senderSession,
+      };
+      const initial = cachedGroups([message]);
+      expect(initial[0]?.senderSession?.label).toBe("Daily report");
+
+      const refreshed = cachedGroups([
+        { ...message, senderSession: { ...message.senderSession, label } },
+      ]);
+
+      expect(refreshed[0]?.senderSession?.label).toBe(label);
+      expect(refreshed[0]).not.toBe(initial[0]);
+    },
+  );
 });
 
 describe("cached group content classification", () => {
@@ -247,7 +362,7 @@ describe("cached group content classification", () => {
     },
   );
 
-  it("keeps media visible and folds commentary after the same message changes in place", () => {
+  it("keeps media visible and folds commentary after a message replacement", () => {
     const content: Record<string, unknown>[] = [
       { type: "image", url: "https://example.com/diagram.png" },
     ];
@@ -268,8 +383,8 @@ describe("cached group content classification", () => {
       },
       { role: "assistant", content: "Done", timestamp: 4 },
     ];
-    const project = () =>
-      collapseCompletedTurnWork(cachedGroups([...messages]), {
+    const project = (history = messages) =>
+      collapseCompletedTurnWork(cachedGroups(history), {
         sessionKey: "agent:target:dashboard:history",
         runWorking: false,
       });
@@ -281,13 +396,18 @@ describe("cached group content classification", () => {
       { kind: "group", role: "assistant" },
     ]);
 
-    preview.content.splice(0, 1, { type: "text", text: "Preparing a diagram" });
+    const replacement = {
+      ...preview,
+      content: [{ type: "text", text: "Preparing a diagram" }],
+    };
 
-    expect(project()).toMatchObject([
+    expect(
+      project(messages.map((message) => (message === preview ? replacement : message))),
+    ).toMatchObject([
       { kind: "group", role: "user" },
       {
         kind: "work-group",
-        groups: [{ role: "assistant", messages: [{ message: preview }] }, { role: "tool" }],
+        groups: [{ role: "assistant", messages: [{ message: replacement }] }, { role: "tool" }],
       },
       { kind: "group", role: "assistant" },
     ]);
@@ -296,6 +416,76 @@ describe("cached group content classification", () => {
 
 describe("explicit answer visibility across continuations", () => {
   beforeEach(() => resetChatThreadState());
+
+  it.each([
+    { name: "settled Codex answer", terminal: true, preserved: true },
+    { name: "intermediate Codex text", terminal: false, preserved: false },
+    { name: "explicit commentary", terminal: true, phase: "commentary", preserved: false },
+    { name: "interrupted Codex text", terminal: true, aborted: true, preserved: false },
+    { name: "legacy unphased reply", terminal: true, legacy: true, preserved: false },
+  ])(
+    "classifies $name before an unscoped delivery notice",
+    ({ terminal, phase, aborted, legacy, preserved }) => {
+      const runId = "completed-run";
+      const messages = [
+        { role: "user", content: "Inspect the file", timestamp: 1, __openclaw: { runId } },
+        {
+          role: "toolResult",
+          toolCallId: "read-file",
+          toolName: "exec",
+          content: "File inspected",
+          timestamp: 2,
+          __openclaw: { runId },
+        },
+        {
+          role: "assistant",
+          content: "File verified — café 雪 🦞",
+          stopReason: "stop",
+          ...(phase ? { phase } : {}),
+          ...(aborted ? { openclawAbort: { aborted: true } } : {}),
+          timestamp: 3,
+          __openclaw: {
+            runId,
+            ...(!legacy ? { mirrorOrigin: "codex-app-server", runTerminal: terminal } : {}),
+          },
+        },
+        {
+          role: "assistant",
+          content: "Gateway restart config-patch ok",
+          api: "openclaw-transcript",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          stopReason: "stop",
+          timestamp: 4,
+        },
+      ];
+      for (const history of [messages, structuredClone(messages)]) {
+        const items = coalesceAgentRunFrames(
+          coalesceActivityRuns(
+            collapseCompletedTurnWork(cachedGroups(history), {
+              sessionKey: "agent:main:dashboard:answers",
+              runWorking: false,
+            }),
+          ),
+        );
+        const parts = items.flatMap((item) =>
+          item.kind === "agent-run-frame" ? item.parts : [item],
+        );
+        expect(
+          parts
+            .filter((item) => item.kind === "group")
+            .flatMap((item) => item.messages.map(({ message }) => message)),
+        ).toEqual([messages[0], ...(preserved ? [messages[2]] : []), messages[3]]);
+        expect(
+          parts
+            .filter((item) => item.kind === "work-group")
+            .flatMap((item) =>
+              item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
+            ),
+        ).toEqual([messages[1], ...(!preserved ? [messages[2]] : [])]);
+      }
+    },
+  );
 
   it.each([
     { phase: "final_answer", tool: true },
@@ -451,7 +641,7 @@ describe("explicit answer visibility across continuations", () => {
           ownership === "independent-run" ? [messages[1]] : [messages[1], ...messages.slice(3)],
         );
         if (ownership === "independent-run") {
-          expect(work[0]?.durationMs).toBe(2);
+          expect(work[0]?.durationMs).toBeNull();
         }
         const activity = items.filter((item) => item.kind === "activity-run");
         expect(
@@ -508,7 +698,7 @@ describe("explicit answer visibility across continuations", () => {
         item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
       ),
     ).toEqual([[messages[1], messages[3], messages[5], messages[6]], [messages[8]]]);
-    expect(work[0]?.durationMs).toBe(6);
+    expect(work[0]?.durationMs).toBeNull();
     expect(
       items
         .filter((item) => item.kind === "group")

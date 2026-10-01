@@ -14,6 +14,11 @@ The WebSocket RPC query subcommands and their shared options. Part of the [`open
 
 All query commands use WebSocket RPC.
 
+With token, password, or `none` authentication, ordinary RPC calls to the
+configured local loopback Gateway do not open the shared state database for device
+authentication. Explicit URL targets and paired remote connections retain their
+device authentication rules.
+
 <Tabs>
   <Tab title="Output modes">
     - Default: human-readable (colored in TTY).
@@ -48,6 +53,8 @@ openclaw gateway health --port 18789
 
 `/healthz` is a liveness probe: it returns as soon as the server can answer HTTP. `/readyz` is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed `/readyz` responses include an `eventLoop` diagnostic block (delay, utilization, CPU-core ratio, `degraded` flag).
 
+<a id="param-port"></a>
+
 <ParamField path="--port <port>" type="number">
   Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call.
 </ParamField>
@@ -69,12 +76,18 @@ refreshing, partial, or stale. The command returns the available snapshot from
 one request; run it again later to check for refreshed totals. JSON output preserves
 the `cacheStatus` object so scripts can inspect the same state.
 
+<a id="param-days"></a>
+
 <ParamField path="--days <days>" type="number" default="30">
   Number of days to include.
 </ParamField>
+<a id="param-agent"></a>
+
 <ParamField path="--agent <id>" type="string">
   Scope the summary to one configured agent id.
 </ParamField>
+<a id="param-all-agents"></a>
+
 <ParamField path="--all-agents" type="boolean">
   Aggregate across all configured agents. Cannot combine with `--agent`.
 </ParamField>
@@ -91,18 +104,28 @@ openclaw gateway stability --bundle latest --export
 openclaw gateway stability --json
 ```
 
+<a id="param-limit"></a>
+
 <ParamField path="--limit <limit>" type="number" default="25">
   Maximum recent events to include (max `1000`).
 </ParamField>
+<a id="param-type"></a>
+
 <ParamField path="--type <type>" type="string">
   Filter by diagnostic event type, e.g. `payload.large` or `diagnostic.memory.pressure`.
 </ParamField>
+<a id="param-since-seq"></a>
+
 <ParamField path="--since-seq <seq>" type="number">
   Include only events after a diagnostic sequence number.
 </ParamField>
+<a id="param-bundle-path"></a>
+
 <ParamField path="--bundle [path]" type="string">
   Read a persisted stability bundle instead of calling the running Gateway. `--bundle latest` (or bare `--bundle`) picks the newest bundle under the state directory; you can also pass a bundle JSON path directly.
 </ParamField>
+<a id="param-export"></a>
+
 <ParamField path="--export" type="boolean">
   Write a shareable support diagnostics zip instead of printing stability details.
 </ParamField>
@@ -113,7 +136,7 @@ openclaw gateway stability --json
 <AccordionGroup>
   <Accordion title="Privacy and bundle behavior">
     - Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, approval ids, channel/plugin names, and redacted session summaries. They exclude chat text, webhook bodies, tool outputs, raw request/response bodies, tokens, cookies, secret values, hostnames, and raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
-    - Fatal Gateway exits, shutdown timeouts, and restart startup failures write a diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json`, even when the recorder has no events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` apply to bundle output too.
+    - Fatal Gateway exits, shutdown timeouts, and restart startup failures write a diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json`, even when the recorder has no events. When the error has a stack, `error.stack` retains it with secrets redacted and a limit of 8,000 UTF-16 code units. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` apply to bundle output too.
     - Failed shutdown steps include `evidence.shutdown`: the step and redacted error names, messages, codes, and stacks, including nested causes and aggregate errors. Use `openclaw gateway stability --bundle latest --json` to inspect these details. Capture is bounded to 32 errors and 8,000 UTF-16 code units per stack. `gateway.restart_close_failed` identifies a thrown close failure; `gateway.restart_shutdown_timeout` identifies the overall shutdown deadline. A timeout also retains any shutdown error already observed. Restart and stop failures flush the existing file logger before exit, within its shutdown budget.
 
   </Accordion>
@@ -132,27 +155,43 @@ openclaw gateway diagnostics export --json
 <ParamField path="--output <path>" type="string">
   Output zip path. Defaults to a support export under the state directory.
 </ParamField>
+<a id="param-log-lines"></a>
+
 <ParamField path="--log-lines <count>" type="number" default="5000">
   Maximum sanitized log lines to include.
 </ParamField>
+<a id="param-log-bytes"></a>
+
 <ParamField path="--log-bytes <bytes>" type="number" default="1000000">
   Maximum log bytes to inspect.
 </ParamField>
+<a id="param-url"></a>
+
 <ParamField path="--url <url>" type="string">
   Gateway WebSocket URL for the health snapshot.
 </ParamField>
+<a id="param-token"></a>
+
 <ParamField path="--token <token>" type="string">
   Gateway token for the health snapshot.
 </ParamField>
+<a id="param-password"></a>
+
 <ParamField path="--password <password>" type="string">
   Gateway password for the health snapshot.
 </ParamField>
+<a id="param-timeout"></a>
+
 <ParamField path="--timeout <ms>" type="number" default="3000">
   Status/health snapshot timeout.
 </ParamField>
+<a id="param-no-stability-bundle"></a>
+
 <ParamField path="--no-stability-bundle" type="boolean">
   Skip persisted stability bundle lookup.
 </ParamField>
+<a id="param-json"></a>
+
 <ParamField path="--json" type="boolean">
   Print the written path, size, and manifest as JSON.
 </ParamField>
@@ -172,27 +211,43 @@ openclaw gateway status --require-rpc
 openclaw gateway status --port 19001
 ```
 
+<a id="param-url-1"></a>
+
 <ParamField path="--url <url>" type="string">
   Probe this explicit WebSocket URL instead of the service-derived target. Cannot combine with `--port`.
 </ParamField>
+<a id="param-port-1"></a>
+
 <ParamField path="--port <port>" type="number">
   Select a local Gateway port using the invoking CLI config for auth and TLS. Accepts `gateway --port 19001 status` and `gateway status --port 19001`; an explicit status port wins. Native service details remain visible as diagnostics but do not select the probe target.
 </ParamField>
+<a id="param-token-1"></a>
+
 <ParamField path="--token <token>" type="string">
   Token auth for the probe.
 </ParamField>
+<a id="param-password-1"></a>
+
 <ParamField path="--password <password>" type="string">
   Password auth for the probe.
 </ParamField>
+<a id="param-timeout-1"></a>
+
 <ParamField path="--timeout <ms>" type="number" default="10000">
-  Probe timeout.
+  Probe timeout. Without an explicit value, the RPC probe uses 10 seconds and Windows Task Scheduler state and registration probes allow 60 seconds for cold startup. The read-only registration query uses this allowance for both its total runtime and time without output. Explicit values also apply to native service probes. Each operation has its own budget; this is not an overall command deadline.
 </ParamField>
+<a id="param-no-probe"></a>
+
 <ParamField path="--no-probe" type="boolean">
   Skip the connectivity probe (service-only view).
 </ParamField>
+<a id="param-deep"></a>
+
 <ParamField path="--deep" type="boolean">
   Scan system-level services too.
 </ParamField>
+<a id="param-require-rpc"></a>
+
 <ParamField path="--require-rpc" type="boolean">
   Upgrade the connectivity probe to a read probe and exit non-zero if it fails. Cannot combine with `--no-probe`.
 </ParamField>
@@ -200,6 +255,7 @@ openclaw gateway status --port 19001
 <AccordionGroup>
   <Accordion title="Status semantics">
     - Stays available for diagnostics even when the local CLI config is missing or invalid.
+    - If service discovery cannot inspect a required file, such as a systemd environment file readable only by root, status reports the native service as unknown and continues with the caller's Gateway target and credentials. Observed service ownership refusals remain errors; status does not change file permissions or relax lifecycle checks.
     - Default output proves service state, WebSocket connect, and the auth capability visible at handshake time — not read/write/admin operations.
     - Probes are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
     - Resolves configured auth SecretRefs for probe auth when possible. If a required SecretRef is unresolved, `--json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or fix the secret source. Unresolved-auth warnings are suppressed once the probe succeeds.
@@ -210,6 +266,7 @@ openclaw gateway status --port 19001
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
+    - If the Gateway reports no version, human output still shows the locally inspected service package version and path when readable. A version mismatch suggests reinstalling only when that service is the probe target; installation restrictions appear as the existing refusal message.
     - A missing native service is informational when that service is diagnostic-only, such as a Gateway using a non-default state directory. The connectivity probe still reports the selected Gateway's result.
     - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or probe target. Nix mode, external supervision, noncanonical installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
     - Human output includes `Gateway heap:` with configured service heap controls and a separate install-time recommendation based on memory visible to the CLI. JSON output exposes the same report as `service.gatewayHeap`. Neither is a measurement of the running Gateway's V8 heap ceiling; use runtime memory diagnostics for that.
@@ -241,6 +298,8 @@ openclaw gateway probe
 openclaw gateway probe --json
 openclaw gateway probe --port 18789
 ```
+
+<a id="param-port-2"></a>
 
 <ParamField path="--port <port>" type="number">
   Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects only the local loopback target instead of configured gateway environment URL, environment port, or remote targets.
@@ -293,6 +352,8 @@ CLI equivalent:
 openclaw gateway probe --ssh user@gateway-host
 ```
 
+<a id="param-ssh"></a>
+
 <ParamField path="--ssh <target>" type="string">
   `user@host` or `user@host:port` (port defaults to `22`).
 </ParamField>
@@ -304,6 +365,8 @@ install the **OpenSSH Client** optional feature; Windows places it under
 <ParamField path="--ssh-identity <path>" type="string">
   Identity file.
 </ParamField>
+<a id="param-ssh-auto"></a>
+
 <ParamField path="--ssh-auto" type="boolean">
   Pick the first discovered gateway host as SSH target from the resolved discovery endpoint (`local.` plus the configured wide-area domain, if any). TXT-only hints are ignored.
 </ParamField>
@@ -326,6 +389,9 @@ openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
+To add an existing checkout to the Control UI's Place picker, use the
+[project registration and listing examples](/web/control-ui/sessions-and-sidebar#register-an-existing-repository).
+
 For `sessions.send` and `chat.send`, JSON `timeoutMs` is the receiving agent's
 execution budget, not an acknowledgment timeout. Omit it for ordinary
 coordination; `--timeout` independently limits how long this CLI waits:
@@ -341,27 +407,47 @@ never a shell or direct RPC substitute. An unavailable messaging tool is not
 permission to use the CLI. Subagents return results through their accepted task
 completion path; the parent relays any necessary coordination with other sessions.
 
+In an agent's `exec` subprocess (`OPENCLAW_SHELL=exec`), message RPCs are
+refused before connecting so worker reports cannot appear as fresh human input.
+Ordinary operator terminals and non-message Gateway diagnostics are unchanged.
+
+<a id="param-params"></a>
+
 <ParamField path="--params <json>" type="string" default="{}">
   JSON object string for params.
 </ParamField>
+<a id="param-url-2"></a>
+
 <ParamField path="--url <url>" type="string">
   Gateway WebSocket URL.
 </ParamField>
+<a id="param-port-3"></a>
+
 <ParamField path="--port <port>" type="number">
   Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`.
 </ParamField>
+<a id="param-token-2"></a>
+
 <ParamField path="--token <token>" type="string">
   Gateway token.
 </ParamField>
+<a id="param-password-2"></a>
+
 <ParamField path="--password <password>" type="string">
   Gateway password.
 </ParamField>
+<a id="param-timeout-2"></a>
+
 <ParamField path="--timeout <ms>" type="number" default="10000">
   Timeout budget.
 </ParamField>
+<a id="param-expect-final"></a>
+
 <ParamField path="--expect-final" type="boolean">
   Mainly for agent-style RPCs that stream intermediate events before a final payload.
 </ParamField>
+<a id="param-json-1"></a>
+
 <ParamField path="--json" type="boolean">
   Machine-readable JSON output.
 </ParamField>
@@ -402,4 +488,6 @@ openclaw gateway resume <suspensionId> --port 18999 --json
 ```
 
 An already expired or resumed lease is a successful no-op. A different active
-suspension ID is rejected.
+suspension ID is rejected. Once shutdown commits, resume is refused even for the
+original owner; `gateway.suspend.status` reports that owner's shutdown progress
+until server teardown closes RPC access.

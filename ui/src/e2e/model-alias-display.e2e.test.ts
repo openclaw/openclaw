@@ -148,7 +148,9 @@ suite.define(() => {
       expect(modelRequest.params).toEqual({ agentId: "main", view: "configured" });
       expect(await gateway.getRequests("models.list")).toHaveLength(1);
 
-      const select = page.locator("openclaw-select-picker.model-picker__select").first();
+      const select = page.locator(
+        'openclaw-agents-page openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+      );
       await select.waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(() =>

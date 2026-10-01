@@ -13,7 +13,7 @@ import type {
 } from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { readEnvInt } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -23,10 +23,7 @@ const MAX_FINISHED_SESSION_COUNT = 50;
 const MAX_FINISHED_SESSION_OUTPUT_CHARS = 2_000_000;
 
 function clampTtl(value: number | undefined) {
-  if (value === undefined || Number.isNaN(value)) {
-    return DEFAULT_JOB_TTL_MS;
-  }
-  return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
+  return clampWithDefault(value, DEFAULT_JOB_TTL_MS, MIN_JOB_TTL_MS, MAX_JOB_TTL_MS);
 }
 
 const defaultJobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
@@ -224,7 +221,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
+  const aggregated = tail(session.aggregated + chunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
@@ -314,11 +311,17 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  if (!session.finalizing) {
+    settleExecSessionFinalization(session);
+  }
+}
+
+/** Releases scope joins after the process owner's task and notification work settles. */
+export function settleExecSessionFinalization(session: ProcessSession): void {
+  session.finalizing = false;
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     activeExecSessions.delete(session.id);
-    // The exec owner's synchronous task/notification callbacks run before
-    // these promise continuations resume and release the environment state.
     active.settled?.resolve();
   }
 }
@@ -356,11 +359,6 @@ export function acknowledgeNotifyOnExit(record: {
   }
   remove();
   record.notifyOnExitRemoval = undefined;
-}
-
-/** Reports owner-tracked process liveness even after visibility is removed. */
-export function hasActiveBackgroundExecSession(sessionId: string): boolean {
-  return activeExecSessions.get(sessionId)?.promoted === true;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */
@@ -469,11 +467,6 @@ function capPendingStream(
     output.splice(writeIndex, index - writeIndex);
   }
   return pendingChars;
-}
-
-/** Keeps only the last `max` characters for bounded aggregate output storage. */
-function trimWithCap(text: string, max: number) {
-  return tail(text, max);
 }
 
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */

@@ -2,7 +2,8 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { registerSourceRunnerServiceFixture } from "./source-runner-service.mjs";
 
 const root = process.env.OPENCLAW_TEST_NATIVE_RUNNER_ROOT;
 const sourceRoot = process.env.OPENCLAW_TEST_NATIVE_RUNNER_SOURCE;
@@ -10,6 +11,7 @@ const mode = process.env.OPENCLAW_TEST_NATIVE_RUNNER_MODE;
 if (!root || !sourceRoot || (mode !== "runner" && mode !== "watch")) {
   throw new Error("Native runner signal fixture is missing its private scope");
 }
+registerSourceRunnerServiceFixture(sourceRoot);
 const fixture = fileURLToPath(import.meta.url);
 const release = path.join(root, "release");
 const terminate = path.join(root, "terminate");
@@ -59,8 +61,15 @@ if (process.argv.includes("--fixture-worker")) {
   }
   writePid("implementation");
   const spawn = childProcess.spawn;
-  childProcess.spawn = (_command, _args, options) =>
-    spawn(process.execPath, [fixture, "--fixture-build"], options);
+  const buildUrl = pathToFileURL(path.join(process.cwd(), "scripts/build-all.mts")).href;
+  childProcess.spawn = (command, args, options) => {
+    if (command !== process.execPath || !Array.isArray(args) || !args.includes(buildUrl)) {
+      process.stderr.write(
+        `Native runner fixture received an unexpected spawn: ${path.basename(command)}\n`,
+      );
+    }
+    return spawn(process.execPath, [fixture, "--fixture-build"], options);
+  };
   syncBuiltinESMExports();
   waitForRelease(mode === "watch");
 } else if (process.argv[1] === path.join(sourceRoot, "scripts/watch-node.mts")) {

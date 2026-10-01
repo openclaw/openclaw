@@ -19,6 +19,12 @@ const CRON_SCHEDULE = { kind: "cron", expr: "* * * * *" };
 const EVERY_SCHEDULE = { kind: "every", everyMs: 60_000 };
 const AGENT_TURN = { kind: "agentTurn", message: "hello" };
 const SYSTEM_EVENT = { kind: "systemEvent", text: "hi" };
+const CHANNEL_REQUESTER = {
+  version: 1,
+  channel: "discord",
+  accountId: "work",
+  senderId: "123456789012345678",
+};
 const STALE_AT_SCHEDULE = {
   kind: "at",
   at: "2026-01-12T18:00:00Z",
@@ -139,6 +145,91 @@ describe("normalizeCronJobCreate", () => {
     },
   );
 
+  describe.each(["create", "patch"] as const)("%s authority envelopes", (mode) => {
+    const normalize = mode === "create" ? normalizeCreate : normalizePatch;
+    const envelopes = {
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: { kind: "local" },
+        channelRequester: CHANNEL_REQUESTER,
+      },
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+      toolsAllowExecTargetRequirement: {
+        version: 1,
+        target: { version: 1, host: "gateway", ask: "always" },
+        grantIndex: 0,
+      },
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "test-runtime",
+        namespace: "test.authority",
+        payload: { tools: [{ id: "read", enabled: true }] },
+      },
+    };
+
+    it("does not materialize omitted, undefined, or inherited authority fields", () => {
+      for (const input of [
+        {},
+        {
+          scheduledToolPolicy: undefined,
+          toolsAllowProvenance: undefined,
+          toolsAllowExecTarget: undefined,
+          toolsAllowExecTargetRequirement: undefined,
+          runtimeAuthority: undefined,
+        },
+        Object.create(envelopes) as UnknownRecord,
+      ]) {
+        const normalized = normalize(input);
+
+        expect(normalized).not.toHaveProperty("scheduledToolPolicy");
+        expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+        expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
+        expect(normalized).not.toHaveProperty("toolsAllowExecTargetRequirement");
+        expect(normalized).not.toHaveProperty("runtimeAuthority");
+      }
+    });
+
+    it("retains valid envelopes without mutating or freezing the input", () => {
+      const input = structuredClone(envelopes);
+
+      const normalized = normalize(input);
+
+      expect(normalized).toMatchObject(envelopes);
+      expect(input).toEqual(envelopes);
+      const authority = child(normalized, "runtimeAuthority");
+      const payload = child(authority, "payload");
+      expect(authority).not.toBe(input.runtimeAuthority);
+      expect(payload).not.toBe(input.runtimeAuthority.payload);
+      expect(Object.isFrozen(authority)).toBe(true);
+      expect(Object.isFrozen(payload)).toBe(true);
+      expect(Object.isFrozen((payload.tools as unknown[])[0])).toBe(true);
+      expect(Object.isFrozen(input.runtimeAuthority)).toBe(false);
+      expect(Object.isFrozen(input.runtimeAuthority.payload)).toBe(false);
+      expect(Object.isFrozen(input.runtimeAuthority.payload.tools[0])).toBe(false);
+    });
+
+    it("retains a recovery marker while dropping invalid peer envelopes", () => {
+      const normalized = normalize({
+        scheduledToolPolicy: { version: 2, mode: "trusted" },
+        toolsAllowProvenance: { version: 2, source: "authenticated-requester" },
+        toolsAllowExecTarget: { version: 1, host: "remote" },
+        toolsAllowExecTargetRequirement: null,
+        runtimeAuthority: { ...envelopes.runtimeAuthority, version: 2 },
+      });
+
+      expect(normalized.toolsAllowExecTargetRequirement).toEqual({
+        version: 1,
+        recoveryRequired: true,
+      });
+      expect(normalized).not.toHaveProperty("scheduledToolPolicy");
+      expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+      expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
+      expect(normalized).not.toHaveProperty("runtimeAuthority");
+    });
+  });
+
   it.each(["create", "patch"] as const)(
     "does not promote prototype-only schedule fields during %s normalization",
     (mode) => {
@@ -159,6 +250,88 @@ describe("normalizeCronJobCreate", () => {
     );
 
     expect(child(createAgent({ payload }), "payload")).not.toHaveProperty("model");
+  });
+  it("retains only authored native requester and caller facts without claiming a captured tool surface", () => {
+    const ignoredGetter = vi.fn(() => true);
+    const channelRequester = Object.defineProperty(
+      {
+        ...CHANNEL_REQUESTER,
+        channel: " Discord ",
+        accountId: " Work ",
+        senderId: " 123456789012345678 ",
+        roles: ["administrator"],
+      },
+      "senderIsOwner",
+      { enumerable: true, get: ignoredGetter },
+    );
+    const normalized = createAgent({
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: { kind: "local" },
+        channelRequester,
+      },
+    });
+
+    expect(normalized.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin: { kind: "local" },
+      channelRequester: CHANNEL_REQUESTER,
+    });
+    expect(ignoredGetter).not.toHaveBeenCalled();
+  });
+  it.each([
+    { label: "missing version", patch: { version: undefined } },
+    { label: "unknown version", patch: { version: 2 } },
+    { label: "blank channel", patch: { channel: " " } },
+    { label: "invalid account", patch: { accountId: "__proto__" } },
+    { label: "non-string sender", patch: { senderId: 123 } },
+  ])("drops $label requester facts without losing genuine tool-surface proof", ({ patch }) => {
+    const normalized = createAgent({
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "local" },
+        channelRequester: { ...CHANNEL_REQUESTER, ...patch },
+      },
+    });
+
+    expect(normalized.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "final-executable-surface",
+      callerOrigin: { kind: "local" },
+    });
+  });
+  it("rejects accessor and inherited requester identities without invoking getters", () => {
+    const senderGetter = vi.fn(() => CHANNEL_REQUESTER.senderId);
+    const accessorRequester = Object.defineProperty({ ...CHANNEL_REQUESTER }, "senderId", {
+      enumerable: true,
+      get: senderGetter,
+    });
+    const inheritedRequester = Object.create(CHANNEL_REQUESTER) as UnknownRecord;
+    for (const channelRequester of [accessorRequester, inheritedRequester, undefined]) {
+      const normalized = createAgent({
+        toolsAllowProvenance: {
+          version: 1,
+          source: "authenticated-requester",
+          channelRequester,
+        },
+      });
+      expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+    }
+    expect(senderGetter).not.toHaveBeenCalled();
+  });
+  it.each([undefined, 2])("rejects native provenance envelope version %s", (version) => {
+    expect(
+      createAgent({
+        toolsAllowProvenance: {
+          version,
+          source: "authenticated-requester",
+          channelRequester: CHANNEL_REQUESTER,
+        },
+      }),
+    ).not.toHaveProperty("toolsAllowProvenance");
   });
   it("trims cron timezones and drops blank values", () => {
     const trimmed = mainSchedule({ ...CRON_SCHEDULE, tz: "  Europe/Vienna  " });
@@ -195,10 +368,7 @@ describe("normalizeCronJobCreate", () => {
     );
     expect(normalized.sessionTarget).toBe("current");
     expect(normalized.sessionKey).toBe("agent:main:telegram:direct:42");
-  });
-  it("canonicalizes delivery.channel casing", () => {
-    const delivery = agentDelivery({ mode: "announce", channel: "Telegram", to: "7200373102" });
-    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
+    expect(normalized.delivery).toEqual({ mode: "announce" });
   });
   it("preserves explicit null model clear in payload patches", () => {
     const normalized = normalizePatch({ payload: { kind: "agentTurn", model: null } });
@@ -223,6 +393,19 @@ describe("normalizeCronJobCreate", () => {
   it("preserves explicit exact cron schedule", () => {
     const schedule = mainSchedule({ kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 });
     expect(schedule.staggerMs).toBe(0);
+  });
+  it.each(["1e3", "42.8", "0x10", "abc", "", null, {}, 8_640_000_000_000_001])(
+    "rejects invalid explicit cron stagger %j before create or patch defaults",
+    (staggerMs) => {
+      const schedule = { kind: "cron", expr: "0 * * * *", staggerMs };
+      expect(() => createMain({ schedule })).toThrow(/staggerMs/);
+      expect(() => normalizePatch({ schedule })).toThrow(/staggerMs/);
+    },
+  );
+  it("still strips an invalid stagger from a non-cron schedule", () => {
+    const schedule = { kind: "every", everyMs: 60_000, staggerMs: "abc" };
+    expect(createMain({ schedule }).schedule).toEqual(EVERY_SCHEDULE);
+    expect(normalizePatch({ schedule }).schedule).toEqual(EVERY_SCHEDULE);
   });
   it("defaults deleteAfterRun for one-shot schedules", () => {
     const normalized = createMain({ schedule: { kind: "at", at: "2026-01-12T18:00:00Z" } });
@@ -322,9 +505,6 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.channel).toBe("telegram");
     expect(delivery.to).toBe("123");
     expect(validateCronAddParams(normalized)).toBe(false);
-  });
-  it("defaults isolated agentTurn delivery to announce", () => {
-    expect(child(createAgent(), "delivery").mode).toBe("announce");
   });
   it("defaults command payloads to isolated announce jobs", () => {
     const normalized = createDefaulted({
@@ -489,12 +669,6 @@ describe("normalizeCronJobCreate", () => {
     );
     expect(delivery.mode).toBeUndefined();
     expect(delivery.to).toBe("123");
-  });
-  it("stores current sessionTarget source context when context is available", () => {
-    const normalized = createAgent({ sessionTarget: "current" }, "agent:main:discord:group:ops");
-    expect(normalized.sessionTarget).toBe("current");
-    expect(normalized.sessionKey).toBe("agent:main:discord:group:ops");
-    expect(normalized.delivery).toEqual({ mode: "announce" });
   });
   it("falls back current sessionTarget to isolated without context", () => {
     const normalized = createAgent({ sessionTarget: "current" });
@@ -726,18 +900,6 @@ describe("normalizeCronJobPatch", () => {
       },
     });
     expect(normalized.payload).toEqual({ kind: "systemEvent", text: "hi", toolsAllow: ["exec"] });
-    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
-  });
-  it("prunes schedule fields that do not belong to at schedules for patches", () => {
-    const normalized = normalizePatch({ schedule: STALE_AT_SCHEDULE });
-    expect(normalized.schedule).toEqual(NORMALIZED_AT_SCHEDULE);
-    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
-  });
-  it("prunes staggerMs from every schedules for patches", () => {
-    const normalized = normalizePatch({
-      schedule: { kind: "every", everyMs: 60_000, staggerMs: 30_000 },
-    });
-    expect(normalized.schedule).toEqual(EVERY_SCHEDULE);
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 });

@@ -1,4 +1,3 @@
-// Line plugin module implements gateway behavior.
 import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin, PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
@@ -56,9 +55,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
 
-    const monitorLineProvider =
-      getLineRuntime().channel.line?.monitorLineProvider ??
-      (await loadLineMonitorRuntime()).monitorLineProvider;
+    const { monitorLineProvider } = await loadLineMonitorRuntime();
 
     return await monitorLineProvider({
       channelAccessToken: token,

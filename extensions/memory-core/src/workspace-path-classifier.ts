@@ -14,6 +14,15 @@ export const classifyWorkspaceMemoryPaths: ClassifyWorkspaceMemoryPaths = async 
         absolutePath: path.resolve(params.workspaceDir, relativePath),
         source: "memory",
         workspaceDir: params.workspaceDir,
+        ...(params.readSources !== undefined
+          ? {
+              readSource: {
+                canonicalRelativePath: params.readSources.find(
+                  (source) => source.relativePath === relativePath,
+                )?.canonicalRelativePath,
+              },
+            }
+          : {}),
       });
       return { relativePath, originClass: classification.originClass };
     }),

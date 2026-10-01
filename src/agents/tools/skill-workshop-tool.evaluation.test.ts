@@ -115,28 +115,9 @@ describe("skill_workshop evaluation", () => {
     const visible = toolText(evaluated);
 
     expect(visible).toContain("Decisions: pass=1, revise=0, block=0, none=0; errors=1; skipped=1.");
-    expect(visible).toContain('"evaluatorId":"offline","pluginId":"quality","status":"error"');
-    expect(visible).toContain('"evaluatorId":"pass-rules","pluginId":"quality"');
-    expect(visible).toContain('"pluginVersion":"1.2.3"');
-    expect(visible).toContain('"status":"completed"');
-    expect(visible).toContain('"decision":"pass"');
-    expect(visible).toContain("private pass reason");
-    expect(visible).toContain("private pass summary");
-    expect(visible).toContain('"file":"SKILL.md"');
-    expect(visible).toContain('"line":12');
-    expect(visible).toContain('"message":"critical finding"');
-    expect(visible).toContain('"severity":"critical"');
+    const visibleOutcomes: unknown = JSON.parse(visible.split("\nOutcomes: ")[1] ?? "");
+    expect(visibleOutcomes).toEqual([errorOutcome, completedOutcome, skippedOutcome]);
     expect(visible).toContain('"metrics":{"coverage":0.75,"score":0.8}');
-    expect(visible).toContain('"evaluatorVersion":"rules-7"');
-    expect(visible).toContain('"mode":"static"');
-    expect(visible).toContain('"error":"private error"');
-    expect(visible).toContain('"evaluatorId":"optional","pluginId":"quality","status":"skipped"');
-    expect(visible.indexOf('"evaluatorId":"offline"')).toBeLessThan(
-      visible.indexOf('"evaluatorId":"pass-rules"'),
-    );
-    expect(visible.indexOf('"evaluatorId":"pass-rules"')).toBeLessThan(
-      visible.indexOf('"evaluatorId":"optional"'),
-    );
     expect(visible.length).toBeLessThan(1_000);
     expect(visible).not.toContain("[truncated:");
     const details = evaluated.details as { evaluation: { outcomes: unknown[] } };

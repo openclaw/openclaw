@@ -1,4 +1,3 @@
-// Voice Call plugin module implements cli behavior.
 import path from "node:path";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -36,12 +35,6 @@ import {
   getTailscaleSelfInfo,
   setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
-
-type Logger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
 
 type SetupCheck = {
   id: string;
@@ -137,7 +130,6 @@ export function registerVoiceCallCli(params: {
   coreConfig: OpenClawConfig;
   ensureRuntime: () => Promise<VoiceCallRuntime>;
   stateRuntime?: VoiceCallStateRuntime["state"];
-  logger: Logger;
 }) {
   const { program, config, coreConfig, ensureRuntime, stateRuntime } = params;
   const ensureHistoryStateRuntime = (): void => {

@@ -9,6 +9,7 @@ import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
+import type { RedactPattern } from "./redact-pattern-runtime.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -37,7 +38,7 @@ afterAll(async () => await paths.cleanup());
 async function logFromPlugin(
   message: string,
   meta?: Record<string, unknown>,
-  patterns?: string[],
+  patterns?: readonly RedactPattern[],
   write?: (logger: ReturnType<typeof getChildLogger>) => void,
 ) {
   const file = paths.nextPath();
@@ -46,7 +47,8 @@ async function logFromPlugin(
     file,
     consoleStyle: "json",
     consoleLevel: "info",
-    redactPatterns: patterns,
+    // Logging config carries pattern text only; the default policy's matchers are not configurable.
+    redactPatterns: patterns?.filter((pattern): pattern is string => typeof pattern === "string"),
   });
   const output = vi.fn();
   loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
@@ -261,6 +263,62 @@ it.each([":", "="])(
       expect(record.message).not.toContain("opaque");
       expect(record.message).toContain(`x-pomerium-jwt-assertion${separator} ***`);
     }
+  },
+);
+
+it.each([
+  {
+    name: "unchanged audit fields",
+    fields: { kind: "forwarded", host: "example.invalid", substituted: false },
+    patterns: [],
+    expected: '{"kind":"forwarded","host":"example.invalid","substituted":false}',
+  },
+  {
+    name: "colliding masked property names",
+    fields: { keyA: "first", keyB: "last" },
+    patterns: ["/key[AB]/g"],
+    expected: '{"***":"last"}',
+  },
+  {
+    name: "masked integer property order",
+    fields: { "0": "zero", "1": "one", other: "tail" },
+    patterns: ['/"(0)":"zero"/g'],
+    expected: '{"1":"one","***":"zero","other":"tail"}',
+  },
+  {
+    name: "a masked surrogate half",
+    fields: { value: "😀" },
+    patterns: [String.raw`/\uDE00/g`],
+    expected: String.raw`{"value":"\ud83d***"}`,
+  },
+])("registered plugin logger preserves canonical file bytes for $name", async (fixture) => {
+  const result = await logFromPlugin("canonical proof", fixture.fields, fixture.patterns);
+  expect(result.lines).toHaveLength(1);
+  expect(result.lines[0]).toContain(`"1":${fixture.expected}`);
+  expect(result.records[0]["1"]).toEqual(JSON.parse(fixture.expected));
+});
+
+it.each([
+  { patterns: [], one: "one" },
+  { patterns: ['/"1":"(one)","0":"zero"/g'], one: "***" },
+])(
+  "registered plugin logger preserves canonical metadata-only native values: $patterns",
+  async ({ patterns, one }) => {
+    let conversions = 0;
+    class NativeValue {
+      toJSON() {
+        conversions += 1;
+        return new Proxy({ 0: "zero", 1: "one" }, { ownKeys: () => ["1", "0"] });
+      }
+    }
+    const result = await logFromPlugin("", undefined, patterns, (logger) => {
+      logger.info({ value: new NativeValue() });
+    });
+    expect(conversions).toBe(1);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0].message).toBeUndefined();
+    expect(result.records[0]["1"].value).toEqual({ 0: "zero", 1: one });
+    expect(result.lines[0]).toContain(`"value":{"0":"zero","1":"${one}"}`);
   },
 );
 
@@ -514,4 +572,19 @@ it("registered plugin service logger never restores a secret after a zero-width 
   ]);
   expect(result.records[0]["1"].value).toBe("FIRST_…7890 ***SECOND_PRIVATE_VALUE");
   expect(result.console[0].value).toBe("FIRST_…7890 ***SECOND_PRIVATE_VALUE");
+});
+
+it("registered plugin logger projects one capture across scalars before the next rule", async () => {
+  const result = await logFromPlugin(
+    "cross-scalar capture",
+    { alpha: "SYNTHETIC_A", beta: "SYNTHETIC_B", next: "SYNTHETIC_NEXT", safe: "visible" },
+    [
+      String.raw`/"alpha":"(SYNTHETIC_A","beta":"SYNTHETIC_B)"/g`,
+      String.raw`/"alpha":"\*\*\*","\*\*\*":"\*\*\*","next":"(SYNTHETIC_NEXT)"/g`,
+    ],
+  );
+  const expected = { alpha: "***", "***": "***", next: "***", safe: "visible" };
+  expect(result.records[0]["1"]).toEqual(expected);
+  expect(result.console[0]).toMatchObject(expected);
+  expect(JSON.stringify(result)).not.toMatch(/SYNTHETIC_(?:A|B|NEXT)/);
 });

@@ -67,6 +67,7 @@ const APP_ROUTE_DEFINITIONS = {
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   memory: { path: "/settings/memory" },
+  search: { path: "/settings/search" },
   talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
@@ -93,7 +94,6 @@ const APP_ROUTE_DEFINITIONS = {
   // Automations is the product name; /cron stays as a legacy alias for
   // pre-rename bookmarks and deep links.
   cron: { path: "/automations", aliases: ["/cron"] },
-  tasks: { path: "/tasks" },
   devices: { path: "/settings/devices", aliases: ["/nodes"] },
   "cloud-workers": { path: "/settings/cloud-workers" },
   plugin: { path: "/plugin" },
@@ -355,13 +355,8 @@ export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
 }
 
 export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
-  const normalizedPath = normalizePath(pathname);
-  const prefix = `${pathForRoute("plugins", basePath)}/`;
-  if (!normalizedPath.startsWith(prefix)) {
-    return null;
-  }
-  const id = normalizedPath.slice(prefix.length);
-  return isPluginCatalogId(id) ? id : null;
+  const id = routePathSuffix(pathname, "plugins", basePath);
+  return id && isPluginCatalogId(id) ? id : null;
 }
 
 export function pathForPluginSettings(pluginId: string, basePath = ""): string {
@@ -374,13 +369,7 @@ export function pathForPluginSettings(pluginId: string, basePath = ""): string {
 }
 
 export function pluginSettingsIdFromPath(pathname: string, basePath = ""): string | null {
-  const normalizedPath = normalizePath(pathname);
-  const settingsPath = pathForRoute("plugin-settings", basePath);
-  const prefix = `${settingsPath}/`;
-  if (!normalizedPath.startsWith(prefix)) {
-    return null;
-  }
-  const encodedPluginId = normalizedPath.slice(prefix.length);
+  const encodedPluginId = routePathSuffix(pathname, "plugin-settings", basePath);
   // This exact retired discovery route belongs to the Plugins workspace.
   if (!encodedPluginId || encodedPluginId.includes("/") || encodedPluginId === "discover") {
     return null;

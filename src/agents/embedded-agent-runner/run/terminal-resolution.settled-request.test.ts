@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { setReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -61,59 +60,6 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         settledTurnFinalizationAvailable: true,
       }),
     ).toBeNull();
-  });
-
-  it("keeps explicit silence terminal across required and optional settled turns", () => {
-    const toolUseAssistant = buildEmbeddedRunnerAssistant({
-      stopReason: "toolUse",
-      content: [{ type: "toolCall", id: "tool-1", name: "write", arguments: {} }],
-    });
-    const silentAssistant = buildEmbeddedRunnerAssistant({
-      stopReason: "stop",
-      content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [SILENT_REPLY_TOKEN],
-      toolMetas: [{ toolName: "write", toolCallId: "tool-1", replaySafe: false }],
-      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      messagesSnapshot: [
-        { role: "user", content: [{ type: "text", text: "[OpenClaw heartbeat poll]" }] },
-        toolUseAssistant,
-        { role: "toolResult", toolCallId: "tool-1", toolName: "write", isError: false },
-        silentAssistant,
-      ] as never,
-      lastAssistant: silentAssistant,
-      currentAttemptAssistant: silentAssistant,
-      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-
-    const request = (runParams: {
-      trigger: "heartbeat" | "user";
-      terminalReplyExpectation?: "required";
-    }) =>
-      resolveSettledTurnFinalizationRequest({
-        runParams: {
-          sessionId: "session:settled-silent",
-          runId: "run:settled-silent",
-          allowEmptyAssistantReplyAsSilent: true,
-          ...runParams,
-        } as never,
-        attempt,
-        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
-        modelApi: "openai-responses",
-        executionContract: undefined,
-        payloadsWithToolMedia: [],
-        hasTerminalToolPresentation: false,
-        terminalState: resolveEmbeddedRunAttemptTerminalState({
-          attempt,
-          assistant: silentAssistant,
-        }),
-        settledTurnFinalizationAvailable: true,
-      });
-
-    expect(request({ trigger: "heartbeat" })).toBeNull();
-    expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBeNull();
   });
 
   it("requires an available finalizer and no visible structured error", () => {
@@ -182,6 +128,61 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         }),
       }),
     ).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
+  it("preserves optional authored silence after a settled tool failure", () => {
+    const toolAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-rejected", name: "tool_call", arguments: {} }],
+    });
+    const silentAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: silentAssistant,
+      currentAttemptAssistant: silentAssistant,
+      messagesSnapshot: [
+        toolAssistant,
+        makeTextToolResult("tool-rejected", "tool_call", "Required argument missing", true, 0),
+        silentAssistant,
+      ],
+      toolMetas: [
+        { toolName: "tool_call", toolCallId: "tool-rejected", isError: true, replaySafe: true },
+      ],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      lastToolError: { toolName: "tool_call", error: "Required argument missing" },
+    });
+    const request = (terminalReplyExpectation: "required" | "optional") =>
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:rejected-silent",
+          runId: "run:rejected-silent",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "Review the completed work.",
+          timeoutMs: 60_000,
+          terminalReplyExpectation,
+        },
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: buildEmbeddedRunPayloads({
+          assistantTexts: attempt.assistantTexts,
+          lastAssistant: silentAssistant,
+          lastToolError: attempt.lastToolError,
+          sessionKey: "session:rejected-silent",
+        }),
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: silentAssistant,
+        }),
+        settledTurnFinalizationAvailable: true,
+      });
+
+    expect(request("required")).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(request("optional")).toBeNull();
   });
 
   it("finalizes after successful tools despite pre-tool progress and a stale error (#132762)", () => {

@@ -45,13 +45,13 @@ export type TestChatPane = HTMLElement & {
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
   syncHistoryObserver: () => void;
-  prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
   stagedOlderPage: unknown;
   stagedOlderLoad: Promise<void> | null;
   requestReplyMessage: (messageId: string) => void;
   readReplyMessage: (messageId: string) => unknown;
+  replyMessageStatus: (messageId: string) => string | undefined;
   openReplyMessage: (messageId: string) => void;
   currentReplyNavigationId: (sessionKey: string) => string | null;
   hasOlderMessages: () => boolean;

@@ -3,10 +3,55 @@ import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "./errno.js";
 
-export type DatabasePathIdentity = Readonly<{
+export type DatabaseFileIdentity = Readonly<{
   key: string;
-  canonicalPath: string;
+  birthtime?: string;
 }>;
+export type DatabasePathIdentity = DatabaseFileIdentity & Readonly<{ canonicalPath: string }>;
+
+// The physical host policy stays fixed across every admission in this process.
+const useDatabaseBirthtime = process.platform !== "linux";
+
+export function readDatabaseIdentityBirthtime(file: BigIntStats): string {
+  // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
+  // Keep the unknown creation-time value stable across ordinary database writes.
+  return useDatabaseBirthtime ? file.birthtimeNs.toString() : "0";
+}
+
+export function readDatabaseFileIdentity(value: unknown): DatabaseFileIdentity {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !("key" in value) ||
+    typeof value.key !== "string" ||
+    !/^file:(?:0|[1-9]\d{0,19}):(?:0|[1-9]\d{0,19})$/.test(value.key) ||
+    ("birthtime" in value &&
+      value.birthtime !== undefined &&
+      (typeof value.birthtime !== "string" || !/^-?(?:0|[1-9]\d{0,29})$/.test(value.birthtime)))
+  ) {
+    throw new Error("SQLite snapshot requires a captured physical file identity");
+  }
+  return {
+    key: value.key,
+    ...("birthtime" in value && typeof value.birthtime === "string"
+      ? { birthtime: value.birthtime }
+      : {}),
+  };
+}
+
+export function assertDatabaseFileIdentity(
+  file: BigIntStats,
+  expected: DatabaseFileIdentity,
+): void {
+  if (
+    !file.isFile() ||
+    `file:${file.dev}:${file.ino}` !== expected.key ||
+    (expected.birthtime !== undefined && readDatabaseIdentityBirthtime(file) !== expected.birthtime)
+  ) {
+    throw new Error("SQLite database file identity changed before existing-only open");
+  }
+}
 
 function existingIdentity(
   file: BigIntStats,
@@ -16,10 +61,18 @@ function existingIdentity(
   if (!file.isFile()) {
     throw new Error("SQLite worker database path must identify a regular file");
   }
-  if (file.dev !== canonicalFile.dev || file.ino !== canonicalFile.ino) {
+  if (
+    file.dev !== canonicalFile.dev ||
+    file.ino !== canonicalFile.ino ||
+    readDatabaseIdentityBirthtime(file) !== readDatabaseIdentityBirthtime(canonicalFile)
+  ) {
     throw new Error("SQLite database pathname changed during admission");
   }
-  return { key: `file:${file.dev}:${file.ino}`, canonicalPath };
+  return {
+    key: `file:${file.dev}:${file.ino}`,
+    canonicalPath,
+    birthtime: readDatabaseIdentityBirthtime(file),
+  };
 }
 
 /** Inspect a native-owner path without replacing its diagnostic for a non-file target. */
@@ -39,14 +92,14 @@ export function inspectDatabasePathIdentitySync(
     if (!file.isFile()) {
       return undefined;
     }
-    const canonicalPath = realpathSync(resolvedPath);
+    const canonicalPath = realpathSync.native(resolvedPath);
     return existingIdentity(file, statSync(canonicalPath, { bigint: true }), canonicalPath);
   }
   const missing: string[] = [];
   let ancestor = resolvedPath;
   while (true) {
     try {
-      const canonicalPath = path.join(realpathSync(ancestor), ...missing);
+      const canonicalPath = path.join(realpathSync.native(ancestor), ...missing);
       return { key: `path:${canonicalPath}`, canonicalPath };
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
@@ -71,6 +124,16 @@ export function readDatabasePathIdentitySync(databasePath: string): DatabasePath
   return identity;
 }
 
+/** Inspect retained aliases only while binding a newly observed database path. */
+export function findChangedDatabasePaths(
+  paths: Iterable<string>,
+  observed: DatabasePathIdentity,
+): string[] {
+  return [...paths].filter(
+    (pathname) => inspectDatabasePathIdentitySync(pathname)?.key !== observed.key,
+  );
+}
+
 export async function readDatabasePathIdentity(
   databasePath: string,
 ): Promise<DatabasePathIdentity> {
@@ -81,9 +144,16 @@ export async function readDatabasePathIdentity(
     throw error;
   });
   if (file) {
-    const canonicalPath = await realpath(databasePath);
-    const canonicalFile = await stat(canonicalPath, { bigint: true });
-    return existingIdentity(file, canonicalFile, canonicalPath);
+    try {
+      const canonicalPath = await realpath(databasePath);
+      const canonicalFile = await stat(canonicalPath, { bigint: true });
+      return existingIdentity(file, canonicalFile, canonicalPath);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        throw new Error("SQLite database pathname changed during admission", { cause: error });
+      }
+      throw error;
+    }
   }
   // Resolve the existing ancestor before a first open so directory aliases share admission.
   const missing: string[] = [];
@@ -106,9 +176,13 @@ export async function readDatabasePathIdentity(
   }
 }
 
-export function assertExistingDatabaseIdentity(databasePath: string, expected: string): void {
-  const file = statSync(databasePath, { bigint: true });
-  if (!file.isFile() || `file:${file.dev}:${file.ino}` !== expected) {
-    throw new Error("SQLite database file identity changed before existing-only open");
-  }
+export function assertExistingDatabaseIdentity(
+  databasePath: string,
+  expected: string,
+  expectedBirthtime?: string,
+): void {
+  assertDatabaseFileIdentity(statSync(databasePath, { bigint: true }), {
+    key: expected,
+    birthtime: expectedBirthtime,
+  });
 }

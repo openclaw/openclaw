@@ -1,13 +1,12 @@
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import { resolveRunEntryCliRuntime } from "../../agents/embedded-agent-runner/run-entry-runtime.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
-import { prepareGitHubPublicationAvailability } from "../../gateway/github-publication-availability.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -22,11 +21,11 @@ import {
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import type { MessageToolDeliveryState } from "./agent-runner-event-handler.js";
 import type { EmbeddedAgentRunResult } from "./agent-runner-execution.types.js";
+import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import type {
   AgentFallbackCandidateCommonParams,
   AgentFallbackCycleParams,
 } from "./agent-runner-fallback-cycle.types.js";
-import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-lifecycle.js";
 import {
   mintReplyMessageActionTurnCapability,
   resolveModelFallbackOptions,
@@ -81,7 +80,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const bootstrapContextRunKind = turn.opts?.isHeartbeat
     ? ("heartbeat" as const)
     : ("default" as const);
-  let githubPublicationAvailability: Promise<boolean> | undefined;
 
   params.timing.logMilestoneIfSlow({
     runId: params.runId,
@@ -90,49 +88,33 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     milestone: "before_model_fallback",
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
-  const resolveCandidateRuntime = (provider: string, model: string) => {
+  const resolveCandidateRuntime = (
+    provider: string,
+    model: string,
+    sessionRuntimeOverride: string | undefined,
+  ) => {
     const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
     const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
-    const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-      provider,
-      entry: activeEntry,
-      cfg: params.runtimeConfig,
-    });
-    const pinnedHarnessId = resolveSessionPinnedHarnessId(activeEntry);
-    const locksPersistedHarness =
-      pinnedHarnessId !== undefined && pinnedHarnessId === sessionRuntimeOverride;
     const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
       config: params.runtimeConfig,
     });
-    const pinnedCliRuntime =
-      !locksPersistedHarness &&
-      sessionRuntimeOverride &&
-      isCliProvider(sessionRuntimeOverride, params.runtimeConfig)
-        ? sessionRuntimeOverride
-        : undefined;
-    const cliExecutionProvider =
-      pinnedCliRuntime ??
-      (sessionRuntimeOverride
-        ? provider
-        : (resolveCliRuntimeExecutionProvider({
-            provider,
-            cfg: params.runtimeConfig,
-            agentId: turn.followupRun.run.agentId,
-            modelId: model,
-            authProfileId: selectedAuthProfile.authProfileId,
-          }) ?? provider));
-    const useCliExecution =
-      pinnedCliRuntime !== undefined ||
-      (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, params.runtimeConfig));
     return {
       candidateRun,
       sessionRuntimeOverride,
-      cliExecutionProvider,
-      useCliExecution,
+      ...resolveRunEntryCliRuntime({
+        config: params.runtimeConfig,
+        provider,
+        model,
+        agentId: turn.followupRun.run.agentId,
+        authProfileId: selectedAuthProfile.authProfileId,
+        sessionRuntimeOverride,
+        pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
+      }),
     };
   };
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
+      preparedRunAdmission: params.preparedRunAdmission,
       selection: {
         cfg: selection.cfg,
         provider: selection.provider,
@@ -149,7 +131,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         runId: params.runId,
         agentId: turn.followupRun.run.agentId,
         sessionId: turn.followupRun.run.sessionId,
-        sessionKey: selection.sessionKey,
+        sessionKey: turn.sessionKey,
         lane: runLane,
       },
       harness: {
@@ -165,8 +147,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             entry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
             cfg: params.runtimeConfig,
           }),
-        resolveContextEngineHost: (provider, model) => {
-          const runtime = resolveCandidateRuntime(provider, model);
+        resolveContextEngineHost: (provider, model, runtimeOverride) => {
+          const runtime = resolveCandidateRuntime(provider, model, runtimeOverride);
           if (!runtime.useCliExecution) {
             return undefined;
           }
@@ -189,7 +171,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           hasRetryBlockedDelivery:
             turn.blockReplyPipeline?.hasRetryBlockedDelivery() === true ||
             params.directBlockDeliveries.some(hasBlockReplyDeliveryCustody),
-          hasDirectlySentBlockReply: params.directlySentBlockKeys.size > 0,
+          hasDirectlySentBlockReply: params.directBlockDeliveries.some(
+            (delivery) => delivery.terminalDeliveryConfirmed === true,
+          ),
           hasBlockReplyPipelineOutput: Boolean(
             turn.blockReplyPipeline?.hasBuffered() || turn.blockReplyPipeline?.didStream(),
           ),
@@ -207,9 +191,21 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       },
       abortSignal: params.runAbortSignal,
       onFallbackStep: (step) => {
-        emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
+        emitAgentEvent({
+          runId: params.runId,
+          ...(turn.sessionKey ? { sessionKey: turn.sessionKey } : {}),
+          stream: "lifecycle",
+          data: { phase: "fallback_step", ...step },
+        });
       },
       runCandidate: async (provider, model, runOptions) => {
+        bindReplyFallbackSteeringRoute({
+          operation: turn.replyOperation,
+          provenance: runOptions.modelRoutingProvenance,
+          route: { provider, model },
+          config: params.runtimeConfig,
+          workspaceDir: turn.followupRun.run.workspaceDir,
+        });
         clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
         params.state.maintenanceAuthProfile = undefined;
         params.state.compactionRequestBudget = undefined;
@@ -217,7 +213,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
         const runtime = params.timing.measureSync("fallback_resolve_runtime", () =>
-          resolveCandidateRuntime(provider, model),
+          resolveCandidateRuntime(provider, model, runOptions.agentHarnessRuntimeOverride),
         );
         const candidateRun = runtime.candidateRun;
         bindSourceReplyDeliveryRuntime(candidateRun, sourceReplyDeliveryRuntime);
@@ -241,6 +237,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
           sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
+          agentRuntime: runtime.sessionRuntimeOverride,
         });
         const candidateFastMode = resolveRunFastModeForFallbackCandidate({
           run: candidateRun,
@@ -270,6 +267,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         );
         try {
           const common = {
+            ...runOptions,
             preparedRunAdmission: params.preparedRunAdmission,
             messageActionTurnCapability,
             turn,
@@ -282,16 +280,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             runId: params.runId,
             runAbortSignal: params.runAbortSignal,
             runLane,
-            isFallbackRetry: runOptions.isFallbackRetry,
-            isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
             suppressQueuedUserPersistenceForCandidate:
               (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
               queuedUserMessagePersistedAcrossFallback,
             userTurnTranscriptRecorder,
-            contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
-            onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
-            assistantErrorTranscript: runOptions.assistantErrorTranscript,
-            authProfileFailurePolicy: runOptions.authProfileFailurePolicy,
             notifyUserMessagePersisted: () => {
               queuedUserMessagePersistedAcrossFallback = true;
             },
@@ -314,7 +306,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             const candidate = await runCliFallbackCandidate({
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
-              classifyResult: runOptions.classifyResult,
               lifecycleGeneration: params.state.lifecycleGeneration,
             });
             params.state.bootstrapPromptWarningSignaturesSeen =
@@ -323,21 +314,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           }
           const candidate = await runEmbeddedFallbackCandidate({
             ...common,
-            githubPublicationAvailable: await (githubPublicationAvailability ??=
-              turn.sessionKey && params.effectiveRun.agentId
-                ? prepareGitHubPublicationAvailability({
-                    sessionId: turn.followupRun.run.sessionId,
-                    sessionKey: turn.sessionKey,
-                    agentId: params.effectiveRun.agentId,
-                  })
-                : Promise.resolve(false)),
             effectiveRun: params.effectiveRun,
-            sessionRuntimeOverride: runtime.sessionRuntimeOverride,
+            directBlockDeliveries: params.directBlockDeliveries,
             getLifecycleGeneration: () => params.state.lifecycleGeneration,
             onLifecycleGeneration: (generation) => {
               params.state.lifecycleGeneration = generation;
             },
-            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             notifyUserAboutCompaction: params.notifyUserAboutCompaction,
             messageToolDeliveryState,
             onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {

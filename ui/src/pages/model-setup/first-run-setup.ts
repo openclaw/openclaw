@@ -5,6 +5,7 @@ import type {
   SystemAgentSetupVerifyResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import {
@@ -22,6 +23,7 @@ import {
   type ModelSetupPageState,
   type ModelSetupVerifyState,
   type ModelSetupWizardResult,
+  type ModelSetupWizardRecovery,
 } from "./state.ts";
 
 export type ModelSetupConnection = Pick<
@@ -41,10 +43,14 @@ export function captureModelSetupConnection(
   previousRecoveryScope: string | null = null,
 ) {
   const snapshot = context.gateway.snapshot;
+  const selection = modelSetupAgentSelection(context, firstRun);
   return {
     client: snapshot.client,
     hello: snapshot.hello,
-    agentId: modelSetupAgentSelection(context, firstRun).state.selectedId,
+    agentId: selection.state.selectedId,
+    selectionIntentRevision: firstRun ? 0 : selection.intentRevision,
+    selectionPending:
+      !firstRun && selection.state.selectedId === null && context.agents.state.agentsList === null,
     connected: snapshot.phase === "connected",
     firstRun,
     connectionRevision: context.gateway.connectionRevision,
@@ -54,6 +60,60 @@ export function captureModelSetupConnection(
         ? (snapshot.hello?.auth?.recoveryScope ?? null)
         : previousRecoveryScope,
   };
+}
+
+type ConnectionSnapshot = ReturnType<typeof captureModelSetupConnection>;
+
+export function modelSetupOwnerChanges(
+  previous: ConnectionSnapshot | null,
+  connection: ConnectionSnapshot,
+) {
+  const authenticatedOwnerLost =
+    previous && (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
+  const ownerChanged =
+    previous &&
+    (connection.agentId !== previous.agentId ||
+      connection.selectionIntentRevision !== previous.selectionIntentRevision ||
+      connection.firstRun !== previous.firstRun ||
+      connection.connectionRevision !== previous.connectionRevision ||
+      authenticatedOwnerLost);
+  return { authenticatedOwnerLost, ownerChanged };
+}
+
+export function reconcileModelSetupConnection(
+  previous: ConnectionSnapshot | null,
+  connection: ConnectionSnapshot,
+): { kind: "unchanged" | "pending" | "changed"; connection: ConnectionSnapshot } {
+  // An unloaded roster with unchanged intent is not a different wizard owner.
+  // Keep the admitted owner blocked until selection is validated again.
+  if (
+    previous &&
+    connection.selectionPending &&
+    connection.selectionIntentRevision === previous.selectionIntentRevision &&
+    connection.firstRun === previous.firstRun &&
+    connection.connectionRevision === previous.connectionRevision &&
+    (!connection.connected ||
+      (connection.recoveryScope &&
+        connection.recoveryScope === previous.recoveryScope &&
+        hasOperatorAdminAccess(connection.hello?.auth ?? null)))
+  ) {
+    return {
+      kind: previous.selectionPending ? "unchanged" : "pending",
+      connection: { ...previous, selectionPending: true },
+    };
+  }
+  const unchanged =
+    previous &&
+    connection.client === previous.client &&
+    connection.hello === previous.hello &&
+    connection.agentId === previous.agentId &&
+    connection.connected === previous.connected &&
+    connection.firstRun === previous.firstRun &&
+    connection.connectionRevision === previous.connectionRevision &&
+    connection.recoveryScope === previous.recoveryScope &&
+    connection.selectionIntentRevision === previous.selectionIntentRevision &&
+    connection.selectionPending === previous.selectionPending;
+  return { kind: unchanged ? "unchanged" : "changed", connection };
 }
 
 export type ModelSetupRouteData = { firstRun: boolean };
@@ -90,6 +150,12 @@ type FirstRunSetupHost = {
   setVerifyState: (state: ModelSetupVerifyState) => void;
   setActivationState: (state: ModelSetupActivationState) => void;
   setRefreshWarning: (warning: string | null) => void;
+  resumeWizard: (
+    wizard: ModelSetupWizardRecovery,
+    observer: (result: ModelSetupWizardResult) => () => boolean,
+  ) => void;
+  closeWizard: () => void;
+  notify: () => void;
 };
 
 export class FirstRunSetup {
@@ -106,6 +172,10 @@ export class FirstRunSetup {
       const activation = this.pending;
       if (activation?.receipt && JSON.stringify(activation.receipt) === receipt) {
         this.pending = null;
+        if (activation.outcome === "pending") {
+          // Another page settled this wizard; retire its local work, not the Gateway session.
+          this.host.closeWizard();
+        }
         if (activation.outcome === "verified") {
           this.host.setActivationState({ phase: "idle" });
         }
@@ -253,6 +323,11 @@ export class FirstRunSetup {
       return;
     }
     const configured = this.configuredActivationModel(pageState.result);
+    if (!this.pending.modelRef && receipt?.wizard) {
+      this.started = true;
+      this.host.resumeWizard(receipt.wizard, this.observeActivation(this.pending));
+      return;
+    }
     if (this.pending && (!configured || !this.pending.modelRef)) {
       this.started = true;
       this.showUnresolved();
@@ -275,6 +350,7 @@ export class FirstRunSetup {
     kind: string;
     modelRef?: string;
     modelTarget?: "utility";
+    wizard?: ModelSetupWizardRecovery;
   }): FirstRunActivation | null {
     const routeData = this.host.routeData();
     if (!routeData?.firstRun) {
@@ -328,6 +404,14 @@ export class FirstRunSetup {
       result.status === "done" ? result.modelActivation?.modelTarget : undefined;
     activation.outcome = "verified";
     activation.receipt = persistFirstRunActivationReceipt(this.host.context(), activation);
+  }
+
+  observeActivation(activation: FirstRunActivation | null) {
+    return (result: ModelSetupWizardResult) => {
+      this.recordActivation(activation, result);
+      this.host.notify();
+      return () => this.ownsActivation(activation);
+    };
   }
 
   finishActivation(

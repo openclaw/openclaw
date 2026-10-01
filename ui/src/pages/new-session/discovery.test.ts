@@ -31,6 +31,29 @@ describe("draftCloudProfileSupportsExecutionMode", () => {
 });
 
 describe("readDraftCloudProfiles", () => {
+  it("projects only bounded display identity and never guesses from a profile name", () => {
+    expect(
+      readDraftCloudProfiles([
+        {
+          id: "production",
+          providerId: "crabbox",
+          providerDisplayId: "aws",
+          settings: { provider: "azure" },
+        },
+        { id: "aws", providerId: "crabbox", providerDisplayId: "azure" },
+      ]),
+    ).toEqual([
+      { id: "aws", providerId: "crabbox", providerDisplayId: "azure", trust: undefined },
+      { id: "production", providerId: "crabbox", providerDisplayId: "aws", trust: undefined },
+    ]);
+    for (const providerDisplayId of [undefined, "", " aws", "aws\n", "a".repeat(65), {}, 42]) {
+      const [profile] = readDraftCloudProfiles([
+        { id: "aws", providerId: "crabbox", providerDisplayId },
+      ]);
+      expect(profile).not.toHaveProperty("providerDisplayId");
+    }
+  });
+
   it("keeps same-class choices distinct per OS and bounds catalogs", () => {
     const [profile] = readDraftCloudProfiles([
       {
@@ -178,6 +201,37 @@ describe("readDraftCloudProfiles", () => {
 });
 
 describe("readDraftEnvironments", () => {
+  it("retains actionable worker-host issues while discarding malformed messages", () => {
+    const issue = {
+      code: "worker-host-unavailable",
+      message: "state directory /srv/node is group-writable; run chmod go-w /srv/node",
+    };
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:unavailable",
+          type: "node",
+          status: "unavailable",
+          sessionHost: false,
+          issues: [
+            issue,
+            { ...issue, message: " " },
+            { ...issue, message: 42 },
+            { ...issue, message: "x".repeat(1_025) },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "node:unavailable",
+        type: "node",
+        status: "unavailable",
+        sessionHost: false,
+        issues: [issue],
+      },
+    ]);
+  });
+
   it("keeps only the exact update-required issue contract", () => {
     const issue = {
       code: "update-required",
@@ -229,6 +283,24 @@ describe("readDraftEnvironments", () => {
         },
       },
     ]);
+  });
+
+  it("preserves the Gateway's remediation for a runtime-required command", () => {
+    const requiredNodeCommand = {
+      command: "codex.exec-server.stdio.v1",
+      state: "undeclared",
+      message: "Enable the codex plugin on this node with openclaw plugins enable codex.",
+    };
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:runner",
+          type: "node",
+          status: "available",
+          requiredNodeCommand,
+        },
+      ])[0]?.requiredNodeCommand,
+    ).toEqual(requiredNodeCommand);
   });
 
   it("keeps the closed environment types while rejecting malformed entries", () => {

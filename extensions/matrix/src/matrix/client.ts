@@ -1,4 +1,3 @@
-// Matrix plugin module implements client behavior.
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
 export type { MatrixAuth } from "./client/types.js";

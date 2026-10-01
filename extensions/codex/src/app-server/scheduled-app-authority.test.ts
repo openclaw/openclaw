@@ -15,6 +15,7 @@ import {
   readCurrentCodexScheduledAppPolicy,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
+import { scheduledAppApprovalPolicyCases } from "./scheduled-app-authority.test-support.js";
 import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 
 function policyContext() {
@@ -694,57 +695,60 @@ describe("scheduled Codex app authority", () => {
     },
   );
 
-  it.each([
-    { name: "global default", app: {}, expected: "prompt" },
-    {
-      name: "app default over global default",
-      app: { default_tools_approval_mode: "writes" },
-      expected: "writes",
-    },
-    {
-      name: "tool override over app default",
-      app: {
-        default_tools_approval_mode: "prompt",
-        tools: { edit: { approval_mode: "approve" } },
-      },
-      expected: "approve",
-    },
-  ])("preserves approval $name during capture and continuation", async ({ app, expected }) => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "app/installed") {
-        return { apps: [{ id: "calendar", enabled: true, callable: true }] };
-      }
-      if (method === "config/read") {
+  it.each(scheduledAppApprovalPolicyCases)(
+    "preserves approval $name during capture and continuation",
+    async ({ app, expected, toolMetadata }) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "app/installed") {
+          return { apps: [{ id: "calendar", enabled: true, callable: true }] };
+        }
+        if (method === "config/read") {
+          return {
+            config: {
+              apps: { _default: { default_tools_approval_mode: "prompt" }, calendar: app },
+            },
+          };
+        }
         return {
-          config: {
-            apps: { _default: { default_tools_approval_mode: "prompt" }, calendar: app },
-          },
+          data: [
+            {
+              name: "codex_apps",
+              tools: {
+                edit: { title: "Edit event", _meta: { connector_id: "calendar", ...toolMetadata } },
+              },
+            },
+          ],
+          nextCursor: null,
         };
-      }
-      return {
-        data: [{ name: "codex_apps", tools: { edit: { _meta: { connector_id: "calendar" } } } }],
-        nextCursor: null,
-      };
-    });
-    const captured = await captureScheduledCodexAppAuthority({
-      client: { request } as never,
-      threadId: "thread-final",
-      policyContext: policyContext(),
-      auth: { kind: "prepared-profile", profileId: "openai:work", accountId: "acct-1" },
-    });
-    expect(captured).toMatchObject({ payload: { apps: [{ tools: { edit: expected } }] } });
+      });
+      const captured = await captureScheduledCodexAppAuthority({
+        client: { request } as never,
+        threadId: "thread-final",
+        policyContext: policyContext(),
+        auth: { kind: "prepared-profile", profileId: "openai:work", accountId: "acct-1" },
+      });
+      expect(captured).toMatchObject({ payload: { apps: [{ tools: { edit: expected } }] } });
 
-    const config = threadConfig();
-    config.policyContext = policyContext();
-    const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
-      config,
-      authority(),
-      await readCurrentCodexScheduledAppPolicy({ request }),
-    );
-    expect(intersected.configPatch).toMatchObject({
-      apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
-    });
-  });
+      const config = threadConfig();
+      config.policyContext = policyContext();
+      const currentPolicy = await readCurrentCodexScheduledAppPolicy({ request });
+      const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+        config,
+        authority(),
+        currentPolicy,
+      );
+      expect(intersected.configPatch).toMatchObject({
+        apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
+      });
+      const relaxed = intersectCodexPluginThreadConfigWithScheduledAuthority(config, captured, {
+        ...currentPolicy,
+        config: { apps: { calendar: { default_tools_approval_mode: "approve" } } },
+      });
+      expect(relaxed.configPatch).toMatchObject({
+        apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
+      });
+    },
+  );
 
   it("removes tools missing from current inventory and rotates the fingerprint", () => {
     const full = intersectCodexPluginThreadConfigWithScheduledAuthority(

@@ -1,7 +1,3 @@
-import crypto from "node:crypto";
-import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
-import { classifyOtelGrpcMigrationOwnership } from "../commands/doctor/shared/include-migration-ownership.js";
-import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-compat.js";
 import {
   readDeferredPluginMigrations,
   readDeferredPluginMigrationsAsync,
@@ -15,15 +11,20 @@ import {
 } from "../infra/shell-env.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
-import { preserveDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
+import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
+import {
+  resolveConfigIoEffect,
+  runConfigIoAsync,
+  runConfigIoSync,
+  type ConfigIoOperation,
+} from "./io.effects.js";
+import { isInvalidConfigError } from "./io.invalid-config.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
-import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
   resolveConfigWidePluginMetadataSnapshotAsync,
@@ -35,12 +36,10 @@ import {
   resolveConfigIncludesForRead,
   resolveConfigPathForDeps,
 } from "./io.read-helpers.js";
-import { autoOwnerDisplaySecretByPath } from "./io.state.js";
 import type {
   ConfigIoFactoryOptions,
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
-  NormalizedConfigIoDeps,
 } from "./io.types.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
@@ -53,61 +52,29 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import {
   validateConfigObjectWithPlugins,
   validateConfigObjectWithPluginsAsync,
-  type PreparedConfigValidationPluginMetadata,
 } from "./validation.js";
+import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
-type ValidateConfigWithPluginsResult = ReturnType<typeof validateConfigObjectWithPlugins>;
-
-type RecoveryCandidateValidation = {
-  migrated: ReturnType<typeof applyLegacyDoctorMigrations>;
-  authoredCandidate: unknown;
-  validated: ValidateConfigWithPluginsResult;
-};
+export type ConfigRecoveryCandidateTransform = (params: {
+  candidate: ConfigRecoveryCandidate;
+  configPath: string;
+  includeProvenance: NonNullable<ConfigFileSnapshot["includeProvenance"]>;
+  resolvedConfig: unknown;
+  deferredPluginMigrations: readonly DeferredPluginMigration[];
+}) => unknown;
 
 type ValidationPluginMetadataSnapshotLoader = {
   load: (config: OpenClawConfig) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadAsync: (config: OpenClawConfig) => Promise<PreparedConfigValidationPluginMetadata>;
-  getManifestRegistry: () => PluginManifestRegistry | undefined;
   getSnapshot: () => PluginMetadataSnapshot | undefined;
 };
 
-export type ConfigIoContext = {
-  deps: NormalizedConfigIoDeps;
-  pathResolution: { env: NodeJS.ProcessEnv; homedir?: () => string };
-  configPath: string;
-  options: ConfigIoFactoryOptions;
-  resolveDeferredPluginMigrations: () => readonly DeferredPluginMigration[];
-  resolveDeferredPluginMigrationsAsync: () => Promise<readonly DeferredPluginMigration[]>;
-  observeLoadConfigSnapshot: (snapshot: ConfigFileSnapshot) => ConfigFileSnapshot;
-  observeLoadConfigSnapshotAsync: (
-    snapshot: ConfigFileSnapshot,
-    assertCurrent?: () => void,
-  ) => Promise<ConfigFileSnapshot>;
-  finalizeLoadedRuntimeConfig: (config: OpenClawConfig) => OpenClawConfig;
-  finalizeLoadedRuntimeConfigAsync: (
-    config: OpenClawConfig,
-    metadata: ValidationPluginMetadataSnapshotLoader,
-    assertCurrent?: () => void,
-  ) => Promise<OpenClawConfig>;
-  createValidationPluginMetadataSnapshotLoader: (params: {
-    effectiveConfigRaw: unknown;
-    env: NodeJS.ProcessEnv;
-    allowCurrentPluginMetadata?: boolean;
-  }) => ValidationPluginMetadataSnapshotLoader;
-  resolveRuntimePreflightSourceConfig: (
-    candidate: OpenClawConfig,
-    includeFileHashes?: Record<string, string>,
-    includeFileTargets?: Record<string, string>,
-  ) => OpenClawConfig;
-  prepareRecoveryBackupCandidateAsync: (
-    candidate: ConfigRecoveryCandidate,
-  ) => Promise<ConfigRecoveryCandidatePreparation>;
-  prepareRecoveryBackupCandidate: (
-    candidate: ConfigRecoveryCandidate,
-  ) => ConfigRecoveryCandidatePreparation;
-};
+export type ConfigIoContext = ReturnType<typeof createConfigIoContext>;
 
-export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): ConfigIoContext {
+export function createConfigIoContext(
+  options: ConfigIoFactoryOptions = {},
+  transformRecoveryCandidate?: ConfigRecoveryCandidateTransform,
+) {
   const deps = normalizeConfigIoDeps(options);
   const configPath = resolveConfigPathForDeps(deps);
   // The normalized default homedir already applies OPENCLAW_HOME. Path
@@ -120,7 +87,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       options.deferredPluginMigrations ??
       (options.pluginValidation === "core-only"
         ? []
-        : readDeferredPluginMigrations({ env: deps.env }))
+        : readDeferredPluginMigrations({
+            env: deps.env,
+            artifactPreservingReadOnly: !deps.observe,
+          }))
     );
   }
 
@@ -131,7 +101,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       options.deferredPluginMigrations ??
       (options.pluginValidation === "core-only"
         ? []
-        : readDeferredPluginMigrationsAsync({ env: deps.env }))
+        : readDeferredPluginMigrationsAsync({
+            env: deps.env,
+            artifactPreservingReadOnly: !deps.observe,
+          }))
     );
   }
 
@@ -197,26 +170,13 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
       });
     }
-    const pendingValue = autoOwnerDisplaySecretByPath.get(configPath);
-    const { config: resolvedConfig, generatedSecret } = ensureOwnerDisplaySecret(
-      cfg,
-      () => pendingValue ?? crypto.randomBytes(32).toString("hex"),
-    );
-    const finalized = applyConfigOverrides(
-      retainGeneratedOwnerDisplaySecret({
-        config: resolvedConfig,
-        configPath,
-        generatedSecret,
-        state: { pendingByPath: autoOwnerDisplaySecretByPath },
-      }),
-    );
+    const finalized = applyConfigOverrides(cfg);
     const inherited = inheritLegacyDefaultAgentId(cfg, finalized);
     copyConfigResolutionFacts(cfg, inherited);
     return inherited;
   }
 
   function createValidationPluginMetadataSnapshotLoader(params: {
-    effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }): ValidationPluginMetadataSnapshotLoader {
@@ -246,7 +206,6 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
             installedPluginRecordIds: new Set(Object.keys(records)),
           };
         })()),
-      getManifestRegistry: () => snapshot?.manifestRegistry,
       getSnapshot: () => snapshot,
     };
   }
@@ -255,8 +214,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     candidate: OpenClawConfig,
     includeFileHashes?: Record<string, string>,
     includeFileTargets?: Record<string, string>,
+    baseEnv: NodeJS.ProcessEnv = deps.env,
   ): OpenClawConfig {
-    const env = { ...deps.env } as NodeJS.ProcessEnv;
+    const env = cloneEnvWithPlatformSemantics(baseEnv);
     const resolvedIncludes = resolveConfigIncludesForRead(
       candidate,
       configPath,
@@ -274,14 +234,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     );
   }
 
-  function* prepareRecoveryBackupCandidateSteps(candidate: ConfigRecoveryCandidate): Generator<
-    {
-      sync: () => RecoveryCandidateValidation;
-      async: () => Promise<RecoveryCandidateValidation>;
-    },
-    ConfigRecoveryCandidatePreparation,
-    RecoveryCandidateValidation
-  > {
+  function* prepareRecoveryBackupCandidateSteps(
+    candidate: ConfigRecoveryCandidate,
+  ): ConfigIoOperation<ConfigRecoveryCandidatePreparation> {
     try {
       const originalEnv = cloneEnvWithPlatformSemantics(deps.env);
       const includeProvenance: NonNullable<ConfigFileSnapshot["includeProvenance"]>[number][] = [];
@@ -302,32 +257,14 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         originalEnv,
         deps.lowerPrecedenceEnv,
       );
-      const otelOwnership = classifyOtelGrpcMigrationOwnership({
-        snapshot: { path: configPath, includeProvenance },
-        authoredConfig: candidate.parsed,
-        resolvedConfig: originalResolution.resolvedConfigRaw,
-      });
-      if (otelOwnership && otelOwnership.kind !== "direct") {
-        return {
-          ok: false,
-          reason:
-            otelOwnership.kind === "resolved-only"
-              ? "candidate migration cannot persist an env-resolved diagnostics.otel.protocol repair"
-              : "candidate migration requires an include-owned diagnostics.otel.protocol repair",
-        };
-      }
-      // Recovery is a migration boundary, not runtime compatibility: the canonical Doctor
-      // registry owns historical shapes before current-schema validation and any disk write.
       const prepareValidation = (pending: readonly DeferredPluginMigration[]) => {
-        const migration = applyLegacyDoctorMigrations(candidate.parsed, {
-          authoredRaw: candidate.parsed,
-          resolvedRaw: originalResolution.resolvedConfigRaw,
-        });
-        const authoredCandidate = migration.next
-          ? preserveDeferredPluginMigrationConfig({
-              sourceConfig: candidate.parsed,
-              nextConfig: migration.next,
-              pending,
+        const authoredCandidate = transformRecoveryCandidate
+          ? transformRecoveryCandidate({
+              candidate,
+              configPath,
+              includeProvenance,
+              resolvedConfig: originalResolution.resolvedConfigRaw,
+              deferredPluginMigrations: pending,
             })
           : candidate.parsed;
         const candidateEnv = cloneEnvWithPlatformSemantics(deps.env);
@@ -338,11 +275,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         const resolution = resolveConfigForRead(resolved, candidateEnv, deps.lowerPrecedenceEnv);
         const effectiveConfigRaw = resolution.resolvedConfigRaw;
         return {
-          migrated: migration,
           authoredCandidate,
           effectiveConfigRaw,
           pluginMetadata: createValidationPluginMetadataSnapshotLoader({
-            effectiveConfigRaw,
             env: candidateEnv,
           }),
           validationOptions: {
@@ -355,16 +290,11 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           },
         };
       };
-      const {
-        migrated: legacyMigration,
-        authoredCandidate: preparedRawConfig,
-        validated,
-      } = yield {
+      const { authoredCandidate: preparedRawConfig, validated } = yield* resolveConfigIoEffect({
         sync: () =>
           withSynchronousArtifactPreservingStateSnapshot(() => {
             const prepared = prepareValidation(resolveDeferredPluginMigrations());
             return {
-              migrated: prepared.migrated,
               authoredCandidate: prepared.authoredCandidate,
               validated: validateConfigObjectWithPlugins(prepared.effectiveConfigRaw, {
                 ...prepared.validationOptions,
@@ -375,7 +305,6 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         async: async () => {
           const prepared = prepareValidation(await resolveDeferredPluginMigrationsAsync());
           return {
-            migrated: prepared.migrated,
             authoredCandidate: prepared.authoredCandidate,
             validated: await validateConfigObjectWithPluginsAsync(prepared.effectiveConfigRaw, {
               ...prepared.validationOptions,
@@ -383,13 +312,13 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
             }),
           };
         },
-      };
+      });
       if (!validated.ok) {
         const issueSummary = formatConfigIssueSummary(validated.issues.slice(0, 3)) ?? "";
         const detail = issueSummary.length > 800 ? `${issueSummary.slice(0, 799)}…` : issueSummary;
         return {
           ok: false,
-          reason: `candidate remains invalid after legacy migration${detail ? `: ${detail}` : ""}`,
+          reason: `candidate is not valid current config${detail ? `: ${detail}` : ""}`,
         };
       }
       return {
@@ -397,45 +326,34 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         candidate: {
           config: validated.config,
           parsed: preparedRawConfig,
-          raw: legacyMigration.next
-            ? JSON.stringify(preparedRawConfig, null, 2).trimEnd().concat("\n")
-            : candidate.raw,
+          raw:
+            preparedRawConfig !== candidate.parsed
+              ? JSON.stringify(preparedRawConfig, null, 2).trimEnd().concat("\n")
+              : candidate.raw,
         },
       };
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      return { ok: false, reason: `candidate preparation failed: ${detail}` };
+      // Unavailable dependencies cannot establish that the backup is invalid.
+      if (
+        error instanceof ConfigIncludeReadError ||
+        !(error instanceof ConfigIncludeError || isInvalidConfigError(error))
+      ) {
+        throw error;
+      }
+      return { ok: false, reason: `candidate preparation failed: ${error.message}` };
     }
   }
 
   function prepareRecoveryBackupCandidate(
     candidate: ConfigRecoveryCandidate,
   ): ConfigRecoveryCandidatePreparation {
-    const steps = prepareRecoveryBackupCandidateSteps(candidate);
-    let next = steps.next();
-    while (!next.done) {
-      try {
-        next = steps.next(next.value.sync());
-      } catch (error) {
-        next = steps.throw(error);
-      }
-    }
-    return next.value;
+    return runConfigIoSync(prepareRecoveryBackupCandidateSteps(candidate));
   }
 
   async function prepareRecoveryBackupCandidateAsync(
     candidate: ConfigRecoveryCandidate,
   ): Promise<ConfigRecoveryCandidatePreparation> {
-    const steps = prepareRecoveryBackupCandidateSteps(candidate);
-    let next = steps.next();
-    while (!next.done) {
-      try {
-        next = steps.next(await next.value.async());
-      } catch (error) {
-        next = steps.throw(error);
-      }
-    }
-    return next.value;
+    return await runConfigIoAsync(prepareRecoveryBackupCandidateSteps(candidate));
   }
 
   return {
@@ -443,6 +361,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     pathResolution,
     configPath,
     options,
+    ...(transformRecoveryCandidate ? { transformRecoveryCandidate } : {}),
     resolveDeferredPluginMigrations,
     resolveDeferredPluginMigrationsAsync,
     observeLoadConfigSnapshot,

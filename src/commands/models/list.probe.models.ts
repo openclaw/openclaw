@@ -1,9 +1,7 @@
-/** Model candidate normalization and catalog selection for auth probes. */
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { normalizeProviderId, parseModelRef } from "../../agents/model-selection.js";
 import { DEFAULT_PROVIDER } from "./shared.js";
 
-/** Groups configured model candidates by their requested provider identity. */
 export function buildProbeCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const raw of modelCandidates) {

@@ -1,23 +1,72 @@
 // Ui tests cover ui script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { brotliCompressSync, gzipSync } from "node:zlib";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   isDirectScriptExecution,
   resolveUiBuildEnvironment,
   resolvePnpmSpawnCall,
-  resolveSpawnCall,
-  shouldUseCmdExeForCommand,
 } from "../../scripts/ui.mts";
+import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../../src/gateway/control-ui-root-assets.js";
+import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
+import { isPidDefinitelyDead } from "../../src/shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function copyUiFixture(root: string): void {
+  for (const file of [
+    "scripts/ui.js",
+    "scripts/ui.mts",
+    "scripts/pnpm-runner.mts",
+    "scripts/run-node-package-bin.mts",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/lib/build-identity.mts",
+    "scripts/lib/output-root-guard.mjs",
+    "scripts/lib/record-shared.mjs",
+    "src/infra/process-env.ts",
+    "src/infra/windows-process-start.ts",
+    "src/shared/freebsd-process-identity.ts",
+    "src/shared/freebsd-process-identity-native.ts",
+    "src/shared/pid-alive.ts",
+    "ui/package.json",
+    "ui/src/build-info-normalizers.ts",
+    "packages/normalization-core/src/record-coerce.ts",
+    "packages/normalization-core/src/string-coerce.ts",
+    "packages/normalization-core/src/utf16-slice.ts",
+  ]) {
+    const destination = path.join(root, file);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(file, destination);
+  }
+  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+}
+
+function writeUiPackageBin(modules: string, name: string, source: string): string {
+  const directory = path.join(modules, name);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({
+      name,
+      type: "module",
+      exports: { ".": "./entry.mjs", "./package.json": "./package.json" },
+      bin: { [name]: "./entry.mjs" },
+    }),
+  );
+  const entry = path.join(directory, "entry.mjs");
+  fs.writeFileSync(entry, source);
+  return entry;
+}
+
 // writeFileSync creates the file before its content lands, so an existence
 // poll can observe an empty file on loaded runners; wait for bytes instead.
 function readNonEmpty(file: string): string | null {
@@ -107,7 +156,7 @@ async function withUiProcessCleanup(
   );
 }
 
-describe("scripts/ui windows spawn behavior", () => {
+describe("scripts/ui", () => {
   it("reuses the runtime identity for the documented standalone UI rebuild", () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
     const firstBuild = normalizeControlUiBuildInfo({
@@ -180,85 +229,19 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
   });
 
-  it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
-    expect(
-      shouldUseCmdExeForCommand("C:\\Users\\dev\\AppData\\Local\\pnpm\\pnpm.CMD", "win32"),
-    ).toBe(true);
-
-    expect(
-      resolveSpawnCall(
-        "C:\\Program Files\\nodejs\\pnpm.cmd",
-        ["run", "build", "-t", "path with spaces"],
-        { PATH: "C:\\bin" },
-        { comSpec: "C:\\Windows\\System32\\cmd.exe", cwd: "C:\\repo\\ui", platform: "win32" },
-      ),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        '""C:\\Program Files\\nodejs\\pnpm.cmd" run build -t "path with spaces""',
-      ],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env: { PATH: "C:\\bin" },
-        shell: false,
-        windowsVerbatimArguments: true,
-      },
-    });
-  });
-
-  it("does not use cmd.exe for non-command launchers", () => {
-    expect(shouldUseCmdExeForCommand("C:\\Program Files\\nodejs\\node.exe", "win32")).toBe(false);
-    expect(shouldUseCmdExeForCommand("C:\\tools\\pnpm.com", "win32")).toBe(false);
-    expect(shouldUseCmdExeForCommand("/usr/local/bin/pnpm", "linux")).toBe(false);
-
-    expect(
-      resolveSpawnCall(
-        "C:\\Program Files\\nodejs\\pnpm.exe",
-        ["run", "build"],
-        { PATH: "C:\\bin" },
-        { cwd: "C:\\repo\\ui", platform: "win32" },
-      ),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\pnpm.exe",
-      args: ["run", "build"],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env: { PATH: "C:\\bin" },
-        shell: false,
-      },
-    });
-  });
-
-  it("rejects unsafe cmd.exe arguments before launch", () => {
-    expect(() =>
-      resolveSpawnCall("C:\\tools\\pnpm.cmd", ["run", "build", "evil&calc"], undefined, {
-        platform: "win32",
-      }),
-    ).toThrow(/unsafe windows cmd\.exe argument/i);
-    expect(() =>
-      resolveSpawnCall("C:\\tools\\pnpm.cmd", ["run", "build", "%PATH%"], undefined, {
-        platform: "win32",
-      }),
-    ).toThrow(/unsafe windows cmd\.exe argument/i);
-  });
-
-  it("uses a trusted cmd.exe path when no explicit Windows launcher is injected", () => {
-    expect(
-      resolveSpawnCall(
-        "C:\\tools\\pnpm.cmd",
-        ["run", "build"],
-        {
-          ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
-          SystemRoot: "D:\\Windows",
-        },
-        { cwd: "C:\\repo\\ui", platform: "win32" },
-      ).command,
-    ).toBe("D:\\Windows\\System32\\cmd.exe");
+  it("rejects unsafe Windows pnpm shim arguments before launch", () => {
+    for (const argument of ["evil&calc", "%PATH%"]) {
+      expect(() =>
+        resolvePnpmSpawnCall(
+          ["install", argument],
+          { PATH: "" },
+          {
+            npmExecPath: "",
+            platform: "win32",
+          },
+        ),
+      ).toThrow(/unsafe windows cmd\.exe argument/i);
+    }
   });
 
   it("routes Windows Corepack pnpm entrypoints through node", () => {
@@ -299,26 +282,6 @@ describe("scripts/ui windows spawn behavior", () => {
     }
   });
 
-  it("keeps non-Windows launches direct even with shell metacharacters", () => {
-    expect(
-      resolveSpawnCall(
-        "/usr/local/bin/pnpm",
-        ["run", "build", "contains&metacharacters"],
-        { PATH: "/bin" },
-        { cwd: "/repo/ui", platform: "linux" },
-      ),
-    ).toEqual({
-      command: "/usr/local/bin/pnpm",
-      args: ["run", "build", "contains&metacharacters"],
-      options: {
-        cwd: "/repo/ui",
-        stdio: "inherit",
-        env: { PATH: "/bin" },
-        shell: false,
-      },
-    });
-  });
-
   it("detects direct execution through a junctioned script path", () => {
     const realScriptPath = path.resolve("repo/openclaw/scripts/ui.js");
     const junctionScriptPath = path.resolve("linked/openclaw/scripts/ui.js");
@@ -345,44 +308,26 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(output).not.toContain("Control UI performance");
   });
 
-  it.each(
-    ["hoisted", "isolated"].flatMap((layout) =>
-      [
-        { action: "build", args: ["build"], noPnpm: false },
-        { action: "build", args: ["build"], noPnpm: true },
-        { action: "dev", args: [], noPnpm: false },
-        { action: "test", args: ["run", "--config", "vitest.config.ts"], noPnpm: false },
-      ].map(({ action, args, noPnpm }) => ({ layout, action, args, noPnpm })),
-    ),
-  )(
+  it.each([
+    { layout: "hoisted", action: "build", args: ["build"], noPnpm: false },
+    { layout: "isolated", action: "build", args: ["build"], noPnpm: true },
+    { layout: "hoisted", action: "dev", args: [], noPnpm: false },
+    {
+      layout: "isolated",
+      action: "test",
+      args: ["run", "--config", "vitest.config.ts"],
+      noPnpm: false,
+    },
+  ])(
     "runs $action from $layout dependencies without package shims (noPnpm=$noPnpm)",
     ({ action, args, layout, noPnpm }) => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-layout-")));
       const ui = path.join(root, "ui");
       const modules = path.join(layout === "isolated" ? ui : root, "node_modules");
       const expectedExit = action === "test" ? 17 : 0;
-      const forwarded = ["--help", "--mode", "fixture with spaces"];
+      const forwarded = ["--help", "--mode", "fixture with spaces & symbols"];
       try {
-        for (const file of [
-          "scripts/ui.js",
-          "scripts/ui.mts",
-          "scripts/pnpm-runner.mts",
-          "scripts/run-node-package-bin.mts",
-          "scripts/windows-cmd-helpers.mjs",
-          "scripts/lib/build-identity.mts",
-          "scripts/lib/output-root-guard.mjs",
-          "scripts/lib/record-shared.mjs",
-          "ui/package.json",
-          "ui/src/build-info-normalizers.ts",
-          "packages/normalization-core/src/record-coerce.ts",
-          "packages/normalization-core/src/string-coerce.ts",
-          "packages/normalization-core/src/utf16-slice.ts",
-        ]) {
-          const destination = path.join(root, file);
-          fs.mkdirSync(path.dirname(destination), { recursive: true });
-          fs.copyFileSync(file, destination);
-        }
-        fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+        copyUiFixture(root);
         for (const name of [
           "vite",
           "vitest",
@@ -390,19 +335,9 @@ describe("scripts/ui windows spawn behavior", () => {
           "@vitest/browser-playwright",
           "playwright",
         ]) {
-          const directory = path.join(modules, name);
-          fs.mkdirSync(directory, { recursive: true });
-          fs.writeFileSync(
-            path.join(directory, "package.json"),
-            JSON.stringify({
-              name,
-              type: "module",
-              exports: { ".": "./entry.mjs", "./package.json": "./package.json" },
-              bin: { [name]: "./entry.mjs" },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(directory, "entry.mjs"),
+          writeUiPackageBin(
+            modules,
+            name,
             `console.log(JSON.stringify({
   args: process.argv.slice(2), cwd: process.cwd(),
   commit: process.env.GIT_COMMIT, timestamp: process.env.OPENCLAW_BUILD_TIMESTAMP
@@ -444,15 +379,344 @@ process.exitCode = ${expectedExit};\n`,
     },
   );
 
+  const liveUiBuildSiblings = [
+    `control-ui.build-${process.pid}-live`,
+    `control-ui.build-${process.pid}-live.retired`,
+  ];
+  it.each([
+    {
+      label: "a: Vite failure without prior output",
+      prior: false,
+      retiredOnly: false,
+      viteExit: 1,
+      performanceExit: 0,
+      seedSiblings: false,
+      publishDenials: 0,
+      expectedExit: 1,
+      expectedHealth: "missing-index",
+      expectedOutputId: null,
+      expectedDistEntries: [],
+      expectedWaits: [],
+      expectedStderr: null,
+    },
+    {
+      label: "b: Vite failure with stale output",
+      prior: true,
+      retiredOnly: false,
+      viteExit: 1,
+      performanceExit: 0,
+      seedSiblings: false,
+      publishDenials: 0,
+      expectedExit: 1,
+      expectedHealth: "stale",
+      expectedOutputId: "stale-runtime",
+      expectedDistEntries: ["control-ui"],
+      expectedWaits: [],
+      expectedStderr: null,
+    },
+    {
+      label: "c: performance validator failure with stale output",
+      prior: true,
+      retiredOnly: false,
+      viteExit: 0,
+      performanceExit: 17,
+      seedSiblings: false,
+      publishDenials: 0,
+      expectedExit: 17,
+      expectedHealth: "stale",
+      expectedOutputId: "stale-runtime",
+      expectedDistEntries: ["control-ui"],
+      expectedWaits: [],
+      expectedStderr: null,
+    },
+    {
+      label: "d: success replacing stale output and cleaning dead siblings",
+      prior: true,
+      retiredOnly: false,
+      viteExit: 0,
+      performanceExit: 0,
+      seedSiblings: true,
+      publishDenials: 0,
+      expectedExit: 0,
+      expectedHealth: "ready",
+      expectedOutputId: "fixture-runtime",
+      expectedDistEntries: ["control-ui", ...liveUiBuildSiblings],
+      expectedWaits: [],
+      expectedStderr: null,
+    },
+    {
+      label: "e: EPERM publication failure with stale output",
+      prior: true,
+      retiredOnly: false,
+      viteExit: 0,
+      performanceExit: 0,
+      seedSiblings: false,
+      publishDenials: 100,
+      expectedExit: 1,
+      expectedHealth: "stale",
+      expectedOutputId: "stale-runtime",
+      expectedDistEntries: ["control-ui"],
+      expectedWaits: [100, 200, 400, 800, 1600],
+      expectedStderr: "Failed to publish Control UI build; previous output retained.",
+    },
+    {
+      label: "f: interrupted swap restored before a failed retry",
+      prior: false,
+      retiredOnly: true,
+      viteExit: 1,
+      performanceExit: 0,
+      seedSiblings: false,
+      publishDenials: 0,
+      expectedExit: 1,
+      expectedHealth: "stale",
+      expectedOutputId: "stale-runtime",
+      expectedDistEntries: ["control-ui"],
+      expectedWaits: [],
+      expectedStderr: null,
+    },
+    {
+      label: "g: transient publication denial clears",
+      prior: true,
+      retiredOnly: false,
+      viteExit: 0,
+      performanceExit: 0,
+      seedSiblings: false,
+      publishDenials: 2,
+      expectedExit: 0,
+      expectedHealth: "ready",
+      expectedOutputId: "fixture-runtime",
+      expectedDistEntries: ["control-ui"],
+      expectedWaits: [100, 200],
+      expectedStderr: null,
+    },
+  ])(
+    "publishes only validated complete output ($label)",
+    ({
+      prior,
+      retiredOnly,
+      viteExit,
+      performanceExit,
+      seedSiblings,
+      publishDenials,
+      expectedExit,
+      expectedHealth,
+      expectedOutputId,
+      expectedDistEntries,
+      expectedWaits,
+      expectedStderr,
+    }) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-ui-publication-"));
+      copyUiFixture(root);
+      const output = path.join(root, "dist/control-ui");
+      const deadPid = 2_147_483_647;
+      if (seedSiblings || retiredOnly) {
+        expect(isPidDefinitelyDead(deadPid)).toBe(true);
+      }
+      const buildId = "fixture-runtime";
+      const buildFiles = (id: string) => ({
+        "index.html": `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${id}-${"a".repeat(64)}"><script type="module" src="./assets/index.js"></script></html>`,
+        "assets/index.js": `console.log(${JSON.stringify(id)});`,
+        "assets/lazy.js": `export default ${JSON.stringify(id)};`,
+      });
+      if (prior || retiredOnly) {
+        const priorOutput = retiredOnly
+          ? path.join(root, "dist", `control-ui.build-${deadPid}-x.retired`)
+          : output;
+        for (const [file, bytes] of Object.entries(buildFiles("stale-runtime"))) {
+          fs.mkdirSync(path.dirname(path.join(priorOutput, file)), { recursive: true });
+          fs.writeFileSync(path.join(priorOutput, file), bytes);
+        }
+      }
+      if (retiredOnly) {
+        const unfinished = path.join(root, "dist", `control-ui.build-${deadPid}-y`);
+        fs.mkdirSync(unfinished);
+        fs.writeFileSync(path.join(unfinished, "junk"), "incomplete");
+      }
+      const modules = path.join(root, "node_modules");
+      writeUiPackageBin(modules, "dompurify", "export {};\n");
+      writeUiPackageBin(
+        modules,
+        "vite",
+        `
+import fs from "node:fs";
+import path from "node:path";
+const args = process.argv.slice(2);
+const out = args.includes("--outDir") ? args[args.lastIndexOf("--outDir") + 1] : path.resolve("../dist/control-ui");
+for (const [file, bytes] of Object.entries(${JSON.stringify(buildFiles(buildId))})) {
+  fs.mkdirSync(path.dirname(path.join(out, file)), { recursive: true });
+  fs.writeFileSync(path.join(out, file), bytes);
+}
+console.log(JSON.stringify({ tool: "vite", out, args }));
+process.exitCode = ${viteExit};
+`,
+      );
+      for (const [validator, name, exitCode] of [
+        ["check-control-ui-precompressed-assets.mts", "precompressed", 0],
+        ["check-control-ui-performance.mts", "performance", performanceExit],
+      ] as const) {
+        fs.writeFileSync(
+          path.join(root, "scripts", validator),
+          `
+import fs from "node:fs";
+import path from "node:path";
+const args = process.argv.slice(2);
+const out = args.includes("--dist") ? args[args.indexOf("--dist") + 1]
+  : args.find(arg => !arg.startsWith("--")) ?? path.resolve("dist/control-ui");
+console.log(JSON.stringify({ tool: ${JSON.stringify(name)}, out, args }));
+if (out && !fs.existsSync(path.join(out, "index.html"))) throw new Error("missing staged index");
+process.exitCode = ${exitCode};
+`,
+        );
+      }
+      const fsGuard = path.join(root, "fs-guard.cjs");
+      const waitsFile = path.join(root, "rename-waits.json");
+      fs.writeFileSync(
+        fsGuard,
+        `
+const fs = require("node:fs");
+const rename = fs.renameSync;
+let remainingDenials = ${publishDenials};
+const waits = [];
+Atomics.wait = (_array, _index, _value, delay) => {
+  waits.push(delay);
+  return "timed-out";
+};
+process.on("exit", () => fs.writeFileSync(${JSON.stringify(waitsFile)}, JSON.stringify(waits)));
+fs.renameSync = function(from, to) {
+  if (to === ${JSON.stringify(output)} && !from.endsWith(".retired") && remainingDenials > 0) {
+    remainingDenials -= 1;
+    throw Object.assign(new Error("fixture publication failure"), { code: "EPERM" });
+  }
+  return rename(from, to);
+};
+require("node:module").syncBuiltinESMExports();
+`,
+      );
+      const args = [
+        "--require",
+        fsGuard,
+        "scripts/ui.js",
+        "build",
+        "--mode",
+        "fixture with spaces",
+      ];
+      if (seedSiblings) {
+        for (const name of [
+          ...liveUiBuildSiblings,
+          `control-ui.build-${deadPid}-dead`,
+          `control-ui.build-${deadPid}-dead.retired`,
+        ]) {
+          fs.mkdirSync(path.join(root, "dist", name), { recursive: true });
+          fs.writeFileSync(path.join(root, "dist", name, "sentinel"), name);
+        }
+      }
+      const result = spawnSync(testNodeExecPath, args, {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+          OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
+          OPENCLAW_BUILD_TIMESTAMP: "2026-08-27T00:00:00.000Z",
+          GIT_COMMIT: "a".repeat(40),
+        },
+        timeout: 10_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(expectedExit);
+      expect(JSON.parse(fs.readFileSync(waitsFile, "utf8"))).toEqual(expectedWaits);
+      expect(inspectControlUiRootAssets(output, buildId).kind).toBe(expectedHealth);
+      if (expectedOutputId) {
+        const expected = buildFiles(expectedOutputId);
+        expect(
+          fs
+            .readdirSync(output, { recursive: true, encoding: "utf8" })
+            .toSorted((left, right) => left.localeCompare(right)),
+        ).toEqual(
+          ["assets", ...Object.keys(expected)].map((file) => path.normalize(file)).toSorted(),
+        );
+        for (const [file, bytes] of Object.entries(expected)) {
+          expect(fs.readFileSync(path.join(output, file))).toEqual(Buffer.from(bytes));
+        }
+      }
+      expect(fs.readdirSync(path.join(root, "dist")).toSorted()).toEqual(
+        expectedDistEntries.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+      );
+      if (seedSiblings) {
+        for (const name of liveUiBuildSiblings) {
+          expect(fs.readFileSync(path.join(root, "dist", name, "sentinel"), "utf8")).toBe(name);
+        }
+      }
+      if (expectedExit === 0) {
+        const calls = result.stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        const staging = calls[0].out;
+        expect(path.dirname(staging)).toBe(path.join(root, "dist"));
+        expect(staging).not.toBe(output);
+        expect(calls).toEqual([
+          {
+            tool: "vite",
+            out: staging,
+            args: ["build", "--mode", "fixture with spaces", "--outDir", staging],
+          },
+          { tool: "precompressed", out: staging, args: [staging] },
+          { tool: "performance", out: staging, args: ["--report-only", "--dist", staging] },
+        ]);
+      }
+      if (expectedStderr) {
+        expect(result.stderr).toContain(expectedStderr);
+      }
+    },
+  );
+
+  it("checks the selected staged directory with both real validators", () => {
+    const root = tempDirs.make("openclaw-ui-validators-");
+    const staging = path.join(root, "dist/control-ui.build-123-fixture");
+    fs.mkdirSync(path.join(staging, "assets"), { recursive: true });
+    fs.writeFileSync(
+      path.join(staging, "index.html"),
+      '<script src="./assets/index.js"></script><link href="./assets/index.css">',
+    );
+    for (const name of ["index.js", "index.css"]) {
+      const bytes = Buffer.from("/* synthetic asset */");
+      const file = path.join(staging, "assets", name);
+      fs.writeFileSync(file, bytes);
+      fs.writeFileSync(`${file}.gz`, gzipSync(bytes));
+      fs.writeFileSync(`${file}.br`, brotliCompressSync(bytes));
+    }
+    for (const [script, ...args] of [
+      ["check-control-ui-precompressed-assets.mts", staging],
+      ["check-control-ui-performance.mts", "--report-only", "--dist", staging],
+    ] as const) {
+      const result = spawnSync(testNodeExecPath, [path.resolve("scripts", script), ...args], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+    }
+  });
+
   it.each([
     { noPnpm: false, failValidator: null },
-    { noPnpm: true, failValidator: null },
     { noPnpm: false, failValidator: "check-control-ui-precompressed-assets.mts" },
     { noPnpm: true, failValidator: "check-control-ui-performance.mts" },
   ])(
-    "reports budgets and enforces asset validity off disk caches (noPnpm=$noPnpm, failure=$failValidator)",
+    "reports budgets and enforces asset validity without compiler children or disk caches (noPnpm=$noPnpm, failure=$failValidator)",
     ({ noPnpm, failValidator }) => {
       const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-cache-")));
+      const root = path.join(tempDir, "repo");
+      copyUiFixture(root);
+      const modules = path.join(root, "node_modules");
+      const vite = writeUiPackageBin(
+        modules,
+        "vite",
+        'throw new Error("build must be intercepted");',
+      );
+      writeUiPackageBin(modules, "dompurify", "export {};\n");
       const tempRoot = path.join(tempDir, "temp");
       const cacheRoots = ["tsx", `tsx-${process.geteuid?.() ?? os.userInfo().username}`].map(
         (name) => path.join(tempRoot, name),
@@ -480,6 +744,17 @@ process.exitCode = ${expectedExit};\n`,
 const fs = require("node:fs");
 const path = require("node:path");
 const roots = ${JSON.stringify(cacheRoots)};
+if (${JSON.stringify(validators)}.includes(process.argv[2])) {
+  function rejectRuntimeActivity(operation) {
+    fs.appendFileSync(${JSON.stringify(accessLog)}, operation + "\\n");
+    throw new Error("Unexpected validator runtime activity: " + operation);
+  }
+  const childProcess = require("node:child_process");
+  for (const operation of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
+    childProcess[operation] = function() { rejectRuntimeActivity(operation); };
+  }
+  require("node:worker_threads").Worker = function() { rejectRuntimeActivity("Worker"); };
+}
 function guardAccess(target, operation) {
   const resolved = path.resolve(String(target));
   if (roots.some(root => resolved === root || resolved.startsWith(root + path.sep))) {
@@ -508,16 +783,16 @@ require("node:module").syncBuiltinESMExports();
         fs.writeFileSync(
           fixture,
           `
-enum Transformed { Value = "transformed" }
-const validator = process.argv[2];
+const validator: string = process.argv[2];
 const reportOnly = process.argv.includes("--report-only");
-console.log(JSON.stringify({ validator, transformed: Transformed.Value, reportOnly }));
+console.log(JSON.stringify({ validator, reportOnly }));
 process.exitCode = validator === ${JSON.stringify(failValidator)} ? 17
   : validator === "check-control-ui-performance.mts" && !reportOnly ? 1 : 0;
 `,
         );
         // Run the native launcher, intercept only the build, then replay each real
-        // validator command/environment with a tiny transform-required entrypoint.
+        // validator command/environment with erasable TypeScript. The preload rejects
+        // compiler workers and subprocesses before they can escape validator completion.
         fs.writeFileSync(
           capture,
           `
@@ -529,15 +804,22 @@ const validators = ${JSON.stringify(validators)};
 assert.equal(process.env.TSX_DISABLE_CACHE, undefined);
 assert.equal(process.env.npm_execpath, ${JSON.stringify(pnpm)});
 childProcess.spawnSync = function(command, args, options) {
-  if (args[0] === ${JSON.stringify(path.join(path.dirname(createRequire(path.resolve("ui/package.json")).resolve("vite/package.json")), "bin/vite.js"))}) {
-    assert.deepEqual(args.slice(1), ["build"]);
+  if (args[0] === ${JSON.stringify(vite)}) {
+    assert.deepEqual(args.slice(1, 3), ["build", "--outDir"]);
+    assert.equal(path.dirname(args[3]), ${JSON.stringify(path.join(root, "dist"))});
+    assert.equal(require("node:fs").existsSync(args[3]), true);
     return { status: 0 };
   }
-  const validator = path.basename(args[2]);
-  if (!validators.includes(validator)) throw new Error("Unexpected UI subprocess");
-  assert.deepEqual(args.slice(3), validator === "check-control-ui-performance.mts" ? ["--report-only"] : []);
+  const validatorIndex = args.findIndex(arg => validators.includes(path.basename(arg)));
+  if (validatorIndex === -1) throw new Error("Unexpected UI subprocess");
+  const validator = path.basename(args[validatorIndex]);
+  const validatorArgs = args.slice(validatorIndex + 1);
+  const staging = validatorArgs.at(-1);
+  assert.equal(path.dirname(staging), ${JSON.stringify(path.join(root, "dist"))});
+  assert.equal(require("node:fs").existsSync(staging), true);
+  assert.deepEqual(validatorArgs, validator === "check-control-ui-performance.mts" ? ["--report-only", "--dist", staging] : [staging]);
   assert.equal(options.env.TSX_DISABLE_CACHE, undefined);
-  return spawnSync(command, [...args.slice(0, 2), ${JSON.stringify(fixture)}, validator, ...args.slice(3)], options);
+  return spawnSync(command, [...args.slice(0, validatorIndex), ${JSON.stringify(fixture)}, validator, ...validatorArgs], options);
 };
 require("node:module").syncBuiltinESMExports();
 `,
@@ -564,22 +846,22 @@ require("node:module").syncBuiltinESMExports();
         ]);
 
         if (!noPnpm && failValidator === null) {
-          const control = spawnSync(testNodeExecPath, ["--import", "tsx", fixture, "control"], {
-            cwd: path.resolve("."),
-            encoding: "utf8",
-            env,
-            timeout: 10_000,
-          });
+          const control = spawnSync(
+            testNodeExecPath,
+            ["--eval", `require("node:fs").readdirSync(${JSON.stringify(cacheRoots[0])})`],
+            { cwd: root, encoding: "utf8", env, timeout: 10_000 },
+          );
           expect(control.error).toBeUndefined();
-          // Prove the guard detects raw tsx cache access without coupling to its disk I/O strategy.
-          expect(fs.readFileSync(accessLog, "utf8").trim()).not.toBe("");
+          expect(control.status).toBe(1);
+          // Check the cache guard without starting the compiler service it protects against.
+          expect(fs.readFileSync(accessLog, "utf8").trim()).toBe("readdirSync");
           fs.unlinkSync(accessLog);
         }
         const result = spawnSync(
           testNodeExecPath,
           ["--require", capture, "scripts/ui.js", "build"],
           {
-            cwd: path.resolve("."),
+            cwd: root,
             encoding: "utf8",
             env,
             timeout: 10_000,
@@ -599,7 +881,6 @@ require("node:module").syncBuiltinESMExports();
         ).toEqual(
           expectedValidators.map((validator) => ({
             validator,
-            transformed: "transformed",
             reportOnly: validator === "check-control-ui-performance.mts",
           })),
         );
@@ -782,10 +1063,7 @@ require("node:module").syncBuiltinESMExports();
 });
 
 function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  // A stopped orphan can remain unreaped after the wrapper exits on Linux.
+  // Require thread extinction, not immediate removal of its PID table entry.
+  return !isPidDefinitelyDead(pid);
 }

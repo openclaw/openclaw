@@ -1,19 +1,11 @@
-// Zalouser plugin module implements group policy behavior.
 import type { ScopeTree } from "openclaw/plugin-sdk/channel-policy";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeChannelSlug } from "openclaw/plugin-sdk/channel-targets";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ZalouserGroupConfig } from "./types.js";
 
 type ZalouserGroups = Record<string, ZalouserGroupConfig>;
 
 const toGroupCandidate = (value?: string | null) => value?.trim() ?? "";
-
-function normalizeZalouserGroupSlug(raw?: string | null): string {
-  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
-  return trimmed
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 export function buildZalouserGroupCandidates(params: {
   groupId?: string | null;
@@ -23,32 +15,21 @@ export function buildZalouserGroupCandidates(params: {
   includeWildcard?: boolean;
   allowNameMatching?: boolean;
 }): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const push = (value?: string | null) => {
-    const normalized = toGroupCandidate(value);
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    out.push(normalized);
-  };
-
   const groupId = toGroupCandidate(params.groupId);
   const groupChannel = toGroupCandidate(params.groupChannel);
   const groupName = toGroupCandidate(params.groupName);
 
-  push(groupId);
+  const candidates = [groupId];
   if (params.includeGroupIdAlias === true && groupId) {
-    push(`group:${groupId}`);
+    candidates.push(`group:${groupId}`);
   }
   if (params.allowNameMatching !== false) {
-    [groupChannel, groupName, normalizeZalouserGroupSlug(groupName)].forEach(push);
+    candidates.push(groupChannel, groupName, normalizeChannelSlug(groupName));
   }
   if (params.includeWildcard !== false) {
-    push("*");
+    candidates.push("*");
   }
-  return out;
+  return uniqueStrings(candidates.map(toGroupCandidate).filter(Boolean));
 }
 
 export function findZalouserGroupEntry(

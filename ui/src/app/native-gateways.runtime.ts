@@ -48,10 +48,6 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
     return null;
   }
   const post = handler.postMessage.bind(handler);
-  const postWithId = (
-    type: "select" | "open-window" | "set-primary" | "reconnect" | "reconnect-cancel",
-    id: string,
-  ) => post({ type, id });
   let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"]);
   const listeners = new Set<(snapshot: NativeGatewaysSnapshot) => void>();
   const onChange = (event: Event) => {
@@ -71,11 +67,11 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    select: (id) => postWithId("select", id),
-    openWindow: (id) => postWithId("open-window", id),
-    setPrimary: (id) => postWithId("set-primary", id),
-    reconnect: (id) => postWithId("reconnect", id),
-    reconnectCancel: (id) => postWithId("reconnect-cancel", id),
+    select: (id) => post({ type: "select", id }),
+    openWindow: (id) => post({ type: "open-window", id }),
+    setPrimary: (id) => post({ type: "set-primary", id }),
+    reconnect: (id) => post({ type: "reconnect", id }),
+    reconnectCancel: (id) => post({ type: "reconnect-cancel", id }),
     openSettings: () => post({ type: "open-settings" }),
   };
 }

@@ -312,21 +312,23 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             sessions: sessions)
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        OpenClawChatAgentsListResponse(
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        await onUpdate(OpenClawChatAgentsListResponse(
             defaultId: self.fixture.defaultAgentID,
             agents: self.fixture.agents.map {
                 OpenClawChatAgentChoice(
                     id: $0.id,
                     name: $0.name,
                     workspaceGit: $0.workspacegit)
-            })
+            }))
     }
 
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
-        guard ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture") else { return [] }
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture") else {
+            return OpenClawChatChildSessionsResult(rows: [], isComplete: true)
+        }
         let groupID = "swarm:\(parentKey):research"
-        return [
+        return OpenClawChatChildSessionsResult(rows: [
             self.swarmChild("polling", "National polling", status: "done", groupID: groupID, parentKey: parentKey),
             self.swarmChild("work", "Work and labor", status: "running", groupID: groupID, parentKey: parentKey),
             self.swarmChild("health", "Health", status: "running", groupID: groupID, parentKey: parentKey),
@@ -338,7 +340,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 parentKey: parentKey,
                 queued: true),
             self.swarmChild("media", "Media signals", status: "failed", groupID: groupID, parentKey: parentKey),
-        ]
+        ], isComplete: true)
     }
 
     private func swarmChild(
@@ -412,11 +414,15 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             continuation.yield(.health(ok: true))
-            self.registerFixtureEventContinuation(continuation)
+            guard ScreenshotFixtureMode.holdsInitialChatRun else {
+                continuation.finish()
+                return
+            }
+            Task {
+                await self.store.setEventContinuation(continuation)
+            }
         }
     }
-
-    func setActiveSessionKey(_: String) async throws {}
 
     func resetSession(sessionKey _: String) async throws {
         await self.store.reset()
@@ -462,6 +468,12 @@ private actor LocalFixtureChatStore {
                 sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
                 messages: self.messages,
                 thinkingLevel: self.thinkingLevel,
+                inFlightRun: ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
+                    ? self.activeRunID.map {
+                        OpenClawChatInFlightRun(
+                            runId: $0,
+                            text: String(repeating: "Streaming layout response. ", count: 12))
+                    } : nil,
                 sessionInfo: OpenClawChatSessionInfo(
                     hasActiveRun: self.activeRunID != nil,
                     activeRunIds: self.activeRunID.map { [$0] })),
@@ -707,6 +719,7 @@ private actor LocalFixtureChatStore {
         var sessionId: String?
         var messages: [OpenClawChatMessage]?
         var thinkingLevel: String?
+        var inFlightRun: OpenClawChatInFlightRun?
         var sessionInfo: OpenClawChatSessionInfo?
     }
 
@@ -725,19 +738,5 @@ private actor LocalFixtureChatStore {
 extension ScreenshotFixtureMode {
     static var holdsInitialChatRun: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-hold-initial-chat-run")
-    }
-}
-
-extension LocalFixtureChatTransport {
-    private func registerFixtureEventContinuation(
-        _ continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation)
-    {
-        guard ScreenshotFixtureMode.holdsInitialChatRun else {
-            continuation.finish()
-            return
-        }
-        Task {
-            await self.store.setEventContinuation(continuation)
-        }
     }
 }

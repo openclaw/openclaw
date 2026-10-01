@@ -1,22 +1,50 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as snapshots from "../../infra/sqlite-readonly-location.js";
+import { UpdateCampaignController } from "../../infra/update-campaign.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { readUpdateRunStatus } from "../../infra/update-run-status.js";
+import {
+  getUpdateSchedule,
+  resetUpdateStatusState,
+  setUpdateScheduleCache,
+} from "../../infra/update-status-state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  beginGatewayRestartSignalAdmission,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
+import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { startUpdateRunWatcher } from "../update-run-watcher.js";
+import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
 
-vi.mock("../../infra/update-status-state.js", () => ({
-  getUpdateAvailable: () => null,
-  getUpdateSchedule: () => null,
-}));
-
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateSchedule(),
   refreshGatewayUpdateStatus: async () => {},
 }));
 
@@ -53,17 +81,364 @@ async function requestUpdateRead(method: UpdateReadMethod, params: Record<string
 }
 
 let home: TempHomeEnv;
+let lifecycle: UpdateCheckLifecycle;
+let campaignOwner: UpdateCampaignController;
 beforeEach(async () => {
   home = await createTempHomeEnv("openclaw-update-status-");
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
+  campaignOwner = new UpdateCampaignController(lifecycle.scheduler);
+  lifecycle.campaign = campaignOwner;
 });
 afterEach(async () => {
+  await lifecycle.stop();
+  await lifecycle.scheduler.stop();
+  resetGatewayWorkAdmission();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   warn.mockClear();
+  resetUpdateStatusState();
   await home.restore();
 });
 
 describe("update history RPCs", () => {
+  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+    "settles an applying campaign when its handed-off run finishes %s",
+    async (status) => {
+      campaignOwner.announce({
+        target: { kind: "package", version: "2026.9.6" },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      expect(campaignOwner.adopt().status).toBe("adopted");
+      const campaignId = campaignOwner.getState()?.id;
+      const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
+      campaignOwner.bindRun(expectDefined(campaignId, "campaign id"), run.runId);
+      finishUpdateRun(run.runId, { status, reason: "database-schema-preflight" });
+
+      const respond = await requestUpdateRead("update.status");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          lastRun: expect.objectContaining({ runId: run.runId, status }),
+          schedule: { channel: "stable", autoEnabled: true },
+        }),
+      );
+      expect(campaignOwner.getState()).toBeUndefined();
+    },
+  );
+
+  it("reconciles the admitted campaign run even when newer history masks it", async () => {
+    campaignOwner.announce({
+      target: { kind: "package", version: "2026.9.6" },
+      apply: async () => "applied",
+      onChange: (campaign) =>
+        setUpdateScheduleCache({
+          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+        }),
+    });
+    campaignOwner.adopt();
+    const campaignId = expectDefined(campaignOwner.getState(), "campaign state").id;
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId } });
+    campaignOwner.bindRun(campaignId, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    const newer = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        lastRun: expect.objectContaining({ runId: newer.runId }),
+        schedule: { channel: "stable", autoEnabled: true },
+      }),
+    );
+    expect(campaignOwner.getState()).toBeUndefined();
+  });
+
+  it("preserves status and retries campaign reconciliation after an exact-run read fails", async () => {
+    campaignOwner.announce({
+      target: { kind: "package", version: "2026.9.6" },
+      apply: async () => "applied",
+      onChange: (campaign) =>
+        setUpdateScheduleCache({
+          next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+        }),
+    });
+    campaignOwner.adopt();
+    const campaign = expectDefined(campaignOwner.getState(), "campaign state");
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: campaign.id } });
+    campaignOwner.bindRun(campaign.id, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    vi.spyOn(Date, "now").mockReturnValue(run.createdAtMs + 1);
+    const newer = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(newer.runId, { status: "skipped", reason: "dry-run" });
+    vi.spyOn(ledger, "getUpdateRunAsync").mockRejectedValueOnce(new Error("ledger read failed"));
+
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        lastRun: expect.objectContaining({ runId: newer.runId }),
+        schedule: { channel: "stable", autoEnabled: true, campaign },
+      }),
+    );
+    expect(campaignOwner.getState()).toEqual(campaign);
+    expect(warn).toHaveBeenCalledWith(
+      "update.status campaign run lookup failed: ledger read failed",
+    );
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ schedule: { channel: "stable", autoEnabled: true } }),
+    );
+    expect(campaignOwner.getState()).toBeUndefined();
+  });
+
+  it.each(["running", "unrelated"] as const)(
+    "keeps an applying campaign when the latest run is %s",
+    async (kind) => {
+      campaignOwner.announce({
+        target: { kind: "package", version: "2026.9.6" },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      campaignOwner.adopt();
+      const campaign = campaignOwner.getState();
+      const run = createUpdateRun({
+        trigger: "campaign",
+        origin: { campaignId: kind === "unrelated" ? randomUUID() : campaign?.id },
+      });
+      if (kind === "unrelated") {
+        finishUpdateRun(run.runId, { status: "failed" });
+      }
+
+      expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          schedule: { channel: "stable", autoEnabled: true, campaign },
+        }),
+      );
+      expect(campaignOwner.getState()).toEqual(campaign);
+    },
+  );
+
+  it("does not clear a replacement campaign after an awaited ledger read", async () => {
+    const announce = (version: string) => {
+      campaignOwner.announce({
+        target: { kind: "package", version },
+        apply: async () => "applied",
+        onChange: (campaign) =>
+          setUpdateScheduleCache({
+            next: { channel: "stable", autoEnabled: true, ...(campaign ? { campaign } : {}) },
+          }),
+      });
+      campaignOwner.adopt();
+      return expectDefined(campaignOwner.getState(), "campaign state");
+    };
+    const original = announce("2026.9.6");
+    const run = createUpdateRun({ trigger: "campaign", origin: { campaignId: original.id } });
+    campaignOwner.bindRun(original.id, run.runId);
+    finishUpdateRun(run.runId, { status: "failed" });
+    const readStatus = ledger.getUpdateRunStatusAsync;
+    vi.spyOn(ledger, "getUpdateRunStatusAsync").mockImplementationOnce(async () => {
+      const status = await readStatus();
+      campaignOwner.clear();
+      announce("2026.9.7");
+      return status;
+    });
+
+    const respond = await requestUpdateRead("update.status");
+    const replacement = campaignOwner.getState();
+    expect(replacement).toMatchObject({ state: "applying" });
+    expect(replacement?.id).not.toBe(original.id);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        schedule: { channel: "stable", autoEnabled: true, campaign: replacement },
+      }),
+    );
+  });
+
+  it("keeps private recovery receipts durable while status and history stay public", async () => {
+    const capture = {
+      manifestSha256: "a".repeat(64),
+      configWrites: [
+        {
+          path: path.join(home.home, "private.json"),
+          beforeHash: null,
+          contiguous: true,
+          afterHash: "b".repeat(64),
+        },
+      ],
+      status: "pending" as const,
+    };
+    const run = createUpdateRun({ trigger: "api", origin: { updateRecoveryCapture: capture } });
+    const publicRun = { ...run, origin: {} };
+    const status = await readUpdateRunStatus();
+    expect(status).toMatchObject({ activeRun: publicRun, lastRun: publicRun });
+    expect(JSON.stringify(status)).not.toContain("updateRecoveryCapture");
+    expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(true, {
+      sentinel: null,
+      activeRun: publicRun,
+      lastRun: publicRun,
+      updateAvailable: null,
+      effectiveChannel: "stable",
+    });
+    expect(await requestUpdateRead("update.runs.get", { runId: run.runId })).toHaveBeenCalledWith(
+      true,
+      { run: publicRun },
+    );
+    expect(await requestUpdateRead("update.runs.list")).toHaveBeenCalledWith(true, {
+      runs: [publicRun],
+    });
+    markGatewayRestartDraining();
+    expect(await requestUpdateRead("update.runs.get", { runId: run.runId })).toHaveBeenCalledWith(
+      true,
+      { run: publicRun },
+    );
+    expect(getUpdateRun(run.runId)?.origin.updateRecoveryCapture).toEqual(capture);
+    expect(run.origin.updateRecoveryCapture).toEqual(capture);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(["accepting", "suspension"] as const)(
+    "rechecks root ownership after a lazy restart read resets into %s",
+    async (nextPhase) => {
+      markGatewayRestartDraining();
+      const preparing = createDeferredCore();
+      const prepared = createDeferredCore();
+      const reconciling = createDeferredCore();
+      const reconciled = createDeferredCore();
+      const reconcile = vi
+        .spyOn(ledger, "getUpdateRunWithReconciliationAsync")
+        .mockImplementation(async () => {
+          reconciling.resolve();
+          await reconciled.promise;
+          return { run: undefined };
+        });
+      const handlers = createLazyCoreHandlers({
+        methods: ["update.runs.get"],
+        loadHandlers: async () => {
+          preparing.resolve();
+          await prepared.promise;
+          return updateStatusHandlers;
+        },
+      });
+      const respond = vi.fn<RespondFn>();
+      const request = handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "read-after-rollback",
+          method: "update.runs.get",
+          params: { runId: randomUUID() },
+        },
+        respond,
+        client: {
+          connId: "read-after-rollback",
+          connect: {
+            role: "operator",
+            scopes: ["operator.admin"],
+            client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
+            minProtocol: 1,
+            maxProtocol: 1,
+          },
+        },
+        isWebchatConnect: () => false,
+        context: { logGateway } as GatewayRequestContext,
+        methodRegistry: createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(handlers)),
+      });
+      await preparing.promise;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      resetGatewayWorkAdmission();
+      if (nextPhase === "suspension") {
+        expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
+        prepared.resolve();
+        await request;
+        expect(reconcile).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+      } else {
+        prepared.resolve();
+        await reconciling.promise;
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        reconciled.resolve();
+        await request;
+        expect(respond).toHaveBeenCalledWith(true, { run: null });
+      }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
+
+  it.each(["signal", "drain"] as const)(
+    "reads recorded progress without reconciliation during restart %s",
+    async (phase) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
+      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+      clock.mockReturnValue(now);
+      if (phase === "signal") {
+        expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
+      } else {
+        markGatewayRestartDraining();
+      }
+      const response = await requestUpdateRead("update.runs.get", { runId: run.runId });
+      if (phase === "signal") {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+      } else {
+        expect(response).toHaveBeenCalledWith(true, { run });
+      }
+      expect(getUpdateRun(run.runId)).toEqual(run);
+      expect(warn).not.toHaveBeenCalled();
+
+      resetGatewayWorkAdmission();
+      await requestUpdateRead("update.runs.get", { runId: run.runId });
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "failed",
+        reason: "legacy-driver-expired",
+      });
+    },
+  );
+
+  it("reads fresh status concurrently without copying the shared database", async () => {
+    const run = createUpdateRun({ trigger: "api" });
+    const backup = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationFromOwnedDatabase");
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      for (const respond of await Promise.all([
+        requestUpdateRead("update.status"),
+        requestUpdateRead("update.status"),
+      ])) {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ activeRun: run, lastRun: run }),
+        );
+      }
+      expect(sql.count()).toBe(0);
+    } finally {
+      sql.restore();
+    }
+    const completed = finishUpdateRun(run.runId, { status: "succeeded" });
+    const respond = await requestUpdateRead("update.status");
+    expect(respond).toHaveBeenCalledWith(true, {
+      sentinel: null,
+      lastRun: completed,
+      updateAvailable: null,
+      effectiveChannel: "stable",
+    });
+    expect(backup).not.toHaveBeenCalled();
+  });
+
   it.each(["update.status", "update.runs.get"] as const)(
     "preserves readable history when reconciliation is refused through %s",
     async (method) => {
@@ -144,9 +519,10 @@ describe("update history RPCs", () => {
     });
     expect(await requestUpdateRead("update.runs.list")).toHaveBeenCalledWith(true, { runs: [] });
 
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const currentTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(currentTime - 2_000);
     const active = createUpdateRun({ trigger: "api" });
-    now.mockReturnValue(2_000);
+    now.mockReturnValue(currentTime - 1_000);
     const latest = finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, {
       status: "skipped",
       reason: "dry-run",
@@ -165,7 +541,7 @@ describe("update history RPCs", () => {
       await requestUpdateRead("update.runs.get", { runId: randomUUID() }),
     ).toHaveBeenCalledWith(true, { run: null });
 
-    now.mockReturnValue(3_000);
+    now.mockReturnValue(currentTime);
     const completed = finishUpdateRun(active.runId, { status: "succeeded" });
     expect(await requestUpdateRead("update.status")).toHaveBeenCalledWith(true, {
       sentinel: null,
@@ -173,12 +549,14 @@ describe("update history RPCs", () => {
       updateAvailable: null,
       effectiveChannel: "stable",
     });
+    const nativeCalls = observeMainThreadSql();
     expect(await requestUpdateRead("update.runs.list")).toHaveBeenCalledWith(true, {
       runs: [latest, completed],
     });
     expect(await requestUpdateRead("update.runs.list", { limit: 1 })).toHaveBeenCalledWith(true, {
       runs: [latest],
     });
+    nativeCalls.expectIdle();
   });
 
   it("rejects malformed identities, invalid limits, and unsupported query fields", async () => {
@@ -208,9 +586,11 @@ it("reconciles an expired legacy admission on Gateway watcher startup", async ()
   const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
   const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
   clock.mockReturnValue(now);
-  const broadcast = vi.fn();
-  const watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+  const published = createDeferredCore();
+  const broadcast = vi.fn(() => published.resolve());
+  const watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   try {
+    await published.promise;
     expect(getUpdateRun(legacy.runId)).toMatchObject({
       phase: "finished",
       status: "failed",
@@ -219,6 +599,51 @@ it("reconciles an expired legacy admission on Gateway watcher startup", async ()
     expect(broadcast).toHaveBeenCalledWith(
       "update.run.changed",
       expect.objectContaining({ runId: legacy.runId, status: "failed" }),
+    );
+  } finally {
+    await watcher.stop();
+  }
+});
+
+it("watches a valid active update when newer terminal history is malformed", async () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now - 1_000);
+  const active = createUpdateRun({ trigger: "cli" });
+  clock.mockReturnValue(now);
+  const latest = finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, {
+    status: "succeeded",
+  });
+  clock.mockRestore();
+  const { db } = openOpenClawStateDatabase();
+  db.prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?").run(
+    "not-json",
+    latest.runId,
+  );
+  expect(getUpdateRun(active.runId)).toEqual(active);
+  expect(() => getUpdateRun(latest.runId)).toThrow();
+
+  const observed = createDeferredCore();
+  const broadcast = vi.fn(() => observed.resolve());
+  const log = {
+    warn: vi.fn((message: string) => {
+      // A failed discovery must reach the assertion, not wait for a test timeout.
+      if (message.startsWith("update run watcher stopped:")) {
+        observed.resolve();
+      }
+    }),
+  };
+  const watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
+  try {
+    await observed.promise;
+    expect(broadcast).toHaveBeenCalledWith("update.run.changed", {
+      runId: active.runId,
+      phase: "requested",
+      status: "running",
+      updatedAtMs: active.updatedAtMs,
+    });
+    expect(lifecycle.scheduler.nextWakeAtMs).not.toBeNull();
+    expect(log.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("update run watcher stopped:"),
     );
   } finally {
     await watcher.stop();

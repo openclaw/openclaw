@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
+import { findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
+import type {
+  CodexCatalogListRequest,
+  CodexCatalogSourceAttempt,
+} from "./session-catalog-list-request.js";
 import { CatalogParamsError } from "./session-catalog-parsing.js";
 
 const INITIAL_BACKOFF_MS = 5_000;
@@ -8,10 +13,6 @@ const MAX_BACKOFF_MS = 60_000;
 type SourceState = {
   failure?: { error: unknown; delayMs: number; retryAt: number; probing: boolean };
 };
-
-type SourceAttempt =
-  | { allowed: false; error: unknown }
-  | { allowed: true; resolved: () => void; rejected: (error: unknown) => void };
 
 /** Source health is separate from query-keyed page sharing and cached page delivery. */
 export class CodexCatalogSourceBackoff {
@@ -23,13 +24,17 @@ export class CodexCatalogSourceBackoff {
     config: OpenClawConfig,
     agentId: string | undefined,
     sourceHomeId: string | undefined,
-  ): SourceAttempt {
+    scope?: CodexCatalogListRequest,
+  ): CodexCatalogSourceAttempt {
     let sources = this.sourcesByConfig.get(config);
     if (!sources) {
       sources = new Map();
       this.sourcesByConfig.set(config, sources);
     }
     const key = JSON.stringify([agentId, sourceHomeId ?? null]);
+    if (scope) {
+      return scope.attempt(sources, key, () => this.begin(config, agentId, sourceHomeId));
+    }
     let state = sources.get(key);
     if (!state) {
       state = {};
@@ -56,6 +61,7 @@ export class CodexCatalogSourceBackoff {
         }
         if (
           error instanceof CatalogParamsError ||
+          (error instanceof Error && error.name === "AbortError") ||
           (error instanceof CodexAppServerRpcError &&
             (error.code === -32600 || error.code === -32602))
         ) {
@@ -64,13 +70,20 @@ export class CodexCatalogSourceBackoff {
           }
           return;
         }
-        // Preserve one immediate retry. Only the current generation advances source health.
-        const delayMs = failure
-          ? Math.min(failure.delayMs * 2 || INITIAL_BACKOFF_MS, MAX_BACKOFF_MS)
-          : 0;
+        // Transient failures retain one immediate retry; OS launch refusals are terminal.
+        const delayMs = findCodexAppServerSpawnError(error)
+          ? Infinity
+          : failure
+            ? Math.min(failure.delayMs * 2 || INITIAL_BACKOFF_MS, MAX_BACKOFF_MS)
+            : 0;
         sources.set(key, {
           failure: { error, delayMs, retryAt: this.now() + delayMs, probing: false },
         });
+      },
+      abandoned: () => {
+        if (sources.get(key) === state && failure) {
+          failure.probing = false;
+        }
       },
     };
   }

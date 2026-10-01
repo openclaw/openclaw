@@ -10,9 +10,11 @@ import {
   readClawPackageRefs,
 } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
-import { createNodeEvalArgs } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { markClawPackageIndependentlyOwned } from "./claw-package-adoption.js";
 import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -253,19 +255,23 @@ describe("Claw package independent adoption", () => {
   it("releases a package lease when process exit bypasses async cleanup", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-exit-lease-") };
     const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
-    const moduleUrl = new URL("./claw-package-lifecycle-lease.ts", import.meta.url).href;
+    const moduleUrl = resolveRuntimeWorkerUrl(
+      stateNativeProcessEntrypoints.clawPackageLifecycleLease,
+    );
     const result = await runNodeScript(
-      createNodeEvalArgs(
-        `
-          import { withClawPackageLifecycleLease } from ${JSON.stringify(moduleUrl)};
+      [
+        ...resolveRuntimeWorkerArgv(moduleUrl, resolveTestNodeExecPath()).slice(0, -1),
+        ...createNodeEvalArgs(
+          `
+          import { withClawPackageLifecycleLease } from ${JSON.stringify(moduleUrl.href)};
           await withClawPackageLifecycleLease(
             ${JSON.stringify(artifact)},
             async () => { process.exit(23); },
             { required: true },
           );
         `,
-        { imports: ["tsx"] },
-      ),
+        ),
+      ],
       { ...process.env, ...env },
       60_000,
     );

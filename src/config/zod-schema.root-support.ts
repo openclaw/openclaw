@@ -21,24 +21,20 @@ const EdgeAuthHeadersSchema = z
     });
   });
 
-const GatewayRemoteSchemaShape = {
-  url: z.string().optional(),
-
-  transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
-
-  remotePort: z.number().int().min(1).max(65_535).optional(),
-
-  token: SecretInputSchema.optional().register(sensitive),
-
-  password: SecretInputSchema.optional().register(sensitive),
-  edgeAuth: EdgeAuthHeadersSchema.optional(),
-  tlsFingerprint: z.string().optional(),
-  sshTarget: z.string().optional(),
-  sshIdentity: z.string().optional(),
-  sshHostKeyPolicy: z.union([z.literal("strict"), z.literal("openssh")]).optional(),
-};
-
-export const GatewayRemoteConfigSchema = z.strictObject(GatewayRemoteSchemaShape).optional();
+export const GatewayRemoteConfigSchema = z
+  .strictObject({
+    url: z.string().optional(),
+    transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
+    remotePort: z.number().int().min(1).max(65_535).optional(),
+    token: SecretInputSchema.optional().register(sensitive),
+    password: SecretInputSchema.optional().register(sensitive),
+    edgeAuth: EdgeAuthHeadersSchema.optional(),
+    tlsFingerprint: z.string().optional(),
+    sshTarget: z.string().optional(),
+    sshIdentity: z.string().optional(),
+    sshHostKeyPolicy: z.union([z.literal("strict"), z.literal("openssh")]).optional(),
+  })
+  .optional();
 
 export const SecuritySchema = z
   .strictObject({
@@ -195,6 +191,29 @@ const TalkProviderEntrySchema = z
   })
   .catchall(z.unknown());
 
+function validateTalkProviderSelection(
+  value: { provider?: string; providers?: Record<string, unknown> },
+  ctx: z.RefinementCtx,
+  scope: "talk" | "talk.realtime",
+): void {
+  const provider = normalizeLowercaseStringOrEmpty(value.provider ?? "");
+  const providers = value.providers ? Object.keys(value.providers) : [];
+  if (provider && providers.length > 0 && !Object.hasOwn(value.providers!, provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: `${scope}.provider must match a key in ${scope}.providers (missing "${provider}")`,
+    });
+  }
+  if (!provider && providers.length > 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: `${scope}.provider is required when ${scope}.providers defines multiple providers`,
+    });
+  }
+}
+
 const TalkRealtimeSchema = z
   .strictObject({
     provider: z.string().optional(),
@@ -212,27 +231,7 @@ const TalkRealtimeSchema = z
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
-  .superRefine((realtime, ctx) => {
-    const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
-    const providers = realtime.providers ? Object.keys(realtime.providers) : [];
-
-    if (provider && providers.length > 0 && !Object.hasOwn(realtime.providers!, provider)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider"],
-        message: `talk.realtime.provider must match a key in talk.realtime.providers (missing "${provider}")`,
-      });
-    }
-
-    if (!provider && providers.length > 1) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider"],
-        message:
-          "talk.realtime.provider is required when talk.realtime.providers defines multiple providers",
-      });
-    }
-  });
+  .superRefine((realtime, ctx) => validateTalkProviderSelection(realtime, ctx, "talk.realtime"));
 
 export const TalkSchema = z
   .strictObject({
@@ -248,26 +247,7 @@ export const TalkSchema = z
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
   })
-  .superRefine((talk, ctx) => {
-    const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
-    const providers = talk.providers ? Object.keys(talk.providers) : [];
-
-    if (provider && providers.length > 0 && !Object.hasOwn(talk.providers!, provider)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider"],
-        message: `talk.provider must match a key in talk.providers (missing "${provider}")`,
-      });
-    }
-
-    if (!provider && providers.length > 1) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["provider"],
-        message: "talk.provider is required when talk.providers defines multiple providers",
-      });
-    }
-  });
+  .superRefine((talk, ctx) => validateTalkProviderSelection(talk, ctx, "talk"));
 
 const RESERVED_MCP_SERVER_NAME = "__proto__";
 const RESERVED_MCP_SERVER_NAME_ERROR = 'MCP server name "__proto__" is reserved; rename the server';
@@ -306,19 +286,16 @@ function createMcpServersSchema(serverNameSchema: z.ZodType<string>) {
 }
 
 export function validateHttpOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      url.pathname === "/" &&
-      !url.search &&
-      !url.hash &&
-      !url.username &&
-      !url.password
-    );
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return (
+    url !== null &&
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    url.pathname === "/" &&
+    !url.search &&
+    !url.hash &&
+    !url.username &&
+    !url.password
+  );
 }
 
 export const McpConfigSchema = z
@@ -344,6 +321,11 @@ export const McpConfigSchema = z
 
 export const NodeHostSchema = z
   .strictObject({
+    autoUpdate: z
+      .strictObject({
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
     agentRuns: NodeHostAgentRunsSchema,
     workerRuns: NodeHostWorkerRunsSchema,
     browserProxy: z

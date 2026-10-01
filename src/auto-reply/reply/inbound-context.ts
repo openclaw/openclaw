@@ -41,15 +41,12 @@ export function isFinalizedInboundContext<T extends Record<string, unknown>>(
 }
 
 function resolveCanonicalInboundText(
-  ctx: Record<string, unknown>,
+  ctx: MsgContext & { BodyStripped?: unknown },
   opts: Pick<FinalizeInboundContextOptions, "forceBodyForAgent" | "forceBodyForCommands"> = {},
 ): CanonicalInboundText {
-  const body = normalizeTextField(ctx.Body) ?? "";
+  const body = ctx.Body ?? "";
   const rawTextFromAliases =
-    normalizeTextField(ctx.RawBody) ??
-    normalizeTextField(ctx.Transcript) ??
-    normalizeTextField(ctx.BodyStripped) ??
-    body;
+    ctx.RawBody ?? ctx.Transcript ?? normalizeTextField(ctx.BodyStripped) ?? body;
   const forceTextProjection = opts.forceBodyForAgent || opts.forceBodyForCommands;
   const rawText = forceTextProjection
     ? rawTextFromAliases
@@ -58,13 +55,13 @@ function resolveCanonicalInboundText(
     ? body
     : (normalizeTextField(ctx.agentText) ??
       normalizeTextField(ctx.BodyForAgent) ??
-      normalizeTextField(ctx.CommandBody) ??
+      ctx.CommandBody ??
       rawText);
   const commandText = opts.forceBodyForCommands
-    ? (normalizeTextField(ctx.CommandBody) ?? rawText)
+    ? (ctx.CommandBody ?? rawText)
     : (normalizeTextField(ctx.commandText) ??
       normalizeTextField(ctx.BodyForCommands) ??
-      normalizeTextField(ctx.CommandBody) ??
+      ctx.CommandBody ??
       rawText);
   // Literal input has no executable projection, including before command handlers
   // run or when media enrichment forces text projection again.
@@ -143,10 +140,9 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
   normalized.GroupSystemPrompt = normalizeTextField(normalized.GroupSystemPrompt);
   if (Array.isArray(normalized.ChannelPromptContext)) {
-    const normalizedChannelPromptContext = normalized.ChannelPromptContext.map((entry) =>
-      normalizeTextField(entry),
+    normalized.ChannelPromptContext = normalized.ChannelPromptContext.map(
+      normalizeTextField,
     ).filter((entry): entry is string => Boolean(entry));
-    normalized.ChannelPromptContext = normalizedChannelPromptContext;
   }
 
   const chatType = normalizeChatType(normalized.ChatType);
@@ -159,14 +155,11 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   normalized.BodyForAgent = normalized.agentText;
   normalized.BodyForCommands = normalized.commandText;
 
-  const explicitLabel = normalizeOptionalString(normalized.ConversationLabel);
-  if (!explicitLabel) {
-    const resolved = normalizeOptionalString(resolveConversationLabel(normalized));
-    if (resolved) {
-      normalized.ConversationLabel = resolved;
-    }
-  } else {
-    normalized.ConversationLabel = explicitLabel;
+  const label =
+    normalizeOptionalString(normalized.ConversationLabel) ??
+    normalizeOptionalString(resolveConversationLabel(normalized));
+  if (label) {
+    normalized.ConversationLabel = label;
   }
 
   // Always set. Default-deny when upstream forgets to populate it.

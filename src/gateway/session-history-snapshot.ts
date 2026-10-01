@@ -1,10 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   PaginatedSessionHistory,
   SessionHistoryMessage,
   SessionHistoryReadParams,
   SessionHistorySnapshot,
 } from "../config/sessions/session-history-types.js";
-import { projectChatDisplayMessagesWithState } from "./chat-display-projection.core.js";
+import {
+  projectChatDisplayMessagesWithState,
+  type ChatDisplayProjectionOptions,
+} from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
@@ -19,6 +23,7 @@ type SessionHistorySnapshotOptions = {
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
+  resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
 };
 
 /** Keep raw scan context inside the worker; only the completed page crosses isolates. */
@@ -27,6 +32,7 @@ export async function readSessionHistorySnapshotKernel(
   options: SessionHistorySnapshotOptions,
 ): Promise<SessionHistorySnapshot> {
   let rawMessages: unknown[];
+  let windowReset = false;
   let totalRawMessages: number | undefined;
   let transcriptPath: string | undefined;
   let projected: ReturnType<typeof projectChatDisplayMessagesWithState>;
@@ -40,8 +46,10 @@ export async function readSessionHistorySnapshotKernel(
     rawMessages = snapshot.messages;
     transcriptPath = snapshot.transcriptPath;
     projected = projectChatDisplayMessagesWithState(rawMessages, {
+      subagentCoordination: options.readers.subagentCoordination,
       includeCommentaryFallbacks: true,
       maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      resolveCronJobName: options.resolveCronJobName,
       ...(options.deferProfileDisplay
         ? {}
         : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
@@ -58,13 +66,18 @@ export async function readSessionHistorySnapshotKernel(
       preserveProjectionContext: true,
       ...options,
     });
+    windowReset = tail.windowReset ?? false;
     projected = tail.projection;
     rawMessages = tail.rawMessages;
     totalRawMessages = tail.readPage.totalMessages;
     transcriptPath = tail.readPage.transcriptPath;
   }
-  const rawHistoryMessages = toSessionHistoryMessages(rawMessages);
-  const history = paginateSessionMessages(projected.messages, params.limit, params.cursor);
+  const rawHistoryMessages = rawMessages.filter(isRecord);
+  const history = paginateSessionMessages(
+    projected.messages,
+    params.limit,
+    windowReset ? undefined : params.cursor,
+  );
   if (
     typeof totalRawMessages === "number" &&
     totalRawMessages > rawMessages.length &&
@@ -77,7 +90,7 @@ export async function readSessionHistorySnapshotKernel(
     }
   }
   return {
-    history,
+    history: { ...history, ...(windowReset ? { windowReset: true } : {}) },
     rawTranscriptSeq:
       totalRawMessages ?? resolveMessageSeq(rawHistoryMessages.at(-1)) ?? rawHistoryMessages.length,
     turnBoundaryPending: projected.turnBoundaryPending,
@@ -96,13 +109,6 @@ export function resolveCursorSeq(cursor: string | undefined): number | undefined
   }
   const value = Number(normalized);
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
-  return messages.filter(
-    (message): message is SessionHistoryMessage =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
-  );
 }
 
 export function buildPaginatedSessionHistory(params: {

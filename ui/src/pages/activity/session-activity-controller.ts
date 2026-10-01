@@ -7,6 +7,7 @@ import { activityPersonFromPath, activityPersonLocation } from "../../app-route-
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { activityPulseBoundaries } from "./activity-pulse-window.ts";
 import {
   readCurrentWorkChange,
   reconcileCurrentWork,
@@ -61,6 +62,7 @@ export class SessionActivityController implements ReactiveController {
   private readonly summaryRetries = new Set<string>();
   private canEnsureSummaries = false;
   private filters: ActivityQuery | null = null;
+  private bucketRollover?: ReturnType<typeof setTimeout>;
   private readonly pendingChanges: CurrentWorkChange[] = [];
   private changesOverflowed = false;
   private normalizedLocation = "";
@@ -88,14 +90,20 @@ export class SessionActivityController implements ReactiveController {
     this.resetQuery();
   }
 
-  private resetQuery(): void {
-    this.eventRefresh.reset();
-    this.pending?.controller.abort();
-    this.pending = undefined;
+  private resetSummaries(): void {
     this.summaryPending?.abort();
     this.summaryPending = undefined;
     this.summaryAttempts.clear();
     this.summaryRetries.clear();
+  }
+
+  private resetQuery(): void {
+    clearTimeout(this.bucketRollover);
+    this.bucketRollover = undefined;
+    this.eventRefresh.reset();
+    this.pending?.controller.abort();
+    this.pending = undefined;
+    this.resetSummaries();
     this.requestState = "idle";
     this.incomplete = false;
     this.error = undefined;
@@ -315,10 +323,7 @@ export class SessionActivityController implements ReactiveController {
     const interrupted = this.pending !== undefined || this.summaryPending !== undefined;
     this.pageActive = !leaving && document.visibilityState !== "hidden";
     if (!this.pageActive) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
     }
     this.eventRefresh.setActive(this.pageActive, leaving || interrupted);
   };
@@ -366,36 +371,40 @@ export class SessionActivityController implements ReactiveController {
   ): Promise<void> {
     this.canEnsureSummaries = canEnsureSummaries;
     if (!canEnsureSummaries) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
     }
     if (!client || !filters) {
       this.resetQuery();
       this.host.requestUpdate();
       return Promise.resolve();
     }
-    const request =
-      filters === "current"
-        ? {
-            activeOnly: true,
-            archived: "all",
-            includeGlobal: true,
-            includeUnknown: true,
-            includeDerivedTitles: true,
-            limit: 100,
-          }
+    const now = new Date();
+    const boundaries =
+      filters === "current" ? undefined : activityPulseBoundaries(filters.time, now.getTime());
+    clearTimeout(this.bucketRollover);
+    this.bucketRollover = undefined;
+    if (boundaries && typeof setTimeout === "function") {
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+      const rollover = Math.min(boundaries.at(-1)!, midnight);
+      this.bucketRollover = setTimeout(
+        () => this.eventRefresh.schedule(),
+        rollover - now.getTime() + 1_000,
+      );
+    }
+    const request = {
+      archived: "all",
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+      limit: 100,
+      ...(filters === "current"
+        ? { activeOnly: true }
         : {
-            archived: "all",
-            includeGlobal: true,
-            includeUnknown: true,
             includePeople: true,
+            activityPulseBoundaries: boundaries,
             excludeSubagents: true,
             includeActivitySummary: true,
-            includeDerivedTitles: true,
             sortBy: "activity",
-            limit: 100,
             ...(filters.personId ? { involvingProfileId: filters.personId } : {}),
             ...(filters.query ? { search: filters.query } : {}),
             ...(filters.time === "all"
@@ -404,7 +413,8 @@ export class SessionActivityController implements ReactiveController {
                   activeMinutes:
                     filters.time === "24h" ? 1440 : filters.time === "7d" ? 10080 : 43200,
                 }),
-          };
+          }),
+    };
     const queryKey = JSON.stringify(request);
     const sameQuery = this.client === client && this.queryKey === queryKey;
     if (sameQuery && this.pending && reason !== "retry") {
@@ -429,10 +439,7 @@ export class SessionActivityController implements ReactiveController {
     this.requestState = reason === "retry" ? "retrying" : "loading";
     this.error = undefined;
     if (!sameQuery) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
       this.result = undefined;
       this.incomplete = false;
     }

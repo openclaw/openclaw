@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { invalidateModelCatalogCache } from "../model-catalog-cache.ts";
+import { peekModelCatalog } from "../model-catalog-store.ts";
 import {
   invalidateChatMetadataForSessionEvent,
   invalidateChatMetadataStore,
   type ChatMetadataResult,
+  type ChatMetadataResponse,
+  type ChatMetadataUpdate,
 } from "./chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
@@ -19,7 +23,143 @@ const scope = { agentId: "main", sessionKey: "agent:main:retained" };
 const commands: ChatMetadataResult = { commands: [] };
 const models = [{ id: "fresh", name: "Fresh", provider: "test" }];
 
+afterEach(() => vi.useRealTimers());
+
 describe("automatic metadata admission", () => {
+  it.each(["matching", "different", "failed", "retired"] as const)(
+    "publishes commands immediately before validating the pending %s catalog after a session patch",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const metadata = createDeferred<ChatMetadataResponse>();
+      const catalog = createDeferred<{ models: typeof models }>();
+      const updates: ChatMetadataUpdate[] = [];
+      const catalogsAtChange: ReturnType<typeof peekModelCatalog>[] = [];
+      const refreshes: ReturnType<typeof loadChatMetadataRefresh>[] = [];
+      const request = vi.fn((method: string) => {
+        if (method === "chat.metadata") {
+          return metadata.promise;
+        }
+        return catalog.promise;
+      });
+      const client = createTestGatewayClient(request);
+      const release = subscribeChatMetadata(client, scope, (update) => {
+        updates.push(update);
+        if (update.type === "result" && update.catalogChanged) {
+          catalogsAtChange.push(peekModelCatalog(client, scope));
+        }
+        if (update.type === "invalidated" || update.type === "result") {
+          refreshes.push(loadChatMetadataRefresh(client, scope));
+        }
+      });
+      try {
+        invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
+        await vi.advanceTimersByTimeAsync(2_499);
+        expect(request).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "models.list",
+          "chat.metadata",
+        ]);
+        const commandsRead = loadChatMetadata(client, scope);
+        metadata.resolve({ ...commands, models });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(updates.filter((update) => update.type === "result")).toEqual([
+          { type: "result", result: commands },
+        ]);
+        await expect(commandsRead).resolves.toEqual(commands);
+        expect(peekChatMetadata(client, scope)).toEqual(commands);
+        expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+
+        request.mockImplementation((method) =>
+          method === "chat.metadata" ? Promise.resolve(commands) : Promise.resolve({ models }),
+        );
+        if (outcome === "retired") {
+          invalidateModelCatalogCache(client, scope);
+        }
+        if (outcome === "failed") {
+          catalog.reject(new Error("Catalog unavailable"));
+        } else {
+          catalog.resolve({ models: outcome === "different" ? [] : models });
+        }
+        await commandsRead;
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.all(refreshes.map((refresh) => refresh.completed));
+        const changed = outcome !== "matching";
+        expect(updates.filter((update) => update.type === "result")).toEqual([
+          { type: "result", result: commands },
+          ...(changed ? [{ type: "result", result: commands, catalogChanged: true }] : []),
+        ]);
+        expect(catalogsAtChange).toEqual(changed ? [undefined] : []);
+        expect(updates[0]).toEqual({
+          type: "invalidated",
+          scope: "session",
+          refreshSessionFacts: true,
+        });
+        expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
+          changed ? 2 : 1,
+        );
+        expect(peekModelCatalog(client, scope)).toEqual({ models });
+        expect(refreshes[0]?.isCurrent()).toBe(!changed);
+      } finally {
+        metadata.resolve(commands);
+        catalog.resolve({ models });
+        await Promise.all(refreshes.map((refresh) => refresh.completed));
+        release();
+      }
+    },
+  );
+
+  it.each(["visible", "hidden", "released", "global invalidation"])(
+    "coalesces session patches and rechecks admission when %s",
+    async (transition) => {
+      vi.useFakeTimers();
+      const request = vi.fn(async (method: string) =>
+        method === "chat.metadata" ? commands : { models },
+      );
+      const client = createTestGatewayClient(request);
+      let active = true;
+      const refreshes: ReturnType<typeof loadChatMetadataRefresh>[] = [];
+      const release = subscribeChatMetadata(
+        client,
+        scope,
+        (update) => {
+          if (update.type === "invalidated") {
+            refreshes.push(loadChatMetadataRefresh(client, scope));
+          }
+        },
+        () => active,
+      );
+      await loadChatMetadataRefresh(client, scope).completed;
+      request.mockClear();
+      for (let index = 0; index < 5; index++) {
+        invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(request).not.toHaveBeenCalled();
+      if (transition === "hidden") {
+        active = false;
+      } else if (transition === "released") {
+        release();
+      } else if (transition === "global invalidation") {
+        invalidateChatMetadataStore(client);
+        expect(request).toHaveBeenCalledWith("chat.metadata", scope);
+      }
+      await vi.advanceTimersByTimeAsync(2_500);
+      await Promise.all(refreshes.map((refresh) => refresh.completed));
+      const admitted = transition === "visible" || transition === "global invalidation";
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
+        admitted ? 1 : 0,
+      );
+      if (transition === "hidden") {
+        active = true;
+        await loadChatMetadataRefresh(client, scope).completed;
+        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(1);
+      }
+      release();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("reuses metadata across concurrent presentations and route remounts until invalidated", async () => {
     let metadataReads = 0;
     const client = createTestGatewayClient((method) => {

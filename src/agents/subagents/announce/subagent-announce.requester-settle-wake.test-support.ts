@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import type { SubagentAnnounceDeliveryResult as Result } from "./subagent-announce-dispatch.js";
-import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-wake.js";
+import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-state.js";
 
 export const REQUESTER = "agent:main:main";
 export const requesterSettleKey = (suffix: string) =>
@@ -55,6 +55,7 @@ export function completeBatch(
   batch: readonly SubagentRunRecord[],
   rearmGeneration?: number,
   outcome?: Result,
+  onCommitted?: () => void,
 ): void {
   const runIds = batch.map((entry) => entry.runId).toSorted();
   if (outcome) {
@@ -69,6 +70,7 @@ export function completeBatch(
       entry.requesterSettleWake = undefined;
     }
   }
+  onCommitted?.();
 }
 
 export const deliverSpy = vi.fn(async (_params: Record<string, unknown>): Promise<Result> => ({

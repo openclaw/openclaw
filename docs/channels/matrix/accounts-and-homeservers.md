@@ -41,6 +41,8 @@ Both commands accept `--account <id>` for multi-account setups. The repair flow:
 
 It does not delete old rooms automatically. It picks the healthy DM and updates the mapping so future Matrix sends, verification notices, and other direct-message flows target the right room.
 
+Mapping updates read the existing account data before writing. If that read fails, the update stops without replacing existing mappings. Retry the repair after account-data reads recover.
+
 ## Multi-account
 
 ```json5
@@ -148,6 +150,9 @@ Matrix accepts these target forms anywhere OpenClaw asks for a room or user targ
 - Aliases: `#alias:server`, `channel:#alias:server`, or `matrix:channel:#alias:server`
 
 Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix when configuring explicit delivery targets, cron jobs, bindings, or allowlists. OpenClaw keeps internal session keys canonical for storage, so those lowercase keys are not a reliable source for Matrix delivery IDs.
+
+Config-backed peer and group listings use the selected account's allowlists and
+configured rooms without loading stored Matrix credentials.
 
 Live directory lookup uses the logged-in Matrix account:
 

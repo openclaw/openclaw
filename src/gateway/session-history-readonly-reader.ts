@@ -1,58 +1,163 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
-import { readCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
+import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
+import {
+  readCurrentProjectionSnapshot,
+  type CurrentTranscriptProjection,
+} from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-binding.js";
+import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import { readOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
+import type { SessionConversationBinding } from "../config/sessions/session-history-types.js";
+import { listSessionReactionsInDatabase } from "../config/sessions/session-reaction-store.read.js";
+import {
+  SessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "../config/sessions/session-transcript-projection-error.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../state/openclaw-agent-db-readonly.js";
+import {
+  isSubagentCoordinationHistoryInput,
+  type SubagentCoordinationDisplayResolver,
+} from "./chat-display-projection.history.js";
+import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
+import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
+import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
-import type { ResolvedTranscriptReadTarget } from "./session-transcript-read-target.js";
+import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
-/** Serializable addresses prepared by the host; no handle, environment or config crosses isolates. */
-export type PreparedSessionHistoryReadTarget = {
-  transcript: ResolvedTranscriptReadTarget & { agentId: string; storePath: string };
-  database: { agentId: string; path: string };
-  entryValidationKey?: string;
-};
-
-export function createReadonlySessionHistoryReader(target: PreparedSessionHistoryReadTarget) {
-  return createSessionTranscriptReader({
-    resolveTarget: async () => target.transcript,
-    readSnapshot: async (_transcript, read) => {
-      const result = withScopedOpenClawAgentDatabaseReadOnly(
-        (database) =>
-          readWithCanonicalSessionAdmission(database, () => {
-            // Repeat the original conditional row validation at every reader invocation,
-            // after dispatch. A current entry may name a successor; it never selects this transcript.
-            const entryValidationKey = target.entryValidationKey;
-            if (entryValidationKey !== undefined) {
-              readOpenClawAgentDatabaseReadOnly(database, (db) =>
-                readSessionEntryRow(db, entryValidationKey),
-              );
-            }
-            return readCurrentProjectionSnapshot(
-              database,
-              {
-                agentId: target.transcript.agentId,
-                sessionId: target.transcript.sessionId,
-                sessionKey: target.transcript.sessionKey,
-                databaseAgentId: target.database.agentId,
-                path: target.database.path,
-              },
-              read,
-            );
+/** Source and run facts live only for one history operation, on its admitted database. */
+export function createBoundSessionHistorySubagentProjection(
+  readSnapshot: <T>(read: (projection: CurrentTranscriptProjection) => T) => T,
+  stateDatabase: PreparedSessionHistoryReadTarget["stateDatabase"],
+  readSourceDatabases: () => GatewaySessionStoreReadSources | undefined,
+): SubagentCoordinationDisplayResolver {
+  const runs = new Map<
+    string,
+    ReturnType<typeof readSessionTranscriptRunInputVisibilityFromProjection>
+  >();
+  const readSource = createBoundSessionHistorySubagentSource(
+    readSnapshot,
+    stateDatabase,
+    readSourceDatabases,
+  );
+  return {
+    isSubagentSession: readSource,
+    isSubagentRunMessage(runId, messageSeq) {
+      if (messageSeq === undefined) {
+        return false;
+      }
+      let visibility = runs.get(runId);
+      if (
+        !visibility ||
+        (visibility.hidden &&
+          visibility.firstVisibleMessageSeq === undefined &&
+          visibility.scannedThroughMessageSeq < messageSeq)
+      ) {
+        visibility = readSnapshot((projection) =>
+          readSessionTranscriptRunInputVisibilityFromProjection(projection, {
+            idempotencyKey: buildRunUserTurnIdempotencyKey(runId),
+            runId,
+            messageSeq,
+            previous: visibility?.hidden ? visibility : undefined,
+            isHiddenInput: (message) => {
+              const record = asOptionalRecord(message);
+              return Boolean(record && isSubagentCoordinationHistoryInput(record, readSource));
+            },
           }),
-        target.database,
-        { throwOnMissingTable: true },
-      );
-      if (!result.found) {
-        throw new Error(
-          "Session transcript storage is unavailable; open the source gateway and retry.",
         );
+        runs.set(runId, visibility);
       }
-      if (result.value.kind === "unavailable") {
-        throw new SessionTranscriptProjectionUnavailableError(target.transcript.sessionId);
-      }
-      return result.value.value;
+      return (
+        visibility.hidden &&
+        (visibility.firstVisibleMessageSeq === undefined ||
+          messageSeq < visibility.firstVisibleMessageSeq)
+      );
     },
-  });
+  };
+}
+
+export function createReadonlySessionHistoryReader(
+  target: Omit<PreparedSessionHistoryReadTarget, "sourceDiscovery">,
+  resolveSourceDatabases?: () => GatewaySessionStoreReadSources | undefined,
+) {
+  let sourceDatabases = target.sourceDatabases;
+  const readDatabase = <T>(read: (database: OpenClawAgentReadOnlyDatabase) => T): T => {
+    const result = withScopedOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        readWithCanonicalSessionAdmission(database, () => {
+          // Repeat the original conditional row validation at every reader invocation,
+          // after dispatch. A current entry may name a successor; it never selects this transcript.
+          const entryValidationKey = target.entryValidationKey;
+          if (entryValidationKey !== undefined) {
+            readSessionEntryRow(database, entryValidationKey);
+          }
+          return read(database);
+        }),
+      target.database,
+    );
+    if (!result.found) {
+      throw new SessionTranscriptStorageUnavailableError(result.reason);
+    }
+    return result.value;
+  };
+  const readSnapshot = <T>(read: (projection: CurrentTranscriptProjection) => T): T => {
+    const result = readDatabase((database) =>
+      readCurrentProjectionSnapshot(
+        database,
+        {
+          agentId: target.transcript.agentId,
+          sessionId: target.transcript.sessionId,
+          sessionKey: target.transcript.sessionKey,
+          databaseAgentId: target.database.agentId,
+          path: target.database.path,
+        },
+        read,
+      ),
+    );
+    if (result.kind === "unavailable") {
+      throw new SessionTranscriptProjectionUnavailableError(target.transcript.sessionId);
+    }
+    return result.value;
+  };
+  return {
+    readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
+      const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
+      return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));
+    },
+    readReactions: () =>
+      readDatabase((database) => {
+        if (!target.transcript.sessionKey) {
+          throw new Error("Reaction reads require a session key");
+        }
+        return listSessionReactionsInDatabase(database, target.transcript.sessionKey, {
+          sessionId: target.transcript.sessionId,
+        });
+      }),
+    readConversationBinding: (conversationRef: string): SessionConversationBinding | null =>
+      readDatabase((database) => {
+        const conversation = resolveConversationInDatabase(database, conversationRef);
+        if (!conversation) {
+          return null;
+        }
+        const { channel, accountId, target: address, threadId, nativeChannelId } = conversation;
+        return { channel, accountId, target: address, threadId, nativeChannelId };
+      }),
+    readTranscriptBinding: () =>
+      readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection)),
+    readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
+      readSnapshot((projection) => readTranscriptDisplayDeltaFromProjection(projection, limits)),
+    ...createSessionTranscriptReader({
+      resolveTarget: async () => target.transcript,
+      readSnapshot: async (_transcript, read) => readSnapshot(read),
+    }),
+    subagentCoordination: createBoundSessionHistorySubagentProjection(
+      readSnapshot,
+      target.stateDatabase,
+      () => (sourceDatabases ??= resolveSourceDatabases?.()),
+    ),
+  };
 }

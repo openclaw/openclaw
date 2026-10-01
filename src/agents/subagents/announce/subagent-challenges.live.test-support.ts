@@ -15,10 +15,10 @@ import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../utils/message-channel.js";
-import {
-  countPendingDescendantRuns,
-  listDescendantRunsForRequester,
-} from "../registry/subagent-registry.test-helpers.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { listDescendantRunsForRequesterFromRuns } from "../registry/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../registry/subagent-registry-state.js";
+import { countPendingDescendantRuns } from "../registry/subagent-registry.test-helpers.js";
 import { createExternalGates } from "./subagent-external-gate.test-support.js";
 
 const WAIT_MS = 8 * 60_000;
@@ -241,7 +241,12 @@ type LiveSubagentContext = {
 };
 
 export async function runWithLiveSubagentGateway(
-  options: { children?: number },
+  options: {
+    children?: number;
+    maxConcurrent?: number;
+    additionalTools?: string[];
+    peerSessions?: boolean;
+  },
   body: (context: LiveSubagentContext) => Promise<void>,
 ): Promise<void> {
   expect(Boolean(process.env.OPENAI_API_KEY?.trim()), "OpenAI API key is present").toBe(true);
@@ -299,8 +304,21 @@ export async function runWithLiveSubagentGateway(
         },
         plugins: { enabled: false },
         tools: {
+          // These scenarios inspect direct tool calls in the transcript.
           codeMode: false,
-          allow: ["sessions_spawn", "sessions_yield", "subagents", "read", "exec", "process"],
+          toolSearch: false,
+          ...(options.peerSessions
+            ? { sessions: { visibility: "all" as const }, agentToAgent: { enabled: true } }
+            : {}),
+          allow: [
+            "sessions_spawn",
+            "sessions_yield",
+            "subagents",
+            "read",
+            "exec",
+            "process",
+            ...(options.additionalTools ?? []),
+          ],
           exec: { mode: "full", host: "gateway" },
         },
         models: {
@@ -338,7 +356,7 @@ export async function runWithLiveSubagentGateway(
               allowAgents: ["*"],
               maxSpawnDepth: 2,
               maxChildrenPerAgent: Math.max(3, childrenPerBatch),
-              maxConcurrent: Math.max(3, childrenPerBatch),
+              maxConcurrent: options.maxConcurrent ?? childrenPerBatch,
               runTimeoutSeconds: 300,
               announceTimeoutMs: 300_000,
               archiveAfterMinutes: 60,
@@ -435,8 +453,8 @@ export async function runWithLiveSubagentGateway(
         );
         record("parent-final-observed", { sessionKey, expectedMarker: marker, reply: firstFinal });
         expect(firstFinal, `first parent completion for ${marker}`).toBe(expected);
-        await until("descendant settlement", () =>
-          countPendingDescendantRuns(sessionKey) === 0 ? true : undefined,
+        await until("descendant settlement", async () =>
+          (await countPendingDescendantRuns(sessionKey, () => {})) === 0 ? true : undefined,
         );
         const messages = await history(sessionKey);
         expect(
@@ -482,7 +500,10 @@ export async function runWithLiveSubagentGateway(
       // Capture evidence before cleanup can terminalize or release pending work.
       evidence.push({ phase: "external-gates", gates: gateServer?.snapshot() });
       for (const sessionKey of observedParents) {
-        const runs = listDescendantRunsForRequester(sessionKey);
+        const runs = listDescendantRunsForRequesterFromRuns(
+          getSubagentRunsSnapshotForRead(subagentRuns),
+          sessionKey,
+        );
         evidence.push({
           phase: "final-observation",
           sessionKey,

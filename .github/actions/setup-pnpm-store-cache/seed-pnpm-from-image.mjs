@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 const packageManager = process.argv[2];
 const imageVersion = "12.3.4";
@@ -13,25 +13,31 @@ const imageNativeHashes = {
   arm64:
     "b7bd40540ecb46a88a4f2679c4c61a65cda7e437dda4c6dfa2466e8883971c138cd371029c5d2de226306810ea26056394a6143b0685fdb4506a318d038709e3",
 };
-// The repository already selects 12.4.0. Authenticate both stages of its
+// The repository already selects 12.5.1. Authenticate both stages of its
 // bootstrap without changing that pin or routing downloads through Node fetch.
-const currentVersion = "12.4.0";
+const currentVersion = "12.5.1";
 const currentWrapperHash =
-  "37536c26ed40ab4134b6511e09f6b27f3ebb45687468f2406ca3805279a4e5ca158c1931350ad9774d6ab2108d71b3dbaeb39943159294375e4d053e8e05685c";
+  "e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f";
 const currentNativeHashes = {
-  x64: "490560464711e17caa7fcf9535bb58d2bb5c1277c3ab8f11847df41d6a36fd47ea2847e57b6ace3321993a63750db330e19cc6e66598a02f353bb66a1c565c3f",
+  x64: "dcf914058a39cf8760b659d3348163ed01a9703500baa5f3f561958a03c309e71c127846891916980e75d364e66091edc093f72df984f9917d3c6796867f29f5",
   arm64:
-    "ea7a50530ab70ff5976d3811e1ebc0a44290f484f39d9e88cff769b5c8c1cc0efec122d369890af7c39ddb0b070a83e61056fdb46b4cf9cbc6f36fb0cb4a3db8",
+    "ea16cc596dbf790a356f9c2f40f7bf9dd2c75531fcf116afe8df9f7c3e3f87a22e14c8d60a06ac15862c16fd06aefa6a444031dd2c26652be58bed0d157a9bc4",
 };
 const current = packageManager === `pnpm@${currentVersion}+sha512.${currentWrapperHash}`;
 const version = current ? currentVersion : imageVersion;
 const wrapperHash = current ? currentWrapperHash : imageWrapperHash;
 const nativeHash = (current ? currentNativeHashes : imageNativeHashes)[process.arch];
 const archiveRoot = "/opt/crabbox/toolchain-archives";
+const cachedArchives = process.env.PNPM_CONFIG_STORE_DIR
+  ? join(process.env.PNPM_CONFIG_STORE_DIR, "toolchain")
+  : undefined;
 const registry = "https://registry.npmjs.org";
 const registryConfigured = (process.env.COREPACK_NPM_REGISTRY || registry).replace(/\/$/u, "");
-// These approved native archives are glibc builds. Other platforms/registries
-// retain ordinary Corepack/pnpm selection rather than receiving the wrong binary.
+// Curl's built-in retry policy already distinguishes transient HTTP responses.
+// Retry only transport exits here so permanent HTTP failures still fail once.
+const retryableCurlStatuses = new Set([5, 6, 7, 18, 35, 52, 55, 56, 92]);
+// These native archives are glibc builds. Windows seeds only the authenticated
+// wrapper; pnpm owns its native binary selection and signature verification.
 let supportedCurrentHost = !current;
 if (current && process.platform === "linux") {
   try {
@@ -46,38 +52,43 @@ const canDownload =
   process.env.COREPACK_ENABLE_NETWORK !== "0" &&
   process.env.COREPACK_INTEGRITY_KEYS === undefined;
 
+const seedNative = process.platform === "linux" && supportedCurrentHost && nativeHash;
 if (
-  process.platform === "linux" &&
-  supportedCurrentHost &&
-  nativeHash &&
+  (seedNative || (current && process.platform === "win32")) &&
   packageManager === `pnpm@${version}+sha512.${wrapperHash}`
 ) {
   const staging = await mkdtemp(join(process.env.RUNNER_TEMP || tmpdir(), "pnpm-image-"));
   let corepackHome;
   try {
-    const archives = [
-      [`pnpm-${version}.tgz`, wrapperHash],
-      [`exe.linux-${process.arch}-${version}.tgz`, nativeHash],
-    ];
+    const archives = [[`pnpm-${version}.tgz`, wrapperHash]];
+    if (seedNative) {
+      archives.push([`exe.linux-${process.arch}-${version}.tgz`, nativeHash]);
+    }
     let valid = true;
     for (const [name, hash] of archives) {
       const destination = join(staging, name);
-      let copied = true;
-      try {
-        // Hash the private bytes we will extract, not a mutable image marker.
-        await copyFile(join(archiveRoot, name), destination);
-      } catch (error) {
-        if (["ENOENT", "EACCES", "EISDIR"].includes(error.code)) {
-          copied = false;
-        } else {
-          throw error;
-        }
-      }
       const authentic = () =>
         readFile(destination).then(
           (bytes) => createHash("sha512").update(bytes).digest("hex") === hash,
         );
-      if (!copied || !(await authentic())) {
+      let restored = false;
+      for (const root of [cachedArchives, archiveRoot].filter(Boolean)) {
+        try {
+          // Authenticate the private bytes we will extract, never a cache marker.
+          await copyFile(join(root, name), destination);
+        } catch (error) {
+          if (["ENOENT", "EACCES", "EISDIR", "ENOTDIR"].includes(error.code)) {
+            continue;
+          }
+          throw error;
+        }
+        if (await authentic()) {
+          console.error(`Restored pinned pnpm archive ${name} from ${root}`);
+          restored = true;
+          break;
+        }
+      }
+      if (!restored) {
         if (!canDownload) {
           valid = false;
           break;
@@ -85,23 +96,34 @@ if (
         const url = name.startsWith("pnpm-")
           ? `${registry}/pnpm/-/${name}`
           : `${registry}/@pnpm/exe.linux-${process.arch}/-/${name}`;
-        const fetched = spawnSync(
-          "curl",
-          [
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "120",
-            "--output",
-            destination,
-            url,
-          ],
-          { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
-        );
+        console.error(`Downloading pinned pnpm archive ${name}`);
+        const curlArgs = [
+          "--fail",
+          "--location",
+          "--silent",
+          "--show-error",
+          "--connect-timeout",
+          "10",
+          "--max-time",
+          "120",
+          "--retry",
+          "2",
+          "--retry-delay",
+          "2",
+          "--output",
+          destination,
+          url,
+        ];
+        let fetched;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          fetched = spawnSync("curl", curlArgs, {
+            stdio: ["ignore", "ignore", "pipe"],
+            encoding: "utf8",
+          });
+          if (fetched.error || !retryableCurlStatuses.has(fetched.status)) {
+            break;
+          }
+        }
         if (fetched.error || fetched.status !== 0) {
           throw new Error(`Cannot download pinned pnpm archive ${name}: ${fetched.stderr}`, {
             cause: fetched.error,
@@ -123,8 +145,12 @@ if (
         await mkdir(roots[index], { recursive: true });
         const result = spawnSync(
           "tar",
-          ["-xzf", join(staging, name), "-C", roots[index], "--strip-components=1"],
-          { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
+          [
+            "-xzf",
+            relative(roots[index], join(staging, name)).split(sep).join("/"),
+            "--strip-components=1",
+          ],
+          { cwd: roots[index], stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
         );
         if (result.error || result.status !== 0) {
           throw new Error(`Cannot extract authenticated pnpm image archive: ${result.stderr}`, {
@@ -141,6 +167,16 @@ if (
           hash: `sha512.${wrapperHash}`,
         }),
       );
+      if (cachedArchives) {
+        try {
+          await mkdir(cachedArchives, { recursive: true });
+          for (const [name] of archives) {
+            await copyFile(join(staging, name), join(cachedArchives, name));
+          }
+        } catch (error) {
+          console.error(`::warning::Cannot cache authenticated pnpm archives: ${error.code}`);
+        }
+      }
       process.stdout.write(`${corepackHome}\n`);
       corepackHome = undefined;
     }

@@ -1,14 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withIsolatedTestHome } from "../../../../test/test-env.js";
+import type { OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { VERSION } from "../../../version.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
+import { successfulInstall } from "./missing-configured-plugin-install.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   installPluginFromClawHub: vi.fn(),
@@ -17,12 +21,17 @@ const mocks = vi.hoisted(() => ({
   loadManifestMetadataSnapshot: vi.fn(),
   listOfficialExternalPluginCatalogEntries: vi.fn(),
   updateNpmInstalledPlugins: vi.fn(),
+  resolveNpmSpecMetadata: vi.fn(),
   writePersistedInstalledPluginIndexInstallRecordsWithLease:
     vi.fn<
       typeof import("../../../plugins/installed-plugin-index-records.js").writePersistedInstalledPluginIndexInstallRecordsWithLease
     >(),
 }));
 
+vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/install-source-utils.js")>()),
+  resolveNpmSpecMetadata: mocks.resolveNpmSpecMetadata,
+}));
 vi.mock("../../../plugins/clawhub.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/clawhub.js")>()),
   installPluginFromClawHub: mocks.installPluginFromClawHub,
@@ -106,6 +115,21 @@ afterAll(async () => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("configured plugin cohort availability", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
+    mocks.loadManifestMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({ plugins: [] }),
+    );
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
+    mocks.resolveNpmSpecMetadata.mockImplementation(async ({ spec }: { spec: string }) => {
+      const name = spec.slice(0, spec.lastIndexOf("@"));
+      return {
+        ok: true,
+        metadata: { name, version: VERSION, resolvedSpec: `${name}@${VERSION}` },
+      };
+    });
+  });
   beforeAll(async () => {
     await import("./missing-configured-plugin-install.js");
   });
@@ -199,5 +223,137 @@ describe("configured plugin cohort availability", () => {
       result.records,
       expect.any(Object),
     );
+  });
+
+  it("upgrades v2026.7.1-beta.3 Codex Supervisor config and installs Codex", async () => {
+    const env = { ...testEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION };
+    // This is the bundled plugin id and config surface shipped by v2026.7.1-beta.3.
+    const raw = {
+      plugins: {
+        allow: ["codex-supervisor"],
+        entries: {
+          "codex-supervisor": {
+            enabled: true,
+            config: {
+              endpoints: [
+                {
+                  id: "local",
+                  label: "Local Codex",
+                  transport: "stdio-proxy",
+                  command: "codex",
+                  args: ["app-server", "--listen", "stdio://"],
+                  cwd: "/tmp/openclaw",
+                },
+              ],
+              allowRawTranscripts: true,
+              allowWriteControls: false,
+            },
+          },
+        },
+      },
+    };
+    const migration = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
+
+    expect(migration.next).not.toBeNull();
+    const cfg = migration.next as OpenClawConfig;
+    expect(cfg.plugins?.allow).toEqual(["codex"]);
+    expect(cfg.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: {
+        supervision: {
+          enabled: true,
+          endpoints: [
+            {
+              id: "local",
+              label: "Local Codex",
+              transport: "stdio-proxy",
+              command: "codex",
+              args: ["app-server", "--listen", "stdio://"],
+              cwd: "/tmp/openclaw",
+            },
+          ],
+          allowRawTranscripts: true,
+          allowWriteControls: false,
+        },
+      },
+    });
+    expect(cfg.plugins?.entries).not.toHaveProperty("codex-supervisor");
+    expect(migration.changes).toEqual(
+      expect.arrayContaining([
+        "Moved plugins.entries.codex-supervisor to plugins.entries.codex.config.supervision.",
+        "Rewrote plugins.allow codex-supervisor references to codex.",
+      ]),
+    );
+
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
+      successfulInstall({
+        pluginId: "codex",
+        npmSpec: "@openclaw/codex",
+        version: "2026.7.2",
+        resolution: {
+          integrity: "sha512-codex-supervisor-upgrade",
+          resolvedAt: "2026-07-10T00:00:00.000Z",
+        },
+      }),
+    );
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        openclaw: {
+          plugin: { id: "codex", label: "Codex" },
+          install: { npmSpec: "@openclaw/codex", defaultChoice: "npm" },
+        },
+      },
+    ]);
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg,
+      pluginIds: ["codex"],
+      env,
+      baselineRecords: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        spec: `@openclaw/codex@${VERSION}`,
+        expectedPluginId: "codex",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    const records = expectDefined(
+      mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mock.calls[0],
+      "persisted plugin records",
+    )[0];
+    expect(records.codex).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: "/tmp/openclaw-plugins/codex",
+      version: "2026.7.2",
+      resolvedName: "@openclaw/codex",
+      resolvedSpec: "@openclaw/codex@2026.7.2",
+      integrity: "sha512-codex-supervisor-upgrade",
+    });
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+      records,
+      {
+        config: cfg,
+        env,
+        filePath: databasePath,
+        lease: expect.objectContaining({
+          databasePath,
+          assertOwned: expect.any(Function),
+          assertOwnedInTransaction: expect.any(Function),
+        }),
+      },
+    );
+    expect(result.changes).toEqual([
+      `Installed missing configured plugin "codex" from @openclaw/codex@${VERSION}.`,
+    ]);
+    expect(result.warnings).toEqual([]);
+    expect(result.repairedPluginIds).toEqual(["codex"]);
+    expect(result.records).toEqual(records);
   });
 });

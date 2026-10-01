@@ -1,4 +1,3 @@
-// Memory Core plugin module owns ranked search-window filtering and diagnostics.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemoryIndexIdentityDiagnostic,
@@ -205,7 +204,19 @@ async function finalizeMemorySearchToolQuery(params: {
   const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
   const status = params.status ?? active.manager.status();
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
-  if (pausedIndexIdentity) {
+  // A pending chunking upgrade on an otherwise matching index degrades to
+  // keyword-only results instead of pausing memory search; every other
+  // mismatch still withholds all candidates. Keyword results still need a
+  // usable FTS index — the manager's fallback requires the same, so without
+  // it there is no retrieval path and the tool must keep the paused
+  // diagnostic instead of reporting a successful empty search.
+  const chunkingUpgradeKeywordOnly =
+    pausedIndexIdentity?.status === "mismatched" &&
+    pausedIndexIdentity.owner === "openclaw" &&
+    pausedIndexIdentity.code === "chunking_version" &&
+    pausedIndexIdentity.chunkingVersionOnly === true &&
+    Boolean(status.fts?.enabled && status.fts?.available);
+  if (pausedIndexIdentity && !chunkingUpgradeKeywordOnly) {
     return {
       searchStartedAt: startedAt,
       status,
@@ -228,10 +239,8 @@ async function finalizeMemorySearchToolQuery(params: {
     const allowedSources = new Set(searchSources);
     filtered = filtered.filter((hit) => allowedSources.has(hit.source));
   }
-  if (query.requestedCorpus === "sessions") {
-    filtered = filtered.filter((hit) => hit.source === "sessions");
-  } else if (query.requestedCorpus === "memory") {
-    filtered = filtered.filter((hit) => hit.source === "memory");
+  if (query.requestedCorpus === "sessions" || query.requestedCorpus === "memory") {
+    filtered = filtered.filter((hit) => hit.source === query.requestedCorpus);
   }
 
   const rawResults = filtered.slice(0, query.resultLimit);

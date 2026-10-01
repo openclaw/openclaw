@@ -2,14 +2,11 @@ import { createHash } from "node:crypto";
 import type {
   OpenClawCrablineInbound,
   OpenClawCrablineInboundInput,
-  StartedOpenClawCrablineAdapter,
   StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
 import { parseQaTarget } from "./qa-bus-protocol.js";
 import type { QaBusInboundMessageInput } from "./runtime-api.js";
 
-const TELEGRAM_QA_DRIVER_ID = "100001";
-const TELEGRAM_QA_OBSERVER_ID = "100002";
 const MATRIX_QA_SERVER_NAME = "matrix-qa.test";
 const MATRIX_QA_DRIVER_ID = `@driver:${MATRIX_QA_SERVER_NAME}`;
 const DISCORD_ID_PATTERN = /^\d{17,20}$/u;
@@ -22,14 +19,6 @@ export function resolveDiscordQaId(value: string) {
   }
   const digest = BigInt(`0x${createHash("sha256").update(trimmed).digest("hex").slice(0, 16)}`);
   return String(DISCORD_ID_FLOOR + (digest % DISCORD_ID_FLOOR));
-}
-
-export function resolveTelegramQaSenderId(senderId: string) {
-  return senderId === "driver"
-    ? TELEGRAM_QA_DRIVER_ID
-    : senderId === "observer"
-      ? TELEGRAM_QA_OBSERVER_ID
-      : senderId;
 }
 
 function resolveMatrixQaSenderId(senderId: string) {
@@ -45,8 +34,9 @@ function resolveMatrixQaConversationId(conversationId: string) {
   if (!trimmed) {
     throw new Error("Matrix QA conversation id must be non-empty");
   }
-  if (trimmed.startsWith("!") && trimmed.includes(":")) {
-    return trimmed;
+  const explicitTarget = normalizeExplicitMatrixTarget(trimmed);
+  if (explicitTarget) {
+    return explicitTarget;
   }
   const digest = createHash("sha256").update(trimmed).digest("hex").slice(0, 16);
   return `!${digest}:${MATRIX_QA_SERVER_NAME}`;
@@ -74,9 +64,7 @@ function resolveMatrixQaTarget(target: string) {
   if (target.startsWith("thread:")) {
     if (target.startsWith("thread:/v1/")) {
       const parsed = parseQaTarget(target);
-      const resolvedConversationId =
-        normalizeExplicitMatrixTarget(parsed.conversationId) ??
-        resolveMatrixQaConversationId(parsed.conversationId);
+      const resolvedConversationId = resolveMatrixQaConversationId(parsed.conversationId);
       const kind = parsed.chatType === "direct" ? "dm" : "group";
       return `thread:/v1/${kind}/${encodeQaThreadComponent(resolvedConversationId)}/${encodeQaThreadComponent(parsed.threadId ?? "")}`;
     }
@@ -84,35 +72,24 @@ function resolveMatrixQaTarget(target: string) {
     const separator = threadTarget.indexOf("/");
     if (separator > 0) {
       const conversationId = threadTarget.slice(0, separator);
-      const resolvedConversationId =
-        normalizeExplicitMatrixTarget(conversationId) ??
-        resolveMatrixQaConversationId(conversationId);
+      const resolvedConversationId = resolveMatrixQaConversationId(conversationId);
       return `thread:${resolvedConversationId}${threadTarget.slice(separator)}`;
     }
   }
   for (const prefix of ["channel:", "group:", "dm:"]) {
     if (target.startsWith(prefix)) {
       const conversationId = target.slice(prefix.length);
-      const resolvedConversationId =
-        normalizeExplicitMatrixTarget(conversationId) ??
-        resolveMatrixQaConversationId(conversationId);
+      const resolvedConversationId = resolveMatrixQaConversationId(conversationId);
       return `${prefix}${resolvedConversationId}`;
     }
   }
   return resolveMatrixQaConversationId(target);
 }
 
-function resolveMatrixQaText(text: string, botUserId: string) {
+function resolveQaMention(text: string, mention: string) {
   return text.replace(
     /(^|[\s([{])@openclaw(?=$|[\s.,!?;)\]}])/gu,
-    (_match, prefix: string) => `${prefix}${botUserId}`,
-  );
-}
-
-function resolveDiscordQaText(text: string, botUserId: string) {
-  return text.replace(
-    /(^|[\s([{])@openclaw(?=$|[\s.,!?;)\]}])/gu,
-    (_match, prefix: string) => `${prefix}<@${botUserId}>`,
+    (_match, prefix: string) => `${prefix}${mention}`,
   );
 }
 
@@ -139,7 +116,7 @@ function resolveDiscordQaTarget(target: string) {
 }
 
 export function createCrablineProviderInboundInput(
-  adapter: StartedOpenClawCrablineAdapter,
+  adapter: StartedOpenClawCrablineCorrelatedAdapter,
   input: QaBusInboundMessageInput,
 ): OpenClawCrablineInboundInput {
   const kind = input.conversation.kind === "direct" ? "direct" : "group";
@@ -156,18 +133,16 @@ export function createCrablineProviderInboundInput(
       kind,
     },
     senderId:
-      adapter.channel === "telegram"
-        ? resolveTelegramQaSenderId(input.senderId)
-        : adapter.channel === "matrix"
-          ? resolveMatrixQaSenderId(input.senderId)
-          : adapter.channel === "discord"
-            ? resolveDiscordQaId(input.senderId)
-            : input.senderId,
+      adapter.channel === "matrix"
+        ? resolveMatrixQaSenderId(input.senderId)
+        : adapter.channel === "discord"
+          ? resolveDiscordQaId(input.senderId)
+          : input.senderId,
     text:
       adapter.channel === "matrix" && adapter.manifest.provider === "matrix"
-        ? resolveMatrixQaText(input.text, adapter.manifest.botUserId)
+        ? resolveQaMention(input.text, adapter.manifest.botUserId)
         : adapter.channel === "discord" && adapter.manifest.provider === "discord"
-          ? resolveDiscordQaText(input.text, adapter.manifest.botUserId)
+          ? resolveQaMention(input.text, `<@${adapter.manifest.botUserId}>`)
           : input.text,
     ...(input.threadId && adapter.channel === "discord"
       ? { threadId: resolveDiscordQaId(input.threadId) }
@@ -176,7 +151,7 @@ export function createCrablineProviderInboundInput(
 }
 
 export function resolveCrablineStateConversation(params: {
-  adapter: StartedOpenClawCrablineAdapter;
+  adapter: StartedOpenClawCrablineCorrelatedAdapter;
   input: QaBusInboundMessageInput;
   providerInbound: OpenClawCrablineInbound;
 }) {
@@ -188,6 +163,7 @@ export function resolveCrablineStateConversation(params: {
 export function createCrablineProviderDelivery(
   adapter: Pick<StartedOpenClawCrablineCorrelatedAdapter, "channel" | "createAgentDelivery">,
   target: string,
+  threadId?: string,
 ) {
   const { providerTargetKey, ...delivery } = adapter.createAgentDelivery({
     target:
@@ -196,6 +172,21 @@ export function createCrablineProviderDelivery(
         : adapter.channel === "discord"
           ? resolveDiscordQaTarget(target)
           : target,
+    threadId: adapter.channel === "discord" && threadId ? resolveDiscordQaId(threadId) : threadId,
   });
   return { delivery, providerTargetKey };
+}
+
+export function createCrablineProviderCorrelation(
+  adapter: StartedOpenClawCrablineCorrelatedAdapter,
+  target: Pick<QaBusInboundMessageInput, "conversation" | "threadId">,
+) {
+  return adapter.createInbound({
+    input: createCrablineProviderInboundInput(adapter, {
+      conversation: target.conversation,
+      senderId: target.conversation.kind === "direct" ? target.conversation.id : "driver",
+      text: "QA provider correlation",
+      ...(target.threadId ? { threadId: target.threadId } : {}),
+    }),
+  });
 }

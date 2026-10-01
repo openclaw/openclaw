@@ -1,4 +1,3 @@
-// Imessage plugin module implements self chat cache behavior.
 import { createHash } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatIMessageChatTarget } from "../targets.js";
@@ -17,7 +16,6 @@ type SelfChatLookup = SelfChatCacheKeyParts & {
 };
 
 type SelfChatCacheEntry = {
-  id: number;
   createdAt: number;
   createdAtSkewToleranceMs: number;
   rememberedAt: number;
@@ -59,9 +57,7 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
 
 class DefaultSelfChatCache implements SelfChatCache {
   private cache = new Map<string, Map<number, SelfChatCacheEntry>>();
-  private insertionOrder: Array<{ key: string; id: number }> = [];
-  private insertionOrderOffset = 0;
-  private entryCount = 0;
+  private insertionOrder = new Map<number, string>();
   private lastCleanupAt = 0;
   private nextEntryId = 1;
 
@@ -80,16 +76,14 @@ class DefaultSelfChatCache implements SelfChatCache {
     }
     const entries = this.cache.get(key) ?? new Map<number, SelfChatCacheEntry>();
     const entry = {
-      id: this.nextEntryId,
       createdAt: lookup.createdAt,
       createdAtSkewToleranceMs: lookup.allowCreatedAtSkew ? SELF_CHAT_CREATED_AT_TOLERANCE_MS : 0,
       rememberedAt: Date.now(),
     };
-    this.nextEntryId += 1;
-    entries.set(entry.id, entry);
+    const id = this.nextEntryId++;
+    entries.set(id, entry);
     this.cache.set(key, entries);
-    this.insertionOrder.push({ key, id: entry.id });
-    this.entryCount += 1;
+    this.insertionOrder.set(id, key);
     this.maybeCleanup();
   }
 
@@ -124,48 +118,28 @@ class DefaultSelfChatCache implements SelfChatCache {
       for (const [id, entry] of entries.entries()) {
         if (now - entry.rememberedAt > SELF_CHAT_TTL_MS) {
           entries.delete(id);
-          this.entryCount -= 1;
+          this.insertionOrder.delete(id);
         }
       }
       if (entries.size === 0) {
         this.cache.delete(key);
       }
     }
-    while (
-      this.entryCount > MAX_SELF_CHAT_CACHE_ENTRIES &&
-      this.insertionOrderOffset < this.insertionOrder.length
-    ) {
-      const oldest = expectDefined(
-        this.insertionOrder[this.insertionOrderOffset],
+    while (this.insertionOrder.size > MAX_SELF_CHAT_CACHE_ENTRIES) {
+      const [id, key] = expectDefined(
+        this.insertionOrder.entries().next().value,
         "oldest iMessage self-chat cache entry",
       );
-      this.insertionOrderOffset += 1;
-      const entries = this.cache.get(oldest.key);
+      this.insertionOrder.delete(id);
+      const entries = this.cache.get(key);
       if (!entries) {
         continue;
       }
-      if (!entries.delete(oldest.id)) {
-        continue;
-      }
-      this.entryCount -= 1;
+      entries.delete(id);
       if (entries.size === 0) {
-        this.cache.delete(oldest.key);
+        this.cache.delete(key);
       }
     }
-    this.compactInsertionOrder();
-  }
-
-  private compactInsertionOrder(): void {
-    if (
-      this.insertionOrderOffset <= 1_024 &&
-      this.insertionOrder.length <= this.entryCount + 1_024
-    ) {
-      return;
-    }
-    this.insertionOrder = this.insertionOrder
-      .slice(this.insertionOrderOffset)
-      .filter((entry) => this.cache.get(entry.key)?.has(entry.id));
-    this.insertionOrderOffset = 0;
   }
 }
 

@@ -53,6 +53,7 @@ export function buildCommandContext(params: {
     accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: auth.ownerList,
     senderIsOwner: auth.senderIsOwner,
+    ...(auth.assertOwnerCurrent ? { assertOwnerCurrent: auth.assertOwnerCurrent } : {}),
     isAuthorizedSender: auth.isAuthorizedSender,
     senderId: auth.senderId,
     abortKey,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
-import { activeSessions } from "./capture.js";
+import { activeSessions } from "./capture-startup.js";
 import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import {

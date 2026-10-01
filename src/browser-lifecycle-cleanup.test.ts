@@ -17,16 +17,22 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
 
   it("normalizes session keys before closing browser sessions", async () => {
     const onWarn = vi.fn();
+    const isCurrent = () => true;
+    const prepareCurrent = async () => true;
 
     await expect(
       cleanupBrowserSessionsForLifecycleEnd({
         sessionKeys: ["", "  session-a  ", "session-a", "session-b"],
+        isCurrent,
+        prepareCurrent,
         onWarn,
       }),
     ).resolves.toBeUndefined();
 
     expect(closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
       sessionKeys: ["session-a", "session-b"],
+      isCurrent,
+      prepareCurrent,
       onWarn,
     });
   });

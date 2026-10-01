@@ -1,4 +1,3 @@
-// Discord plugin module implements mentions behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -30,22 +29,15 @@ export function formatMention(params: {
   const userId = params.userId == null ? null : normalizeSnowflake(params.userId);
   const roleId = params.roleId == null ? null : normalizeSnowflake(params.roleId);
   const channelId = params.channelId == null ? null : normalizeSnowflake(params.channelId);
-  const values = [
-    userId ? { kind: "user" as const, id: userId } : null,
-    roleId ? { kind: "role" as const, id: roleId } : null,
-    channelId ? { kind: "channel" as const, id: channelId } : null,
-  ].filter((entry): entry is { kind: "user" | "role" | "channel"; id: string } => Boolean(entry));
-  if (values.length !== 1) {
+  const mentions = [
+    userId ? `<@${userId}>` : null,
+    roleId ? `<@&${roleId}>` : null,
+    channelId ? `<#${channelId}>` : null,
+  ].filter((entry): entry is string => Boolean(entry));
+  if (mentions.length !== 1) {
     throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
   }
-  const target = expectDefined(values.at(0), "single Discord mention target");
-  if (target.kind === "user") {
-    return `<@${target.id}>`;
-  }
-  if (target.kind === "role") {
-    return `<@&${target.id}>`;
-  }
-  return `<#${target.id}>`;
+  return expectDefined(mentions.at(0), "single Discord mention target");
 }
 
 function resolveConfiguredMentionAlias(

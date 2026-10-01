@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  markMcpLoopbackToolCallFinished,
   markMcpLoopbackToolCallStarted,
   recordMcpLoopbackToolCallResult,
   updateMcpLoopbackToolCallCapture,
@@ -134,4 +135,58 @@ describe("CLI loopback ask_user deadline tracking", () => {
     expect(tracking.getActiveLoopbackAskUserDeadline()).toBeUndefined();
     tracking.finalizeCapture(() => {});
   });
+});
+
+describe("CLI conversation delivery evidence", () => {
+  it.each(["sent", "queued", "unknown"] as const)(
+    "uses the raw %s receipt despite a sent JSONL echo",
+    (status) => {
+      const tracking = createTracking();
+      const toolName = "conversations_send";
+      const args = {
+        conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        message: "Synthetic message",
+      };
+      const name = `mcp__openclaw__${toolName}`;
+      tracking.handleCliToolUseStart({
+        toolCallId: "conversation-call",
+        name,
+        kind: "mcp_tool_use",
+        args,
+      });
+      const capture = markMcpLoopbackToolCallStarted({
+        captureKey: "deadline-test",
+        toolName,
+        args,
+      });
+      if (!capture) {
+        throw new Error("expected captured conversation call");
+      }
+      try {
+        recordMcpLoopbackToolCallResult({
+          captureHandle: capture,
+          toolName,
+          args,
+          outcome: "completed",
+          result: {
+            details: { status, ...(status === "sent" ? {} : { messageId: "prepared-1" }) },
+          },
+        });
+        tracking.handleCliToolResult({
+          toolCallId: "conversation-call",
+          name,
+          isError: false,
+          result: { details: { status: "sent", messageId: "presentation-id" } },
+        });
+        const result = tracking.withExecutionEvidence({ text: "On it." });
+        expect(result.didSendViaMessagingTool).toBe(status === "sent" ? true : undefined);
+        expect(result.messagingToolSentTexts).toEqual(
+          status === "sent" ? [args.message] : undefined,
+        );
+      } finally {
+        markMcpLoopbackToolCallFinished(capture);
+        tracking.finalizeCapture(() => {});
+      }
+    },
+  );
 });

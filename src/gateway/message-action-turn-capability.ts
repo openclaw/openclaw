@@ -10,6 +10,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel-normalize.js";
+import type { CronAuthenticatedChannelRequester } from "./cron-creator-authority-grant.types.js";
 
 const DEFAULT_TTL_MS = 15 * 60_000;
 const MAX_TTL_MS = 24 * 60 * 60_000;
@@ -21,7 +22,24 @@ const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 type ScheduledMessageActionAuthority = {
   policy: ScheduledToolPolicyContext;
   assertCurrent: () => void;
+  assertSourceCurrent?: () => void;
+  channelRequester?: CronAuthenticatedChannelRequester;
 };
+
+/** Host-only delivery restriction; carries no channel, requester, or source privilege. */
+type MessageActionDeliveryAttempt = {
+  beforeAttempt: () => Promise<void>;
+  assertCurrent: () => void;
+};
+
+/** Private handoff from authenticated dashboard admission to the exact reply run. */
+export type DashboardMessageReadAdmission = Readonly<{
+  agentId: string;
+  runId: string;
+  sessionKey: string;
+  sessionId?: string;
+  assertCurrent: () => void;
+}>;
 
 export type MessageActionAuthorization = {
   requesterAccountId?: string;
@@ -29,6 +47,10 @@ export type MessageActionAuthorization = {
   toolContext?: InternalChannelThreadingToolContext;
   /** @internal Redeemed from the process-local turn capability. */
   scheduled?: ScheduledMessageActionAuthority;
+  /** @internal Restricts writes independently of scheduled authorization. */
+  deliveryAttempt?: MessageActionDeliveryAttempt;
+  /** @internal Redeemed only by the host; never serialized or passed to plugins. */
+  assertDashboardReadCurrent?: () => void;
 };
 
 type MessageActionRequesterIdentity = {
@@ -78,6 +100,8 @@ type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   runId: string;
   sessionKey: string;
   scheduled?: ScheduledMessageActionAuthority;
+  deliveryAttempt?: MessageActionDeliveryAttempt;
+  assertDashboardReadCurrent?: () => void;
 };
 
 const capabilitiesByToken = new Map<string, MessageActionTurnCapability>();
@@ -147,20 +171,17 @@ function copyToolContext(
   };
 }
 
-function sweepExpiredMessageActionTurnCapabilities(nowMs: number = Date.now()): number {
-  let removed = 0;
+function sweepExpiredMessageActionTurnCapabilities(nowMs: number): void {
   for (const [token, capability] of capabilitiesByToken) {
     if (nowMs >= capability.expiresAtMs) {
       capabilitiesByToken.delete(token);
-      removed += 1;
     }
   }
-  return removed;
 }
 
 /**
- * Mint an opaque capability from trusted channel ingress or a live cron occurrence.
- * Public Gateway agent requests never receive this token.
+ * Mint an opaque capability from admitted channel/dashboard input or a live cron occurrence.
+ * Unattested Gateway agent requests never receive this token.
  */
 export function mintMessageActionTurnCapability(params: {
   agentId: string;
@@ -175,6 +196,8 @@ export function mintMessageActionTurnCapability(params: {
   requesterSenderE164?: string;
   toolContext?: InternalChannelThreadingToolContext;
   scheduled?: ScheduledMessageActionAuthority;
+  deliveryAttempt?: MessageActionDeliveryAttempt;
+  assertDashboardReadCurrent?: () => void;
   expiresWithRun?: boolean;
   ttlMs?: number;
   nowMs?: number;
@@ -207,16 +230,54 @@ export function mintMessageActionTurnCapability(params: {
     requesterSenderE164: normalizeOptionalString(params.requesterSenderE164),
     toolContext: copyToolContext(params.toolContext),
   };
+  const assertActive = () => {
+    if (capabilitiesByToken.get(token) !== capability || Date.now() >= capability.expiresAtMs) {
+      throw new Error("message action turn capability is no longer active");
+    }
+  };
   const scheduled = params.scheduled;
   if (scheduled) {
+    const assertSourceCurrent = scheduled.assertSourceCurrent;
     capability.scheduled = {
       policy: structuredClone(scheduled.policy),
+      ...(scheduled.channelRequester
+        ? { channelRequester: structuredClone(scheduled.channelRequester) }
+        : {}),
       assertCurrent: () => {
-        if (capabilitiesByToken.get(token) !== capability || Date.now() >= capability.expiresAtMs) {
-          throw new Error("message action turn capability is no longer active");
-        }
+        assertActive();
         scheduled.assertCurrent();
       },
+      ...(assertSourceCurrent
+        ? {
+            assertSourceCurrent: () => {
+              assertActive();
+              assertSourceCurrent();
+            },
+          }
+        : {}),
+    };
+  }
+  const deliveryAttempt = params.deliveryAttempt;
+  if (deliveryAttempt) {
+    capability.deliveryAttempt = {
+      assertCurrent: () => {
+        assertActive();
+        deliveryAttempt.assertCurrent();
+      },
+      beforeAttempt: async () => {
+        assertActive();
+        deliveryAttempt.assertCurrent();
+        await deliveryAttempt.beforeAttempt();
+        assertActive();
+        deliveryAttempt.assertCurrent();
+      },
+    };
+  }
+  const assertDashboardReadCurrent = params.assertDashboardReadCurrent;
+  if (assertDashboardReadCurrent) {
+    capability.assertDashboardReadCurrent = () => {
+      assertActive();
+      assertDashboardReadCurrent();
     };
   }
   capabilitiesByToken.set(token, capability);
@@ -259,7 +320,7 @@ function resolveStoredMessageActionTurnCapability(
   return capability;
 }
 
-/** Serializable context deliberately excludes the scheduled grant and its closure. */
+/** Serializable context deliberately excludes host-only grants and their closures. */
 export function resolveMessageActionTurnCapability(
   params: MessageActionTurnCapabilityLookup,
 ): AgentRuntimeMessageActionContext | undefined {
@@ -277,11 +338,7 @@ function copyMessageActionTurnContext(
     expiresAtMs: capability.expiresAtMs,
     sessionId: capability.sessionId,
     sourceReplySessionKey: capability.sourceReplySessionKey,
-    requesterAccountId: capability.requesterAccountId,
-    requesterSenderId: capability.requesterSenderId,
-    requesterSenderName: capability.requesterSenderName,
-    requesterSenderUsername: capability.requesterSenderUsername,
-    requesterSenderE164: capability.requesterSenderE164,
+    ...selectMessageActionRequesterIdentity(capability),
     toolContext: copyToolContext(capability.toolContext),
   };
 }
@@ -295,6 +352,8 @@ export function resolveMessageActionTurnAuthorization(
     ? {
         ...copyMessageActionTurnContext(capability),
         scheduled: capability.scheduled,
+        deliveryAttempt: capability.deliveryAttempt,
+        assertDashboardReadCurrent: capability.assertDashboardReadCurrent,
       }
     : undefined;
 }

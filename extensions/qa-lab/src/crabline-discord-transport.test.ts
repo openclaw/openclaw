@@ -57,7 +57,8 @@ describe("Crabline Discord transport", () => {
           threadId: "discord-crabline-thread",
         });
         const delivery = transport.buildAgentDelivery({
-          target: "thread:discord-crabline-primary/discord-crabline-thread",
+          target: "group:discord-crabline-primary",
+          threadId: "discord-crabline-thread",
         });
         expect(delivery).toMatchObject({
           channel: "discord",

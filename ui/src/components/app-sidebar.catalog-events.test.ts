@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import {
   catalogPage,
@@ -40,7 +41,10 @@ async function mountTab(
 
 describe("AppSidebar catalog event refresh", () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   it("keeps four stable tabs idle for five minutes and refreshes each once per catalog event", async () => {
     const tabs = [];
@@ -53,7 +57,7 @@ describe("AppSidebar catalog event refresh", () => {
       request.mockClear();
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
     }
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     for (const { request, sidebar } of tabs) {
       expect(request).toHaveBeenCalledTimes(1);
       expect(sidebar.textContent).toContain("Stable catalog");
@@ -67,14 +71,14 @@ describe("AppSidebar catalog event refresh", () => {
       sessionKey: "agent:research:x",
     });
     gateway.publishEvent("sessions.catalog.changed", { agentId: "research" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
     gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -100,6 +104,7 @@ describe("AppSidebar catalog event refresh", () => {
   );
 
   it("paces a trailing event after a slow catalog request without overlapping reads", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const pending = deferred<ReturnType<typeof catalogPage>>();
     const request = createGatewayRequestMock()
       .mockResolvedValueOnce(catalogPage([]))
@@ -107,7 +112,7 @@ describe("AppSidebar catalog event refresh", () => {
       .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
     const { gateway, sidebar } = await mountTab(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
     for (let second = 0; second < 3; second += 1) {
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
@@ -128,9 +133,124 @@ describe("AppSidebar catalog event refresh", () => {
     const { gateway, sidebar, request } = await mountTab();
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
     await sidebar.sessionData.refreshSessionCatalogs();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it("recovers a busy catalog without flashing an error or letting events bypass the retry delay", async () => {
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(catalogPage([{ threadId: "stable", name: "Stable catalog" }]))
+      .mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "server busy",
+          retryable: true,
+          retryAfterMs: 5_000,
+        }),
+      )
+      .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
+    const { gateway, sidebar } = await mountTab(request);
+    await sidebar.sessionData.refreshSessionCatalogs();
+    await sidebar.updateComplete;
+    expect(sidebar.textContent).toContain("Stable catalog");
+    expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
+    for (let second = 0; second < 4; second += 1) {
+      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(request).toHaveBeenCalledTimes(2);
+    }
+    await vi.advanceTimersByTimeAsync(999);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await sidebar.updateComplete;
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(sidebar.textContent).toContain("Updated catalog");
+    expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("bounds busy retries and reports a persistent failure while preserving the catalog", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(catalogPage([{ threadId: "stable", name: "Stable catalog" }]))
+      .mockRejectedValue(
+        new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "server busy",
+          retryable: true,
+          retryAfterMs: 100,
+        }),
+      );
+    try {
+      const { sidebar } = await mountTab(request);
+      await sidebar.sessionData.refreshSessionCatalogs();
+      for (const delay of [1_000, 2_000, 4_000]) {
+        expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
+        expect(warning).not.toHaveBeenCalled();
+        const requests = request.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(request).toHaveBeenCalledTimes(requests);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(request).toHaveBeenCalledTimes(requests + 1);
+      }
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).toContain("Stable catalog");
+      expect(sidebar.sessionData.sessionCatalogRefreshStatus).toMatchObject({
+        error: expect.any(String),
+        stale: true,
+      });
+      expect(warning).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(request).toHaveBeenCalledTimes(5);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it.each(["hide", "remove"])(
+    "retires a pending catalog retry when the sidebar must %s",
+    async (action) => {
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      let visibility: DocumentVisibilityState = "visible";
+      const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+      const request = createGatewayRequestMock()
+        .mockRejectedValueOnce(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "server busy",
+            retryable: true,
+            retryAfterMs: 5_000,
+          }),
+        )
+        .mockResolvedValue(catalogPage([{ threadId: "recovered", name: "Recovered catalog" }]));
+      try {
+        const { sidebar } = await mountTab(request);
+        if (action === "remove") {
+          sidebar.remove();
+        } else {
+          visibility = "hidden";
+          document.dispatchEvent(new Event("visibilitychange"));
+        }
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(request).toHaveBeenCalledOnce();
+        if (action === "hide") {
+          visibility = "visible";
+          document.dispatchEvent(new Event("visibilitychange"));
+          await vi.advanceTimersByTimeAsync(4_999);
+          expect(request).toHaveBeenCalledOnce();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(request).toHaveBeenCalledTimes(2);
+          expect(sidebar.textContent).toContain("Recovered catalog");
+        } else {
+          await vi.advanceTimersByTimeAsync(300_000);
+          expect(request).toHaveBeenCalledOnce();
+        }
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("rechecks visibility after queued background admission", async () => {
     let visibility: DocumentVisibilityState = "visible";
@@ -140,7 +260,7 @@ describe("AppSidebar catalog event refresh", () => {
       const context = sidebar.sessionData.context;
       context?.connectionBootstrap.setForegroundRoute(undefined);
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       visibility = "hidden";
       document.dispatchEvent(new Event("visibilitychange"));
       context?.connectionBootstrap.setForegroundRoute(null);
@@ -148,7 +268,7 @@ describe("AppSidebar catalog event refresh", () => {
       expect(request).toHaveBeenCalledTimes(1);
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
       spy.mockRestore();

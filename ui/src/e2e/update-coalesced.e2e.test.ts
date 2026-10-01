@@ -337,7 +337,10 @@ suite.define(() => {
 
         try {
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText(expectedText, { exact: false }).first().waitFor();
+          await dialog
+            .locator(".update-run-view__details")
+            .getByText(expectedText, { exact: true })
+            .waitFor();
           expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
             "fail",
           );
@@ -393,6 +396,7 @@ suite.define(() => {
           : createUpdateRunFixture({
               phase: "finished",
               status: outcome,
+              reason: outcome === "skipped" ? "no-upstream" : "build-failed",
               finishedAtMs: Date.now(),
             });
       const gateway = await installMockGateway(page, {

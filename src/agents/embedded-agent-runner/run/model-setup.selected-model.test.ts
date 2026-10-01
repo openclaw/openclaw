@@ -6,9 +6,9 @@ import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { writePersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
-import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
+import { createPreparedConfiguredRuntimeModelLookup } from "../model.static-id.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
@@ -16,74 +16,44 @@ import { resolveInitialEmbeddedRunModel } from "./runtime-resolution.js";
 
 const provider = "first-selected";
 const otherProvider = "hook-selected";
+const selected = { provider, model: "middle", requestedRouteResolution: "resolved" } as const;
 const cases = [
-  { name: "configured default", input: {}, planned: "middle", expected: "middle" },
   {
-    name: "unmarked raw entry",
-    input: { provider, model: "entry" },
-    planned: "middle",
+    name: "configured default",
+    tier: "registry",
+    input: {},
     expected: "middle",
   },
-  {
-    name: "marked raw entry",
-    input: { provider, model: "entry", requestedRouteResolution: "raw" },
-    planned: "middle",
-    expected: "middle",
-  },
-  {
-    name: "raw middle alias",
-    input: { provider, model: "middle" },
-    planned: "final",
-    expected: "final",
-  },
-  {
-    name: "selected middle",
-    input: { provider, model: "middle", requestedRouteResolution: "resolved" },
-    planned: "middle",
-    expected: "middle",
-  },
+  ...(["registry", "prepared static"] as const).flatMap((tier) => [
+    { name: "raw entry", tier, input: { provider, model: "entry" }, expected: "middle" },
+    { name: "selected middle", tier, input: selected, expected: "middle" },
+  ]),
   {
     name: "selected model hook redirect",
-    input: { provider, model: "middle", requestedRouteResolution: "resolved" },
+    tier: "registry",
+    input: selected,
     hook: { modelOverride: "entry" },
-    planned: "middle",
     expected: "middle",
   },
   {
     name: "selected provider hook redirect",
-    input: { provider, model: "middle", requestedRouteResolution: "resolved" },
+    tier: "prepared static",
+    input: selected,
     hook: { providerOverride: otherProvider },
-    planned: "middle",
     expected: "other-final",
   },
   {
     name: "locked selection ignores hook",
-    input: {
-      provider,
-      model: "middle",
-      requestedRouteResolution: "resolved",
-      modelSelectionLocked: true,
-    },
+    tier: "registry",
+    input: { ...selected, modelSelectionLocked: true },
     hook: { modelOverride: "entry" },
-    planned: "middle",
     expected: "middle",
-  },
-  {
-    name: "raw plain control",
-    input: { provider, model: "plain" },
-    planned: "plain",
-    expected: "plain",
-  },
-  {
-    name: "selected plain control",
-    input: { provider, model: "plain", requestedRouteResolution: "resolved" },
-    planned: "plain",
-    expected: "plain",
   },
 ] as const;
 
-describe.each(["registry", "prepared static"] as const)("initial model setup using %s", (tier) => {
-  it.each(cases)("preserves $name through materialization", async (scenario) => {
+describe("initial model setup", () => {
+  it.each(cases)("preserves $name through $tier materialization", async (scenario) => {
+    const { tier } = scenario;
     await withOpenClawTestState(
       { label: "initial-model-selection", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
@@ -129,7 +99,7 @@ describe.each(["registry", "prepared static"] as const)("initial model setup usi
             maxTokens: 256,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           }) satisfies Model;
-        const models = ["middle", "final", "plain"].map((id) => createModel(provider, id));
+        const models = ["middle", "final"].map((id) => createModel(provider, id));
         const otherModels = [createModel(otherProvider, "other-final")];
         const stores = createEmptyAgentDiscoveryStores();
         if (tier === "registry") {
@@ -144,6 +114,14 @@ describe.each(["registry", "prepared static"] as const)("initial model setup usi
             models: otherModels,
           });
         }
+        const configuredRuntimeModels =
+          tier === "prepared static"
+            ? [...models, ...otherModels].map((model) => ({
+                provider: model.provider,
+                modelId: model.id,
+                model,
+              }))
+            : [];
         const snapshot: PreparedModelRuntimeSnapshot = {
           catalogOwner: undefined,
           agentId: "main",
@@ -159,14 +137,11 @@ describe.each(["registry", "prepared static"] as const)("initial model setup usi
           allowGatewaySubagentBinding: false,
           modelCatalog: { entries: [], routeVariants: [] },
           inlineProviderModels: [],
-          configuredRuntimeModels:
-            tier === "prepared static"
-              ? [...models, ...otherModels].map((model) => ({
-                  provider: model.provider,
-                  modelId: model.id,
-                  model,
-                }))
-              : [],
+          configuredRuntimeModels,
+          findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+            configuredRuntimeModels,
+            metadataSnapshot,
+          ),
           createStores: () => stores,
         };
         await withPluginRuntimeGenerationScope(snapshot, async () => {
@@ -185,18 +160,9 @@ describe.each(["registry", "prepared static"] as const)("initial model setup usi
             ...runParams,
             config: runParams.config,
           });
-          const planned = resolveModelCandidateChain({
-            cfg: config,
-            agentId: "main",
-            provider: initial.provider,
-            model: initial.modelId,
-            requestedRouteResolution: runParams.requestedRouteResolution,
-            fallbacksOverride: [],
-            manifestPlugins: metadataSnapshot,
-          });
-          expect(planned[0]?.model).toBe(scenario.planned);
           const hook = "hook" in scenario ? scenario.hook : undefined;
           const setup = await resolveEmbeddedRunModelSetup({
+            assertCurrent: () => {},
             runParams,
             ...initial,
             agentDir: snapshot.agentDir,
@@ -218,6 +184,7 @@ describe.each(["registry", "prepared static"] as const)("initial model setup usi
           let currentModel = setup.model;
           let harness = setup.agentHarness;
           const auth = await prepareEmbeddedRunAuthPlan({
+            assertCurrent: () => {},
             runParams,
             provider: setup.provider,
             modelId: setup.modelId,

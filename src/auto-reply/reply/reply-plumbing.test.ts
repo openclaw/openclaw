@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
-import { sortSubagentRuns } from "../../agents/subagents/registry/subagent-run-view.js";
+import { buildSubagentRunView } from "../../agents/subagents/registry/subagent-run-view.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
@@ -475,19 +475,30 @@ describe("subagents utils", () => {
       {
         ...baseRun,
         runId: "run-1",
+        childSessionKey: "agent:main:subagent:run-1",
         createdAt: 1000,
         execution: { status: "running", startedAt: 1000 },
       },
       {
         ...baseRun,
         runId: "run-2",
+        childSessionKey: "agent:main:subagent:run-2",
         createdAt: 1200,
         execution: { status: "running", startedAt: 1200 },
       },
-      { ...baseRun, runId: "run-3", createdAt: 900 },
+      {
+        ...baseRun,
+        runId: "run-3",
+        childSessionKey: "agent:main:subagent:run-3",
+        createdAt: 900,
+      },
     ];
-    const sorted = sortSubagentRuns(runs);
-    expect(sorted.map((run) => run.runId)).toEqual(["run-2", "run-1", "run-3"]);
+    const view = buildSubagentRunView({
+      runs,
+      recentMinutes: 30,
+      countPendingDescendantRuns: () => 0,
+    });
+    expect(view.latest.map((run) => run.runId)).toEqual(["run-2", "run-1", "run-3"]);
   });
 
   it("formats duration compact for seconds and minutes", () => {

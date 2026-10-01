@@ -24,6 +24,7 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter(
 
 const repositoryToolEntries = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/workflows/plugin-prerelease.yml!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
@@ -32,6 +33,7 @@ const repositoryToolEntries = [
 ] as const;
 
 const config = {
+  compilers: productionConfig.compilers,
   ignoreWorkspaces: ["apps/**", "extensions/**", "packages/**", "ui"],
   ignore: ["scripts/**/*.d.{mts,cts,ts}", "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}"],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
@@ -74,9 +76,12 @@ const config = {
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        // Core bootstrap packaging consumes the scripts' dist-import scanner.
+        // CLI subprocess fixtures consume the shared native-report collector.
+        "src/cli/cli-process-child.test-helpers.test.ts!",
+        // Core bootstrap packaging and source updates consume shared script owners.
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
+        "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -86,8 +91,10 @@ const config = {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "src/cli/cli-process-child.test-helpers{,.test}.ts!",
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
+        "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
     },
   },

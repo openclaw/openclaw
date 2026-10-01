@@ -1,38 +1,28 @@
-/**
- * Runtime access-group resolution for channel ingress.
- *
- * Preserves symbolic access-group entries until dynamic membership facts are available.
- */
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
-import type { ChannelIngressAdapter, ResolveChannelMessageIngressParams } from "./runtime-types.js";
-import type { AccessGroupMembershipFact, ChannelIngressChannelId } from "./types.js";
+import type { ResolveChannelMessageIngressParams } from "./runtime-types.js";
+import type {
+  AccessGroupMembershipFact,
+  ChannelIngressChannelId,
+  InternalChannelIngressAdapter,
+} from "./types.js";
 
-function accessGroupNames(entries: readonly (string | number)[]): string[] {
+export function allReferencedAccessGroupNames(
+  entries: Array<readonly (string | number)[]>,
+): string[] {
   return uniqueStrings(
     entries
+      .flat()
       .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
       .filter((entry): entry is string => entry != null),
   );
 }
 
-/**
- * Lists every access-group name referenced by grouped allowFrom entry arrays.
- */
-export function allReferencedAccessGroupNames(
-  entries: Array<readonly (string | number)[]>,
-): string[] {
-  return uniqueStrings(entries.flatMap((entryGroup) => accessGroupNames(entryGroup)));
-}
-
-/**
- * Normalizes direct sender entries while preserving access-group references for runtime lookup.
- */
 export async function normalizeEffectiveEntries(params: {
-  adapter: ChannelIngressAdapter;
+  adapter: InternalChannelIngressAdapter;
   accountId: string;
   entries: readonly (string | number)[];
   context: "dm" | "group" | "route" | "command";
@@ -58,9 +48,6 @@ export async function normalizeEffectiveEntries(params: {
   ]);
 }
 
-/**
- * Resolves dynamic access-group membership facts for referenced runtime access groups.
- */
 export async function resolveRuntimeAccessGroupMembershipFacts(params: {
   input: ResolveChannelMessageIngressParams;
   channelId: ChannelIngressChannelId;

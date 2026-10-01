@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
@@ -25,6 +24,11 @@ export const WizardStartParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
 });
 
+export const McpAuthLoginParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  serverName: NonEmptyString,
+});
+
 /** Client answer payload for the current wizard step. */
 export const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
@@ -37,19 +41,15 @@ export const WizardNextParamsSchema = closedObject({
   answer: Type.Optional(WizardAnswerSchema),
 });
 
-/** Session-id-only params for status requests. */
-const WizardSessionIdParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-});
-
 /** Cancels a wizard or closes input when its client view is discarded. */
 export const WizardCancelParamsSchema = closedObject({
   sessionId: NonEmptyString,
   closeInput: Type.Optional(Type.Boolean()),
 });
 
-/** Reads status for an active or recently completed wizard session. */
-export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
+export const WizardStatusParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+});
 
 /** Selectable value shown in a choice-based wizard step. */
 const WizardStepOptionSchema = closedObject({
@@ -141,6 +141,7 @@ export const WizardStatusResultSchema = closedObject({
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
+export type McpAuthLoginParams = Static<typeof McpAuthLoginParamsSchema>;
 export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;

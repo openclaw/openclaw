@@ -12,6 +12,16 @@ real delivery.
   and crash-ambiguous sends remain with recovery/reconciliation, so live
   delivery and recovery never both publish a terminal outcome.
 
+## Current-Source Completion
+
+- An eligible message action completes the current source only when its
+  requested or implicit destination matches that source and every
+  transport-reported delivered recipient normalizes to it. Requested routing
+  never overrides contradictory or mixed receipt data; inspect every physical
+  part of an aggregate result. Missing recipient metadata preserves the
+  existing plugin result contract. Completion eligibility does not widen
+  transcript-mirror or restart-receipt ownership.
+
 ## Guardrails
 
 - Prefer pure param/spec/normalization helpers for send-argument, media-source,

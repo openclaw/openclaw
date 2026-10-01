@@ -1,4 +1,3 @@
-// Normalizes plugin registry identifiers from installed index records.
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -9,10 +8,6 @@ export type PluginRegistryIdNormalizerOptions = {
   lookUpTable?: Pick<{ manifestRegistry: PluginManifestRegistry }, "manifestRegistry">;
 };
 
-function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
-  return value ? Object.keys(value) : [];
-}
-
 function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): readonly string[] {
   return [
     plugin.id,
@@ -21,9 +16,9 @@ function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): read
     ...(plugin.setup?.providers?.map((provider) => provider.id) ?? []),
     ...(plugin.cliBackends ?? []),
     ...(plugin.setup?.cliBackends ?? []),
-    ...collectObjectKeys(plugin.modelCatalog?.providers),
-    ...collectObjectKeys(plugin.modelCatalog?.aliases),
-    ...collectObjectKeys(plugin.providerAuthAliases),
+    ...Object.keys(plugin.modelCatalog?.providers ?? {}),
+    ...Object.keys(plugin.modelCatalog?.aliases ?? {}),
+    ...Object.keys(plugin.providerAuthAliases ?? {}),
     ...(plugin.legacyPluginIds ?? []),
   ];
 }

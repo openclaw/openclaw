@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   materializeCodexDynamicToolSnapshot,
   materializeCodexPromptSnapshot,
@@ -68,12 +68,16 @@ describe("happy path prompt snapshots", () => {
     }
     setStateDirEnv(poisonedStateRoot);
 
+    // Optional media credentials must not widen or cold-load the pinned tool catalog.
+    vi.stubEnv("OPENAI_API_KEY", "test-prompt-snapshot-openai");
+    vi.stubEnv("ZAI_API_KEY", "test-prompt-snapshot-zai");
     pluginLoaderCallsBefore = getPluginModuleLoaderStats().calls;
     generated = await createHappyPathPromptSnapshotFiles();
     pluginLoaderCallsAfter = getPluginModuleLoaderStats().calls;
   }, 300_000);
 
   afterAll(() => {
+    vi.unstubAllEnvs();
     restoreStateDirEnv(stateDirEnv);
     if (poisonedStateRoot) {
       fs.rmSync(poisonedStateRoot, { recursive: true, force: true });
@@ -83,7 +87,7 @@ describe("happy path prompt snapshots", () => {
   it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
-      { name: "discord-group", replacements: [] },
+      { name: "discord-group", replacements: ["sessions_spawn"] },
       { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
     ];
 
@@ -252,6 +256,7 @@ describe("happy path prompt snapshots", () => {
     const contextTexts: string[] = [];
     // Canonical ASCII keys in Codex's BTreeMap order, independent of the renderer's sorter.
     const keyOrder = [
+      "openclaw_active_computer",
       "openclaw_current_sender",
       "openclaw_source_delivery",
       "openclaw_temporal_context",

@@ -21,21 +21,20 @@ type SystemAgentChatEngineInput = Pick<
 export function buildSystemAgentRejoinResult(params: {
   sessionId: string;
   welcome: string;
+  optionalWelcome?: boolean;
   welcomeQuestion?: SystemAgentChatResult["question"];
-  engine: {
-    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
-      text: string;
-      sensitive?: boolean;
-      wizardInputPending?: boolean;
-      question?: SystemAgentChatResult["question"];
-      step?: SystemAgentChatResult["step"];
-    };
-  };
+  engine: Pick<SystemAgentChatEngine, "decorateRejoinReply">;
 }): SystemAgentChatResult {
   const rejoin = params.engine.decorateRejoinReply({ text: params.welcome, action: "none" });
   return {
     sessionId: params.sessionId,
     reply: rejoin.text || params.welcome,
+    optionalWelcome:
+      params.optionalWelcome === true &&
+      !rejoin.sensitive &&
+      !rejoin.wizardInputPending &&
+      !rejoin.step &&
+      !rejoin.question,
     action: "none",
     ...(rejoin.sensitive === true ? { sensitive: true } : {}),
     ...(rejoin.wizardInputPending === true ? { wizardInputPending: true } : {}),

@@ -76,6 +76,21 @@ async function stopClients(clients: WorkerClients | undefined): Promise<void> {
   await clients.connection.stop();
 }
 
+function waitForWorkerEvent(
+  event: Promise<void>,
+  command: Promise<unknown>,
+  phase: string,
+  resultOutput?: Promise<void>,
+): Promise<void> {
+  const completed = resultOutput ? Promise.race([command, resultOutput]) : command;
+  return Promise.race([
+    event,
+    completed.then(() => {
+      throw new Error(`Worker completed before ${phase}`);
+    }),
+  ]);
+}
+
 describe("cloud worker milestone 2 fault injection", () => {
   let harness: ComposedGatewayHarness;
   const clients: WorkerClients[] = [];
@@ -106,7 +121,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       await fs.mkdir(skillDir, { recursive: true });
       const markdown = "---\nname: cleanup\ndescription: Cleanup proof\n---\n# Instructions\n";
       await fs.writeFile(path.join(skillDir, "SKILL.md"), markdown);
-      const descriptor = harness.createDescriptor();
+      const descriptor = await harness.createDescriptor();
       descriptor.assignment.github = {
         login: "worker-cleanup-fixture",
         token: "synthetic-worker-cleanup-token",
@@ -135,9 +150,13 @@ describe("cloud worker milestone 2 fault injection", () => {
       loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
       const input = new PassThrough();
       const output = new PassThrough();
+      const resultOutput = createDeferred();
       let stdout = "";
       output.on("data", (chunk: Buffer) => {
         stdout += chunk.toString("utf8");
+        if (stdout.includes("\n")) {
+          resultOutput.resolve();
+        }
       });
       const lifetime = {
         signal: controller.signal,
@@ -159,7 +178,12 @@ describe("cloud worker milestone 2 fault injection", () => {
       let protectedDirectory: string | undefined;
       let turnDirectory: string | undefined;
       try {
-        await providerStarted.promise;
+        await waitForWorkerEvent(
+          providerStarted.promise,
+          command,
+          "provider start",
+          resultOutput.promise,
+        );
         environmentStateDir = process.env.OPENCLAW_STATE_DIR;
         expect(environmentStateDir).toBeDefined();
         expect(environmentStateDir).not.toBe(previousStateDir);
@@ -191,7 +215,12 @@ describe("cloud worker milestone 2 fault injection", () => {
               : doneOutcome("paid reply"),
           );
         }
-        await finishingGate.entered.promise;
+        await waitForWorkerEvent(
+          finishingGate.entered.promise,
+          command,
+          "finishing event",
+          resultOutput.promise,
+        );
         if (outcome === "cancellation") {
           expect(harness.requestParams("worker.inference.cancel")).toHaveLength(1);
         }
@@ -235,8 +264,12 @@ describe("cloud worker milestone 2 fault injection", () => {
         const messages = transcript
           .getEntries()
           .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-        expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
-        expect(messages[1]).toMatchObject({ stopReason });
+        expect(messages.map((message) => message.role)).toEqual(
+          outcome === "cancellation" ? ["user"] : ["user", "assistant"],
+        );
+        if (outcome !== "cancellation") {
+          expect(messages[1]).toMatchObject({ stopReason });
+        }
         if (outcome === "success") {
           expect(messages[1]).toMatchObject({ content: [{ type: "text", text: "paid reply" }] });
         } else if (outcome === "provider failure") {
@@ -338,44 +371,59 @@ describe("cloud worker milestone 2 fault injection", () => {
         text: "preview reply",
       };
       let settled = false;
-      const result = runWorkerDescriptor(harness.createDescriptor()).finally(() => {
+      const controller = new AbortController();
+      const result = runWorkerDescriptor(await harness.createDescriptor(), {
+        signal: controller.signal,
+      }).finally(() => {
         settled = true;
       });
       void result.catch(() => undefined);
 
-      await previewGate.entered.promise;
-      nextProviderDelta.resolve();
-      await providerProduced.promise;
-      await vi.waitFor(() =>
-        expect(
-          harness.requestParams("worker.live-event").filter((params) => {
-            const request = params as WorkerLiveEventParams;
-            return request.event.kind === "assistant" || request.event.kind === "thinking";
-          }),
-        ).toHaveLength(2),
-      );
-      expect(settled).toBe(false);
-      expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeNull();
+      try {
+        await waitForWorkerEvent(previewGate.entered.promise, result, "preview event");
+        nextProviderDelta.resolve();
+        await waitForWorkerEvent(providerProduced.promise, result, "provider completion");
+        await waitForWorkerEvent(
+          vi.waitFor(() =>
+            expect(
+              harness.requestParams("worker.live-event").filter((params) => {
+                const request = params as WorkerLiveEventParams;
+                return request.event.kind === "assistant" || request.event.kind === "thinking";
+              }),
+            ).toHaveLength(2),
+          ),
+          result,
+          "both preview requests",
+        );
+        expect(settled).toBe(false);
+        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeNull();
 
-      previewGate.release.resolve();
-      await finishingGate.entered.promise;
-      expect(settled).toBe(false);
-      expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(2);
-      expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeGreaterThan(0);
-      expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
-        { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
-      ]);
+        previewGate.release.resolve();
+        await waitForWorkerEvent(finishingGate.entered.promise, result, "finishing event");
+        expect(settled).toBe(false);
+        expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(2);
+        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeGreaterThan(0);
+        expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
+          { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
+        ]);
 
-      finishingGate.release.resolve();
-      await expect(result).resolves.toMatchObject({
-        transcriptLeafId: expect.any(String),
-        transcriptNextSeq: expect.any(Number),
-      });
+        finishingGate.release.resolve();
+        await expect(result).resolves.toMatchObject({
+          transcriptLeafId: expect.any(String),
+          transcriptNextSeq: expect.any(Number),
+        });
+      } finally {
+        nextProviderDelta.resolve();
+        previewGate.release.resolve();
+        finishingGate.release.resolve();
+        controller.abort(new Error("fixture teardown"));
+        await Promise.allSettled([result]);
+      }
     },
   );
 
   it("survives repeated tunnel partitions without transcript duplication, live replay, or rebilling", async () => {
-    const current = harness.createClients();
+    const current = await harness.createClients();
     clients.push(current);
     const firstRelease = createDeferred();
     const secondRelease = createDeferred();
@@ -404,10 +452,15 @@ describe("cloud worker milestone 2 fault injection", () => {
     secondRelease.resolve();
     await expect(inference).resolves.toEqual(doneOutcome("partitioned reply"));
 
-    const committed = await current.transcript.commit([
-      transcriptMessage("partitioned user"),
+    const message = transcriptMessage("partitioned user");
+    const commit = current.transcript.commit([
+      message,
       { ...doneMessage("partitioned reply"), timestamp: 2 },
     ]);
+    message.content[0]!.text = "caller mutation";
+    const committed = await commit;
+    expect(current.transcript.baseLeafId).toBe(committed.newLeafId);
+    expect(current.transcript.nextSeq).toBe(2);
     for (const delta of ["one", "two", "three"]) {
       current.live.enqueuePreview(RUN_ID, {
         kind: "assistant",
@@ -430,12 +483,13 @@ describe("cloud worker milestone 2 fault injection", () => {
     ).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
     const transcript = SessionManager.open(harness.sessionTarget).getEntries();
     expect(transcript).toHaveLength(2);
+    expect(transcript[0]).toMatchObject({ message: transcriptMessage("partitioned user") });
     expect(new Set(transcript.map((entry) => entry.id)).size).toBe(2);
     expect(SessionManager.open(harness.sessionTarget).getLeafId()).toBe(committed.newLeafId);
   });
 
   it("fences restart-inherited authority and recovers durable state on a fresh claim", async () => {
-    const current = harness.createClients();
+    const current = await harness.createClients();
     clients.push(current);
     const providerRelease = createDeferred<WorkerInferenceTerminalOutcome>();
     const providerStarted = createDeferred();
@@ -505,10 +559,10 @@ describe("cloud worker milestone 2 fault injection", () => {
 
     const recoveryRunId = "restart-recovery-run";
     const oldEpoch = harness.epoch;
-    const freshEpoch = harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, recoveryRunId);
+    const freshEpoch = await harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, recoveryRunId);
     expect(freshEpoch).toBeGreaterThan(oldEpoch);
     providerRelease.resolve(doneOutcome("late stale provider result"));
-    const fresh = harness.createClients({
+    const fresh = await harness.createClients({
       admissionProof: REPLACEMENT_CREDENTIAL,
       epoch: freshEpoch,
       runId: recoveryRunId,
@@ -533,11 +587,11 @@ describe("cloud worker milestone 2 fault injection", () => {
       return [live.runId, live.seq, live.lastAckedSeq];
     });
     expect(liveRequests).toContainEqual([recoveryRunId, 1, 0]);
-    harness.settleRun(recoveryRunId);
+    await harness.settleRun(recoveryRunId);
   });
 
   it("fences a dead worker and admits a fresh owner at a higher epoch", async () => {
-    const old = harness.createClients();
+    const old = await harness.createClients();
     clients.push(old);
     await old.connection.start();
     const oldCommit = await old.transcript.commit([transcriptMessage("old owner")]);
@@ -552,7 +606,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     await pendingStarted.promise;
 
     const oldEpoch = harness.epoch;
-    const newEpoch = harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, "fresh-run");
+    const newEpoch = await harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, "fresh-run");
     expect(newEpoch).toBeGreaterThan(oldEpoch);
     const rejected = old.transcript.commit([transcriptMessage("late old owner")]);
     await expect(rejected).rejects.toMatchObject({
@@ -566,7 +620,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     harness.providerPlan = { kind: "immediate", text: "new owner reply" };
     // Milestone-3 admission binds the worker to a single run; the fresh owner
     // must be admitted for the run it executes.
-    const fresh = harness.createClients({
+    const fresh = await harness.createClients({
       admissionProof: REPLACEMENT_CREDENTIAL,
       epoch: newEpoch,
       baseLeafId: oldCommit.newLeafId,
@@ -604,7 +658,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   });
 
   it("fail-stops a reconnected commit whose base changes while application is in flight", async () => {
-    const current = harness.createClients();
+    const current = await harness.createClients();
     clients.push(current);
     const entered = createDeferred();
     const release = createDeferred();
@@ -621,15 +675,18 @@ describe("cloud worker milestone 2 fault injection", () => {
       name: "WorkerTranscriptCommitError",
       reason: "stale-base-leaf",
     });
+    expect(current.transcript.baseLeafId).toBeNull();
+    expect(current.transcript.nextSeq).toBe(2);
     await expect(
       current.transcript.commit([transcriptMessage("must not retry after stale")]),
     ).rejects.toMatchObject({ name: "WorkerTranscriptCommitError" });
+    expect(current.transcript.nextSeq).toBe(2);
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
     expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
   });
 
   it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {
-    const current = harness.createClients();
+    const current = await harness.createClients();
     clients.push(current);
     // A visible turn's run context is claimed by the gateway dispatch before the
     // turn hands off to the worker. The worker's first live event must adopt that
@@ -666,7 +723,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   });
 
   it("settles stop during an in-flight commit without retrying or spinning", async () => {
-    const current = harness.createClients();
+    const current = await harness.createClients();
     clients.push(current);
     const entered = createDeferred();
     const release = createDeferred();

@@ -34,6 +34,24 @@ describe("toSanitizedMarkdownHtml", () => {
       }
     });
 
+    it("invalidates named-reference caches as authorized aliases arrive, collide, and disappear", () => {
+      const githubRepo = { owner: "openclaw", repo: "openclaw" };
+      const source = "ClawSweeper PR #1576";
+      const known = { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] };
+      for (const [githubRepositories, expected] of [
+        [[], null],
+        [[known], "https://github.com/openclaw/clawsweeper/pull/1576"],
+        [[known, { aliases: ["ClawSweeper"] }], null],
+        [[], null],
+      ] as const) {
+        expect(
+          htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo, githubRepositories }))
+            .querySelector("a")
+            ?.getAttribute("href") ?? null,
+        ).toBe(expected);
+      }
+    });
+
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
       const markdown = "```\ncode\n```";
       const plain = toSanitizedMarkdownHtml(markdown, { codeBlockChrome: "none" });
@@ -94,16 +112,6 @@ describe("toSanitizedMarkdownHtml", () => {
       const fallback = htmlFragment(html).firstElementChild;
       expect(fallback?.className).toBe("markdown-plain-text-fallback");
       expect(fallback?.textContent).toBe(input);
-    });
-
-    it("caches oversized fallback results", () => {
-      const input =
-        Array.from({ length: 240 }, (_, i) => `P${i}`).join("\n\n") + "x".repeat(45_000);
-      const first = toSanitizedMarkdownHtml(input);
-      const second = toSanitizedMarkdownHtml(input);
-      expect(input.length).toBeGreaterThan(40_000);
-      expect(htmlFragment(first).firstElementChild?.className).toBe("markdown-plain-text-fallback");
-      expect(second).toBe(first);
     });
   });
 });

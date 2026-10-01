@@ -107,19 +107,6 @@ function normalizedSummaryLines(summary: string): string[] {
     .filter((line) => line.length > 0);
 }
 
-function hasRequiredSummarySections(summary: string): boolean {
-  const lines = normalizedSummaryLines(summary);
-  let cursor = 0;
-  for (const heading of REQUIRED_SUMMARY_SECTIONS) {
-    const index = lines.findIndex((line, lineIndex) => lineIndex >= cursor && line === heading);
-    if (index < 0) {
-      return false;
-    }
-    cursor = index + 1;
-  }
-  return true;
-}
-
 type SummaryQualityRetentionPlan = {
   minimumChars: number;
   /**
@@ -356,7 +343,7 @@ export function createSummaryQualityRetentionPlan(
 /** Return a structured fallback summary when model output is missing/invalid. */
 export function buildStructuredFallbackSummary(previousSummary: string | undefined): string {
   const trimmedPreviousSummary = previousSummary?.trim() ?? "";
-  if (trimmedPreviousSummary && hasRequiredSummarySections(trimmedPreviousSummary)) {
+  if (trimmedPreviousSummary && parseRequiredSummarySectionContents(trimmedPreviousSummary)) {
     return trimmedPreviousSummary;
   }
   const values = [
@@ -420,19 +407,20 @@ export function extractOpaqueIdentifiers(text: string): string[] {
   ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
 }
 
-function tokenizeAskOverlapText(text: string): string[] {
+function tokenizeAskOverlapText(text: string, includeFallbackTokens = false): string[] {
   const normalized = localeLowercasePreservingWhitespace(text.normalize("NFKC")).trim();
   if (!normalized) {
     return [];
   }
   const keywords = extractKeywords(normalized);
-  if (keywords.length > 0) {
+  if (keywords.length > 0 && !includeFallbackTokens) {
     return keywords;
   }
-  return normalized
+  const tokens = normalized
     .split(/[^\p{L}\p{N}]+/u)
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
+  return uniqueStrings([...keywords, ...tokens]);
 }
 
 function resolveAskOverlapRequirement(latestAsk: string | null): {
@@ -462,7 +450,9 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
   if (!requirement) {
     return true;
   }
-  const summaryTokens = new Set(tokenizeAskOverlapText(summary));
+  // Summary headings contribute keywords even when the ask has only stop words.
+  // Retain summary fallback tokens without broadening keyword-bearing requests.
+  const summaryTokens = new Set(tokenizeAskOverlapText(summary, true));
   const overlapCount = requirement.tokens.filter((token) => summaryTokens.has(token)).length;
   return overlapCount >= requirement.requiredMatches;
 }

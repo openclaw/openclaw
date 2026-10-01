@@ -1,5 +1,7 @@
 // Tests subagent agent-list command output and filtering.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureSubagentListReadContext } from "../../../agents/subagents/registry/subagent-list.js";
+import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -69,7 +71,7 @@ function subagentRun(params: {
     requesterSessionKey: MAIN_SESSION_KEY,
     requesterDisplayKey: "main",
     task: params.task,
-    cleanup: "keep",
+    cleanup: "keep" as const,
     createdAt: Date.now() - startedAgoMs,
     execution:
       params.endedAgoMs === undefined
@@ -84,6 +86,7 @@ function subagentRun(params: {
 }
 
 function agentsActionInput(channel: string, runs: ReturnType<typeof subagentRun>[]) {
+  const snapshot = new Map(runs.map((run) => [run.runId, run]));
   return {
     params: {
       ctx: {
@@ -95,7 +98,14 @@ function agentsActionInput(channel: string, runs: ReturnType<typeof subagentRun>
       },
     },
     requesterKey: MAIN_SESSION_KEY,
-    runs,
+    readContext: {
+      list: captureSubagentListReadContext(
+        runs,
+        buildSubagentRunReadIndexFromRuns({ runs: snapshot }),
+        snapshot,
+        30,
+      ),
+    },
     restTokens: [],
   } as never;
 }

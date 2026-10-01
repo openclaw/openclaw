@@ -42,15 +42,7 @@ public struct OpenClawChatAttentionRequest: Identifiable, Equatable, Sendable {
     private static func normalizedPreview(_ preview: String) -> String {
         let line = preview.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard line.utf16.count > 240 else { return line }
-        var result = ""
-        var length = 0
-        for scalar in line.unicodeScalars {
-            let scalarLength = scalar.value > 0xFFFF ? 2 : 1
-            guard length + scalarLength <= 239 else { break }
-            result.unicodeScalars.append(scalar)
-            length += scalarLength
-        }
-        return result + "…"
+        return ChatReplyQuote.truncateUTF16Safe(line, limit: 239) + "…"
     }
 }
 
@@ -144,7 +136,7 @@ extension OpenClawChatViewModel {
         self.questionCards.compactMap { card in
             guard card.status() == .pending || card.status() == .submitting else { return nil }
             let record = card.record
-            let preview = record.questions.first?.question.trimmingCharacters(in: .whitespacesAndNewlines)
+            let preview = ChatPayloadDecoding.trimmedNonEmptyString(record.questions.first?.question)
             return OpenClawChatAttentionRequest(
                 id: record.id,
                 kind: .question,
@@ -152,7 +144,7 @@ extension OpenClawChatViewModel {
                 agentID: record.agentid,
                 createdAtMs: Double(record.createdatms),
                 expiresAtMs: Double(record.expiresatms),
-                preview: preview.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Question needs an answer"),
+                preview: preview ?? String(localized: "Question needs an answer"),
                 count: record.questions.count,
                 ownerID: self.questionAttentionOwnerID.uuidString)
         }

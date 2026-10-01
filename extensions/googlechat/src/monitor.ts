@@ -1,20 +1,19 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-// Googlechat plugin module implements monitor behavior.
 import {
   formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
   resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
-  type ChannelBotLoopProtectionFacts,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawConfig } from "../runtime-api.js";
-import { resolveWebhookPath } from "../runtime-api.js";
+import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
@@ -30,6 +29,7 @@ import {
   deliverGoogleChatReply,
   type GoogleChatTypingMessage,
 } from "./monitor-reply-delivery.js";
+import { normalizeGoogleChatReplyTarget } from "./monitor-reply-target.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -38,7 +38,6 @@ import type {
   GoogleChatCoreRuntime,
   GoogleChatMonitorOptions,
   GoogleChatRuntimeEnv,
-  GoogleChatStatusSink,
   WebhookTarget,
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
@@ -69,99 +68,6 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
   return undefined;
 }
 
-function resolveGoogleChatBotLoopProtection(params: {
-  allowBots: boolean;
-  isBotSender: boolean;
-  senderId: string;
-  appUserId: string;
-  accountId: string;
-  conversationId: string;
-  config?: ChannelBotLoopProtectionFacts["config"];
-  defaultsConfig?: ChannelBotLoopProtectionFacts["defaultsConfig"];
-  eventTime?: string;
-}): ChannelBotLoopProtectionFacts | undefined {
-  if (
-    !params.allowBots ||
-    !params.isBotSender ||
-    !params.senderId ||
-    params.senderId === params.appUserId
-  ) {
-    return undefined;
-  }
-  return {
-    scopeId: params.accountId,
-    conversationId: params.conversationId,
-    senderId: params.senderId,
-    receiverId: params.appUserId,
-    config: params.config,
-    defaultsConfig: params.defaultsConfig,
-    defaultEnabled: true,
-    nowMs: resolveGoogleChatTimestampMs(params.eventTime),
-  };
-}
-
-function resolveGoogleChatBotLoopProtectionConfig(params: {
-  accountConfig?: ChannelBotLoopProtectionFacts["config"];
-  groupConfig?: ChannelBotLoopProtectionFacts["config"];
-}): ChannelBotLoopProtectionFacts["config"] {
-  return mergePairLoopGuardConfig(params.accountConfig, params.groupConfig);
-}
-
-function shouldSuppressGoogleChatBotLoop(params: {
-  botLoopProtection?: ChannelBotLoopProtectionFacts;
-  core: GoogleChatCoreRuntime;
-  runtime: GoogleChatRuntimeEnv;
-}): boolean {
-  if (!params.botLoopProtection) {
-    return false;
-  }
-  const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection);
-  if (!botLoopResult.suppressed) {
-    return false;
-  }
-  logVerbose(
-    params.core,
-    params.runtime,
-    `skip bot-to-bot loop in ${params.botLoopProtection.conversationId}`,
-  );
-  return true;
-}
-
-async function processGoogleChatEvent(
-  event: GoogleChatEvent,
-  target: WebhookTarget,
-  turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
-) {
-  const eventType = event.type ?? (event as { eventType?: string }).eventType;
-  if (eventType === "CARD_CLICKED") {
-    await maybeHandleGoogleChatApprovalCardClick({ event, target });
-    return;
-  }
-  if (eventType !== "MESSAGE") {
-    return;
-  }
-  if (!event.message || !event.space) {
-    return;
-  }
-
-  await processMessageWithPipeline({
-    event,
-    account: target.account,
-    config: target.config,
-    runtime: target.runtime,
-    core: target.core,
-    statusSink: target.statusSink,
-    mediaMaxMb: target.mediaMaxMb,
-    turnAdoptionLifecycle,
-  });
-}
-
-/**
- * Resolve bot display name with fallback chain:
- * 1. Account config name
- * 2. Agent name from config
- * 3. Agent identity name, then "OpenClaw"
- */
 function resolveBotDisplayName(params: {
   accountName?: string;
   agentId: string;
@@ -178,18 +84,21 @@ function resolveBotDisplayName(params: {
   return agent?.identity?.name?.trim() || "OpenClaw";
 }
 
-async function processMessageWithPipeline(params: {
-  event: GoogleChatEvent;
-  account: ResolvedGoogleChatAccount;
-  config: OpenClawConfig;
-  runtime: GoogleChatRuntimeEnv;
-  core: GoogleChatCoreRuntime;
-  statusSink?: GoogleChatStatusSink;
-  mediaMaxMb: number;
-  turnAdoptionLifecycle?: GoogleChatIngressLifecycle;
-}): Promise<void> {
-  const { event, account, config, runtime, core, statusSink, mediaMaxMb, turnAdoptionLifecycle } =
-    params;
+async function processGoogleChatEvent(
+  event: GoogleChatEvent,
+  target: WebhookTarget,
+  turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
+  config: OpenClawConfig = target.config,
+): Promise<void> {
+  const eventType = event.type ?? event.eventType;
+  if (eventType === "CARD_CLICKED") {
+    await maybeHandleGoogleChatApprovalCardClick({ event, target });
+    return;
+  }
+  if (eventType !== "MESSAGE") {
+    return;
+  }
+  const { account, runtime, core, statusSink, mediaMaxMb } = target;
   const space = event.space;
   const message = event.message;
   if (!space || !message) {
@@ -262,22 +171,21 @@ async function processMessageWithPipeline(params: {
   }
   const { commandAuthorized, effectiveWasMentioned, groupBotLoopProtection, groupSystemPrompt } =
     access;
-  const botLoopProtection = resolveGoogleChatBotLoopProtection({
-    allowBots,
-    isBotSender,
-    senderId,
-    appUserId,
-    accountId: account.accountId,
-    conversationId: spaceId,
-    config: resolveGoogleChatBotLoopProtectionConfig({
-      accountConfig: account.config.botLoopProtection,
-      groupConfig: groupBotLoopProtection,
-    }),
-    defaultsConfig: config.channels?.defaults?.botLoopProtection,
-    eventTime: event.eventTime,
-  });
-  if (shouldSuppressGoogleChatBotLoop({ botLoopProtection, core, runtime })) {
-    return;
+  if (allowBots && isBotSender && senderId && senderId !== appUserId) {
+    const botLoopResult = recordChannelBotPairLoopAndCheckSuppression({
+      scopeId: account.accountId,
+      conversationId: spaceId,
+      senderId,
+      receiverId: appUserId,
+      config: mergePairLoopGuardConfig(account.config.botLoopProtection, groupBotLoopProtection),
+      defaultsConfig: config.channels?.defaults?.botLoopProtection,
+      defaultEnabled: true,
+      nowMs: resolveGoogleChatTimestampMs(event.eventTime),
+    });
+    if (botLoopResult.suppressed) {
+      logVerbose(core, runtime, `skip bot-to-bot loop in ${spaceId}`);
+      return;
+    }
   }
 
   const mediaInputs: ChannelInboundMediaInput[] = attachments.map((attachment) => ({
@@ -383,9 +291,6 @@ async function processMessageWithPipeline(params: {
     },
   });
 
-  // Typing indicator setup
-  // Note: Reaction mode requires user OAuth, not available with service account auth.
-  // If reaction is configured, we fall back to message mode with a warning.
   let typingIndicator = account.config.typingIndicator ?? "message";
   if (typingIndicator === "reaction") {
     runtime.error?.(
@@ -394,12 +299,11 @@ async function processMessageWithPipeline(params: {
     typingIndicator = "message";
   }
   let typingMessage: GoogleChatTypingMessage | undefined;
-  const typingMessageThreadName =
+  const effectiveReplyThreadName =
     account.config.replyToMode && account.config.replyToMode !== "off"
       ? replyThreadName
       : undefined;
 
-  // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
     try {
       const botName = resolveBotDisplayName({
@@ -411,12 +315,12 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: typingMessageThreadName,
+        thread: effectiveReplyThreadName,
       });
       if (result?.messageName) {
         typingMessage = createGoogleChatTypingMessage({
           messageName: result.messageName,
-          requestedThreadName: typingMessageThreadName,
+          requestedThreadName: effectiveReplyThreadName,
           deliveredThreadName: result.threadName,
         });
       }
@@ -448,14 +352,22 @@ async function processMessageWithPipeline(params: {
         delivery: {
           durable: (payload, info) =>
             resolveGoogleChatDurableReplyOptions({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              }),
               infoKind: info.kind,
               spaceId,
               hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              }),
               account,
               spaceId,
               runtime,
@@ -509,15 +421,11 @@ async function downloadAttachment(
   return { path: saved.path, contentType: saved.contentType };
 }
 
-async function monitorGoogleChatProvider(
+export async function startGoogleChatMonitor(
   options: GoogleChatMonitorOptions,
 ): Promise<() => Promise<void>> {
   const core = getGoogleChatRuntime();
-  const webhookPath = resolveWebhookPath({
-    webhookPath: options.webhookPath,
-    webhookUrl: options.webhookUrl,
-    defaultPath: "/googlechat",
-  });
+  const webhookPath = resolveGoogleChatWebhookPath(options);
   if (!webhookPath) {
     options.runtime.error?.(`[${options.account.accountId}] invalid webhook path`);
     return async () => {};
@@ -547,12 +455,13 @@ async function monitorGoogleChatProvider(
     log: options.runtime.log,
   });
 
+  const readConfig = createRuntimeConfigReader(options.config);
   const ingress = createGoogleChatIngressMonitor({
     accountId: options.account.accountId,
     runtime: options.runtime,
     abortSignal: options.abortSignal,
     dispatch: async (event, lifecycle) => {
-      await processGoogleChatEvent(event, target, lifecycle);
+      await processGoogleChatEvent(event, target, lifecycle, readConfig());
     },
   });
   const target: WebhookTarget = {
@@ -583,21 +492,14 @@ async function monitorGoogleChatProvider(
   };
 }
 
-export async function startGoogleChatMonitor(
-  params: GoogleChatMonitorOptions,
-): Promise<() => Promise<void>> {
-  return await monitorGoogleChatProvider(params);
-}
-
-// Null keeps the same meaning it has in monitorGoogleChatProvider above: the
-// configured webhookUrl does not parse, so no route is ever bound. Falling back
-// to the default path here would report a route the monitor never registers.
-export function resolveGoogleChatWebhookPath(params: {
-  account: ResolvedGoogleChatAccount;
-}): string | null {
+// Invalid webhook URLs stay null so status never advertises an unbound default route.
+export function resolveGoogleChatWebhookPath({
+  webhookPath,
+  webhookUrl,
+}: Pick<GoogleChatMonitorOptions, "webhookPath" | "webhookUrl">): string | null {
   return resolveWebhookPath({
-    webhookPath: params.account.config.webhookPath,
-    webhookUrl: params.account.config.webhookUrl,
+    webhookPath,
+    webhookUrl,
     defaultPath: "/googlechat",
   });
 }

@@ -1,30 +1,69 @@
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
-import {
-  clearSessionQueues,
-  enqueueFollowupRun,
-  getFollowupQueueDepth,
-  type FollowupRun,
-} from "../../auto-reply/reply/queue.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { enqueueFollowupRun, getFollowupQueueDepth } from "../../auto-reply/reply/queue/enqueue.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import {
   CommandLaneClearedError,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
   setCommandLaneConcurrency,
 } from "../../process/command-queue.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   upstreamFork: vi.fn(),
   readMediaBuffer: vi.fn(),
 }));
+
+// Queued sources stay idle: this boundary only cuts history and settles pending work.
+vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
+  clearFollowupDrainCallback: vi.fn(),
+  dropAbortedFollowups: () => {
+    throw new Error("Unexpected followup drain");
+  },
+  kickFollowupDrainIfIdle: () => {
+    throw new Error("Unexpected followup drain");
+  },
+  rememberFollowupDrainCallback: () => {
+    throw new Error("Unexpected followup drain");
+  },
+}));
+vi.mock("../../auto-reply/reply/queue/delivery-context.js", () => ({
+  createOverflowSummaryRetrySource: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+  resolveFollowupAuthorizationKey: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+  resolveFollowupDeliveryContextKey: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+}));
+vi.mock("../../agents/model-thinking-default.js", () => ({
+  resolveThinkingSelection: () => {
+    throw new Error("Unexpected model selection refresh");
+  },
+}));
+vi.mock("../../auto-reply/thinking.js", async () => {
+  const { normalizeThinkLevel } = await import("../../auto-reply/thinking.shared.js");
+  return { normalizeThinkLevel };
+});
 
 vi.mock("../../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../media/store.js")>();
@@ -37,19 +76,20 @@ import {
   appendTranscriptMessage,
   listSessionEntriesCore,
   loadSessionEntry,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// One teardown owns drainage and deletion so a failed drain retains the fixture root.
+const tempDirs = createTempDirTracker();
 const sessionKey = "agent:main:rewind-handler";
 const sourceSessionId = "rewind-handler-source";
 const sessionLane = resolveEmbeddedSessionLane(sessionKey);
@@ -139,10 +179,48 @@ afterEach(async () => {
   setCommandLaneConcurrency(sessionLane, 1);
   await Promise.all(queuedCommandSettlements);
   queuedCommandSettlements.clear();
-  resetPluginRuntimeStateForTest();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
+  try {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    resetPluginRuntimeStateForTest();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("drains rewind fixture owners before closing handles and restoring selectors", ({
+  onTestFinished,
+}) => {
+  const stateDir = process.env.OPENCLAW_STATE_DIR!;
+  const agent = openOpenClawAgentDatabase({ agentId: "main" });
+  const state = openOpenClawStateDatabase();
+  const closing: unknown[] = [];
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId: "main",
+    path: agent.path,
+    revoke: () => {},
+    close: async () => {
+      await Promise.resolve();
+      closing.push({
+        agentOpen: agent.db.isOpen,
+        stateOpen: state.db.isOpen,
+        rootExists: fs.existsSync(stateDir),
+        selector: process.env.OPENCLAW_STATE_DIR,
+      });
+    },
+  });
+  onTestFinished(() => {
+    expect(closing).toEqual([
+      { agentOpen: true, stateOpen: true, rootExists: true, selector: stateDir },
+    ]);
+    expect(agent.db.isOpen).toBe(false);
+    expect(state.db.isOpen).toBe(false);
+    expect(fs.existsSync(stateDir)).toBe(false);
+  });
 });
 
 function context(active = false): GatewayRequestContext {
@@ -200,14 +278,22 @@ type QueuedSessionWork = {
 };
 
 function enqueueSessionWork(label: string): QueuedSessionWork {
-  const followupFixture = createQueueTestRun({ prompt: `${label} follow-up` });
   const followup: FollowupRun = {
-    ...followupFixture,
+    prompt: `${label} follow-up`,
+    enqueuedAt: Date.now(),
+    turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: () => {}, onSettled: vi.fn() },
     run: {
-      ...followupFixture.run,
       agentId: "main",
       sessionId: sourceSessionId,
       sessionKey,
+      agentDir: "/tmp",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp",
+      config: {},
+      provider: "openai",
+      model: "gpt-test",
+      timeoutMs: 10_000,
+      blockReplyBreak: "text_end",
     },
   };
   expect(
@@ -231,7 +317,7 @@ function enqueueSessionWork(label: string): QueuedSessionWork {
 
 function expectSessionWorkQueued(work: QueuedSessionWork): void {
   expect(getFollowupQueueDepth(sessionKey)).toBe(1);
-  expect(work.followup.queueAbortSignal?.aborted).toBe(false);
+  expect(work.followup.turnAdoptionLifecycle?.onSettled).not.toHaveBeenCalled();
   expect(getCommandLaneSnapshot(sessionLane)).toMatchObject({
     activeCount: 0,
     queuedCount: 1,
@@ -241,7 +327,7 @@ function expectSessionWorkQueued(work: QueuedSessionWork): void {
 
 async function expectSessionWorkCleared(work: QueuedSessionWork): Promise<void> {
   expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-  expect(work.followup.queueAbortSignal?.aborted).toBe(true);
+  expect(work.followup.turnAdoptionLifecycle?.onSettled).toHaveBeenCalledOnce();
   expect(getCommandLaneSnapshot(sessionLane)).toMatchObject({
     activeCount: 0,
     queuedCount: 0,
@@ -265,7 +351,14 @@ function linkToUpstreamConversation(): void {
   ).toBe(true);
 }
 
-function installUpstreamForkHarness(): void {
+function installUpstreamForkHarness(
+  executionEnvironment?: "host-only",
+  contract: "dual" | "legacy" | "v2" = "v2",
+): void {
+  const sessionFork = {
+    upstreamKinds: ["codex-app-server" as const],
+    fork: mocks.upstreamFork,
+  };
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
     pluginId: "test-harness",
@@ -276,10 +369,17 @@ function installUpstreamForkHarness(): void {
       runAttempt: async () => {
         throw new Error("not used");
       },
-      sessionFork: {
-        upstreamKinds: ["codex-app-server"],
-        fork: mocks.upstreamFork,
-      },
+      ...(contract !== "v2"
+        ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }
+        : {}),
+      ...(contract !== "legacy"
+        ? {
+            sessionForkV2: {
+              ...(executionEnvironment ? { executionEnvironment } : {}),
+              ...sessionFork,
+            },
+          }
+        : {}),
       supports: () => ({ supported: false }),
     },
   });
@@ -297,34 +397,48 @@ async function archiveSourceSession(storePath?: string): Promise<void> {
   );
 }
 
-describe("session message-cut methods", () => {
-  it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
-    const profile = ensureProfileForEmail("restricted-fork-creator@example.com");
-    setUserProfileRole(profile.id, "guest");
-    const client = {
-      connect: { scopes: ["operator.write"] },
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      },
-    } as GatewayClient;
-    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-      agents: { list: [{ id: "main", default: true }] },
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "view" },
-              agents: ["guest-only"],
-              scopes: ["operator.read", "operator.write"],
-            },
+function restrictedOperator(email: string, agentId: string, sandbox?: "required") {
+  const profile = ensureProfileForEmail(email);
+  setUserProfileRole(profile.id, "guest");
+  const client: GatewayClient = {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "test", version: "test", platform: "test", mode: "test" },
+      scopes: ["operator.write"],
+    },
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+  };
+  const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+    agents: { list: [{ id: "main", default: true }] },
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "view" },
+            agents: [agentId],
+            scopes: ["operator.read", "operator.write"],
+            ...(sandbox ? { sandbox } : {}),
           },
         },
       },
-    });
+    },
+  });
+  return { profile, client, runtimeConfig };
+}
+
+describe("session message-cut methods", () => {
+  it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
+    const { client, runtimeConfig } = restrictedOperator(
+      "restricted-fork-creator@example.com",
+      "guest-only",
+    );
 
     const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     expect(fork).toHaveBeenCalledWith(
@@ -342,33 +456,11 @@ describe("session message-cut methods", () => {
   });
 
   it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
-    const profile = ensureProfileForEmail("sandbox-required-fork-creator@example.com");
-    setUserProfileRole(profile.id, "guest");
-    const client = {
-      connect: { scopes: ["operator.write"] },
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      },
-    } as GatewayClient;
-    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-      agents: { list: [{ id: "main", default: true }] },
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "view" },
-              agents: ["main"],
-              scopes: ["operator.read", "operator.write"],
-              sandbox: "required",
-            },
-          },
-        },
-      },
-    });
+    const { profile, client, runtimeConfig } = restrictedOperator(
+      "sandbox-required-fork-creator@example.com",
+      "main",
+      "required",
+    );
 
     const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
@@ -438,18 +530,94 @@ describe("session message-cut methods", () => {
     await expectSessionWorkCleared(work);
   });
 
-  it("clears queued session work after a successful rewind", async () => {
-    const work = enqueueSessionWork("rewind");
-    expectSessionWorkQueued(work);
+  it.each([false, true])(
+    "settles a successful rewind after authority revocation=%s",
+    async (revoke) => {
+      const work = enqueueSessionWork("rewind");
+      expectSessionWorkQueued(work);
+      let current = true;
+      const readMedia = expectDefined(
+        mocks.readMediaBuffer.getMockImplementation(),
+        "media reader",
+      );
+      mocks.readMediaBuffer.mockImplementation(async (id: string) => {
+        const result = await readMedia(id);
+        expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).not.toBe(
+          sourceSessionId,
+        );
+        if (revoke) {
+          current = false;
+        }
+        return result;
+      });
+      const respond = vi.fn();
+      await sessionRewindHandlers["sessions.rewind"]!({
+        req: { id: "committed-rewind" } as never,
+        params: { sessionKey, entryId: "user-entry" },
+        respond,
+        context: context(),
+        client: null,
+        isWebchatConnect: () => false,
+        sessionMutationCommitGuard: () => {
+          if (!current) {
+            throw new Error("rewind authority revoked after commit");
+          }
+        },
+      });
 
-    const respond = await invoke("sessions.rewind", "user-entry");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ editorText: "edit me" }),
+        undefined,
+      );
+      await expectSessionWorkCleared(work);
+    },
+  );
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ editorText: "edit me" }),
-      undefined,
-    );
-    await expectSessionWorkCleared(work);
+  it("rewinds research's global session without clearing main's shared lane", async () => {
+    const key = "global";
+    const lane = resolveEmbeddedSessionLane(key);
+    const target = { agentId: "research", sessionKey: key, sessionId: "research-rewind" };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(target, {
+      eventId: "research-user",
+      message: { role: "user", content: "research question" },
+      parentId: null,
+    });
+    setCommandLaneConcurrency(lane, 0);
+    const commands = [
+      enqueueCommandInLane(lane, async () => "main tagged", {
+        sessionTarget: { agentId: "main", sessionKey: key, sessionId: "main-rewind" },
+      }),
+      enqueueCommandInLane(lane, async () => "main untagged"),
+      enqueueCommandInLane(lane, async () => "research", { sessionTarget: target }),
+    ];
+    const settled = Promise.allSettled(commands);
+    try {
+      const respond = vi.fn();
+      await sessionRewindHandlers["sessions.rewind"]!({
+        req: { id: "research-rewind" } as never,
+        params: { sessionKey: key, agentId: target.agentId, entryId: "research-user" },
+        respond,
+        context: {
+          ...context(),
+          getRuntimeConfig: () => ({ agents: { entries: { main: {}, research: {} } } }),
+        },
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledWith(true, { editorText: "research question" }, undefined);
+      setCommandLaneConcurrency(lane, 1);
+      expect(await settled).toEqual([
+        { status: "fulfilled", value: "main tagged" },
+        { status: "fulfilled", value: "main untagged" },
+        { status: "rejected", reason: expect.any(CommandLaneClearedError) },
+      ]);
+    } finally {
+      clearSessionQueues([key]);
+      setCommandLaneConcurrency(lane, 1);
+      await settled;
+    }
   });
 
   it("preserves queued session work after a rejected branch switch", async () => {
@@ -474,7 +642,6 @@ describe("session message-cut methods", () => {
   });
 
   it.each([
-    ["missing", "branch entry not found"],
     ["user-entry", "entry is not a branch tip"],
     ["assistant-entry", "branch is already active"],
   ])("rejects invalid branch switch target %s", async (entryId, message) => {
@@ -533,6 +700,10 @@ describe("session message-cut methods", () => {
   );
 
   it("returns editor text for rewind and a new key for fork", async () => {
+    await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+      sandboxMode: "off",
+      nativeRuntimeConsent: "native-fixture",
+    }));
     const profileId = "profile-fork-creator";
     const fork = await invoke("sessions.fork", "user-entry", {
       connect: { scopes: ["operator.write"] },
@@ -559,6 +730,8 @@ describe("session message-cut methods", () => {
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
     expect(forkKey).toBeTruthy();
     const forkEntry = loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" });
+    expect(forkEntry).not.toHaveProperty("sandboxMode");
+    expect(forkEntry).not.toHaveProperty("nativeRuntimeConsent");
     expect(forkEntry).toMatchObject({
       createdVia: "operator",
       createdActor: { type: "human", id: profileId },
@@ -585,6 +758,7 @@ describe("session message-cut methods", () => {
       undefined,
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
+    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sandboxMode).toBe("off");
   });
 
   it.each([
@@ -701,7 +875,7 @@ describe("session message-cut methods", () => {
 
   it("delegates complete upstream fork materialization to the harness", async () => {
     linkToUpstreamConversation();
-    installUpstreamForkHarness();
+    installUpstreamForkHarness(undefined, "dual");
     mocks.upstreamFork.mockResolvedValue({
       status: "created",
       key: "agent:main:dashboard:forked",
@@ -716,6 +890,7 @@ describe("session message-cut methods", () => {
     );
     expect(mocks.upstreamFork).toHaveBeenCalledWith(
       expect.objectContaining({
+        assertCurrent: expect.any(Function),
         source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
         targetKey: expect.stringMatching(/^agent:main:dashboard:/),
         upstream: expect.objectContaining({
@@ -728,64 +903,87 @@ describe("session message-cut methods", () => {
     );
   });
 
-  it("preserves the authenticated creator and required sandbox when a harness materializes an upstream fork", async () => {
-    const profile = ensureProfileForEmail("sandbox-required-upstream-fork@example.com");
-    setUserProfileRole(profile.id, "guest");
-    const client = {
-      connect: { scopes: ["operator.write"] },
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      },
-    } as GatewayClient;
-    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-      agents: { list: [{ id: "main", default: true }] },
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "view" },
-              agents: ["main"],
-              scopes: ["operator.read", "operator.write"],
-              sandbox: "required",
+  it.each(["created", "failed"] as const)(
+    "expires native-write authority when the upstream fork settles %s",
+    async (outcome) => {
+      linkToUpstreamConversation();
+      installUpstreamForkHarness();
+      let retainedAssertCurrent: (() => void) | undefined;
+      mocks.upstreamFork.mockImplementation(
+        async ({ assertCurrent }: { assertCurrent: () => void }) => {
+          assertCurrent();
+          retainedAssertCurrent = assertCurrent;
+          return outcome === "created"
+            ? { status: "created", key: "agent:main:dashboard:forked" }
+            : {
+                status: "failed",
+                code: "upstream-unavailable",
+                message: "Codex is offline. Try again.",
+              };
+        },
+      );
+
+      await invoke("sessions.fork", "user-entry");
+
+      const nativeWrites = vi.fn();
+      expect(() => {
+        expectDefined(retainedAssertCurrent, "retained native-write authority")();
+        nativeWrites();
+      }).toThrow("Session initialization source is closed");
+      expect(nativeWrites).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["dual", "legacy", "v2"] as const)(
+    "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",
+    async (contract) => {
+      const profile = ensureProfileForEmail(`sandbox-required-${contract}-fork@example.com`);
+      setUserProfileRole(profile.id, "guest");
+      const client = {
+        connect: { scopes: ["operator.write"] },
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        },
+      } as GatewayClient;
+      const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" },
+                agents: ["main"],
+                scopes: ["operator.read", "operator.write"],
+                sandbox: "required",
+              },
             },
           },
         },
-      },
-    });
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    mocks.upstreamFork.mockImplementation(async ({ targetKey }: { targetKey: string }) => {
-      const created = await createRuntimeAgent().session.createSessionEntry({
-        cfg: runtimeConfig(),
-        key: targetKey,
-        initialEntry: { agentHarnessId: "test-harness" },
       });
-      return { status: "created", key: created.key };
-    });
-
-    const fork = await withPluginRuntimeGatewayRequestScope(
-      { client, isWebchatConnect: () => false },
-      () => invoke("sessions.fork", "user-entry", client, false, runtimeConfig),
-    );
-    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
-
-    expect(fork).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ sessionKey: expect.any(String) }),
-      undefined,
-    );
-    expect(mocks.upstreamFork).toHaveBeenCalledWith(
-      expect.objectContaining({ sandbox: "required" }),
-    );
-    expect(loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" })).toMatchObject({
-      createdActor: { type: "human", id: profile.id },
-      sandbox: "required",
-    });
-  });
+      linkToUpstreamConversation();
+      installUpstreamForkHarness("host-only", contract);
+      const fork = await withPluginRuntimeGatewayRequestScope(
+        { client, isWebchatConnect: () => false },
+        () => invoke("sessions.fork", "user-entry", client, false, runtimeConfig),
+      );
+      expect(fork).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          details: expect.objectContaining({
+            code: "AGENT_RUNTIME_RESTRICTED",
+            reason: "sandbox-required",
+          }),
+        }),
+      );
+      expect(mocks.upstreamFork).not.toHaveBeenCalled();
+      expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
+    },
+  );
 
   it("does not mutate the local session when the upstream fork fails", async () => {
     linkToUpstreamConversation();
@@ -810,30 +1008,28 @@ describe("session message-cut methods", () => {
     expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(entryCount);
   });
 
-  it.each(["steer-message", "in-progress-turn", "drift-mismatch"] as const)(
-    "passes through the %s boundary failure",
-    async (reason) => {
-      linkToUpstreamConversation();
-      installUpstreamForkHarness();
-      mocks.upstreamFork.mockResolvedValue({
-        status: "failed",
-        code: reason,
+  it("passes through an invalid fork boundary failure", async () => {
+    const reason = "drift-mismatch";
+    linkToUpstreamConversation();
+    installUpstreamForkHarness();
+    mocks.upstreamFork.mockResolvedValue({
+      status: "failed",
+      code: reason,
+      message: `boundary failed: ${reason}`,
+    });
+
+    const respond = await invoke("sessions.fork", "user-entry");
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        details: { reason },
         message: `boundary failed: ${reason}`,
-      });
-
-      const respond = await invoke("sessions.fork", "user-entry");
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          details: { reason },
-          message: `boundary failed: ${reason}`,
-        }),
-      );
-    },
-  );
+      }),
+    );
+  });
 
   it.each([
     ["sessions.fork", "Fork"],

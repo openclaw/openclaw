@@ -1,7 +1,7 @@
 /** Collects text-to-speech secret refs from runtime config. */
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import {
-  collectRuntimeSecretInputAssignment,
+  collectSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -27,7 +27,7 @@ export function collectTtsApiKeyAssignments(params: {
       if (!isRecord(providerConfig)) {
         continue;
       }
-      collectRuntimeSecretInputAssignment({
+      collectSecretInputAssignment({
         value: providerConfig.apiKey,
         path: `${appendConfigPathSegment(`${pathPrefix}.providers`, providerId)}.apiKey`,
         expected: "string",

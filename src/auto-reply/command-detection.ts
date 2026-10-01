@@ -8,27 +8,14 @@ import { matchPluginCommand } from "../plugins/commands.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "./commands-registry.types.js";
-import { isAbortTrigger } from "./reply/abort-primitives.js";
+import { isAbortTrigger } from "./reply/abort-trigger-text.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
-/** Returns true when text starts with a configured control command alias. */
-export function hasControlCommand(
-  text?: string,
-  cfg?: OpenClawConfig,
-  options?: CommandNormalizeOptions,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const stripped = stripInboundMetadata(trimmed);
-  if (!stripped) {
-    return false;
-  }
-  const normalizedBody = normalizeCommandBody(stripped, options);
+function normalizeControlCommandBody(text?: string, options?: CommandNormalizeOptions): string {
+  return normalizeCommandBody(stripInboundMetadata(text?.trim() ?? ""), options);
+}
+
+function hasNormalizedControlCommand(normalizedBody: string, cfg?: OpenClawConfig): boolean {
   if (!normalizedBody) {
     return false;
   }
@@ -54,26 +41,26 @@ export function hasControlCommand(
   return false;
 }
 
+/** Returns true when text starts with a configured control command alias. */
+export function hasControlCommand(
+  text?: string,
+  cfg?: OpenClawConfig,
+  options?: CommandNormalizeOptions,
+): boolean {
+  return hasNormalizedControlCommand(normalizeControlCommandBody(text, options), cfg);
+}
+
 /** Returns true for exact control commands or abort triggers after metadata stripping. */
 export function isControlCommandMessage(
   text?: string,
   cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (hasControlCommand(trimmed, cfg, options)) {
-    return true;
-  }
-  const stripped = stripInboundMetadata(trimmed);
-  const normalized =
-    normalizeOptionalLowercaseString(normalizeCommandBody(stripped, options)) ?? "";
-  return isAbortTrigger(normalized);
+  const normalizedBody = normalizeControlCommandBody(text, options);
+  return (
+    hasNormalizedControlCommand(normalizedBody, cfg) ||
+    isAbortTrigger(normalizeLowercaseStringOrEmpty(normalizedBody))
+  );
 }
 
 /** Returns true when a command starts a new transcript rather than resetting in place. */
@@ -81,8 +68,7 @@ export function isSessionBoundaryCommandText(
   text?: string,
   options?: CommandNormalizeOptions,
 ): boolean {
-  const stripped = stripInboundMetadata(text?.trim() ?? "");
-  const normalized = normalizeCommandBody(stripped, options);
+  const normalized = normalizeControlCommandBody(text, options);
   return (
     /^\/(?:new|reset)(?:\s|$)/i.test(normalized) && !/^\/reset\s+soft(?:\s|$)/i.test(normalized)
   );

@@ -1,16 +1,15 @@
 // Transcript artifact usage, previews, and response bounds.
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { findExistingTranscriptPath } from "./session-transcript-archive-reader.js";
 import {
-  aggregateSessionTranscriptUsage,
+  createSessionTranscriptUsageAccumulator,
   type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-derived-readers.js";
-import { isOversizedTranscriptLine } from "./session-transcript-record-parser.js";
-import type { SessionPreviewItem } from "./session-utils.types.js";
+import { resolveSessionTranscriptCandidates } from "./session-transcript-files.fs.js";
+import { MAX_TRANSCRIPT_PARSE_LINE_BYTES } from "./session-transcript-record-parser.js";
 
 export type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 
@@ -41,7 +40,12 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionFile?: string,
   agentId?: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  const filePath = resolveSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+  ).find((value) => fs.existsSync(value));
   if (!filePath) {
     return null;
   }
@@ -51,26 +55,20 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
     if (stat.size === 0) {
       return null;
     }
-    const messages: unknown[] = [];
+    const usageAccumulator = createSessionTranscriptUsageAccumulator("artifact");
     for await (const line of streamSessionTranscriptLines(filePath)) {
-      if (isOversizedTranscriptLine(line)) {
+      if (Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
         continue;
       }
+      let normalizedMessage: Record<string, unknown>;
       try {
-        const record = JSON.parse(line) as Record<string, unknown>;
-        if (
-          !record.message ||
-          typeof record.message !== "object" ||
-          Array.isArray(record.message)
-        ) {
+        const record = asOptionalRecord(JSON.parse(line));
+        const message = asOptionalRecord(record?.message);
+        if (!record || !message) {
           continue;
         }
-        const message = record.message as Record<string, unknown>;
-        const usage =
-          message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
-            ? message.usage
-            : record.usage;
-        messages.push({
+        const usage = asOptionalRecord(message.usage) ?? asOptionalRecord(record.usage);
+        normalizedMessage = {
           ...message,
           ...(typeof message.provider !== "string" && typeof record.provider === "string"
             ? { provider: record.provider }
@@ -78,35 +76,15 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
           ...(typeof message.model !== "string" && typeof record.model === "string"
             ? { model: record.model }
             : {}),
-          ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
-        });
+          ...(usage ? { usage } : {}),
+        };
       } catch {
         continue;
       }
+      usageAccumulator.add(normalizedMessage);
     }
-    return aggregateSessionTranscriptUsage(messages, "artifact");
+    return usageAccumulator.finish();
   } catch {
     return null;
   }
-}
-
-export function buildSessionPreviewItems(
-  messages: readonly unknown[],
-  maxItems: number,
-  maxChars: number,
-  view: "display" | "model-context" = "display",
-): SessionPreviewItem[] {
-  const items: SessionPreviewItem[] = [];
-  for (const message of messages) {
-    const projected = projectSessionDisplayMessage(message, { maxChars, view });
-    if (!projected) {
-      continue;
-    }
-    items.push(projected);
-  }
-
-  if (items.length <= maxItems) {
-    return items;
-  }
-  return items.slice(-maxItems);
 }

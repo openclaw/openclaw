@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureActiveCronJobAgentDeletion } from "../cron/active-jobs.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
@@ -20,6 +23,7 @@ import {
 } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, type AgentProvenance } from "../state/agent-provenance.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../state/openclaw-agent-db-lease.js";
+import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -104,10 +108,25 @@ export function withAgentDeletion<T>(
           const operationId = crypto.randomUUID();
           const journal = runOpenClawStateWriteTransaction((database) => {
             lease.assertOwnedInTransaction(database.db);
-            return beginAgentDeletionJournal(
+            const cancelCronRuns = captureActiveCronJobAgentDeletion(
+              id,
+              requireOpenClawStateDatabaseIdentity(database).key,
+            );
+            const entryJournal = beginAgentDeletionJournal(
               { ...entry, agentId: id, operationId, deleteFiles: entry.deleteFiles !== false },
               stateOptions,
             );
+            // Revoke before cleanup preparation can yield, but never for a rolled-back journal.
+            if (
+              !stageSqliteTransactionState(database.db, {
+                stage() {},
+                rollback() {},
+                commit: cancelCronRuns,
+              })
+            ) {
+              throw new Error("Agent deletion requires a managed transaction");
+            }
+            return entryJournal;
           }, stateOptions);
           const assertJournal = (
             currentStatePath: string,
@@ -238,8 +257,13 @@ export function claimCompletedAgentDeletion(
 export function isAgentDeletionBlocked(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
+  database?: DatabaseSync,
 ): boolean {
-  return Boolean(readAgentDeletionJournal(normalizeAgentId(agentId), options));
+  return Boolean(
+    database
+      ? readAgentDeletionJournalInDatabase({ db: database }, agentId, "runtime")
+      : readAgentDeletionJournal(agentId, options, "runtime"),
+  );
 }
 
 /** Captures the exact durable incarnation of an existing, deletion-safe agent. */

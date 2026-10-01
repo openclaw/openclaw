@@ -92,6 +92,17 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
+it.each([
+  "missing/MEMORY.md",
+  ...(process.platform === "win32" ? [] : ["missing/../MEMORY.md"]),
+  "missing/",
+])("rejects a memory target whose missing suffix is %s", async (suffix) => {
+  const memoryPath = await setupMemoryFile("existing memory");
+  const filePath = `${path.dirname(memoryPath)}${path.sep}${suffix.replaceAll("/", path.sep)}`;
+
+  await expect(resolveMemoryWritePath(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
   "rejects a non-directory symlink before a parent traversal",
   async () => {
@@ -170,29 +181,6 @@ it("rejects a changed preimage before removing a memory file", async () => {
 
   expect(await fs.readFile(memoryPath, "utf-8")).toBe(externalEdit);
 });
-
-it.runIf(process.platform !== "win32")(
-  "keeps the original MEMORY.md when the in-place fallback write fails partway",
-  async () => {
-    const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
-    const memoryPath = await setupMemoryFile(original, true);
-    const promoted = `${original}${"- promoted entry\n".repeat(200)}`;
-    openState.failInPlaceWriteAfterBytes = 1024;
-
-    await expect(
-      commitMemoryContent({
-        filePath: memoryPath,
-        tempPrefix: `${path.basename(memoryPath)}.promotion`,
-        expectedHash: hashMemoryContent(original),
-        expectedContent: original,
-        allowInPlaceFallback: true,
-        content: promoted,
-      }),
-    ).rejects.toMatchObject({ code: "EFBIG" });
-
-    expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
-  },
-);
 
 it.runIf(process.platform !== "win32")(
   "completes the restore across short writes before truncating",

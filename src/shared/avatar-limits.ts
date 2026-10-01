@@ -1,4 +1,8 @@
-// Browser-safe avatar payload limits shared by Gateway and Control UI projections.
+// Browser-safe avatar payload limits shared by state, Gateway, and Control UI projections.
+
+// Profile persistence has a smaller, raster-only contract than general avatar rendering.
+export const MAX_USER_PROFILE_AVATAR_BYTES = 512 * 1024;
+export const USER_PROFILE_AVATAR_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 
 /** Maximum avatar payload size accepted by local file and Gateway upload paths. */
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;

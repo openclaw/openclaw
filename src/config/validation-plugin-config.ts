@@ -21,13 +21,15 @@ import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstallSources,
 } from "../plugins/official-external-plugin-catalog.js";
-import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import { formatRawChannelConfigIssueMessage } from "./validation-channel-rules.js";
+import {
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
 
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
@@ -35,7 +37,7 @@ export function formatChannelConfigIssueMessage(message: string, pluginId?: stri
   const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
   return safePluginId
     ? `invalid config for plugin ${safePluginId}: ${message}`
-    : formatRawChannelConfigIssueMessage(message);
+    : `invalid config: ${message}`;
 }
 
 /** Deferred channel settings remain authored inputs until their owning plugin can validate them. */
@@ -53,7 +55,7 @@ export function resolveDeferredChannelConfigWarning(params: {
   return pluginId && params.deferredPluginIds.has(normalizePluginId(pluginId))
     ? {
         path: `channels.${params.channelId}`,
-        message: `Plugin "${pluginId}" channel config validation is deferred while its state migration is pending; existing settings are preserved.`,
+        message: `Plugin "${pluginId}" channel settings cannot be checked until its data/settings upgrade finishes. Your existing settings have been kept. Run "openclaw update status" for repair details.`,
       }
     : undefined;
 }
@@ -88,6 +90,7 @@ export function validateExplicitPluginConfig(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
+  schemaValidations?: PreparedPluginSchemaValidations;
   registry: PluginManifestRegistry;
   knownIds: Set<string>;
   normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
@@ -203,7 +206,7 @@ export function validateExplicitPluginConfig(params: {
       deferredPluginWarningIds.add(normalized);
       warnings.push({
         path: issuePath,
-        message: `Plugin "${pluginId}" config validation is deferred while its state migration is pending; existing settings are preserved.`,
+        message: `Plugin "${pluginId}" settings cannot be checked until its data/settings upgrade finishes. Your existing settings have been kept. Run "openclaw update status" for repair details.`,
       });
     }
     return true;
@@ -367,18 +370,19 @@ export function validateExplicitPluginConfig(params: {
         selectedMemoryPluginId = pluginId;
       }
     }
-    const shouldReplacePluginConfig = entryHasConfig || (applyDefaults && enabled);
-    const shouldValidate = enabled || entryHasConfig;
-    if (shouldValidate) {
+    if (enabled || entryHasConfig) {
       if (record.configSchema) {
-        const result = validatePluginSchemaValue({
-          origin: record.origin,
-          schema: record.configSchema,
-          cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
-          value: entry?.config ?? {},
-          applyDefaults: true, // Always apply defaults for AJV schema validation;
-          // writeConfigFile persists persistCandidate, not validated.config (#61841)
-        });
+        const result = validatePreparedPluginSchemaValue(
+          {
+            origin: record.origin,
+            schema: record.configSchema,
+            cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
+            value: entry?.config ?? {},
+            applyDefaults: true, // Always apply defaults for AJV schema validation;
+            // writeConfigFile persists persistCandidate, not validated.config (#61841)
+          },
+          params.schemaValidations,
+        );
         if (!result.ok) {
           for (const error of result.errors) {
             const base = `plugins.entries.${pluginId}.config`;
@@ -389,7 +393,7 @@ export function validateExplicitPluginConfig(params: {
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (shouldReplacePluginConfig) {
+        } else if (entryHasConfig || (applyDefaults && enabled)) {
           let nextValue = result.value as Record<string, unknown>;
           const nativeCatalog =
             record.setup?.nativeSessionCatalog ??
@@ -412,10 +416,7 @@ export function validateExplicitPluginConfig(params: {
           }
           params.replacePluginEntryConfig(pluginId, nextValue);
         }
-      } else if (record.format === "bundle") {
-        // Compatible bundles currently expose no native OpenClaw config schema.
-        // Treat them as schema-less capability packs rather than failing validation.
-      } else {
+      } else if (record.format !== "bundle") {
         issues.push({
           path: `plugins.entries.${pluginId}`,
           message: `plugin schema missing for ${pluginId}`,

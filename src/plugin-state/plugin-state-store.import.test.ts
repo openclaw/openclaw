@@ -12,7 +12,6 @@ import {
 import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "./plugin-state-store.test-helpers.js";
 
 let testState: OpenClawTestState;
@@ -33,7 +32,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  setMaxPluginStateEntriesPerPluginForTests(undefined);
   resetPluginStateStoreForTests();
 });
 afterAll(async () => {
@@ -41,23 +39,6 @@ afterAll(async () => {
 });
 
 describe("doctor plugin state import", () => {
-  it("bounds commit work while retaining source ages and remaining TTLs", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    const exec = vi.spyOn(openOpenClawStateDatabase().db, "exec");
-    importPluginStateEntriesForDoctor(
-      pluginId,
-      options,
-      entries.map((entry) => ({ ...entry, ttlMs: 100 })),
-    );
-    const commits = exec.mock.calls.filter(([sql]) => sql === "COMMIT").length;
-    expect(commits).toBeGreaterThan(1);
-    expect(commits).toBeLessThanOrEqual(3);
-    const store = createPluginStateSyncKeyedStore(pluginId, options);
-    expect(store.entries()).toEqual(entries.map((entry) => ({ ...entry, expiresAt: 10_100 })));
-    now.mockReturnValue(10_100);
-    expect(store.entries()).toEqual([]);
-  });
-
   it("commits the successful prefix of a failed batch and converges on rerun", () => {
     const bounded = { ...options, maxEntries: 600 };
     const db = openOpenClawStateDatabase().db;
@@ -103,16 +84,15 @@ describe("doctor plugin state import", () => {
     expect(store.entries()).toEqual(entries);
   });
 
-  it.each([false, true])("refreshes retention across clock changes (backward: %s)", (backward) => {
-    let clock = backward ? 10_002 : 10_000;
+  it("refreshes namespace retention when the clock advances during import", () => {
+    let clock = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => clock);
-    setMaxPluginStateEntriesPerPluginForTests(2);
     seedPluginStateEntriesForTests([
-      { pluginId, namespace: "durable", key: "sibling", value: true, expiresAt: 10_001 },
+      { pluginId, namespace: options.namespace, key: "expiring", value: true, expiresAt: 10_001 },
     ]);
     const db = openOpenClawStateDatabase().db;
     db.function("advance_import_clock", () => {
-      clock = backward ? 10_000 : 10_001;
+      clock = 10_001;
       return 0;
     });
     db.exec(`CREATE TEMP TRIGGER advance_clock AFTER INSERT ON plugin_state_entries
@@ -122,22 +102,14 @@ describe("doctor plugin state import", () => {
       { key: "first", value: 1, createdAt: -2 },
       { key: "second", value: 2, createdAt: -1, ttlMs: 100 },
     ];
-    if (backward) {
-      expect(() => importPluginStateEntriesForDoctor(pluginId, limited, source)).toThrow(
-        "reached the 2 live row limit",
-      );
-    } else {
-      importPluginStateEntriesForDoctor(pluginId, limited, source);
-    }
-    const actual = createPluginStateSyncKeyedStore(pluginId, limited).entries();
-    expect(actual).toEqual(
-      backward
-        ? [source[0]]
-        : [source[0], { key: "second", value: 2, createdAt: -1, expiresAt: 10_101 }],
-    );
+    importPluginStateEntriesForDoctor(pluginId, limited, source);
+    expect(createPluginStateSyncKeyedStore(pluginId, limited).entries()).toEqual([
+      source[0],
+      { key: "second", value: 2, createdAt: -1, expiresAt: 10_101 },
+    ]);
   });
 
-  it.each([0, 17, 750])("commits only the valid prefix before preparation fails at %i", (index) => {
+  it.each([0, 750])("commits only the valid prefix before preparation fails at %i", (index) => {
     const invalid = entries.map((entry, offset) =>
       offset === index ? { ...entry, createdAt: Number.NaN } : entry,
     );
@@ -153,7 +125,6 @@ describe("doctor plugin state import", () => {
   it.each(["evict-oldest", "reject-new"] as const)(
     "preserves %s retention with duplicate keys and durable sibling rows",
     (overflowPolicy) => {
-      setMaxPluginStateEntriesPerPluginForTests(3);
       seedPluginStateEntriesForTests([
         { pluginId, namespace: "durable", key: "sibling", value: true },
       ]);

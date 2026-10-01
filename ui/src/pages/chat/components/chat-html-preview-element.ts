@@ -12,6 +12,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_TIMEOUT_MS } from "../../../lib/widget-sandbox-host.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import { prepareHtmlPreviewLinks } from "./chat-html-preview-links.ts";
 
 type PreviewBinding = {
   context: ApplicationContext;
@@ -59,9 +60,8 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
 
   constructor() {
     super();
-    void new SubscriptionsController(this).watch(
+    void new SubscriptionsController(this).watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       () => {
         if (this.binding && !this.isCurrent(this.binding)) {
           this.clearView();
@@ -173,13 +173,14 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
         this.fail(error);
       }
     };
+    const allowScripts = this.mode !== "strict";
     this.sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxUrl: this.sandboxUrl,
       sandboxOrigin: this.sandboxOrigin,
       documentKey: String(this.frameGeneration),
-      allowScripts: this.mode !== "strict",
-      loadDocument: async () => view.html,
+      allowScripts,
+      loadDocument: async () => prepareHtmlPreviewLinks(view.html, allowScripts),
       onLoaded: () => {},
       onRendered: () => {
         if (currentFrame()) {

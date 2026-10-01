@@ -1,13 +1,15 @@
-// Msteams plugin module implements graph behavior.
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   captureChannelReadAuthority,
   responseWithRelease,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
-import { createMSTeamsHttpError } from "./http-error.js";
 import {
   MSTEAMS_REQUEST_TIMEOUT_MS,
   resolveMSTeamsRequestTimeoutMs,
@@ -15,11 +17,32 @@ import {
   withMSTeamsRequestDeadline,
 } from "./request-timeout.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
+
+const graphRequestCurrentness = new AsyncLocalStorage<(() => void) | undefined>();
+
+export function runWithMSTeamsGraphRequestCurrentness<T>(
+  assertCurrent: (() => void) | undefined,
+  work: () => T,
+): T {
+  assertCurrent?.();
+  return graphRequestCurrentness.run(assertCurrent, work);
+}
+
+function captureGraphRequestCurrentness(assertReadAuthority: (() => void) | undefined) {
+  const assertCurrent = graphRequestCurrentness.getStore();
+  if (!assertCurrent) {
+    return assertReadAuthority;
+  }
+  // Carry the caller through Graph preparation without fencing accepted mutation results.
+  return () => {
+    assertReadAuthority?.();
+    assertCurrent();
+  };
+}
 
 export type GraphUser = {
   id?: string;
@@ -38,7 +61,7 @@ export type GraphChannel = {
   displayName?: string;
 };
 
-export type GraphResponse<T> = { value?: T[] };
+export type GraphResponse<T> = { value?: T[]; "@odata.nextLink"?: string };
 
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
@@ -59,7 +82,8 @@ async function requestGraph(params: {
   deadline?: MSTeamsRequestDeadline;
 }): Promise<Response> {
   const assertReadAuthority = captureChannelReadAuthority();
-  assertReadAuthority?.();
+  const assertRequestCurrent = captureGraphRequestCurrentness(assertReadAuthority);
+  assertRequestCurrent?.();
   const hasBody = params.body !== undefined;
   const url = `${params.root ?? GRAPH_ROOT}${params.path}`;
   const { response, release } = await fetchWithSsrFGuard({
@@ -76,13 +100,13 @@ async function requestGraph(params: {
     },
     auditContext: "msteams.graph",
     timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
-    beforeRequest: assertReadAuthority,
+    beforeRequest: assertRequestCurrent,
   });
   let releaseInFinally = true;
   try {
     assertReadAuthority?.();
     if (!response.ok) {
-      throw await createMSTeamsHttpError(
+      throw await createProviderHttpError(
         response,
         `${params.errorPrefix ?? "Graph"} ${params.path} failed`,
       );
@@ -153,7 +177,8 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
   headers?: Record<string, string>;
 }): Promise<T> {
   const assertReadAuthority = captureChannelReadAuthority();
-  assertReadAuthority?.();
+  const assertRequestCurrent = captureGraphRequestCurrentness(assertReadAuthority);
+  assertRequestCurrent?.();
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: {
@@ -165,12 +190,12 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
     },
     auditContext: "msteams.graph.absolute",
     timeoutMs: MSTEAMS_REQUEST_TIMEOUT_MS,
-    beforeRequest: assertReadAuthority,
+    beforeRequest: assertRequestCurrent,
   });
   try {
     assertReadAuthority?.();
     if (!response.ok) {
-      throw await createMSTeamsHttpError(response, `Graph ${params.url} failed`);
+      throw await createProviderHttpError(response, `Graph ${params.url} failed`);
     }
     return await readProviderJsonResponse<T>(response, `Graph ${params.url} failed`);
   } finally {
@@ -182,13 +207,6 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
   }
 }
 
-/** Graph collection response with optional pagination link. */
-type GraphPagedResponse<T> = {
-  value?: T[];
-  "@odata.nextLink"?: string;
-};
-
-/** Result of a paginated Graph API fetch. */
 export type PaginatedResult<T> = {
   items: T[];
   truncated: boolean;
@@ -215,7 +233,7 @@ export async function fetchAllGraphPages<T>(params: {
   let nextPath: string | undefined = params.path;
 
   for (let page = 0; page < maxPages && nextPath; page++) {
-    const res: GraphPagedResponse<T> = await fetchGraphJson<GraphPagedResponse<T>>({
+    const res: GraphResponse<T> = await fetchGraphJson<GraphResponse<T>>({
       token: params.token,
       path: nextPath,
       headers: params.headers,
@@ -249,8 +267,8 @@ export async function resolveGraphToken(
   cfg: unknown,
   options?: { preferDelegated?: boolean },
 ): Promise<string> {
-  const assertReadAuthority = captureChannelReadAuthority();
-  assertReadAuthority?.();
+  const assertRequestCurrent = captureGraphRequestCurrentness(captureChannelReadAuthority());
+  assertRequestCurrent?.();
   const msteamsCfg = (cfg as { channels?: { msteams?: MSTeamsConfig } })?.channels?.msteams;
   const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
@@ -269,7 +287,7 @@ export async function resolveGraphToken(
       clientId: creds.appId,
       clientSecret: creds.appPassword,
     });
-    assertReadAuthority?.();
+    assertRequestCurrent?.();
     if (delegated) {
       return delegated;
     }
@@ -277,14 +295,13 @@ export async function resolveGraphToken(
   }
 
   const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));
-  assertReadAuthority?.();
+  assertRequestCurrent?.();
   const tokenProvider = createMSTeamsTokenProvider(app);
-  const graphTokenValue = await withMSTeamsRequestDeadline({
+  const accessToken = await withMSTeamsRequestDeadline({
     label: "MS Teams Graph token",
     work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
   });
-  assertReadAuthority?.();
-  const accessToken = readAccessToken(graphTokenValue);
+  assertRequestCurrent?.();
   if (!accessToken) {
     throw new Error("MS Teams graph token unavailable");
   }

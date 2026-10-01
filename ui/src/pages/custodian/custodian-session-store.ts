@@ -44,8 +44,6 @@ import {
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 
-type StoreListener = () => void;
-
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
   messages: CustodianMessage[] = [];
@@ -94,17 +92,16 @@ export class CustodianSessionStore {
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
-  private readonly listeners = new Set<StoreListener>();
+  private readonly listeners = new Set<() => void>();
 
-  subscribe(listener: StoreListener): () => void {
+  subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   connect(context: ApplicationContext, variant: CustodianSessionVariant): void {
     const contextChanged = this.context !== context;
-    const variantChanged = this.variant !== variant;
-    if (!contextChanged && !variantChanged) {
+    if (!contextChanged && this.variant === variant) {
       return;
     }
     if (contextChanged) {
@@ -266,7 +263,7 @@ export class CustodianSessionStore {
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
     let replyEpoch: number | undefined;
-    const reply = this.requestReply(client, params, () => {
+    const outcome = await this.requestReply(client, params, () => {
       const ordinaryDraft = this.inputDrafts.ordinary;
       if (admit && !admit()) {
         return false;
@@ -289,7 +286,6 @@ export class CustodianSessionStore {
         }
       };
     });
-    const outcome = await reply;
     if (questionReply && this.requestEpoch === replyEpoch) {
       this.questionReplyUncertain = eventNudgeState.questionUncertainty(questionState[1], outcome);
       if (outcome === "rejected") {
@@ -313,15 +309,16 @@ export class CustodianSessionStore {
   }
 
   dismissChannelOnboardingNudge(): void {
-    nudgeActions.dismissChannelOnboardingNudge(this, () => this.context?.replace("custodian"));
+    this.channelOnboardingNudgeClosed = true;
+    this.emit();
+    this.context?.replace("custodian");
   }
 
   openChannelsFromOnboarding(): void {
-    nudgeActions.openChannelsFromOnboarding(
-      this,
-      () => this.revokeNavigationAuthority(),
-      () => this.context?.navigate("channels"),
-    );
+    this.channelOnboardingNudgeClosed = true;
+    this.revokeNavigationAuthority();
+    this.emit();
+    this.context?.navigate("channels");
   }
 
   async dismissQuestion(message: CustodianMessage): Promise<void> {
@@ -419,7 +416,7 @@ export class CustodianSessionStore {
   }
 
   private emit(): void {
-    this.inputDrafts.reconcile(this.inferenceState === "ready", this);
+    this.inputDrafts.reconcile(this);
     this.transcript.settleRecovery(
       this.transcriptBlocked,
       () => void this.refreshTranscriptIfIdle(),
@@ -582,7 +579,7 @@ export class CustodianSessionStore {
       }
       return;
     }
-    this.clearConversation();
+    this.clearConversation(true);
     this.startSession(client, true);
   }
 
@@ -633,7 +630,7 @@ export class CustodianSessionStore {
     return true;
   }
 
-  private clearConversation(): void {
+  private clearConversation(preserveDraft = false): void {
     this.messages = [];
     this.dismissedQuestions = new Set();
     this.answeredQuestions = new Set();
@@ -641,7 +638,10 @@ export class CustodianSessionStore {
     this.error = null;
     this.transcript.reset();
     this.inferenceState = "unverified";
-    this.inputDrafts.ordinary = { value: "" };
+    // Initial metadata may arrive after a local draft; only replacement owners clear it.
+    if (!preserveDraft) {
+      this.inputDrafts.ordinary = { value: "" };
+    }
     this.inputDrafts.resetPrompt(this, false);
     this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;

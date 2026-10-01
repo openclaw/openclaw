@@ -15,7 +15,6 @@ describe("logClawUpdatePlanSummary", () => {
       ...makeEmptyClawUpdatePlan({
         agentId: "worker",
         blockers: [],
-        digest: () => "sha256:plan",
       }),
       readiness: {
         ready: false,

@@ -4,14 +4,18 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
+
+registerNewSessionSetupEnglish();
 
 registerSessionPlacementEnglish();
 
 type ChatPanePlacementComposerState =
   | { kind: "ready" }
+  | { kind: "setup"; startup: ApplicationPlacementStartupStatus }
   | { kind: "busy"; message: string }
   | { kind: "dispatch-required" }
   | { kind: "failed"; recoveryAction?: "restart" | "stop-first" };
@@ -20,7 +24,12 @@ export type PlacementComposerPresentation = {
   state: ChatPanePlacementComposerState;
   blocksSend: boolean;
   busyMessage: string | null;
+  startup: ApplicationPlacementStartupStatus | null;
   diskSpace: Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>["diskSpace"];
+  workerRuntimeInstall: Extract<
+    NonNullable<GatewaySessionRow["placement"]>,
+    { state: "active" | "provisioning" }
+  >["workerRuntimeInstall"];
   runError: { summary: string } | null;
   failedUnavailableMessage: string;
   disabledBanner: ChatComposerDisabledBanner | undefined;
@@ -58,11 +67,16 @@ function resolvePlacementComposerState(params: {
   switch (params.row?.placement?.state) {
     case "requested":
     case "provisioning":
-      return { kind: "busy", message: t("chat.startupStatus.provisioningEnvironment") };
     case "syncing":
-      return { kind: "busy", message: t("chat.startupStatus.preparingWorkspace") };
     case "starting":
-      return { kind: "busy", message: t("newSession.starting") };
+      return {
+        kind: "setup",
+        startup: {
+          sessionKey: params.row.key,
+          phase: params.row.placement.state,
+          startedAt: params.row.placement.createdAtMs,
+        },
+      };
     case "draining":
     case "reconciling":
       return { kind: "busy", message: t("sessionsView.finishingSessionMove") };
@@ -99,36 +113,43 @@ export function resolvePlacementComposer(params: {
     !controls.moving &&
     !controls.restarting &&
     params.reclaimingKey !== params.row.key;
-  const canSendDuringSetup =
-    ["requested", "provisioning", "syncing", "starting"].includes(
-      params.row?.placement?.state ?? "",
-    ) &&
-    !params.startupPending &&
-    !controls.moving &&
-    !controls.restarting &&
-    params.reclaimingKey !== params.row?.key;
   const state = resolvePlacementComposerState({
     ...params,
     moving: controls.moving,
     workspaceResultReconciling: canSendDuringWorkspaceSync,
   });
+  const canSendDuringSetup = state.kind === "setup" && !params.startupPending;
   const busyMessage = !params.startupPending && state.kind === "busy" ? state.message : null;
   const placement = params.row?.placement;
+  const canRecoverOnSend =
+    !params.startupPending &&
+    state.kind === "failed" &&
+    placement?.state === "failed" &&
+    placement.retryOnSend === true;
   const terminalReason =
     placement && "terminalReason" in placement ? placement.terminalReason : undefined;
   const failureReason = placement?.state === "failed" ? placement.recoveryError : terminalReason;
   const common = {
     state,
-    blocksSend: state.kind !== "ready" && !canSendDuringWorkspaceSync && !canSendDuringSetup,
+    blocksSend:
+      state.kind !== "ready" &&
+      !canSendDuringWorkspaceSync &&
+      !canSendDuringSetup &&
+      !canRecoverOnSend,
     busyMessage,
+    startup: state.kind === "setup" ? state.startup : null,
     diskSpace: placement?.state === "active" ? placement.diskSpace : undefined,
+    workerRuntimeInstall:
+      placement?.state === "active" || placement?.state === "provisioning"
+        ? placement.workerRuntimeInstall
+        : undefined,
     runError:
       failureReason && !controls.restarting
         ? { summary: t("chat.cloudWorkerFailed", { error: failureReason }) }
         : null,
     failedUnavailableMessage: t("sessionsView.failedSessionUnavailable"),
   };
-  if (params.startupPending || !params.row) {
+  if (params.startupPending || !params.row || canRecoverOnSend) {
     return { ...common, disabledBanner: undefined };
   }
   const dispatchRequired = state.kind === "dispatch-required";
@@ -271,13 +292,11 @@ export function resolveChatPanePlacement(params: {
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
   const moveDisabledReason = moving
     ? t("common.loading")
-    : reclaiming
+    : reclaiming || placementState !== "active"
       ? t("sessionsView.actionUnavailable")
-      : placementState !== "active"
-        ? t("sessionsView.actionUnavailable")
-        : moveAccess.allowed
-          ? undefined
-          : moveAccess.reason;
+      : moveAccess.allowed
+        ? undefined
+        : moveAccess.reason;
   const recoveryDisabledReason = restarting
     ? t("common.loading")
     : moving || reclaiming || (!dispatchRequired && recoveryAction !== "restart")

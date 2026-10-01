@@ -15,11 +15,16 @@ import {
   createCurrentUserProfileMessageProjector,
 } from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
+import {
+  createSubagentCoordinationHistoryProjection,
+  projectForwardedMessages,
+} from "./chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
   buildPaginatedSessionHistory,
   readSessionHistorySnapshotKernel,
 } from "./session-history-snapshot.js";
+import { createSessionHistorySubagentProjection } from "./session-history-subagent-projection.js";
 import { readChatHistoryMessageSeq as resolveMessageSeq } from "./session-history-tail.js";
 import {
   readTranscriptMessageIdempotencyKey,
@@ -34,10 +39,6 @@ type InlineSessionHistoryAppend = {
   shouldRefresh?: boolean;
 };
 
-function isMessageToolMirrorMessage(message: SessionHistoryMessage): boolean {
-  return message.openclawMessageToolMirror !== undefined;
-}
-
 export async function readSessionHistorySnapshotAsync(
   params: SessionHistoryReadParams,
 ): Promise<SessionHistorySnapshot> {
@@ -46,10 +47,12 @@ export async function readSessionHistorySnapshotAsync(
     params.target.sessionEntry?.incognito ||
     isIncognitoSessionKey(params.target.sessionKey)
   ) {
-    return readSessionHistorySnapshotKernel(params, {
+    const snapshot = await readSessionHistorySnapshotKernel(params, {
       readers: sessionTranscriptReaders,
       resolveCurrentUserProfileDisplay,
     });
+    const messages = projectForwardedMessages(snapshot.history.messages);
+    return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
   }
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");
@@ -71,7 +74,7 @@ export async function readSessionHistorySnapshotAsync(
     },
   });
   const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
-  const messages = snapshot.history.messages.map(project);
+  const messages = projectForwardedMessages(snapshot.history.messages).map(project);
   return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
 }
 
@@ -80,7 +83,7 @@ export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
   private readonly maxChars: number;
   private readonly limit: number | undefined;
-  private readonly cursor: string | undefined;
+  private cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
   private turnBoundaryPending: boolean;
@@ -97,13 +100,13 @@ export class SessionHistorySseState {
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
-    this.cursor = params.cursor;
     const snapshot = params.snapshot;
+    this.cursor = snapshot.history.windowReset ? undefined : params.cursor;
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
     this.assistantErrorPending = snapshot.assistantErrorPending;
-    this.transcriptPath = normalizeTranscriptPathForComparison(snapshot.transcriptPath);
+    this.transcriptPath = resolveTranscriptPathForComparison(snapshot.transcriptPath);
   }
 
   snapshot(): PaginatedSessionHistory {
@@ -143,12 +146,21 @@ export class SessionHistorySseState {
       this.rawTranscriptSeq += 1;
     }
     const idempotencyKey = readTranscriptMessageIdempotencyKey(update.message);
-    const nextMessage = attachOpenClawTranscriptMeta(update.message, {
+    let nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       seq: this.rawTranscriptSeq,
     });
     const hadPendingTurnBoundary = this.turnBoundaryPending;
+    const subagentCoordination =
+      this.target.storePath &&
+      !this.target.sessionEntry?.incognito &&
+      !isIncognitoSessionKey(this.target.sessionKey)
+        ? createSessionHistorySubagentProjection(this.target, { deferSources: true })
+        : undefined;
+    nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
+      nextMessage,
+    ])[0];
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
@@ -174,21 +186,13 @@ export class SessionHistorySseState {
         resolveCurrentUserProfileDisplay,
       },
     );
+    subagentCoordination?.assertCurrent?.();
     const projectedPrefix = projectedMessages.slice(0, this.sentHistory.messages.length);
+    // A rewritten prefix needs a full refresh; only an unchanged prefix can append inline.
     if (
       projectedMessages.length > this.sentHistory.messages.length &&
-      !isDeepStrictEqual(projectedPrefix, this.sentHistory.messages)
+      isDeepStrictEqual(projectedPrefix, this.sentHistory.messages)
     ) {
-      // A current-profile change can rewrite an already-emitted row while this
-      // append adds only one tail item. Refresh the full history so the client
-      // does not retain a stale prefix beside the newly revisioned message.
-      this.sentHistory = buildPaginatedSessionHistory({
-        messages: projectedMessages,
-        hasMore: false,
-      });
-      return { shouldRefresh: true };
-    }
-    if (projectedMessages.length > this.sentHistory.messages.length) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
       if (hadPendingTurnBoundary && !this.turnBoundaryPending) {
         const firstAdded = attachOpenClawTranscriptMeta(addedMessages[0], {
@@ -197,26 +201,20 @@ export class SessionHistorySseState {
         addedMessages[0] = firstAdded;
         projectedMessages[this.sentHistory.messages.length] = firstAdded;
       }
-      if (addedMessages.length > 1) {
+      if (addedMessages.length === 1) {
+        const projectedMessage = expectDefined(addedMessages[0], "projected inline message");
+        const emittedMessage: SessionHistoryMessage =
+          resolveMessageSeq(projectedMessage) === undefined
+            ? (attachOpenClawTranscriptMeta(projectedMessage, {
+                seq: this.rawTranscriptSeq,
+              }) as SessionHistoryMessage)
+            : projectedMessage;
         this.sentHistory = buildPaginatedSessionHistory({
-          messages: projectedMessages,
+          messages: [...this.sentHistory.messages, emittedMessage],
           hasMore: false,
         });
-        return { shouldRefresh: true };
+        return { message: emittedMessage, messageSeq: resolveMessageSeq(emittedMessage) };
       }
-      const projectedMessage = expectDefined(addedMessages[0], "projected inline message");
-      const emittedMessage: SessionHistoryMessage =
-        isMessageToolMirrorMessage(projectedMessage) ||
-        resolveMessageSeq(projectedMessage) === undefined
-          ? (attachOpenClawTranscriptMeta(projectedMessage, {
-              seq: this.rawTranscriptSeq,
-            }) as SessionHistoryMessage)
-          : projectedMessage;
-      this.sentHistory = buildPaginatedSessionHistory({
-        messages: [...this.sentHistory.messages, emittedMessage],
-        hasMore: false,
-      });
-      return { message: emittedMessage, messageSeq: resolveMessageSeq(emittedMessage) };
     }
     if (
       nextProjection.messages.length === 0 &&
@@ -232,7 +230,7 @@ export class SessionHistorySseState {
   }
 
   shouldRefreshForTranscriptPath(updatePath: string | undefined): boolean {
-    const nextPath = normalizeTranscriptPathForComparison(updatePath);
+    const nextPath = resolveTranscriptPathForComparison(updatePath);
     return Boolean(this.transcriptPath && nextPath && this.transcriptPath !== nextPath);
   }
 
@@ -243,15 +241,14 @@ export class SessionHistorySseState {
       limit: this.limit,
       cursor: this.cursor,
     });
+    if (snapshot.history.windowReset) {
+      this.cursor = undefined;
+    }
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
     this.assistantErrorPending = snapshot.assistantErrorPending;
-    this.transcriptPath = normalizeTranscriptPathForComparison(snapshot.transcriptPath);
+    this.transcriptPath = resolveTranscriptPathForComparison(snapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;
   }
-}
-
-function normalizeTranscriptPathForComparison(filePath: string | undefined): string | undefined {
-  return typeof filePath === "string" ? resolveTranscriptPathForComparison(filePath) : undefined;
 }

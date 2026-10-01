@@ -4,8 +4,8 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Detected Codex guided sign-in",
@@ -31,7 +31,7 @@ suite.define(() => {
           reducedMotion: "reduce",
         },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
+          const gateway = await installSetupGateway(page, {
             featureMethods: [
               "chat.metadata",
               "chat.startup",
@@ -110,7 +110,7 @@ suite.define(() => {
                     },
             },
           });
-          await page.goto(suite.server.baseUrl + "settings/model-setup");
+          await openModelSetup(page, suite.server.baseUrl);
           if (state === "after") {
             await gateway.deferNext("wizard.next", { answer: { stepId: "scope" } });
           }

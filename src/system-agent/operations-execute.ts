@@ -1,4 +1,3 @@
-// Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -31,7 +30,28 @@ import {
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
 import { executePluginInstall } from "./plugin-install.js";
 
-const loadOverviewModule = async () => await import("./overview.js");
+const INTERACTIVE_SETUP_GUIDANCE = {
+  "skills-setup": [
+    "Skills setup needs an interactive session.",
+    "Run `openclaw setup` and say `configure skills`,",
+    "or run `openclaw configure --section skills` for the terminal wizard.",
+  ],
+  "search-setup": [
+    "Web search setup needs an interactive session.",
+    "Run `openclaw setup` and say `configure search`,",
+    "or run `openclaw configure --section web` for the masked terminal wizard.",
+  ],
+  "gateway-config-setup": [
+    "Gateway configuration needs an interactive session.",
+    "Run `openclaw setup` and say `configure gateway`,",
+    "or run `openclaw configure --section gateway` for the masked terminal wizard.",
+  ],
+  "memory-import": [
+    "Memory import needs an interactive session.",
+    "Open the Memory page in the Control UI,",
+    "or run `openclaw onboard` for the terminal wizard.",
+  ],
+};
 
 // Plugin CLI commands also serve terminals; this operation boundary owns the
 // smaller model budget across every write, without changing human CLI output.
@@ -72,7 +92,7 @@ export async function executeSystemAgentOperation(
       if (opts.deps?.formatOverview) {
         runtime.log(opts.deps.formatOverview(overview));
       } else {
-        const { formatSystemAgentOverview } = await loadOverviewModule();
+        const { formatSystemAgentOverview } = await import("./overview.js");
         runtime.log(formatSystemAgentOverview(overview));
       }
       return { applied: false };
@@ -287,52 +307,19 @@ export async function executeSystemAgentOperation(
       );
       return { applied: false };
     case "skills-setup":
-      runtime.log(
-        [
-          "Skills setup needs an interactive session.",
-          "Run `openclaw setup` and say `configure skills`,",
-          "or run `openclaw configure --section skills` for the terminal wizard.",
-        ].join("\n"),
-      );
-      return { applied: false };
     case "search-setup":
-      runtime.log(
-        [
-          "Web search setup needs an interactive session.",
-          "Run `openclaw setup` and say `configure search`,",
-          "or run `openclaw configure --section web` for the masked terminal wizard.",
-        ].join("\n"),
-      );
-      return { applied: false };
     case "gateway-config-setup":
-      runtime.log(
-        [
-          "Gateway configuration needs an interactive session.",
-          "Run `openclaw setup` and say `configure gateway`,",
-          "or run `openclaw configure --section gateway` for the masked terminal wizard.",
-        ].join("\n"),
-      );
-      return { applied: false };
     case "memory-import":
-      runtime.log(
-        [
-          "Memory import needs an interactive session.",
-          "Open the Memory page in the Control UI,",
-          "or run `openclaw onboard` for the terminal wizard.",
-        ].join("\n"),
-      );
+      runtime.log(INTERACTIVE_SETUP_GUIDANCE[operation.kind].join("\n"));
       return { applied: false };
     case "model-setup":
       runtime.log(
-        [
-          "Changing model providers must happen outside the inference session that powers OpenClaw.",
-          "Stop the OpenClaw host through whatever started it. Run `openclaw onboard` on the machine running OpenClaw: it stages credentials, live-tests the candidate route, and saves only a passing setup. Then restart the host.",
-        ].join("\n"),
+        "Open Settings → Models → Connect provider. Check the connected Gateway and the selected System or agent scope in Settings before signing in. Connecting another provider does not select it as the active model or require stopping the host. Model selection is separate; replacing credentials for a provider already in use can affect current work. Nothing has changed.",
       );
       return { applied: false };
     case "model-accounts":
       runtime.log(
-        "Manage your personal accounts in Settings → Profile → Connected accounts, or run `openclaw models accounts list` / `openclaw models accounts login <provider>`. Check the Gateway, person, and Personal scope before signing in. Nothing has changed. Enter credentials only in the protected sign-in controls, never in chat.",
+        "Manage your personal accounts in Settings → Profile → Connected accounts, or run `openclaw models accounts list` / `openclaw models accounts login <provider>`. Check the Gateway, person, and Personal scope before signing in. Nothing has changed.",
       );
       return { applied: false };
     case "open-setup": {
@@ -353,6 +340,27 @@ export async function executeSystemAgentOperation(
     }
     case "setup":
       return await executeSetup(operation, runtime, opts);
+    case "config-unset":
+      return await applyPersistentOperation({
+        auditOperation: "config.unset",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runConfigUnset =
+            ctx.deps?.runConfigUnset ?? (await import("../cli/config-cli.js")).runConfigUnset;
+          await ctx.commit(() =>
+            runConfigUnset({
+              path: operation.path,
+              runtime: createNoExitRuntime(ctx.runtime),
+              ...(ctx.assertPersistentApply
+                ? { beforePersistentApply: ctx.assertPersistentApply }
+                : {}),
+            }),
+          );
+          return { summary: `Removed config ${operation.path}`, details: { path: operation.path } };
+        },
+      });
     case "config-set":
       return await applyPersistentOperation({
         auditOperation: "config.set",
@@ -371,13 +379,16 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
-          await runConfigSetOperation({ operation, ctx });
+          const { storeEntry, storeProvider } = await runConfigSetOperation({ operation, ctx });
           return {
-            summary: `Set config ${operation.path} SecretRef`,
+            summary: storeEntry
+              ? `Saved the secret as ${storeEntry} and set config ${operation.path} SecretRef`
+              : `Set config ${operation.path} SecretRef`,
             details: {
               path: operation.path,
               source: operation.source,
-              provider: operation.provider ?? "default",
+              provider: storeProvider ?? operation.provider ?? "default",
+              ...(storeEntry ? { storeEntry } : {}),
             },
           };
         },
@@ -461,10 +472,20 @@ export async function executeSystemAgentOperation(
         run: async (ctx) => {
           const createAgentForOperation =
             ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
+          const { createAgentIdentityConfig } = await import("../agents/identity-file.js");
           const result = await ctx.commit(() =>
             createAgentForOperation({
-              name: operation.agentId,
+              entry: {
+                id: operation.agentId,
+                ...(operation.name
+                  ? {
+                      name: operation.name,
+                      identity: createAgentIdentityConfig({ name: operation.name }),
+                    }
+                  : {}),
+              },
               ...(operation.role ? { role: operation.role } : {}),
+              ...(operation.purpose ? { purpose: operation.purpose } : {}),
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
               ...(ctx.assertPersistentApply
                 ? { beforePersistentApply: ctx.assertPersistentApply }
@@ -539,9 +560,8 @@ export async function executeSystemAgentOperation(
         },
       });
     case "doctor": {
-      const runDoctor =
-        opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
-      await runDoctor(runtime, { nonInteractive: true });
+      const { runDoctorProcess } = await import("../commands/doctor.js");
+      await runDoctorProcess(runtime);
       return { applied: false };
     }
     case "doctor-fix":
