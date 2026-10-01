@@ -27,6 +27,8 @@ import {
   emitSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
@@ -196,6 +198,51 @@ describe("buildTranscriptReplyTextFromInputs", () => {
 });
 
 describe("chat delivery watermark preparation", () => {
+  it("retires a shared-store watermark with its physical owner", async () => {
+    await withOpenClawTestState({ label: "chat-watermark-shared" }, async (state) => {
+      const storePath = state.statePath("shared.sqlite");
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      const scope = {
+        agentId: "ops",
+        sessionKey: "agent:ops:watermark",
+        sessionId: "shared-watermark",
+        storePath,
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const appended = appendTranscriptMessageSync(scope, {
+        eventId: "answer",
+        message: { role: "assistant", content: "Shared-store answer." },
+      });
+      expect(appended?.ok).toBe(true);
+      expect(
+        await sessionTranscriptReaders.readSessionTranscriptWatermarkAsync(scope),
+      ).toMatchObject({
+        maxSeq: 1,
+      });
+      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+      const readerSpy = vi
+        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+        .mockImplementation((runRequest) => {
+          const readers = createReaders(runRequest);
+          return {
+            ...readers,
+            readWatermark: async (input) => {
+              const watermark = await readers.readWatermark(input);
+              await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+              return watermark;
+            },
+          };
+        });
+      try {
+        await expect(
+          sessionTranscriptReaders.readSessionTranscriptWatermarkAsync(scope),
+        ).rejects.toThrow("revoked");
+      } finally {
+        readerSpy.mockRestore();
+      }
+    });
+  });
+
   it.each([false, true])(
     "keeps watermark SQLite with its owner (incognito=%s)",
     async (incognito) => {

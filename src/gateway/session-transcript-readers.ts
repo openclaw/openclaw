@@ -4,6 +4,10 @@ import {
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import {
+  prepareSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
@@ -161,7 +165,7 @@ export async function readSessionTranscriptWatermarkAsync(
   const { withSessionHistoryWorkerDatabase } =
     await import("../config/sessions/session-transcript-worker-runtime.js");
   return withSessionHistoryWorkerDatabase(
-    { agentId: target.agentId, path: target.storePath, env: target.env },
+    toDatabaseOptions(await prepareSqliteTranscriptReadScope(target)),
     (owner) => owner.readWatermark({ scope: target }),
   );
 }
