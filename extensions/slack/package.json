@@ -150,11 +150,11 @@
       "clawhubSpec": "clawhub:@openclaw/slack",
       "npmSpec": "@openclaw/slack",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.28",
+      "minHostVersion": ">=2026.9.8",
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.9.7"
+      "pluginApi": ">=2026.9.8"
     },
     "build": {
       "openclawVersion": "2026.9.7",

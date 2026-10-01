@@ -122,6 +122,8 @@ struct DeviceSettingsContractTests {
                     .init(id: "paper", name: "Original"), .init(id: "origami", name: "Origami"),
                 ]),
                 iconAnimationsEnabled: false, launchAtLogin: true, launchAtLoginAvailable: false,
+                keepGatewayRunning: false,
+                keepGatewayRunningAvailable: true,
                 quickChatEnabled: true, quickChatShortcut: .some(withNullableValues ? "⌥Space" : nil),
                 debugPaneEnabled: false),
             capabilities: .init(

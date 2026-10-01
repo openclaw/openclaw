@@ -64,11 +64,15 @@ beforeEach(() => {
 });
 
 function scope() {
-  return {
+  const target = {
     agentId: "main",
     sessionId: archive.session_id,
     env: { OPENCLAW_STATE_DIR: tempDirs.make("cold-preflight-") },
   };
+  const databasePath = resolveOpenClawAgentSqlitePath(target);
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  fs.writeFileSync(databasePath, "original source");
+  return target;
 }
 
 it("checks a hot durable transcript through the worker without host SQLite", async () => {

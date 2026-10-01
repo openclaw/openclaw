@@ -10,6 +10,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -26,6 +27,9 @@ import {
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = getHoisted();
+function useHooks(hooks: Parameters<typeof createHookRunnerWithRegistry>[0]) {
+  hoisted.getGlobalHookRunnerMock.mockReturnValue(createHookRunnerWithRegistry(hooks).runner);
+}
 const embeddedSessionId = "embedded-session";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
@@ -91,10 +95,12 @@ function capturePrompt(
 }
 
 function installPromptHook(prependContext: string, appendContext: string) {
-  hoisted.getGlobalHookRunnerMock.mockReturnValue({
-    hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
-    runBeforePromptBuild: vi.fn(async () => ({ prependContext, appendContext })),
-  });
+  useHooks([
+    {
+      hookName: "before_prompt_build",
+      handler: vi.fn(async () => ({ prependContext, appendContext })),
+    },
+  ]);
 }
 
 function orphanLeaf(olderPrompt: string) {
@@ -162,7 +168,6 @@ function signedAssistant(
 beforeEach(() => {
   resetEmbeddedAttemptHarness();
   clearMemoryPluginState();
-  hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.detectAndLoadPromptImagesMock.mockClear();
 });
 afterEach(async () => {
@@ -418,10 +423,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             } as never,
             {},
           );
-          session.messages = [
-            ...session.messages,
-            { role: "assistant", content: "done", timestamp: 2 },
-          ];
+          session.messages = [...session.messages, doneMessage];
         };
         return session;
       },
@@ -1111,13 +1113,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       throw new Error("blocked prompt should not be submitted");
     });
     const runBeforeAgentRun = vi.fn(async () => ({
-      pluginId: "test-policy",
-      decision: { outcome: "block", reason: "Blocked by test policy." },
+      outcome: "block" as const,
+      reason: "Blocked by test policy.",
     }));
-    hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn((name: string) => name === "before_agent_run"),
-      runBeforeAgentRun,
-    });
+    useHooks([
+      { hookName: "before_agent_run", pluginId: "test-policy", handler: runBeforeAgentRun },
+    ]);
 
     const result = await runAttempt({
       sessionPrompt,
@@ -1235,11 +1236,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const afterTurn = vi.fn(async () => {});
     const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "hook context" }));
     const runLlmInput = vi.fn(async () => {});
-    hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn((name: string) => name === "before_prompt_build" || name === "llm_input"),
-      runBeforePromptBuild,
-      runLlmInput,
-    });
+    useHooks([
+      { hookName: "before_prompt_build", handler: runBeforePromptBuild },
+      { hookName: "llm_input", handler: runLlmInput },
+    ]);
     const { seen, sessionPrompt } = capturePrompt(false, {
       role: "assistant",
       content: "pong",
