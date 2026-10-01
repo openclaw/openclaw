@@ -89,7 +89,6 @@
     <string name="native_0a0b7cf7c428c703" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Action Request"</string>
     <string name="native_0a708e7b03aaf1fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list pins"</string>
     <string name="native_0a93bfca7b918f7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reset pinned items"</string>
-    <string name="native_0a9b44a8ee964420" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wake session · %1$s"</string>
     <string name="native_0ab0e1629576aecf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connect to a Gateway to load Skill Workshop proposals."</string>
     <string name="native_0b0c15d15d686c72" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Setup code was not accepted"</string>
     <string name="native_0b184bc5d5341998" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sign Out"</string>
@@ -138,7 +137,6 @@
     <string name="native_110bc9c13524d99d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connect to your gateway to view a machine screen."</string>
     <string name="native_11252dd2410324bc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Get Goal"</string>
     <string name="native_114c9789813fd2b0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw %1$s (%2$s)"</string>
-    <string name="native_117455ae2f5817cf" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_1196b6c538ecc61a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Repair"</string>
     <string name="native_1196c7b1e0e55580" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"reactions"</string>
     <string name="native_11a6767d5674c7e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Done"</string>
@@ -160,7 +158,6 @@
     <string name="native_140bedbf9c3f6d56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"none"</string>
     <string name="native_1418848426a1b86e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Script payloads are preserved unchanged. Use the CLI to edit this script."</string>
     <string name="native_143069443a7dd1a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Progress cleared"</string>
-    <string name="native_143c4e68f28f3aa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Snoozed threads will show up here."</string>
     <string name="native_14638daf580b6ee0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android setup guide"</string>
     <string name="native_146c4d822cea4531" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s apps blocked from forwarding."</string>
     <string name="native_1485bc093cdbef6d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Paired Devices"</string>
@@ -260,7 +257,6 @@
     <string name="native_21bddf13c6a8d4b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Command approval"</string>
     <string name="native_21c71243e8cba796" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry."</string>
     <string name="native_21f30f631394a9da" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Read recent photos and media"</string>
-    <string name="native_21fbde19cfb095cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Next week"</string>
     <string name="native_225d29f6201e1a63" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Listen"</string>
     <string name="native_2263a54d9ea50d12" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Could not read the QR code from this image."</string>
     <string name="native_226c9a1ebc5a9f75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This address may use Tailscale. Open Tailscale and connect to the Gateway\'s tailnet, then retry. Check that the Gateway computer is online and OpenClaw is running."</string>
@@ -532,7 +528,6 @@
     <string name="native_449f5a775762cdc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Talk"</string>
     <string name="native_4543708d11967ea1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Last page"</string>
     <string name="native_45570472fa4a4da5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"GitHub Identity Status"</string>
-    <string name="native_456a73bbcefb1def" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tomorrow"</string>
     <string name="native_4578d6b453171ffe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Go back and select a session to open its dashboard."</string>
     <string name="native_45989de49fb7f66d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Details"</string>
     <string name="native_45a64dc17588f2ca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s online"</string>
@@ -604,7 +599,6 @@
     <string name="native_4ee252fb736effa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Public key"</string>
     <string name="native_4efca0d10c5feb8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"About"</string>
     <string name="native_4f1bc100d1dccc1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No setup QR code was found in that image. Choose the QR generated by openclaw qr, or enter the setup code manually."</string>
-    <string name="native_4f3c2ef5d308654e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"tomorrow %1$s"</string>
     <string name="native_4fba8c199338b421" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Not included in Request all. Open Android Settings to choose notification access."</string>
     <string name="native_4fe3cdd404ea0290" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"permissions"</string>
     <string name="native_5047cfb3b607e7d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connect the gateway to load nodes and paired devices."</string>
@@ -616,7 +610,6 @@
     <string name="native_51391bf0ab33e827" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"wake"</string>
     <string name="native_51bc9903f8056c05" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway authentication needs attention."</string>
     <string name="native_51bfffbcdbcfbc00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connection details"</string>
-    <string name="native_52102940fe58e07e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Snooze"</string>
     <string name="native_522ff63cdfa8c9a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Milliseconds"</string>
     <string name="native_5267f5e646a5a193" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No matching models"</string>
     <string name="native_526e0087cc3f254d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Description"</string>
@@ -790,7 +783,6 @@
     <string name="native_6965fdd9e5a18c87" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera snap"</string>
     <string name="native_69700b7204137c08" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Preparing playback…"</string>
     <string name="native_6974b6348bd6f124" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway selected unknown provider %1$s"</string>
-    <string name="native_698eab0611adbd01" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"In 1 hour"</string>
     <string name="native_698ef855b198408f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"delete group"</string>
     <string name="native_69909e834a13b2a8" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Follow Android · %1$s"</string>
     <string name="native_69e36568cd8b4659" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"channel"</string>
@@ -1005,7 +997,6 @@
     <string name="native_87b42e40c2a290e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Approved"</string>
     <string name="native_87bb59ba2f92f2a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Workspace"</string>
     <string name="native_87bf2bc08589f0bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Voice"</string>
-    <string name="native_88096584e4a882be" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Snoozed"</string>
     <string name="native_881473f87df47f9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connect to manage channels"</string>
     <string name="native_88296ab3d6665a8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagents"</string>
     <string name="native_888d1f77d903b80b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."</string>
@@ -1336,7 +1327,6 @@
     <string name="native_b65ffe0cec61786d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Portal"</string>
     <string name="native_b6df2441064f1416" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Needs setup"</string>
     <string name="native_b78426f40a794c5d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Unpaired"</string>
-    <string name="native_b7af174b039805e0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wakes %1$s"</string>
     <string name="native_b7b190b4be0b2385" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway received this phone"</string>
     <string name="native_b7b89bf0fd930a9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No configured models"</string>
     <string name="native_b7c397f33783abec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"The Gateway verifies this exact release with ClawHub before download. Review findings appear in the install result. Blocked releases or unavailable security verification prevent installation."</string>
@@ -1612,7 +1602,6 @@
     <string name="native_db18382a249e0206" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"New chat"</string>
     <string name="native_db259fef5236a070" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connect the gateway to update Skill Workshop proposals."</string>
     <string name="native_db4fa8d71b5b2d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw request failed."</string>
-    <string name="native_db7dd4660c80520a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This evening"</string>
     <string name="native_dbb6cf817820de0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Permission required"</string>
     <string name="native_dbcd5e7bb7a0f538" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Light"</string>
     <string name="native_dc1c61f0f60f79a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Review provider readiness\nand configured models."</string>
@@ -1817,7 +1806,6 @@
     <string name="native_f706757ef3473dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Write Calendar"</string>
     <string name="native_f77d1bb58da886e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"timeout"</string>
     <string name="native_f793de205ead5ac3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Low"</string>
-    <string name="native_f7a57925f56775fc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"In 3 hours"</string>
     <string name="native_f8019af406d12fad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Blocklist"</string>
     <string name="native_f82a06175cc4d2e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Full access requires operator.admin access."</string>
     <string name="native_f83f07be16e27018" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"act"</string>
@@ -1835,7 +1823,6 @@
     <string name="native_f9777b12e8f49df2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pearling"</string>
     <string name="native_f991ae9cb081e1f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Open the camera and frame the code from openclaw qr."</string>
     <string name="native_f9ea3f1540eaa584" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No devices"</string>
-    <string name="native_f9f27e61d41ed8a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No snoozed threads"</string>
     <string name="native_fa0ddca1671f4d61" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Forward Notifications"</string>
     <string name="native_fa2acef20c1dd52f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"I’ll keep this conversation separate from ordinary agent chat."</string>
     <string name="native_fa664b09af472ec4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Try a different search or clear the current query."</string>
