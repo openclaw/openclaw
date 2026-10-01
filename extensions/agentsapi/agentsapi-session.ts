@@ -1,8 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { APIConnectionError, APIError, APIUserAbortError } from "openai";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   AgentsApiClient,
   AgentsApiError,
@@ -11,6 +9,7 @@ import {
   type AgentsApiFunctionCall,
   type AgentsApiItem,
 } from "./agentsapi-client.js";
+import { isOptionalReadFailure, isTransportDisconnect } from "./agentsapi-session-errors.js";
 import type { AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
@@ -308,10 +307,7 @@ export function createAgentsApiSession(options: {
         } catch (error) {
           signal.throwIfAborted();
           assertCurrent();
-          const prefixAborted =
-            prefixSignal.aborted &&
-            (error === prefixSignal.reason || error instanceof APIUserAbortError);
-          if (!prefixAborted && !isAgentsApiOptionalHistoryReadFailure(error)) {
+          if (!isOptionalReadFailure(error, prefixSignal)) {
             throw error;
           }
           options.onTranscriptOrderingGap?.();
@@ -421,19 +417,48 @@ export function createAgentsApiSession(options: {
       );
       let nextEvent = events.next();
       void nextEvent.catch(() => {});
-      const settleFromSavedState = async (recover = false): Promise<void> => {
+      const settleFromSavedState = async ({
+        recover = false,
+        quietProbe = false,
+      }: { recover?: boolean; quietProbe?: boolean } = {}): Promise<void> => {
         const submissionFence = submission;
         await submissionFence;
         assertCurrent();
         const admittedCount = admittedMessageCount;
-        const snapshot = await readSavedState(client, signal);
-        assertCurrent();
-        const session = await client.session(sessionId, signal);
-        assertCurrent();
+        let snapshot: Awaited<ReturnType<typeof readSavedState>>;
+        let session: Awaited<ReturnType<AgentsApiClient["session"]>>;
+        const probe = quietProbe ? new AbortController() : undefined;
+        const readSignal = probe ? AbortSignal.any([signal, probe.signal]) : signal;
+        if (probe) {
+          // Interrupt only optional reads. The loop awaits their cancellation
+          // before handling the event; projection keeps the attempt's signal.
+          const interrupt = () => probe.abort();
+          void nextEvent.then(interrupt, interrupt);
+        }
+        try {
+          snapshot = await readSavedState(client, readSignal);
+          assertCurrent();
+          session = await client.session(sessionId, readSignal);
+          readSignal.throwIfAborted();
+          assertCurrent();
+        } catch (error) {
+          signal.throwIfAborted();
+          assertCurrent();
+          if (!quietProbe || !isOptionalReadFailure(error, readSignal)) {
+            throw error;
+          }
+          // An optional probe must not retire healthy native work. Only reads
+          // retry on the next wakeup; tool execution and projection stay below.
+          return;
+        }
         if (session.status === "failed") {
           throw new Error(session.error ?? "Agents API session failed");
         }
         if (session.status === "requires_action") {
+          // Ordinary completion probes leave host actions to their event-driven path.
+          if (quietProbe) {
+            return;
+          }
           await relayFunctions();
           if (settled) {
             return;
@@ -530,7 +555,7 @@ export function createAgentsApiSession(options: {
         onSubmitted();
         if (options.initialInputSubmitted) {
           // Creation can finish inference before this non-replaying stream opens.
-          await settleFromSavedState(true);
+          await settleFromSavedState({ recover: true });
         }
         while (true) {
           if (settled) {
@@ -538,32 +563,32 @@ export function createAgentsApiSession(options: {
           }
           let chunk: IteratorResult<AgentsApiEvent> | undefined;
           try {
-            if (options.initialInputSubmitted) {
-              // Creation events are not replayed, and saved records can lag them.
-              const refresh = new AbortController();
-              try {
-                chunk = await Promise.race([
-                  nextEvent,
-                  delay(1_000, undefined, {
-                    signal: AbortSignal.any([signal, refresh.signal]),
-                  }),
-                ]);
-              } finally {
-                refresh.abort();
-              }
-            } else {
-              chunk = await nextEvent;
+            // Streams do not replay completion, and saved records can lag a
+            // terminal event. Reconcile quiet streams without replacing their reader.
+            const refresh = new AbortController();
+            try {
+              chunk = await Promise.race([
+                nextEvent,
+                delay(1_000, undefined, {
+                  signal: AbortSignal.any([signal, refresh.signal]),
+                }),
+              ]);
+            } finally {
+              refresh.abort();
             }
           } catch (error) {
             signal.throwIfAborted();
             assertCurrent();
-            if (!isAgentsApiTransportDisconnect(error)) {
+            if (!isTransportDisconnect(error)) {
               throw error;
             }
             chunk = { done: true, value: undefined };
           }
           if (!chunk) {
-            await settleFromSavedState(true);
+            await settleFromSavedState({
+              recover: true,
+              quietProbe: !options.initialInputSubmitted,
+            });
             continue;
           }
           if (chunk.done) {
@@ -571,7 +596,7 @@ export function createAgentsApiSession(options: {
             // A broken reader can reject return() as well as next(). Retire only
             // this transport; the admitted native work remains in the session.
             await events.return(undefined).catch((error: unknown) => {
-              if (!isAgentsApiTransportDisconnect(error)) {
+              if (!isTransportDisconnect(error)) {
                 throw error;
               }
             });
@@ -590,14 +615,14 @@ export function createAgentsApiSession(options: {
                 streamController.abort();
                 signal.throwIfAborted();
                 assertCurrent();
-                if (!isAgentsApiTransportDisconnect(error)) {
+                if (!isTransportDisconnect(error)) {
                   throw error;
                 }
               }
             }
             nextEvent = events.next();
             void nextEvent.catch(() => {});
-            await settleFromSavedState(true);
+            await settleFromSavedState({ recover: true });
             continue;
           }
           const event = chunk.value;
@@ -709,26 +734,4 @@ export function createAgentsApiSession(options: {
       closed = true;
     },
   };
-}
-
-function isAgentsApiTransportDisconnect(error: unknown): boolean {
-  if (!(error instanceof Error) || error instanceof AgentsApiError) {
-    return false;
-  }
-  const code = asOptionalRecord(error)?.code;
-  if (
-    (typeof code === "string" &&
-      ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "UND_ERR_SOCKET"].includes(code)) ||
-    (error instanceof TypeError && ["terminated", "fetch failed"].includes(error.message))
-  ) {
-    return true;
-  }
-  return error.cause instanceof Error && isAgentsApiTransportDisconnect(error.cause);
-}
-
-function isAgentsApiOptionalHistoryReadFailure(error: unknown): boolean {
-  return (
-    error instanceof APIConnectionError ||
-    (error instanceof APIError && (error.status === 429 || (error.status ?? 0) >= 500))
-  );
 }

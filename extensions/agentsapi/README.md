@@ -114,6 +114,17 @@ tool policies still apply. Use a runtime that supports per-turn restrictions whe
 hook's tool list must be enforced. Steering messages and isolated completions do not
 run these conversation prompt hooks.
 
+While an ordinary admitted turn's event stream is quiet, the harness checks saved native
+state once per second. This also covers terminal events that arrive before their
+saved records. Completion still requires the current admitted root turn to be
+terminal, the session to be idle, and every admitted input receipt to be present.
+These checks do not resubmit input or extend the run's deadline.
+Transient read failures retry on the next quiet-stream check within that same
+deadline; authentication errors and native failures still end the attempt.
+Quiet completion checks leave required host actions to their existing event-driven path.
+An arriving stream event interrupts an optional saved-state read so a slow read
+cannot hold up the event handler.
+
 Memory Core dreaming can generate its diary narrative in a fresh Agents API
 session without an executor, supplied functions, native web search, vaults, or
 subagents. These calls use the prepared model and API key, do not reuse the
