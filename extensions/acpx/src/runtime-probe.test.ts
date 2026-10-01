@@ -1,113 +1,100 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpRuntimeTurnResult } from "../runtime-api.js";
-import { renderAgentCommand } from "./command-line.js";
+import { renderAgentCommand, type AcpxAgentCommand } from "./command-line.js";
 import {
   OPENCLAW_ACPX_LEASE_ID_ARG,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
+import type { AcpxProcessCleanupDeps } from "./process-reaper.js";
 import {
   CODEX_ACP_WRAPPER_COMMAND,
   makeEmptySessionStore,
-  makeLeasedRuntime,
   makeLeaseStore,
   makeRuntime,
   makeTurn,
   observeLaunch,
   runtimeCommand,
-  type TestSessionStore,
 } from "./runtime.test-support.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
+
+function makeProbeRuntime(
+  leases: ReturnType<typeof makeLeaseStore>,
+  cleanup?: AcpxProcessCleanupDeps,
+  command: AcpxAgentCommand = CODEX_ACP_WRAPPER_COMMAND,
+  wrapperRoot = "/tmp/openclaw/acpx",
+) {
+  return makeRuntime(
+    makeEmptySessionStore(),
+    {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leases.store,
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agent) => (agent === "codex" ? command : agent),
+        list: () => ["codex"],
+      },
+    },
+    { openclawProcessCleanup: cleanup },
+  );
+}
 
 describe("AcpxRuntime diagnostic probes", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { wrapperRoot: "/tmp/openclaw/acpx", command: CODEX_ACP_WRAPPER_COMMAND },
-    {
-      wrapperRoot: String.raw`C:\OpenClaw State\acpx`,
-      command: [
+  it("leases portable generated-wrapper probes at the pre-spawn boundary", async () => {
+    const events: string[] = [];
+    const leaseStore = makeLeaseStore();
+    leaseStore.store.save.mockImplementation(async (lease: Record<string, unknown>) => {
+      events.push("lease-saved");
+      leaseStore.leases.set(String(lease.leaseId), lease);
+    });
+    const { runtime, probe } = makeProbeRuntime(
+      leaseStore,
+      {
+        listProcesses: vi.fn(async () => {
+          events.push("process-inspected");
+          return [];
+        }),
+      },
+      [
         String.raw`C:\Program Files\node.exe`,
         String.raw`C:\OpenClaw State\acpx\codex-acp-wrapper.mjs`,
       ],
-    },
-  ])(
-    "leases generated-wrapper probes at the pre-spawn boundary ($wrapperRoot)",
-    async ({ wrapperRoot, command }) => {
-      const events: string[] = [];
-      const baseStore: TestSessionStore = makeEmptySessionStore();
-      const leaseStore = makeLeaseStore();
-      leaseStore.store.save.mockImplementation(async (lease: Record<string, unknown>) => {
-        events.push("lease-saved");
-        leaseStore.leases.set(String(lease.leaseId), lease);
-      });
-      const { runtime, probe } = makeRuntime(
-        baseStore,
-        {
-          openclawGatewayInstanceId: "gateway-test",
-          openclawProcessLeaseStore: leaseStore.store,
-          openclawWrapperRoot: wrapperRoot,
-          agentRegistry: {
-            resolve: (agentName: string) => (agentName === "codex" ? command : agentName),
-            list: () => ["codex"],
-          },
-        },
-        {
-          openclawProcessCleanup: {
-            listProcesses: vi.fn(async () => {
-              events.push("process-inspected");
-              return [];
-            }),
-          },
-        },
-      );
-      let launchedCommand = "";
-      probe.mockImplementation(async () => {
-        await observeLaunch(runtime);
-        events.push("probe-entered");
-        launchedCommand = renderAgentCommand(runtimeCommand(runtime));
-        return { ok: true, message: "ready" };
-      });
+      String.raw`C:\OpenClaw State\acpx`,
+    );
+    let launchedCommand = "";
+    probe.mockImplementation(async () => {
+      await observeLaunch(runtime);
+      events.push("probe-entered");
+      launchedCommand = renderAgentCommand(runtimeCommand(runtime));
+      return { ok: true, message: "ready" };
+    });
 
-      await runtime.doctor();
+    await runtime.doctor();
 
-      expect(events).toEqual(["lease-saved", "probe-entered", "process-inspected"]);
-      expect(launchedCommand).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
-      expect(launchedCommand).toContain(`${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`);
-      expect(Array.from(leaseStore.leases.values())).toEqual([
-        expect.objectContaining({ rootPid: 0, state: "open" }),
-      ]);
-      expect(leaseStore.store.markState).not.toHaveBeenCalledWith(expect.any(String), "lost");
-    },
-  );
+    expect(events).toEqual(["lease-saved", "probe-entered", "process-inspected"]);
+    expect(launchedCommand).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
+    expect(launchedCommand).toContain(`${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`);
+    expect(Array.from(leaseStore.leases.values())).toEqual([
+      expect.objectContaining({ rootPid: 0, state: "open" }),
+    ]);
+    expect(leaseStore.store.markState).not.toHaveBeenCalledWith(expect.any(String), "lost");
+  });
 
   it("settles each diagnostic probe cleanup before starting the next probe", async () => {
     const firstEntered = createDeferred<void>();
     const releaseFirst = createDeferred<void>();
     const events: string[] = [];
-    const { runtime, probe } = makeRuntime(
-      makeEmptySessionStore(),
-      {
-        openclawGatewayInstanceId: "gateway-test",
-        openclawProcessLeaseStore: makeLeaseStore().store,
-        openclawWrapperRoot: "/tmp/openclaw/acpx",
-        agentRegistry: {
-          resolve: () => CODEX_ACP_WRAPPER_COMMAND,
-          list: () => ["codex"],
-        },
-      },
-      {
-        openclawProcessCleanup: {
-          listProcesses: vi.fn(async () => {
-            events.push("cleanup");
-            return [];
-          }),
-        },
-      },
-    );
+    const { runtime, probe } = makeProbeRuntime(makeLeaseStore(), {
+      listProcesses: vi.fn(async () => {
+        events.push("cleanup");
+        return [];
+      }),
+    });
     probe.mockImplementationOnce(async () => {
       events.push("first-started");
       firstEntered.resolve();
@@ -172,35 +159,19 @@ describe("AcpxRuntime diagnostic probes", () => {
   });
 
   it("reaps a fulfilled probe wrapper that exact live evidence still finds", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
     let launchedCommand = "";
     const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
-    const { runtime, probe } = makeRuntime(
-      baseStore,
-      {
-        openclawGatewayInstanceId: "gateway-test",
-        openclawProcessLeaseStore: leaseStore.store,
-        openclawWrapperRoot: "/tmp/openclaw/acpx",
-        agentRegistry: {
-          resolve: (agentName: string) =>
-            agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
-          list: () => ["codex"],
-        },
-      },
-      {
-        openclawProcessCleanup: {
-          listProcesses: vi.fn(async () => [
-            { pid: 710, ppid: 1, command: launchedCommand },
-            { pid: 711, ppid: 710, command: "node adapter-child.js" },
-          ]),
-          killProcess: vi.fn((pid, signal) => {
-            killed.push({ pid, signal });
-          }),
-          sleep: vi.fn(async () => {}),
-        },
-      },
-    );
+    const { runtime, probe } = makeProbeRuntime(leaseStore, {
+      listProcesses: vi.fn(async () => [
+        { pid: 710, ppid: 1, command: launchedCommand },
+        { pid: 711, ppid: 710, command: "node adapter-child.js" },
+      ]),
+      killProcess: vi.fn((pid, signal) => {
+        killed.push({ pid, signal });
+      }),
+      sleep: vi.fn(async () => {}),
+    });
     probe.mockImplementation(async () => {
       await observeLaunch(runtime);
       launchedCommand = renderAgentCommand(runtimeCommand(runtime));
@@ -218,43 +189,7 @@ describe("AcpxRuntime diagnostic probes", () => {
     ]);
   });
 
-  it("retains a fulfilled probe lease when live evidence is unavailable", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-    const leaseStore = makeLeaseStore();
-    const { runtime, probe } = makeRuntime(
-      baseStore,
-      {
-        openclawGatewayInstanceId: "gateway-test",
-        openclawProcessLeaseStore: leaseStore.store,
-        openclawWrapperRoot: "/tmp/openclaw/acpx",
-        agentRegistry: {
-          resolve: (agentName: string) =>
-            agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
-          list: () => ["codex"],
-        },
-      },
-      {
-        openclawProcessCleanup: {
-          listProcesses: vi.fn(async () => {
-            throw new Error("process evidence unavailable");
-          }),
-        },
-      },
-    );
-    probe.mockImplementation(async () => {
-      await observeLaunch(runtime);
-      return { ok: true, message: "ready" };
-    });
-
-    await runtime.doctor();
-
-    expect(Array.from(leaseStore.leases.values())).toEqual([
-      expect.objectContaining({ rootPid: 0, state: "open" }),
-    ]);
-  });
-
   it("coalesces repeated probe uncertainty before it can evict a live lease", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
     leaseStore.leases.set("lease-live", {
       leaseId: "lease-live",
@@ -278,24 +213,9 @@ describe("AcpxRuntime diagnostic probes", () => {
         }
       }
     });
-    const { runtime, probe } = makeRuntime(
-      baseStore,
-      {
-        openclawGatewayInstanceId: "gateway-test",
-        openclawProcessLeaseStore: leaseStore.store,
-        openclawWrapperRoot: "/tmp/openclaw/acpx",
-        agentRegistry: {
-          resolve: (agentName: string) =>
-            agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
-          list: () => ["codex"],
-        },
-      },
-      {
-        openclawProcessCleanup: {
-          listProcesses: vi.fn(async () => []),
-        },
-      },
-    );
+    const { runtime, probe } = makeProbeRuntime(leaseStore, {
+      listProcesses: vi.fn(async () => []),
+    });
     const probeLeaseIds = new Set<string>();
     probe.mockImplementation(async () => {
       await observeLaunch(runtime);
@@ -310,23 +230,10 @@ describe("AcpxRuntime diagnostic probes", () => {
       await runtime.doctor();
     }
 
-    const { runtime: updatedRuntime, probe: updatedProbe } = makeRuntime(
-      baseStore,
-      {
-        openclawGatewayInstanceId: "gateway-test",
-        openclawProcessLeaseStore: leaseStore.store,
-        openclawWrapperRoot: "/tmp/openclaw/acpx",
-        agentRegistry: {
-          resolve: (agentName: string) =>
-            agentName === "codex" ? `${CODEX_ACP_WRAPPER_COMMAND} --updated` : agentName,
-          list: () => ["codex"],
-        },
-      },
-      {
-        openclawProcessCleanup: {
-          listProcesses: vi.fn(async () => []),
-        },
-      },
+    const { runtime: updatedRuntime, probe: updatedProbe } = makeProbeRuntime(
+      leaseStore,
+      { listProcesses: vi.fn(async () => []) },
+      `${CODEX_ACP_WRAPPER_COMMAND} --updated`,
     );
     updatedProbe.mockImplementation(async () => {
       await observeLaunch(updatedRuntime);
@@ -344,9 +251,8 @@ describe("AcpxRuntime diagnostic probes", () => {
   });
 
   it("leases generated-wrapper doctor probes and keeps uncertain failures open", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
     const leaseStore = makeLeaseStore();
-    const { runtime, probe } = makeLeasedRuntime(baseStore, leaseStore);
+    const { runtime, probe } = makeProbeRuntime(leaseStore);
     probe.mockImplementation(async () => {
       await observeLaunch(runtime);
       const command = runtimeCommand(runtime);

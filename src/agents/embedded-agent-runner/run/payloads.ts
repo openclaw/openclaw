@@ -477,18 +477,9 @@ export function buildEmbeddedRunPayloads(params: {
         }
       }
       if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
-        const silentText = payload.text;
         payload.text = undefined;
-        if (hasReplyPayloadContent(payload) || hasReplyPayloadSpeechContent(payload)) {
-          return payload;
-        }
-        payload.text = silentText;
       }
       return payload;
     })
-    .filter(
-      (p) =>
-        (hasReplyPayloadContent(p) || hasReplyPayloadSpeechContent(p)) &&
-        !(p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)),
-    );
+    .filter((payload) => hasReplyPayloadContent(payload) || hasReplyPayloadSpeechContent(payload));
 }

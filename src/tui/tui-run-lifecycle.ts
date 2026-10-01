@@ -199,12 +199,6 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     clearPendingSubmitDraft(state, runId);
   };
 
-  const clearActiveRunIfMatch = (runId: string) => {
-    if (state.activeChatRunId === runId) {
-      state.activeChatRunId = null;
-    }
-  };
-
   const promoteMostRecentSessionRun = (): boolean => {
     if (state.activeChatRunId) {
       return false;
@@ -290,7 +284,9 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     params: { runId: string; wasActiveRun: boolean; status: "idle" | "aborted" | "error" },
     reconcileIdle: boolean,
   ) => {
-    clearActiveRunIfMatch(params.runId);
+    if (state.activeChatRunId === params.runId) {
+      state.activeChatRunId = null;
+    }
     const promotedRemainingRun = promoteMostRecentSessionRun();
     flushPendingHistoryRefreshIfIdle();
     if (!promotedRemainingRun) {

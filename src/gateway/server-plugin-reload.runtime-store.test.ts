@@ -235,7 +235,7 @@ it.each(["cold start", "hot enable"] as const)(
               port: 0,
               log,
               loadGatewayPluginBootstrapModule: async () => bootstrap,
-              prepareAttachedPluginRuntime: async (candidate) => {
+              prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
                 loaded.push(candidate);
                 return {
                   publish() {
@@ -245,6 +245,7 @@ it.each(["cold start", "hot enable"] as const)(
                       "gateway-bindable",
                       state.workspaceDir,
                       registryOwner.registry,
+                      trackActivationCleanup,
                     );
                     registryOwner.publish(candidate.pluginRegistry);
                   },
@@ -256,13 +257,15 @@ it.each(["cold start", "hot enable"] as const)(
               nextConfig,
               sourceConfig: nextConfig,
               changedPaths,
-              prepareConfigEffects: () => {
-                markPreparedModelRuntimeSnapshotsStale(
-                  "prepared model runtime owner is stale before plugin drain",
-                  { waitForReplacement: true },
-                );
-                return async () => {};
-              },
+              prepareConfigEffects: () => ({
+                retire: () => {
+                  markPreparedModelRuntimeSnapshotsStale(
+                    "prepared model runtime owner is stale before plugin replacement",
+                    { waitForReplacement: true },
+                  );
+                },
+                rollback: async () => {},
+              }),
               env,
               commitRuntime: async (publication) => {
                 publication?.publish();

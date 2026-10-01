@@ -75,18 +75,12 @@ function isRawFetchCall(expression: ts.Expression) {
   return false;
 }
 
-/**
- * Finds raw `fetch(...)` and `globalThis.fetch(...)` call lines.
- */
 function findRawFetchCallLines(_content: string, _fileName: string, sourceFile: ts.SourceFile) {
   return collectCallExpressionLines(sourceFile, (node) =>
     isRawFetchCall(node.expression) ? node.expression : null,
   );
 }
 
-/**
- * Runs the raw channel/plugin fetch guard.
- */
 async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,

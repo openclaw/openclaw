@@ -480,9 +480,7 @@ export function createCrabboxWorkerProvider(
         timeoutMs:
           resolveCrabboxNodeEnrollmentTimeoutMs(enrollment.bootstrapTimeoutMs) +
           (desktop && !project ? CRABBOX_SETUP_TIMEOUT_MS : 0),
-        ...(nodeEnrollmentSetup.forwardedEnv
-          ? { forwardedEnv: nodeEnrollmentSetup.forwardedEnv }
-          : {}),
+        forwardedEnv: nodeEnrollmentSetup.forwardedEnv,
       });
       let deviceId: string;
       try {

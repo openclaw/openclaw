@@ -73,6 +73,8 @@ Sessions are owned by the gateway, not by clients.
 
 Multiple devices/channels can map to the same session, but history is not fully synced back to every client. Use one primary device for long conversations to avoid divergent context. The Control UI and TUI always show the gateway-backed session transcript, so they are the source of truth.
 
+If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
+
 Details: [Session management](/concepts/session).
 
 ## Prompt bodies and history context

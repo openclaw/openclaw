@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandOutbox
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatReactionAccess
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.chat.ChatWidgetResource
@@ -637,9 +638,6 @@ internal class NotificationNodeEventOutbox(
   }
 }
 
-/**
- * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
- */
 data class GatewayConnectionProblem(
   val code: String?,
   val message: String,
@@ -908,7 +906,12 @@ class NodeRuntime private constructor(
 
   // Reentry retains this runtime, so requester data and both capability paths must share its original mode.
   private val screenshotBranchesEnabled = mode == NodeRuntimeMode.ScreenshotFixture && AndroidScreenshotFixture.branchesEnabled
-  private val screenshotRequester by lazy { AndroidScreenshotFixture.createRequester(branchesEnabled = screenshotBranchesEnabled) }
+  private val screenshotRequester by lazy {
+    AndroidScreenshotFixture.createRequester(
+      branchesEnabled = screenshotBranchesEnabled,
+      onEvent = { event, payload -> chat.handleGatewayEvent(event, payload) },
+    )
+  }
   private val gatewayAuthLifecycleLock = Any()
   private var gatewayAuthResetInProgress = false
   private var gatewayConnectOperationsInFlight = 0
@@ -1185,31 +1188,6 @@ class NodeRuntime private constructor(
 
   private var activeGatewayConnection: GatewayConnectionContext? = null
 
-  private val cameraHandler: CameraHandler =
-    CameraHandler(
-      appContext = appContext,
-      camera = camera,
-      setCameraAudioCaptureActive = ::setCameraAudioCaptureActive,
-      invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
-    )
-
-  private val debugHandler: DebugHandler =
-    DebugHandler(
-      appContext = appContext,
-      identityStore = identityStore,
-    )
-
-  private val locationHandler: LocationHandler =
-    LocationHandler(
-      appContext = appContext,
-      location = location,
-      json = json,
-      isForeground = { _isForeground.value },
-      locationMode = { locationMode.value },
-      backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
-      locationPreciseEnabled = { locationPreciseEnabled.value },
-    )
-
   private val permissionSnapshot = {
     readAndroidPermissionSnapshot(
       context = appContext,
@@ -1220,53 +1198,9 @@ class NodeRuntime private constructor(
     )
   }
 
-  private val deviceHandler: DeviceHandler =
-    DeviceHandler(
-      appContext = appContext,
-      smsEnabled = SensitiveFeatureConfig.smsEnabled,
-      callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
-      photosEnabled = SensitiveFeatureConfig.photosEnabled,
-      permissionSnapshot = permissionSnapshot,
-    )
-
-  private val notificationsHandler: NotificationsHandler =
-    NotificationsHandler(
-      appContext = appContext,
-    )
-
-  private val systemHandler: SystemHandler =
-    SystemHandler(
-      appContext = appContext,
-    )
-
-  private val photosHandler: PhotosHandler =
-    PhotosHandler(
-      appContext = appContext,
-    )
-
-  private val contactsHandler: ContactsHandler =
-    ContactsHandler(
-      appContext = appContext,
-    )
-
-  private val calendarHandler: CalendarHandler =
-    CalendarHandler(
-      appContext = appContext,
-    )
-
-  private val callLogHandler: CallLogHandler =
-    CallLogHandler(
-      appContext = appContext,
-    )
-
   private val motionHandler: MotionHandler =
     MotionHandler(
       appContext = appContext,
-    )
-
-  private val smsHandlerImpl: SmsHandler =
-    SmsHandler(
-      sms = sms,
     )
 
   private val mobileUiHandler = MobileUiHandler()
@@ -1274,11 +1208,41 @@ class NodeRuntime private constructor(
 
   private val invokeDispatcher: InvokeDispatcher =
     InvokeDispatcher(
-      cameraHandler = cameraHandler,
-      locationHandler = locationHandler,
-      deviceHandler = deviceHandler,
-      notificationsHandler = notificationsHandler,
-      systemHandler = systemHandler,
+      cameraHandler =
+        CameraHandler(
+          appContext = appContext,
+          camera = camera,
+          setCameraAudioCaptureActive = ::setCameraAudioCaptureActive,
+          invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
+        ),
+      debugHandler = DebugHandler(appContext = appContext, identityStore = identityStore),
+      locationHandler =
+        LocationHandler(
+          appContext = appContext,
+          location = location,
+          json = json,
+          isForeground = { _isForeground.value },
+          locationMode = { locationMode.value },
+          backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
+          locationPreciseEnabled = { locationPreciseEnabled.value },
+        ),
+      deviceHandler =
+        DeviceHandler(
+          appContext = appContext,
+          smsEnabled = SensitiveFeatureConfig.smsEnabled,
+          callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
+          photosEnabled = SensitiveFeatureConfig.photosEnabled,
+          permissionSnapshot = permissionSnapshot,
+        ),
+      notificationsHandler = NotificationsHandler(appContext = appContext),
+      systemHandler = SystemHandler(appContext = appContext),
+      photosHandler = PhotosHandler(appContext = appContext),
+      contactsHandler = ContactsHandler(appContext = appContext),
+      calendarHandler = CalendarHandler(appContext = appContext),
+      callLogHandler = CallLogHandler(appContext = appContext),
+      motionHandler = motionHandler,
+      smsHandler = SmsHandler(sms = sms),
+      mobileUiHandler = mobileUiHandler,
       talkHandler =
         object : TalkHandler {
           override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart()
@@ -1289,14 +1253,6 @@ class NodeRuntime private constructor(
 
           override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce()
         },
-      photosHandler = photosHandler,
-      contactsHandler = contactsHandler,
-      calendarHandler = calendarHandler,
-      motionHandler = motionHandler,
-      smsHandler = smsHandlerImpl,
-      debugHandler = debugHandler,
-      callLogHandler = callLogHandler,
-      mobileUiHandler = mobileUiHandler,
       isForeground = { _isForeground.value },
       cameraEnabled = { cameraEnabled.value },
       locationEnabled = { locationMode.value != LocationMode.Off },
@@ -1659,6 +1615,9 @@ class NodeRuntime private constructor(
         _gatewayUpdateAvailable.value = hello.updateAvailable
         val operatorScopes = normalizeOperatorScopes(hello.authScopes)
         _operatorScopes.value = operatorScopes
+        chat.setReactionAccess(
+          ChatReactionAccess(role = hello.authRole, scopes = operatorScopes.toSet(), sessionCap = hello.authSessionCap),
+        )
         synchronized(gatewayDataScopeLock) { appearancePreferenceScopeOwner = null }
         replaceGatewayMethods(hello.methods)
         replaceGatewayCapabilities(hello.capabilities)
@@ -1692,6 +1651,11 @@ class NodeRuntime private constructor(
         systemAgentChatController.refresh(startIfNeeded = false)
         micCapture.onGatewayConnectionChanged(true)
         wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
+        scope.launch {
+          val gatewayScope = captureGatewayDataScope() ?: return@launch
+          val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return@launch
+          refreshCurrentProfileId(gatewayScope, lease)
+        }
         scope.launch {
           subscribeOperatorSessionEvents()
           refreshBrandingFromGateway()
@@ -1974,6 +1938,7 @@ class NodeRuntime private constructor(
     replaceGatewayCapabilities(null)
     _gatewayControlPage.value = _gatewayControlPage.value?.copy(browserFocusAvailable = false)
     _operatorScopes.value = emptyList()
+    chat.setReactionAccess(ChatReactionAccess())
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _gatewayAccentArgb.value = null
     _gatewaySourcePreviewConfig.value = null
@@ -3214,6 +3179,8 @@ class NodeRuntime private constructor(
     replaceGatewayMethods(
       buildSet {
         add(GatewayMethod.DesktopObserve.rawValue)
+        add(GatewayMethod.SessionReactionsList.rawValue)
+        add(GatewayMethod.SessionReactionsSet.rawValue)
         if (AndroidScreenshotFixture.attentionEnabled) {
           addAll(listOf("approval.get", "approval.resolve", "exec.approval.list", "plugin.approval.list", "openclaw.approval.list"))
         }
@@ -3249,6 +3216,9 @@ class NodeRuntime private constructor(
       )
     _cronJobs.value = parseScreenshotCronJobs()
     _operatorScopes.value = listOf(OperatorAdminScope)
+    chat.setReactionAccess(
+      ChatReactionAccess(role = "operator", scopes = setOf(OperatorAdminScope), sessionCap = "write", viewerId = "screenshot-viewer"),
+    )
     systemAgentChatSupported.value = true
     _nodesDevicesSummary.value = AndroidScreenshotFixture.nodes
     channelsSummary.update { it.copy(summary = AndroidScreenshotFixture.channels) }
@@ -6735,7 +6705,7 @@ class NodeRuntime private constructor(
       when ((root?.get("status") as? JsonPrimitive)?.contentOrNull) {
         "ok" -> {
           val entries = root.get("entries").asObjectOrNull() ?: return GatewayAppearancePreferencesRead.Unavailable
-          val profileId = fetchCurrentProfileId(gatewayScope, lease)
+          val profileId = refreshCurrentProfileId(gatewayScope, lease)
           // Writable values without an authenticated owner must not replace a
           // previous profile's appearance while its offline edits remain queued.
           if (profileId == null && operatorScopesAllowWrite(_operatorScopes.value)) {
@@ -6774,7 +6744,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun fetchCurrentProfileId(
+  private suspend fun refreshCurrentProfileId(
     gatewayScope: GatewayDataScope,
     lease: GatewaySession.RequestLease,
   ): String? =
@@ -6786,13 +6756,18 @@ class NodeRuntime private constructor(
           GatewayMethod.UsersSelf.rawValue,
           "{}",
         )
-      json
-        .parseToJsonElement(res)
-        .asObjectOrNull()
-        ?.get("profile")
-        .asObjectOrNull()
-        ?.get("id")
-        .asStringOrNull()
+      val profileId =
+        json
+          .parseToJsonElement(res)
+          .asObjectOrNull()
+          ?.get("profile")
+          .asObjectOrNull()
+          ?.get("id")
+          .asStringOrNull()
+      lease.commitIfCurrent {
+        publishGatewayData(gatewayScope) { chat.setReactionViewerId(profileId) }
+      }
+      profileId
     } catch (cancelled: CancellationException) {
       throw cancelled
     } catch (_: Throwable) {

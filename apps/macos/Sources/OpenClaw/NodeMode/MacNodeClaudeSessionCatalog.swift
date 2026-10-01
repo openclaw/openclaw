@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import CoreFoundation
 import Foundation
 
@@ -221,20 +222,6 @@ enum MacNodeClaudeSessionCatalog {
         }
     }
 
-    private final class CatalogEnumerationObserver: @unchecked Sendable {
-        private let lock = NSLock()
-        private var observer: (@Sendable (String) -> Void)?
-
-        func set(_ observer: (@Sendable (String) -> Void)?) {
-            self.lock.withLock { self.observer = observer }
-        }
-
-        func notify(rootPath: String) {
-            let observer = self.lock.withLock { self.observer }
-            observer?(rootPath)
-        }
-    }
-
     private static let defaultPageLimit = 50
     private static let maxPageLimit = 100
     private static let defaultReadLimit = 20
@@ -259,12 +246,12 @@ enum MacNodeClaudeSessionCatalog {
     private static let iso8601Style = Date.ISO8601FormatStyle()
     private static let catalogDiscoveryCache = CatalogDiscoveryCache()
     private static let transcriptReadLeases = TranscriptReadLeaseCache()
-    private static let catalogEnumerationObserver = CatalogEnumerationObserver()
+    private static let catalogEnumerationObserver = LockIsolated<(@Sendable (String) -> Void)?>(nil)
 
     static func setCatalogEnumerationObserverForTesting(
         _ observer: (@Sendable (String) -> Void)?)
     {
-        self.catalogEnumerationObserver.set(observer)
+        self.catalogEnumerationObserver.setValue(observer)
     }
 
     static func shouldAdvertise(
@@ -823,7 +810,8 @@ extension MacNodeClaudeSessionCatalog {
         try Task.checkCancellation()
         let projectsURL = self.projectsURL(homeURL: homeURL)
         let rootPath = projectsURL.standardizedFileURL.path
-        self.catalogEnumerationObserver.notify(rootPath: rootPath)
+        let enumerationObserver = self.catalogEnumerationObserver.value
+        enumerationObserver?(rootPath)
         let resolvedProjectsURL = projectsURL.resolvingSymlinksInPath()
         var records: [String: SessionRecord] = [:]
         var sidechainIds = Set<String>()

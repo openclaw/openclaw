@@ -19,11 +19,7 @@ import {
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import type {
-  QaRawSessionStoreEntry,
-  QaSkillStatusEntry,
-  QaSuiteRuntimeEnv,
-} from "./suite-runtime-types.js";
+import type { QaSkillStatusEntry, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
 
 type QaGatewayCallEnv = Pick<
@@ -471,7 +467,7 @@ async function readRawQaSessionStore(
     readEntries?: typeof listSessionEntries;
     retryDelaysMs?: readonly number[];
   } = {},
-) {
+): Promise<Record<string, SessionEntry>> {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
   const agentId = readNonEmptyString(options.agentId) ?? "qa";
   const readEntries = options.readEntries ?? listSessionEntries;
@@ -481,7 +477,7 @@ async function readRawQaSessionStore(
       return Object.fromEntries(
         readEntries({ agentId, env: runtimeEnv }).map(({ sessionKey, entry }) => [
           sessionKey,
-          entry as QaRawSessionStoreEntry,
+          entry,
         ]),
       );
     } catch (error) {

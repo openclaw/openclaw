@@ -1,11 +1,12 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CoreTsgoGraph } from "../../scripts/check-tsgo-core-boundary.mts";
 import {
   selectChangedCiTsgoGraphs,
   resolveCiTsgoGraphs,
   TSGO_CI_GRAPHS,
+  TSGO_CI_ADDITIONAL_GRAPHS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { createChangedCiTypeCheckPlan } from "../../scripts/run-tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -79,6 +80,8 @@ describe("changed CI compiler graph selection", () => {
     ["unclassified/module.ts"],
     ["docs/plugins/sdk-subpaths.md", "ui/src/styles/chat.css"],
     [sharedType, "src/config/catalog.json"],
+    ["extensions/example/value.ts", "extensions/example/types.d.ts"],
+    ["extensions/example/value.ts", "extensions/example/tsconfig.json"],
   ])("retains all compilers without discovery for uncertain input %j", async (paths) => {
     expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
     inspectGraphs.mockRejectedValue(new Error("Full plans must not enumerate compiler inputs"));
@@ -103,24 +106,141 @@ describe("changed CI compiler graph selection", () => {
     expect(inspectGraphs).not.toHaveBeenCalled();
   });
 
-  it("still discovers compiler consumers for existing source-only changes", async () => {
-    const cwd = tempDirs.make("ci-type-source-");
-    mkdirSync(join(cwd, "src"));
-    writeFileSync(join(cwd, "src/value.ts"), "export type Value = number;\n");
+  it.each([undefined, "additional-checks"] as const)(
+    "still discovers core consumers when the parallel boundary owner is %s",
+    async (coreBoundaryOwner) => {
+      const cwd = tempDirs.make("ci-type-source-");
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src/value.ts"), "export type Value = number;\n");
+      inspectGraphs.mockResolvedValue(
+        graphs().map(({ name, config }) => ({
+          name,
+          config,
+          roots: [],
+          files: name === "ui" ? ["src/value.ts"] : [],
+        })),
+      );
+      expect(
+        await createChangedCiTypeCheckPlan(["src/value.ts"], { cwd, coreBoundaryOwner }),
+      ).toEqual({ mode: "changed", graphs: [{ name: "ui", config: "tsconfig.ui.json" }] });
+      expect(inspectGraphs).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps every noncore consumer when a parallel owner checks the core boundary", async () => {
+    const cwd = tempDirs.make("ci-type-extension-");
+    const paths = ["extensions/example/value.ts", "docs/value.md", "ui/styles/value.css"];
+    for (const file of paths) {
+      mkdirSync(dirname(join(cwd, file)), { recursive: true });
+      writeFileSync(join(cwd, file), "export type Value = number;\n");
+    }
     inspectGraphs.mockResolvedValue(
-      graphs().map(({ name, config }) => ({
-        name,
-        config,
+      TSGO_CI_ADDITIONAL_GRAPHS.map((graph) => ({
+        ...graph,
         roots: [],
-        files: name === "ui" ? ["src/value.ts"] : [],
+        files: [paths[0]!],
       })),
     );
-    expect(await createChangedCiTypeCheckPlan(["src/value.ts"], { cwd })).toEqual({
-      mode: "changed",
-      graphs: [{ name: "ui", config: "tsconfig.ui.json" }],
+    expect(
+      await createChangedCiTypeCheckPlan(paths, { cwd, coreBoundaryOwner: "additional-checks" }),
+    ).toEqual({ mode: "changed", graphs: TSGO_CI_ADDITIONAL_GRAPHS });
+    // Without a separate owner, a partial inventory cannot authorize narrowing.
+    expect(await createChangedCiTypeCheckPlan(paths, { cwd })).toEqual({
+      mode: "full",
+      graphs: TSGO_CI_GRAPHS,
     });
-    expect(inspectGraphs).toHaveBeenCalledOnce();
   });
+
+  it.each(["leaf", "directory", "extension-alias", "broken", "traversal", "directory-file"])(
+    "retains every compiler for a nonphysical extension input (%s)",
+    async (kind) => {
+      const cwd = tempDirs.make("ci-type-extension-alias-");
+      mkdirSync(join(cwd, "src"));
+      mkdirSync(join(cwd, "extensions", "example"), { recursive: true });
+      writeFileSync(join(cwd, "src/value.ts"), "export type Value = number;\n");
+      writeFileSync(join(cwd, "extensions/example/other.ts"), "export type Value = number;\n");
+      const file =
+        kind === "traversal"
+          ? "extensions/example/../../src/value.ts"
+          : kind === "directory"
+            ? "extensions/alias/value.ts"
+            : "extensions/example/value.ts";
+      if (kind === "directory") {
+        symlinkSync(join(cwd, "src"), join(cwd, "extensions/alias"), "dir");
+      } else if (kind === "directory-file") {
+        mkdirSync(join(cwd, file));
+      } else if (kind !== "traversal") {
+        symlinkSync(
+          join(
+            cwd,
+            kind === "broken"
+              ? "src/missing.ts"
+              : kind === "extension-alias"
+                ? "extensions/example/other.ts"
+                : "src/value.ts",
+          ),
+          join(cwd, file),
+          "file",
+        );
+      }
+      inspectGraphs.mockRejectedValue(
+        new Error("Aliases must retain all graphs without discovery"),
+      );
+      expect(
+        await createChangedCiTypeCheckPlan([file], { cwd, coreBoundaryOwner: "additional-checks" }),
+      ).toEqual({ mode: "full", graphs: TSGO_CI_GRAPHS });
+      expect(inspectGraphs).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["deleted", "symlink"])(
+    "retains every compiler when an extension input becomes %s during discovery",
+    async (change) => {
+      const cwd = tempDirs.make("ci-type-extension-replaced-");
+      const file = "extensions/example/value.ts";
+      mkdirSync(join(cwd, "extensions/example"), { recursive: true });
+      writeFileSync(join(cwd, file), "export type Value = number;\n");
+      const target = join(cwd, "extensions/example/other.ts");
+      writeFileSync(target, "export type Value = number;\n");
+      inspectGraphs.mockImplementation(async () => {
+        unlinkSync(join(cwd, file));
+        if (change === "symlink") {
+          symlinkSync(target, join(cwd, file), "file");
+        }
+        return TSGO_CI_ADDITIONAL_GRAPHS.map((graph) => ({ ...graph, roots: [], files: [file] }));
+      });
+      expect(
+        await createChangedCiTypeCheckPlan([file], { cwd, coreBoundaryOwner: "additional-checks" }),
+      ).toEqual({ mode: "full", graphs: TSGO_CI_GRAPHS });
+    },
+  );
+
+  it.each(["missing", "duplicate", "unexpected", "unmatched", "mixed", "ambient", "config"])(
+    "refuses incomplete or inapplicable noncore discovery (%s)",
+    (kind) => {
+      const file = "extensions/example/value.ts";
+      const inventory: { config: string; files: string[] }[] = TSGO_CI_ADDITIONAL_GRAPHS.map(
+        ({ config }) => ({ config, files: [file] }),
+      );
+      const paths = [file];
+      if (kind === "missing") {
+        inventory.pop();
+      } else if (kind === "duplicate") {
+        inventory[inventory.length - 1] = inventory[0]!;
+      } else if (kind === "unexpected") {
+        inventory[0] = { config: "tsconfig.core.json", files: [file] };
+      } else if (kind === "unmatched") {
+        paths.push("extensions/example/other.ts");
+      } else if (kind === "mixed") {
+        paths.push("src/value.ts");
+      } else if (kind === "ambient") {
+        paths.push("extensions/example/types.d.ts");
+      } else if (kind === "config") {
+        paths.push("extensions/example/package.json");
+      }
+      expect(selectChangedCiTsgoGraphs(paths, inventory, { scope: "noncore" })).toBeUndefined();
+    },
+  );
 
   it.each(["missing", "duplicate"])("refuses an incomplete %s compiler inventory", (kind) => {
     const inventory = graphs();

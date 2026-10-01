@@ -12,7 +12,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../src/state/openclaw-state-db.js";
-import { activeSessions } from "../src/transcripts/capture.js";
+import { activeSessions } from "../src/transcripts/capture-startup.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 

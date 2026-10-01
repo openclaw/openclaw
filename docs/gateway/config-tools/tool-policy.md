@@ -41,6 +41,11 @@ workspace and identity checks or the meeting transcript caller checks.
 `coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
 allow `bundle-mcp` (configured MCP servers).
 
+The [`tts` tool](/tools/tts/api#tool-profiles) is not part of any restricted
+profile. To let an agent on `minimal`, `coding`, or `messaging` call it, add
+`tts` to `tools.alsoAllow`. [Automatic TTS](/tools/tts/output#auto-tts-behavior)
+is not a tool, so profiles do not affect it.
+
 An unset profile also leaves core tools unfiltered, but does not itself opt into
 optional plugin tools. Explicit `full` contributes a wildcard to plugin tool
 selection, including optional tools from enabled plugins. Plugin configuration,
@@ -238,7 +243,7 @@ Restricts tools for the current turn's originating requester. This is defense-in
 }
 ```
 
-Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are accepted as `id:` only. Matching order is channel+id, id, e164, username, name, then wildcard.
+Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries. Matching order is channel+id, id, e164, username, name, then wildcard.
 
 Per-agent `agents.entries.*.tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
 

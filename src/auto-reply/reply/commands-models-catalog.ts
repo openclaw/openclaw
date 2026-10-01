@@ -31,7 +31,6 @@ import {
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
-import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -122,29 +121,21 @@ export function buildPreparedModelsProviderData(
 }
 
 export async function loadModelsProviderData(
-  cfg: OpenClawConfig,
+  config: OpenClawConfig,
   agentId: string | undefined,
   options: ModelsBrowseOptions,
   agentDir?: string,
 ): Promise<PreparedModelsProviderData> {
-  const published = await preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
-    config: cfg,
+  const owner = await preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
+    config,
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
     readOnly: true,
   });
   // The owner records refresh outcomes; a sent menu must not wait for acquisition or be rewritten.
-  void published.loadFullModelCatalog?.().catch(() => undefined);
-  return projectPreparedModelsProviderData(published.config, agentId, options, published);
-}
-
-async function projectPreparedModelsProviderData(
-  cfg: OpenClawConfig,
-  agentId: string | undefined,
-  options: ModelsBrowseOptions,
-  owner: PreparedModelRuntimeSnapshot,
-): Promise<PreparedModelsProviderData> {
+  void owner.loadFullModelCatalog?.().catch(() => undefined);
+  const cfg = owner.config;
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,

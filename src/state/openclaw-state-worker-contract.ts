@@ -13,9 +13,6 @@ import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
 } from "../agents/workspace-state-store.kernel.js";
-import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registry-read.worker.js";
-import type { WorktreeRetirementOperations } from "../agents/worktrees/registry-retirement.worker.js";
-import type { WorktreeRunLeaseRowInput } from "../agents/worktrees/run-lease-store.kernel.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
 import type { AuditWriterOperations } from "../audit/audit-event-writer.types.js";
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
@@ -28,7 +25,6 @@ import type {
 } from "../config/io.health-state.types.js";
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
-import type { FleetRegistryWriteOperations } from "../fleet/registry.types.js";
 import type {
   RepositoryGitHubPublicationPendingQuery,
   RepositoryGitHubPublicationStatusRow,
@@ -41,7 +37,9 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-record.js";
+import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
+import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
   DeferredPluginMigration,
@@ -56,8 +54,6 @@ import type { DevicePairingWorkerOperations } from "../infra/device-pairing-work
 import type { ExecAuthorizationWorkerOperations } from "../infra/exec-approvals-contracts.js";
 import type { CurrentConversationBindingWorkerOperations } from "../infra/outbound/current-conversation-bindings.worker-contract.js";
 import type { PreparedPromotionClaim } from "../infra/promotions-feed.kernel.js";
-import type { ApnsRegistrationWorkerOperations } from "../infra/push-apns-store.worker-contract.js";
-import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker-contract.js";
 import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
@@ -73,7 +69,7 @@ import type {
   InterruptedUpdateSettlement,
   InterruptedUpdateSettlementResult,
 } from "../infra/update-run-interruption-contract.js";
-import type { UpdateRunStepWriteOperations } from "../infra/update-run-mutation.types.js";
+import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
 import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
@@ -89,6 +85,7 @@ import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-co
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
+import type { SessionUpstreamWorkerOperations } from "../sessions/session-upstream-links.worker-contract.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker.js";
 import type * as curator from "../skills/workshop/curator.kernel.js";
@@ -110,6 +107,7 @@ import type { OnboardingRecommendationWriteOperations } from "./onboarding-recom
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type { RegisteredStateWorkerOperations } from "./openclaw-state-worker-registry.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.types.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
@@ -117,22 +115,20 @@ import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
-  UpdateRunStepWriteOperations &
+export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  UpdateRunReconciliationOperations &
+  UpdateRunWriteOperations &
   RepositoryWorkspaceWorkerOperations &
   CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &
   AcpSessionWriteOperations &
-  WorktreeRetirementOperations &
-  WorktreeRegistryReadOperations &
   SessionStateWorkerOperations &
+  SessionUpstreamWorkerOperations &
   McpOAuthReadOperations &
   SkillWorkshopExecutionOperations &
   CurrentConversationBindingWorkerOperations &
   McpOAuthWriteOperations &
   LegacyMcpOAuthWorkerOperations &
-  WebPushWorkerOperations &
-  ApnsRegistrationWorkerOperations &
   DevicePairingWorkerOperations &
   ExecAuthorizationWorkerOperations &
   OperatorApprovalWorkerOperations &
@@ -147,11 +143,12 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
   UserProfileWorkerOperations &
   ChannelIngressWorkerOperations &
   CronStateWorkerOperations &
-  FleetRegistryWriteOperations &
   ProjectRegistryWorkerOperations &
   WorkerEnvironmentWorkerOperations &
   WorkerInferenceStoreOperations &
   PlacementTurnClaimWorkerOperations &
+  WorkspaceJournalWorkerOperations &
+  PlacementSessionToolWorkerOperations &
   WorkerPlacementDispatchStoreOperations &
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations &
@@ -162,12 +159,6 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
   OpenClawStateLeaseLifecycleOperations &
   ManagedImageRecordWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
-    "worktrees.admitRunLease": { input: WorktreeRunLeaseRowInput; output: void };
-    "worktrees.reapRunLeases": { input: { scopes: string[] }; output: void };
-    "worktrees.releaseRunLease": {
-      input: { worktreeId: string; token: string };
-      output: void;
-    };
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };

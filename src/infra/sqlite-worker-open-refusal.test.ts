@@ -4,6 +4,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import {
   useSqliteWorkerStoreFixture,
   appendWorkerRow as append,
@@ -26,7 +27,9 @@ const { stores, databasePath, open } = useSqliteWorkerStoreFixture(
   "openclaw-sqlite-worker-open-refusal-",
 );
 
-it.skipIf(Boolean(process.versions.bun))(
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+
+it.skipIf(!explicitSqliteCloseReleasesNativeResources)(
   "refuses before native factory entry without retiring pooled siblings or blocking recovery",
   async () => {
     const file = databasePath();

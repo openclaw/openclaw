@@ -121,12 +121,8 @@ export abstract class OpenAIRealtimeProtocol {
       return;
     }
 
-    this.sendEvent(this.buildGaSessionUpdate());
-  }
-
-  protected buildGaSessionUpdate() {
     const cfg = this.config;
-    return {
+    this.sendEvent({
       type: "session.update" as const,
       session:
         cfg.gaSessionPolicy ??
@@ -145,7 +141,7 @@ export abstract class OpenAIRealtimeProtocol {
           vadThreshold: cfg.vadThreshold,
           voice: cfg.voice ?? "alloy",
         }),
-    };
+    });
   }
 
   protected usesAzureDeploymentRealtimeApi(): boolean {
@@ -451,5 +447,8 @@ export abstract class OpenAIRealtimeProtocol {
     options?: RealtimeVoiceToolResultOptions,
   ): void;
 
-  protected abstract sendEvent(event: unknown, detail?: string): void;
+  protected abstract sendEvent(
+    event: { type: string; [key: string]: unknown },
+    detail?: string,
+  ): void;
 }

@@ -9,6 +9,7 @@ const temp = useAutoCleanupTempDirTracker(afterEach);
 const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const artifact of artifacts.splice(0)) {
     artifact.dispose();
   }
@@ -142,3 +143,88 @@ it("captures from the pinned descriptor when descriptor paths are unavailable", 
   expect(fs.readFileSync(artifact.resolve(source.filename), "utf8")).toBe("captured");
   expect(artifact.assertSourceCurrent).not.toThrow();
 });
+
+const descriptorCopyCases = [
+  {
+    label: "Bun on macOS returns EBADF",
+    platform: "darwin",
+    isBun: true,
+    code: "EBADF",
+    shouldCapture: true,
+  },
+  {
+    label: "Node on macOS returns EBADF",
+    platform: "darwin",
+    isBun: false,
+    code: "EBADF",
+    shouldCapture: false,
+  },
+  {
+    label: "Bun on Linux returns EBADF",
+    platform: "linux",
+    isBun: true,
+    code: "EBADF",
+    shouldCapture: false,
+  },
+  {
+    label: "Bun on macOS returns EIO",
+    platform: "darwin",
+    isBun: true,
+    code: "EIO",
+    shouldCapture: false,
+  },
+] as const;
+
+it.each(descriptorCopyCases)(
+  "handles $label at the generation-capture boundary",
+  ({ platform, isBun, code, shouldCapture }) => {
+    const bytes = Buffer.alloc(172_832, "B");
+    const source = fixture(bytes);
+    const realProcess = process;
+    vi.stubGlobal(
+      "process",
+      new Proxy(realProcess, {
+        get(target, property) {
+          if (property === "platform") {
+            return platform;
+          }
+          if (property === "versions") {
+            const versions = { ...target.versions };
+            if (isBun) {
+              versions.bun = "1.4.2";
+            } else {
+              delete versions.bun;
+            }
+            return versions;
+          }
+          return Reflect.get(target, property, target);
+        },
+      }),
+    );
+
+    const copyFileSync = fs.copyFileSync;
+    let injectedError = false;
+    const descriptorPrefix = platform === "linux" ? "/proc/self/fd/" : "/dev/fd/";
+    vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
+      if (
+        typeof from === "string" &&
+        from.startsWith(descriptorPrefix) &&
+        typeof to === "string" &&
+        to.endsWith(`${path.sep}fixture.bin`)
+      ) {
+        injectedError = true;
+        throw Object.assign(new Error("Simulated descriptor-copy failure"), { code });
+      }
+      return copyFileSync(from, to, mode);
+    });
+
+    if (shouldCapture) {
+      const artifact = source.capture();
+      expect(fs.readFileSync(artifact.resolve(source.filename))).toEqual(bytes);
+      expect(artifact.assertSourceCurrent).not.toThrow();
+    } else {
+      expect(() => source.capture()).toThrow("Simulated descriptor-copy failure");
+    }
+    expect(injectedError).toBe(true);
+  },
+);

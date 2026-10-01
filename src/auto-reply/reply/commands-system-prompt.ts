@@ -1,4 +1,3 @@
-// Implements system prompt inspection commands for agent runtime sessions.
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";

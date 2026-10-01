@@ -3,7 +3,8 @@ import {
   ensureManagedCrabboxBinary,
   resolveCrabboxBinary,
 } from "@openclaw/crabbox-provider/cli-runtime-api.js";
-import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isTruthyOptIn } from "../mantis-options.runtime.js";
 
 export type MantisCrabboxLeaseOptions = {
   idleTimeout?: string;

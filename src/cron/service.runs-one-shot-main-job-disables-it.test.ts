@@ -162,6 +162,7 @@ describe("CronService one-shot lifecycle", () => {
         status: "ok",
         completionStatus: completion,
         deliveryStatus: unknown ? "unknown" : "not-delivered",
+        nextRunAtMs: undefined,
         ...(reason ? { deliverySuppressionReason: reason } : {}),
       });
       expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();

@@ -34,7 +34,7 @@ register(api) {
 - [Agent and sessions](/plugins/sdk-runtime/agent) — agent identity, directories, session store, transcripts, and sandbox authority.
 - [Model helpers](/plugins/sdk-runtime/models) — host-owned completions, model-selection policy, and provider auth resolution.
 - [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and native harness completion delivery.
-- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, paired node invocation, and Gateway service events.
+- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, paired node invocation, and Gateway service events.
 - [Media helpers](/plugins/sdk-runtime/media) — speech, media understanding, image/video/music generation, web search, and media utilities.
 - [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
@@ -128,6 +128,14 @@ its managed handles. Already admitted calls and streams have a bounded chance
 to finish before disposal; retaining an old function does not make it a current
 runtime handle.
 
+Ordinary stream results project their payload on the first `value` read. Nested managed
+readers share data inspection within that synchronous read, while each reader
+keeps its own instance admission. An unread terminal payload does not need data
+inspection. Plain payloads retain their native identity and remain mutable;
+they are not frozen or transferred. Nested readers recheck later reads for
+mutations that need executable views. This does not give a closed
+consumer permission to read a retained active-stream result or call its methods.
+
 Context engines selected by an admitted turn remain owned through that turn's
 commit and engine disposal. Replacing an enabled plugin waits for those consumers
 to close before registering its successor. Disabling or removing a plugin can
@@ -154,6 +162,11 @@ fields are optional in the SDK type because an API host without a managed
 instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
+
+Inspection release reports settled disposal failures without marking the managed
+resources as still retained. Prepared-model shutdown records those failures and
+can finish after cleanup settles. Unfinished disposal and failed host cleanup
+prerequisites still prevent shutdown from reporting a completed resource release.
 
 Cleanup is best effort. Plugins must explicitly release their own timers,
 listeners, sockets, watchers, and child processes in `onDispose` or their
@@ -183,12 +196,25 @@ unchanged, including any handles inside them.
 `createPluginRuntimeStore` resolves its slot from the invoking managed instance.
 Preparing another instance does not overwrite that instance's runtime. Calls
 outside managed instance scope retain the store's existing standalone behavior.
-Gateway-hosted agent turns borrow tool registrations from the admitting Gateway's
-current registry, so factories and execution share the instance whose services
-initialized the runtime. Adoption requires the same plugin source, configuration,
-non-empty set of declared tool names, and optionality. It preserves discovery's
-tool membership and order. Without an unambiguous admitting Gateway owner, turns
-keep their discovery registrations.
+Gateway-hosted agent turns use the admitting Gateway's own instance for each
+unchanged plugin: same source, install, manifest, activation, entry policy, and
+configuration, in the Gateway's workspace and environment. The lender comes from
+the admitting Gateway owner, never another Gateway that happens to be process-active.
+Without an unambiguous live owner, preparation loads separate instances. Borrowing
+turns run the Gateway's `registrationMode: "full"` registrations and share its
+services and runtime store; only plugins the Gateway lacks or configures
+differently load a separate discovery instance. After `openclaw plugins reload`,
+later turns use the reloaded Gateway instance, and the reload waits for turns that
+still hold the previous one. Borrowed channel methods and read-authority grants
+expire with the borrowing runtime or invocation scope; retiring the borrower does
+not retire the Gateway's instance.
+
+Turns that load a plugin separately borrow its tool registrations from the
+admitting Gateway's current registry, so factories and execution share the
+instance whose services initialized the runtime. Adoption requires the same
+plugin source, configuration, non-empty set of declared tool names, and
+optionality. It preserves discovery's tool membership and order. Without an
+unambiguous admitting Gateway owner, turns keep their discovery registrations.
 
 SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see
@@ -210,6 +236,19 @@ without this hook, OpenClaw calls the existing `closeAllMemorySearchManagers`
 method, when provided, if the runtime or an embedding adapter retires. This closes
 all of that runtime's managers as best-effort cleanup; it cannot identify dependent
 managers or prevent concurrent manager acquisition.
+
+## Browser meeting transport builders
+
+`MeetingPlatformAdapter.createBrowserAdapterOptions` builds the `browser` and
+`parsing` options for `MeetingPlatformAdapter.create` from platform page scripts,
+permission origins, display names, manual-action prefixes, and retry policy.
+`MeetingPlatformAdapter.createPageScripts` assembles status, transcript, audio
+capture, and leave scripts while the plugin supplies identity and control sources.
+
+`createStatusPreludeSource` accepts either source strings or callbacks for
+`lifecycleSource` and `manualActionSource`. Callbacks receive shared fragments for
+guest names, preserved identity, virtual audio input, microphone control, and
+manual actions. Existing string-based callers keep their generated source.
 
 ## Browser meeting status ownership
 

@@ -58,6 +58,16 @@ openclaw triage --agent codex
 Use `openclaw triage --non-interactive` to collect diagnostics without starting
 an agent. Add `--update-result <path>` to include a saved update-failure artifact.
 
+When another process saves configuration during database admission, OpenClaw
+warns and reads the current configuration again. It validates and uses that
+configuration before continuing, retaining concurrent changes when applying
+the requested update. If the root config or an included file changes after
+candidate checks, it repeats those checks against the current configuration
+before activation. A candidate that cannot accept the current configuration
+still fails validation; a concurrent save alone is not a refusal.
+If the save changes an implicitly selected update channel, OpenClaw resolves
+the target again before execution. An explicit `--channel` keeps its selection.
+
 Validation failures leave the serving Gateway untouched. If stopping the managed
 service unloads it and then fails before activation, OpenClaw attempts to restore
 the verified original runtime after rechecking service ownership. After activation, a
@@ -153,6 +163,11 @@ validation. Other runtime files remain hardlinked when supported.
 
 These lifecycle and copying changes apply when the installed updater supports
 them; installing a newer candidate cannot change the updater already running.
+
+On Windows, interruption before activation still lets the admitted recovery
+owner restore task autostart after pending task operations settle. Cancellation
+fences new update work; restoration still requires the original live installation
+owner and verified task ownership.
 After that updater exits, run the newer `openclaw doctor --fix` from the original
 checkout to locate its sibling runtime directories. Doctor also checks known
 temporary directories, including the managed service's `TMPDIR`, `TMP`, and `TEMP`.
@@ -192,6 +207,44 @@ openclaw update repair --channel beta
 openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
+
+An interrupted automatic triage can leave an uncertain installation handoff after
+its updater and helper exit. Explicit `openclaw update repair` can reclaim that
+handoff when both recorded PID/start identities are provably dead, a complete
+host census finds no remaining references to its run or retained paths, and at
+least 45 minutes have passed since the lease's last recorded activity. A
+recoverable larger recorded timeout extends that grace period. Gateway startup
+and borrowed update processes do not reclaim these leases.
+
+The original run must be identifiable from its retained helper, update history,
+or generation-bound repair metadata, and readable in the selected state database.
+Repair needs that record to check rollback and recovery evidence. Use the same
+profile and state overrides as the failed update; repair does not substitute a
+lease owner ID for a missing run.
+
+Refusals name the processes, inspection gap, or remaining grace period. Stop
+named work through its owning terminal or service, then retry; do not delete the
+lease database. Repair retains unreadable helper paths in its census instead of
+assuming their work has stopped.
+
+On Windows, identifying foreign process owners can require Administrator privileges.
+If repair requests elevation, use the same Windows account and preserve the failed
+update's profile and state overrides. Unknown ownership remains unverified.
+
+When no rollback step is recorded, repair uses ordinary current-installation
+finalization and records a handoff settlement in update history before releasing
+ownership. It preserves retained artifacts and does not invent an owner-death
+time or previous Gateway state. Unresolved state restoration keeps its existing
+recovery safeguards. A failed repair retains its original evidence, bound to the
+new lease generation, for a later explicit repair.
+Each repair attempt records its own run before starting finalization work, so a
+later repair also checks for descendants of interrupted repair attempts.
+
+An unfinished package or configuration rollback keeps the handoff and its artifacts
+intact. Inspect `openclaw update status --json` and complete the recorded restoration
+before retrying repair. Verified completed rollback and settlement receipts permit
+repair, including installations without a running Gateway. Skipped rollback steps
+and diagnostic warnings alone do not prevent repair.
 
 When update, post-core continuation, or repair runs under Bun, its OpenClaw
 maintenance children use that same Bun executable, including fresh Doctor,
@@ -376,8 +429,13 @@ remain visible; the original update history is preserved.
 
 After post-update or finalization work fails and its child processes settle,
 OpenClaw probes the installed Gateway using the normal startup and readiness
-budget. Update history and failure reports record the observed serving version
-and readiness, including for a foreground Gateway. A failed finalization step
+budget. If maintenance found no Gateway service or listener, recovery records
+that readiness observation was skipped instead of waiting for a Gateway to appear.
+Package and database restoration checks still apply, and the original failure
+remains recorded. Update history and failure reports record the observed serving version
+and readiness. A standalone repair failure before Doctor maintenance begins uses
+one bounded observation because that repair has not requested Gateway startup.
+Observations also cover foreground Gateways. A failed finalization step
 can therefore report **verified serving** while retaining its original failure
 and repair guidance. The observation does not restart the Gateway or grant
 maintenance authority. Failed probes retain their specific diagnostic; a

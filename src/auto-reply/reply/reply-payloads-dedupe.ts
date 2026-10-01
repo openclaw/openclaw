@@ -58,9 +58,7 @@ export function filterMessagingToolMediaDuplicates(params: {
     // Delivery operations apply to the message created by this payload. Keep
     // its content intact so dedupe cannot silently skip the operation.
     if (hasEnabledDeliveryOperation(payload)) {
-      if (nextPayloads) {
-        nextPayloads.push(payload);
-      }
+      nextPayloads?.push(payload);
       continue;
     }
     const mediaUrl = payload.mediaUrl;
@@ -71,21 +69,15 @@ export function filterMessagingToolMediaDuplicates(params: {
     if (mediaUrls?.length) {
       for (const [mediaIndex, url] of mediaUrls.entries()) {
         if (sentSet.has(normalizeMediaReferenceForComparison(url))) {
-          if (!filteredUrls) {
-            filteredUrls = mediaUrls.slice(0, mediaIndex);
-          }
+          filteredUrls ??= mediaUrls.slice(0, mediaIndex);
           continue;
         }
-        if (filteredUrls) {
-          filteredUrls.push(url);
-        }
+        filteredUrls?.push(url);
       }
     }
 
     if (!stripSingle && !filteredUrls) {
-      if (nextPayloads) {
-        nextPayloads.push(payload);
-      }
+      nextPayloads?.push(payload);
       continue;
     }
 
@@ -99,9 +91,7 @@ export function filterMessagingToolMediaDuplicates(params: {
         ? { audioAsVoice: undefined }
         : {}),
     });
-    if (!nextPayloads) {
-      nextPayloads = payloads.slice(0, index);
-    }
+    nextPayloads ??= payloads.slice(0, index);
     nextPayloads.push(nextPayload);
   }
 
@@ -310,14 +300,6 @@ export function resolveMessagingToolPayloadDedupe(
         )
       : [],
   );
-  const hasTargetTextEvidence = sentTargets.some(
-    (target) => typeof target.text === "string" && Boolean(target.text.trim()),
-  );
-  const hasTargetMediaUrlEvidence = sentTargets.some(
-    (target) =>
-      Array.isArray(target.mediaUrls) &&
-      target.mediaUrls.some((url) => typeof url === "string" && Boolean(url.trim())),
-  );
   const allTargetsMatchRoute = matchingRoute && matchingTargets.length === sentTargets.length;
 
   return {
@@ -325,8 +307,8 @@ export function resolveMessagingToolPayloadDedupe(
     matchingRoute,
     routeSentTexts,
     routeSentMediaUrls,
-    useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && !hasTargetTextEvidence,
-    useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && !hasTargetMediaUrlEvidence,
+    useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && routeSentTexts.length === 0,
+    useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && routeSentMediaUrls.length === 0,
   };
 }
 

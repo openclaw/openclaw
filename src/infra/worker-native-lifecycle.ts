@@ -13,6 +13,7 @@ import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-br
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   captureRuntimeWorkerSource,
@@ -58,8 +59,10 @@ type NativeSource = RetainedNativeWorkerSource & {
   runtimeGeneration?: RuntimeWorkerGeneration;
   runtime?: NativeRuntime;
   broker?: SpawnBrokerHost;
+  automaticBrokerClose?: Promise<void>;
   brokerModuleUrl: URL;
   closing: boolean;
+  close(): Promise<void>;
 };
 
 const lifetime = resolveGlobalSingleton(
@@ -72,7 +75,30 @@ const lifetime = resolveGlobalSingleton(
     nextId: 0,
     sources: new WeakMap(),
   }),
+  async (state) => {
+    await state.defaultSource?.close();
+  },
 );
+
+function forgetNativeSource(source: NativeSource): void {
+  if (source.runtimeGeneration) {
+    if (lifetime.sources.get(source.runtimeGeneration) === source) {
+      lifetime.sources.delete(source.runtimeGeneration);
+    }
+  } else if (lifetime.defaultSource === source) {
+    lifetime.defaultSource = undefined;
+  }
+}
+
+function closeNativeBroker(source: NativeSource): Promise<void> {
+  try {
+    return source.broker?.close() ?? Promise.resolve();
+  } catch (error) {
+    const failed = createDeferredCore();
+    failed.reject(error);
+    return failed.promise;
+  }
+}
 
 function nativeRuntime(source: NativeSource): NativeRuntime {
   if (source.closing) {
@@ -111,14 +137,19 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         return;
       }
       source.runtime = undefined;
-      if (source.runtimeGeneration) {
-        if (lifetime.sources.get(source.runtimeGeneration) === source) {
-          lifetime.sources.delete(source.runtimeGeneration);
-        }
-      } else if (lifetime.defaultSource === source) {
-        lifetime.defaultSource = undefined;
+      if (!source.broker) {
+        forgetNativeSource(source);
+        return;
       }
-      void source.broker?.close().catch(ownerJoined.reject);
+      if (!source.automaticBrokerClose) {
+        source.automaticBrokerClose = closeNativeBroker(source);
+        void source.automaticBrokerClose.then(
+          () => forgetNativeSource(source),
+          () => {
+            // Keep the original failed attempt reachable through the source's finalizer.
+          },
+        );
+      }
     };
     const terminateOwner = () => {
       if (terminating) {
@@ -190,6 +221,11 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       },
       refreshReference() {
         retireSource();
+        if (source.closing && handles.size === 0 && !nativeOwnerJoined) {
+          // A refused owner close can finish later through its original native handle.
+          void runtime.close().catch(ownerJoined.reject);
+          return;
+        }
         if ([...handles.values()].some((handle) => handle.needsReference)) {
           worker.ref();
           port1.ref();
@@ -277,6 +313,19 @@ export function captureRetainedNativeWorkerSource(options?: {
       ? captured.runtimeGeneration.resolve(resolveRuntimeProcessEntrypointUrl("spawnBroker"))
       : resolveRuntimeProcessEntrypointUrl("spawnBroker"),
     closing: false,
+    close() {
+      return (closingOwners ??= Promise.resolve().then(async () => {
+        const closing = [...owners.values()].map((owner) => owner.close());
+        joinSource();
+        const results = await Promise.allSettled(closing.length ? closing : [joined.promise]);
+        const errors = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (errors.length) {
+          throw new AggregateError(errors, "Native worker execution owner cleanup failed");
+        }
+      }));
+    },
     create(filename, workerOptions, resource) {
       if (captured.runtimeGeneration && !owners.size) {
         throw new Error("Native worker source has no retained execution owner");
@@ -315,15 +364,13 @@ export function captureRetainedNativeWorkerSource(options?: {
       return resource;
     },
     retain(owner, closeOwner) {
-      const generation = captured.runtimeGeneration;
-      if (!generation) {
-        return;
+      if (closingOwners || source.closing) {
+        throw new Error("Native worker source is closing");
       }
-      const record = { close: closeOwner, settled: false };
-      generation.retain(owner, async () => {
+      const close = async () => {
         let outcome: { status: "fulfilled" } | { status: "rejected"; error: unknown };
         try {
-          await record.close();
+          await closeOwner();
           outcome = { status: "fulfilled" };
         } catch (error) {
           outcome = { status: "rejected", error };
@@ -346,7 +393,9 @@ export function captureRetainedNativeWorkerSource(options?: {
         if (outcome.status === "rejected") {
           throw outcome.error;
         }
-      });
+      };
+      const record = { close, settled: false };
+      captured.runtimeGeneration?.retain(owner, close);
       owners.set(owner, record);
     },
   };
@@ -354,6 +403,7 @@ export function captureRetainedNativeWorkerSource(options?: {
   const joined = createDeferredCore();
   void joined.promise.catch(() => undefined);
   let joining = false;
+  let closingOwners: Promise<void> | undefined;
   const joinSource = () => {
     if (joining || [...owners.values()].some((owner) => !owner.settled)) {
       return;
@@ -362,15 +412,25 @@ export function captureRetainedNativeWorkerSource(options?: {
     source.closing = true;
     void (async () => {
       await source.runtime?.close();
-      await source.broker?.close();
-      if (captured.runtimeGeneration) {
-        if (lifetime.sources.get(captured.runtimeGeneration) === source) {
-          lifetime.sources.delete(captured.runtimeGeneration);
-        }
-      } else if (lifetime.defaultSource === source) {
-        lifetime.defaultSource = undefined;
+      const automatic = source.automaticBrokerClose;
+      // Preserve the existing explicit retry when automatic close refused before broker memoization.
+      const closing = closeNativeBroker(source);
+      const attempts = automatic && automatic !== closing ? [automatic, closing] : [closing];
+      const outcomes = await Promise.allSettled(attempts);
+      // Child exit does not certify cleanup. A terminal memoized failure stays sealed until restart.
+      if (outcomes.at(-1)?.status === "fulfilled") {
+        forgetNativeSource(source);
+        owners.clear();
       }
-      owners.clear();
+      const failures = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      if (failures.length > 1 && !Object.is(failures[0], failures[1])) {
+        throw new AggregateError(failures, "Automatic and final native broker cleanup failed");
+      }
+      // Await the original promises to preserve even undefined/null rejection identity.
+      await automatic;
+      await closing;
     })().then(joined.resolve, joined.reject);
   };
   if (captured.runtimeGeneration) {
@@ -418,6 +478,7 @@ function startNativeWorker(
         type: "create",
         id,
         filename: { kind: filename instanceof URL ? "url" : "path", value: String(filename) },
+        environmentData: captureSqliteWorkerEnvironmentData(),
         options: {
           ...captured,
           environment: { ...(env === SHARE_ENV ? process.env : (env ?? process.env)) },

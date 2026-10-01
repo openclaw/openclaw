@@ -27,6 +27,7 @@ type WebSocket = WebSocketClient;
 const acquisitionFixture = vi.hoisted(() => ({
   start: vi.fn(),
   port: 0,
+  reserve: vi.fn(),
   observeClient: undefined as ((client: WebSocket) => void) | undefined,
 }));
 
@@ -46,6 +47,10 @@ async function observeWebSocket() {
 vi.mock("ws", () => observeWebSocket());
 vi.mock("../../packages/gateway-client/src/websocket.js", () => observeWebSocket());
 vi.mock("./server.js", () => ({ startGatewayServer: acquisitionFixture.start }));
+vi.mock("./test-helpers.listener.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./test-helpers.listener.js")>()),
+  reserveGatewayTestListener: acquisitionFixture.reserve,
+}));
 vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
   resetPreparedGatewayModelCatalogForTest: vi.fn(),
@@ -57,6 +62,7 @@ vi.mock("../test-utils/ports.js", async (importOriginal) => ({
 
 afterEach(() => {
   acquisitionFixture.start.mockReset();
+  acquisitionFixture.reserve.mockReset();
   acquisitionFixture.observeClient = undefined;
   vi.restoreAllMocks();
 });
@@ -265,6 +271,13 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
     getTailscaleIngressEndpoint: () => undefined,
   } satisfies import("./server.js").GatewayServer;
   acquisitionFixture.port = peer.port;
+  // This peer already owns the socket; exercise client acquisition and cleanup
+  // without asking the real reservation owner to bind a second listener.
+  acquisitionFixture.reserve.mockResolvedValue({
+    port: peer.port,
+    start: async (run: () => Promise<unknown>) => run(),
+    closeUnadopted: async () => {},
+  });
   const start = acquisitionFixture.start.mockImplementation(async () => {
     // Mirror the real startup-owned selector for close-order assertions.
     process.env.OPENCLAW_GATEWAY_PORT = String(peer.port);

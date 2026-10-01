@@ -116,10 +116,7 @@ async function prepareControllerFacts(
                     : new SessionMutationFactsUnavailableError({ cause: error });
                 }
               },
-              release() {
-                facts?.release();
-                generation.release();
-              },
+              release: releasePrepared,
             };
           } catch (error) {
             generation.release();

@@ -6,7 +6,6 @@ import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import {
   AcceptedWorkspacePublicationIndeterminateError,
-  isAcceptedWorkspacePublicationIndeterminateError,
   parseAcceptedWorkspaceSettlement,
   type AcceptedWorkspaceSettlementOutcome,
 } from "./workspace-accepted-publication.js";
@@ -279,7 +278,7 @@ function createAcceptedWorkspacePublisher(params: {
     } catch (error) {
       // Transport or settlement timeouts are observation evidence, never authority
       // for an inverse operation; recovery owns restoring both sides.
-      if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
+      if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
         throw error;
       }
       if (transactionBegun) {

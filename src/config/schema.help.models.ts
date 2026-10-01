@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 export const MODEL_FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
@@ -11,7 +10,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.catalogRefresh.enabled":
     "Fetch hosted model catalog updates in the background (default: true). Set to false to disable all remote model catalog traffic.",
   "models.catalogRefresh.url":
-    "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). Changes apply after a Gateway restart.",
+    "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). A running Gateway stops using the previous source's catalog and adopts the mirror's at its next catalog check, without restarting.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":

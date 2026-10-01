@@ -125,7 +125,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       source: WorkerTurnTranscriptSource;
       readAckedSeq: () => number;
     },
-  ): WorkerLiveEventApplicationResult | LiveEventWindow => {
+  ): WorkerLiveEventFailure | LiveEventWindow => {
     let window = windows.get(sessionId);
     if (
       window &&
@@ -426,30 +426,27 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     first: WorkerLiveEventPublication,
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
-    let publication: WorkerLiveEventPublication = firstPending ?? first;
     let buffered = firstPending;
     let publishedPrefix = false;
     while (true) {
+      const publication = buffered ?? first;
       const { request } = publication;
       const failed = publish(window, publication, buffered !== undefined);
+      if (failed?.details.reason === "capacity-exceeded" && buffered) {
+        // Keep the ordered tail retryable while the active prefix claim drains.
+        // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
+        return { ok: true, result: { ackedSeq: window.ackedSeq } };
+      }
+      if (buffered && window.pending.delete(request.seq)) {
+        window.pendingBytes -= buffered.sizeBytes;
+      }
       if (failed) {
-        if (failed.details.reason === "capacity-exceeded" && buffered) {
-          // Keep the ordered tail retryable while the active prefix claim drains.
-          // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
-          return { ok: true, result: { ackedSeq: window.ackedSeq } };
-        }
-        if (buffered && window.pending.delete(request.seq)) {
-          window.pendingBytes -= buffered.sizeBytes;
-        }
         if (failed.details.reason === "capacity-exceeded" && !publishedPrefix) {
           // A fresh head cannot advance. Reset its cursor and release every claim.
           clearWindow(window);
           return failed;
         }
         return publishedPrefix ? { ok: true, result: { ackedSeq: window.ackedSeq } } : failed;
-      }
-      if (buffered && window.pending.delete(request.seq)) {
-        window.pendingBytes -= buffered.sizeBytes;
       }
       window.ackedSeq = request.seq;
       publishedPrefix = true;
@@ -461,12 +458,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
           window.terminalRuns.delete(runId);
         }
       }
-      const next = window.pending.get(window.ackedSeq + 1);
-      if (!next) {
+      buffered = window.pending.get(window.ackedSeq + 1);
+      if (!buffered) {
         break;
       }
-      publication = next;
-      buffered = next;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };

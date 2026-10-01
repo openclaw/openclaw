@@ -9,6 +9,7 @@ import {
   normalizeAccountId,
   patchScopedAccountConfig,
   createSetupTranslator,
+  splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type DmPolicy,
@@ -38,10 +39,6 @@ const ZALOUSER_GROUPS_PLACEHOLDER = t("wizard.zalouser.groupsPlaceholder");
 const ZALOUSER_DM_ACCESS_TITLE = t("wizard.zalouser.dmAccessTitle");
 const ZALOUSER_ALLOWLIST_TITLE = t("wizard.zalouser.allowlistTitle");
 const ZALOUSER_GROUPS_TITLE = t("wizard.zalouser.groupsTitle");
-
-function parseZalouserEntries(raw: string): string[] {
-  return normalizeStringEntries(raw.split(/[\n,;]+/g));
-}
 
 function setZalouserAccountScopedConfig(
   cfg: OpenClawConfig,
@@ -85,7 +82,8 @@ function setZalouserGroupAllowlist(
 }
 
 function ensureZalouserPluginEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  const next: OpenClawConfig = {
+  const allow = cfg.plugins?.allow;
+  return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
@@ -96,17 +94,7 @@ function ensureZalouserPluginEnabled(cfg: OpenClawConfig): OpenClawConfig {
           enabled: true,
         },
       },
-    },
-  };
-  const allow = next.plugins?.allow;
-  if (!Array.isArray(allow) || allow.includes(channel)) {
-    return next;
-  }
-  return {
-    ...next,
-    plugins: {
-      ...next.plugins,
-      allow: [...allow, channel],
+      ...(Array.isArray(allow) && !allow.includes(channel) ? { allow: [...allow, channel] } : {}),
     },
   };
 }
@@ -141,7 +129,7 @@ async function promptZalouserAllowFrom(params: {
       placeholder: ZALOUSER_ALLOW_FROM_PLACEHOLDER,
       initialValue: existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : undefined,
     });
-    const parts = parseZalouserEntries(entry);
+    const parts = splitSetupEntries(entry);
     if (parts.length === 0) {
       await prompter.note(
         [

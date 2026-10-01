@@ -565,7 +565,7 @@ test.each([
       placements.markWorkspaceResultPending(claim);
     } else {
       const basePack = Buffer.from("retained workspace rollback");
-      placements.beginWorkspaceReconciliation(journalOwner, {
+      await placements.beginWorkspaceReconciliation(journalOwner, {
         version: 1,
         temporaryNonce: "a".repeat(32),
         baseManifestRef: active.workspaceBaseManifestRef,
@@ -640,7 +640,7 @@ test.each([
       expect(pending).toHaveLength(1);
       placements.abandonWorkspaceResult(pending[0]!);
     } else {
-      placements.abortWorkspaceReconciliation(journalOwner, { force: true });
+      await placements.abortWorkspaceReconciliation(journalOwner, { force: true });
     }
     const ready = await describe();
     expect(ready.ok).toBe(true);

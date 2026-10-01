@@ -104,13 +104,18 @@ export function readSelectedSessionEntriesInDatabase(
  */
 export function listSessionEntriesReadOnly(
   scope: SessionEntryListScope = {},
-  options: { deferParticipants?: true } = {},
+  options: {
+    deferParticipants?: true;
+    continuation?: CanonicalSessionReaderContinuation;
+  } = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options),
-    toDatabaseOptions(resolved),
-  );
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const read = () => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options);
+    return options.continuation
+      ? readWithCanonicalSessionReaderContinuation(database, options.continuation, read)
+      : read();
+  }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
 }
 
@@ -120,29 +125,50 @@ export function listSqliteSessionEntriesFromDatabase(
   scope: SessionEntryListScope,
   options: { deferParticipants?: true } = {},
 ): SessionEntrySummary[] {
-  if (scope.expiredCronRuns) {
-    const { agentId, updatedBefore } = scope.expiredCronRuns;
-    const requestedOwner = normalizeAgentId(agentId);
-    return withSqlitePostCommitPublications(database.db, () =>
+  if (scope.cronRetention || scope.expiredCronRuns) {
+    const expired = scope.expiredCronRuns;
+    const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
+    const captured = withSqlitePostCommitPublications(database.db, () =>
       runSqliteDeferredTransactionSync(database.db, () => {
-        const selectedKeys = new Set<string>();
         const snapshot = readSessionEntryCache(database, {
           cache: false,
-          retainFullEntry: (sessionKey, entry) => {
-            const selected =
-              isCronRunSessionKey(sessionKey) &&
-              normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) === requestedOwner &&
-              !((entry.updatedAt ?? 0) >= updatedBefore);
-            if (selected) {
-              selectedKeys.add(sessionKey);
-            }
-            return selected;
-          },
+          projection: "list",
         });
         // Sibling metadata and participants still cross complete listing validation.
-        return Array.from(iterateSessionEntriesForListing(snapshot, false, selectedKeys));
+        const entries = Array.from(iterateSessionEntriesForListing(snapshot));
+        const selected = entries.filter(
+          ({ sessionKey, entry }) =>
+            isCronRunSessionKey(sessionKey) &&
+            (scope.cronRetention ||
+              (expired !== undefined &&
+                normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) === requestedOwner &&
+                !((entry.updatedAt ?? 0) >= expired.updatedBefore))),
+        );
+        // Capture only deletion candidates' payloads, in the same snapshot as their metadata.
+        const rows = selected.length
+          ? executeSqliteQuerySync(
+              database.db,
+              selectSessionEntryRows(database, "full")
+                .select("updated_at")
+                .where(
+                  "session_key",
+                  "in",
+                  sqliteStringSet(selected.map(({ sessionKey }) => sessionKey)),
+                ),
+            ).rows
+          : [];
+        return { entries: scope.cronRetention ? entries : selected, rows };
       }),
     );
+    // Cold JSON decoding must not extend the worker's deferred read transaction.
+    const fullRows = new Map(captured.rows.map((row) => [row.session_key, row]));
+    for (const summary of captured.entries) {
+      const row = fullRows.get(summary.sessionKey);
+      if (row) {
+        summary.entry = { ...parseSessionEntryJson(row), ...summary.entry };
+      }
+    }
+    return captured.entries;
   }
   const projection = scope.projection ?? "full";
   const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {

@@ -132,7 +132,7 @@ describe("reconciliation continuation authority", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected local source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
@@ -199,7 +199,7 @@ describe("reconciliation continuation authority", () => {
         if (revokeAt === "wait") {
           revoke();
         }
-        placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
+        await placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
         placements.acceptWorkspaceResult(prior);
         placements.completeWorkspaceResultAndReleaseTurn(prior);
         if (revokeAt === "never") {

@@ -4,7 +4,7 @@ import {
   extractErrorCodeOrErrno,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   Tool as OpenAITool,
@@ -152,13 +152,6 @@ type ObserveResponsesPromptEgress = NonNullable<
   ReturnType<typeof createResponsesPromptEgressObserver>
 >;
 
-function resolveRequestTimeoutMs(options?: OpenAICodexResponsesOptions): number | undefined {
-  const timeoutMs = options?.timeoutMs;
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? resolveTimerTimeoutMs(timeoutMs, 1)
-    : undefined;
-}
-
 function buildRequestSignal(
   baseSignal: AbortSignal | undefined,
   timeoutMs: number | undefined,
@@ -290,7 +283,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       );
       // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
-      requestTimeoutMs = resolveRequestTimeoutMs(options);
+      requestTimeoutMs = clampPositiveTimerTimeoutMs(options?.timeoutMs);
       requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
       firstEventAbort = createFirstStreamEventAbortController(requestTimeoutSignal);
       activeSignal = firstEventAbort.signal;

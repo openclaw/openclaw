@@ -112,7 +112,8 @@ private final class DashboardWindowOwnershipTrackingWindow: NSWindow {
     }
 }
 
-@Suite(.serialized)
+// Suite limits cap every test; the localized case bounds its child test process at 120 s.
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardWindowOwnershipTests {
     static let primaryGateway = DashboardGatewayEntry(
@@ -593,9 +594,8 @@ struct DashboardWindowOwnershipTests {
                 }
                 let reopened = scenario == "reopened" ? Task { @MainActor in try await manager.show() } : nil
                 if reopened != nil {
-                    let deadline = ContinuousClock.now + .seconds(5)
-                    while await requests.numberOfRequests() < 3, ContinuousClock.now < deadline {
-                        try await Task.sleep(for: .milliseconds(10))
+                    try await TestWait.state("reopened browser identity request") {
+                        await requests.numberOfRequests() >= 3
                     }
                     #expect(await requests.numberOfRequests() == 3)
                 }
@@ -722,10 +722,8 @@ struct DashboardWindowOwnershipTests {
     }
 
     private func expectPresentationProbe(from probes: AsyncStream<DashboardRouteProbePurpose>) async throws {
-        let purpose = try await AsyncTimeout.withTimeout(
-            seconds: 3,
-            onTimeout: { NSError(domain: "DashboardPresentationProbe", code: 1) },
-            operation: { await probes.first(where: { _ in true }) })
+        var iterator = probes.makeAsyncIterator()
+        let purpose = await iterator.next()
         #expect(purpose == .presentation)
     }
 }

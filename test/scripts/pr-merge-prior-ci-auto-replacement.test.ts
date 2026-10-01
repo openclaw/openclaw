@@ -80,9 +80,16 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     (_label, replace) => {
       const { f, originalOid, originalRecord, retiredOid, retiredRecord, replacement, captures } =
         cancelledAutoReplacement({ replace });
+      if (!replace) {
+        f.save({ ...f.state(), observations: [{}, {}, {}, {}, { advanceMain: true }] });
+      }
       const recovered = f.adminPriorCi(f.path, true, retiredOid, replacement);
       expect(recovered.status, recovered.output).toBe(0);
       expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 1 });
+      if (!replace) {
+        expect(f.state().mainAdvances).toHaveLength(1);
+        expect(recovered.output).toContain("Requalifying prior-CI admission after main");
+      }
       expect(f.state().restMergePayload).toMatchObject({
         sha: replacement,
         merge_method: "squash",
@@ -134,6 +141,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     ["renewed auto request", "no existing auto/queue request"],
     ["stale outcome", "operator admin recovery requires"],
     ["revoked admin", "active organization admin"],
+    ["revoked admin after materialization", "active organization admin"],
     ["required review", "current enforced reviews must be satisfied"],
     ["failed security", "unsuccessful openclaw/security-sensitive-review"],
     ["new CI attempt", "newer or running CI attempt"],
@@ -161,6 +169,10 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     if (fault === "revoked admin") {
       state.priorCi.membership = "member";
     }
+    if (fault === "revoked admin after materialization") {
+      state.priorCi.revokeAdminOnMainFetch = true;
+      state.observations = [{}, {}, {}, {}, { advanceMain: true }];
+    }
     if (fault === "required review") {
       state.priorCi.reviewDecision = "REVIEW_REQUIRED";
     }
@@ -182,6 +194,11 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     );
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain(diagnostic);
+    if (fault === "revoked admin after materialization") {
+      expect(result.error, result.output).toBeUndefined();
+      expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(true);
+      expect(f.state().mainAdvances).toHaveLength(1);
+    }
     expect(f.state()).toMatchObject({
       mutations: 1,
       cancellations: fault === "missing cancellation" ? 0 : 1,

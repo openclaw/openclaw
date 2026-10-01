@@ -6,8 +6,14 @@ import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
+import {
+  ensureSandboxWorkspaceForSession,
+  resolveSandboxContext,
+  type SandboxFsBridge,
+} from "../../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,15 +24,20 @@ import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
-import { resolveInboundMediaReference } from "../../media/media-reference.js";
+import {
+  buildInboundMediaUriFromPath,
+  resolveInboundMediaReference,
+} from "../../media/media-reference.js";
 import {
   STAGED_INPUT_MAX_BYTES,
+  STAGED_INPUT_GITIGNORE,
   ensureStagedInputDirectory,
   stagedInputDirectory,
   stagedInputFileName,
 } from "../../media/staged-inputs.js";
-import { getMediaDir } from "../../media/store.js";
+import { getMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
@@ -49,6 +60,7 @@ export async function stageSandboxMedia(params: {
   agentId?: string;
   sessionKey?: string;
   workspaceDir: string;
+  skillsSnapshot?: SkillSnapshot;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
   abortSignal?: AbortSignal;
 }): Promise<StageSandboxMediaResult> {
@@ -71,14 +83,28 @@ export async function stageSandboxMedia(params: {
   const forceRemoteCache =
     ctx.MediaRemoteHost &&
     (remoteWorkspace?.prepareTurnAttachments || params.remoteMediaMode === "cache");
+  const sandboxParams = {
+    config: cfg,
+    agentId: params.agentId,
+    sessionKey,
+    workspaceDir,
+    skillsSnapshot: params.skillsSnapshot,
+  };
+  const sshSandbox =
+    !forceRemoteCache &&
+    resolveSandboxConfigForAgent(
+      cfg,
+      resolveSessionAgentId({ sessionKey, config: cfg, agentId: params.agentId }),
+    ).backend === "ssh"
+      ? await resolveSandboxContext(sandboxParams)
+      : null;
   const sandbox = forceRemoteCache
     ? null
-    : await ensureSandboxWorkspaceForSession({
-        config: cfg,
-        agentId: params.agentId,
-        sessionKey,
-        workspaceDir,
-      });
+    : (sshSandbox ?? (await ensureSandboxWorkspaceForSession(sandboxParams)));
+  const remoteBridge = sshSandbox?.fsBridge;
+  if (sshSandbox && !remoteBridge) {
+    throw new Error("SSH sandbox has no filesystem bridge for inbound media staging");
+  }
 
   // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy).
   // Managed local inbound refs are already in OpenClaw's media store; when no sandbox is
@@ -91,20 +117,37 @@ export async function stageSandboxMedia(params: {
     return EMPTY_STAGE_RESULT;
   }
 
-  await fs.mkdir(effectiveWorkspaceDir, { recursive: true });
+  if (!remoteBridge) {
+    await fs.mkdir(effectiveWorkspaceDir, { recursive: true });
+  }
   const remoteAttachmentRoots = ctx.MediaRemoteHost
     ? (resolveChannelRemoteInboundAttachmentRoots({ cfg, ctx }) ?? [])
     : [];
 
   const usedNames = new Set<string>();
   const staged = new Map<number, string>();
-  const stagedUrlAliases = new Set<number>();
+  const stagedUrls = new Map<number, string>();
   const inputDirectory = stagedInputDirectory(crypto.randomUUID());
   let stagingReady = false;
   const prepareDestination = async () => {
     if (!stagingReady) {
       // Keep the privacy marker ahead of file publication, after source validation.
-      await ensureStagedInputDirectory(effectiveWorkspaceDir, inputDirectory, abortSignal);
+      if (remoteBridge) {
+        if (!remoteBridge.createFileExclusive) {
+          throw new Error("SSH sandbox filesystem does not support exclusive input staging");
+        }
+        abortSignal?.throwIfAborted();
+        const created = await remoteBridge.createFileExclusive({
+          filePath: `${inputDirectory}/.gitignore`,
+          data: STAGED_INPUT_GITIGNORE,
+          signal: abortSignal,
+        });
+        if (created !== "created") {
+          throw new Error("Input staging directory is not owned by OpenClaw");
+        }
+      } else {
+        await ensureStagedInputDirectory(effectiveWorkspaceDir, inputDirectory, abortSignal);
+      }
       stagingReady = true;
     }
   };
@@ -127,26 +170,52 @@ export async function stageSandboxMedia(params: {
     // Keep published relative paths portable; resolve the native destination below.
     const relativeDest = path.posix.join(inputDirectory, fileName);
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
+    let downloadedMediaUri: string | undefined;
+    const stageSource = async (sourcePath: string) => {
+      if (remoteBridge) {
+        const buffer = await stageLocalFileIntoSandbox({
+          sourcePath,
+          relativeDestPath: relativeDest,
+          bridge: remoteBridge,
+          abortSignal,
+          prepareDestination,
+        });
+        if (ctx.MediaRemoteHost) {
+          // The SCP temp copy is removed below; Gateway preprocessing and
+          // history still need an original outside the remote-only workspace.
+          const saved = await saveMediaBuffer(
+            buffer,
+            media[entry.index]?.contentType,
+            "inbound",
+            SANDBOX_MEDIA_MAX_BYTES,
+            path.basename(source),
+            undefined,
+            { assertCommitAllowed: () => abortSignal?.throwIfAborted() },
+          );
+          downloadedMediaUri = buildInboundMediaUriFromPath(saved.path);
+        }
+      } else {
+        await stageLocalFileIntoRoot({
+          sourcePath,
+          rootDir: effectiveWorkspaceDir,
+          relativeDestPath: relativeDest,
+          abortSignal,
+          prepareDestination,
+        });
+      }
+    };
 
     try {
       if (ctx.MediaRemoteHost) {
         await stageRemoteFileIntoRoot({
           remoteHost: ctx.MediaRemoteHost,
           remotePath: source,
-          rootDir: effectiveWorkspaceDir,
-          relativeDestPath: relativeDest,
           abortSignal,
-          prepareDestination,
+          stageDownloadedFile: stageSource,
         });
       } else {
         const copySource = await fs.realpath(source).catch(() => source);
-        await stageLocalFileIntoRoot({
-          sourcePath: copySource,
-          rootDir: effectiveWorkspaceDir,
-          relativeDestPath: relativeDest,
-          abortSignal,
-          prepareDestination,
-        });
+        await stageSource(copySource);
       }
     } catch (err) {
       if (abortSignal?.aborted && Object.is(err, abortSignal.reason)) {
@@ -163,15 +232,22 @@ export async function stageSandboxMedia(params: {
     // For sandbox use relative path, for remote cache use absolute path
     const stagedPath = sandbox ? relativeDest : dest;
     staged.set(entry.index, stagedPath);
-    if (
-      await isUrlAliasForStagedSource({
-        url: media[entry.index]?.url,
-        sourcePath: entry.path,
-        source,
-        mediaRemoteHost: ctx.MediaRemoteHost,
-      })
-    ) {
-      stagedUrlAliases.add(entry.index);
+    const originalUrl = media[entry.index]?.url;
+    const rewritesUrl = await isUrlAliasForStagedSource({
+      url: originalUrl,
+      sourcePath: entry.path,
+      source,
+      mediaRemoteHost: ctx.MediaRemoteHost,
+    });
+    // Keep the managed original fetchable after history redacts the runner's
+    // private staged path. A remote host's path is not a local store reference.
+    const inboundUri =
+      downloadedMediaUri ??
+      (!ctx.MediaRemoteHost && (!originalUrl || rewritesUrl)
+        ? buildInboundMediaUriFromPath(source)
+        : undefined);
+    if (inboundUri || rewritesUrl) {
+      stagedUrls.set(entry.index, inboundUri ?? stagedPath);
     }
   }
 
@@ -189,7 +265,7 @@ export async function stageSandboxMedia(params: {
       nextMedia[index] = {
         ...fact,
         path: stagedPath,
-        ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
+        ...(stagedUrls.has(index) ? { url: stagedUrls.get(index) } : {}),
         workspaceDir: effectiveWorkspaceDir,
         staged: true,
       };
@@ -273,13 +349,39 @@ async function stageLocalFileIntoRoot(params: {
   await root.create(params.relativeDestPath, source.buffer);
 }
 
+async function stageLocalFileIntoSandbox(params: {
+  sourcePath: string;
+  relativeDestPath: string;
+  bridge: SandboxFsBridge;
+  abortSignal?: AbortSignal;
+  prepareDestination: () => Promise<void>;
+}): Promise<Buffer> {
+  const source = await readLocalFileSafely({
+    filePath: params.sourcePath,
+    maxBytes: SANDBOX_MEDIA_MAX_BYTES,
+  });
+  params.abortSignal?.throwIfAborted();
+  await params.prepareDestination();
+  params.abortSignal?.throwIfAborted();
+  if (!params.bridge.createFileExclusive) {
+    throw new Error("SSH sandbox filesystem does not support exclusive input staging");
+  }
+  const created = await params.bridge.createFileExclusive({
+    filePath: params.relativeDestPath,
+    data: source.buffer,
+    signal: params.abortSignal,
+  });
+  if (created !== "created") {
+    throw new Error("Input staging file already exists");
+  }
+  return source.buffer;
+}
+
 async function stageRemoteFileIntoRoot(params: {
   remoteHost: string;
   remotePath: string;
-  rootDir: string;
-  relativeDestPath: string;
   abortSignal?: AbortSignal;
-  prepareDestination: () => Promise<void>;
+  stageDownloadedFile: (sourcePath: string) => Promise<void>;
 }): Promise<void> {
   const { abortSignal } = params;
   const safeRemoteHost = normalizeScpRemoteHost(params.remoteHost);
@@ -332,10 +434,7 @@ async function stageRemoteFileIntoRoot(params: {
     );
     // Preserve arbitrary abort reasons outside retry's Error normalization.
     abortSignal?.throwIfAborted();
-    await stageLocalFileIntoRoot({
-      ...params,
-      sourcePath: tmpPath,
-    });
+    await params.stageDownloadedFile(tmpPath);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }

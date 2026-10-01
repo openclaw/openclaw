@@ -8,6 +8,57 @@ import org.junit.Test
 
 class SessionsScreenGroupingTest {
   @Test
+  fun snoozedFilterSeparatesSleepingRowsUntilTheirDeadline() {
+    val nowMs = 1_800_000_000_000L
+    val entries =
+      listOf(
+        session("active"),
+        session("sleeping").copy(snoozedUntil = nowMs + 1_000),
+        session("expired").copy(snoozedUntil = nowMs),
+        session("archived").copy(archived = true, snoozedUntil = nowMs + 1_000),
+      )
+
+    fun keys(
+      filter: SessionFilter,
+      current: String = "active",
+      time: Long = nowMs,
+    ) = resolveSessionBrowserEntries(entries, current, filter, recentFirst = true, nowMs = time).map { it.key }
+
+    assertEquals(listOf("active", "expired"), keys(SessionFilter.Recent))
+    assertEquals(listOf("sleeping"), keys(SessionFilter.Snoozed))
+    assertEquals(emptyList<String>(), keys(SessionFilter.Current, current = "sleeping"))
+    assertEquals(listOf("expired"), keys(SessionFilter.Current, current = "expired"))
+    assertEquals(listOf("archived"), keys(SessionFilter.Archived))
+    assertEquals(listOf("active", "sleeping", "expired"), keys(SessionFilter.Recent, time = nowMs + 1_000))
+    assertEquals(emptyList<String>(), keys(SessionFilter.Snoozed, time = nowMs + 1_000))
+    assertEquals(listOf("active", "sleeping", "expired", "archived"), keys(SessionFilter.Recent, current = "archived", time = nowMs + 1_000))
+  }
+
+  @Test
+  fun snoozeMenuRequiresADurableNonArchivedNonChildUnprotectedSession() {
+    val eligible = session("agent:main:dashboard:work").copy(sessionId = "durable")
+    assertEquals(true, canSnoozeSession(eligible))
+    assertEquals(true, canSnoozeSession(eligible.copy(pinned = true, hasActiveRun = true)))
+    assertEquals(true, canSnoozeSession(eligible.copy(parentSessionKey = "agent:main:main")))
+    val ineligible =
+      listOf(
+        eligible.copy(sessionId = null),
+        eligible.copy(sessionId = " "),
+        eligible.copy(archived = true),
+        eligible.copy(isMain = true),
+        eligible.copy(key = "main"),
+        eligible.copy(key = "agent:main:main"),
+        eligible.copy(key = "global"),
+        eligible.copy(key = "unknown"),
+        eligible.copy(key = "agent:main:subagent:child"),
+        eligible.copy(key = "subagent:child"),
+        eligible.copy(parentSessionKey = "parent"),
+        eligible.copy(spawnedBy = "parent"),
+      )
+    ineligible.forEach { assertEquals(it.toString(), false, canSnoozeSession(it)) }
+  }
+
+  @Test
   fun sessionPresentationTitlePrefersExplicitNamesAndKeepsDashboardPlaceholdersLocal() {
     val dashboardKey = "agent:main:dashboard:fresh"
 
@@ -367,6 +418,7 @@ class SessionsScreenGroupingTest {
         listOf(
           session("first", attention = "question", attentionExpiresAt = 100L),
           session("second", attention = "approval", attentionExpiresAt = 200L),
+          session("sleeping").copy(snoozedUntil = 150L),
         )
       var nowMs = 90L
       val waits = mutableListOf<Long>()
@@ -384,7 +436,9 @@ class SessionsScreenGroupingTest {
 
       assertEquals(listOf(10L, 1L), waits)
       assertEquals(100L, reachedAt)
-      assertEquals(200L, nextSessionStatusExpiry(entries, reachedAt))
+      assertEquals(150L, nextSessionStatusExpiry(entries, reachedAt))
+      assertEquals(200L, nextSessionStatusExpiry(entries, 150L))
+      assertEquals(null, nextSessionStatusExpiry(entries, 200L))
     }
 
   @Test

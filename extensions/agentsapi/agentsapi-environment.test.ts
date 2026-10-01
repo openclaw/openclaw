@@ -1,8 +1,19 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolParam } from "openai/resources/beta/agents/agents";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  createWorkspaceAttachmentPreparer,
+  declareAgentWorkspaceAccess,
+  prepareAgentWorkspaceAttachments,
+  registerAgentWorkspaceAccess,
+  type AgentWorkspaceAccess,
+} from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
@@ -14,7 +25,9 @@ const mocks = vi.hoisted(() => ({
   prepareInputs: vi.fn<typeof import("./agentsapi-files.js").prepareInputs>(),
   uploadInputs: vi.fn<typeof import("./agentsapi-files.js").uploadInputs>(),
   collectOutputs: vi.fn<typeof import("./agentsapi-files.js").collectOutputs>(),
+  resolvePrompt: vi.fn<(prompt: string) => string>(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: mocks.fetch }));
 vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
@@ -60,7 +73,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   }: {
     prompt: string;
     developerInstructions: string;
-  }) => ({ prompt, developerInstructions }),
+  }) => ({ prompt: mocks.resolvePrompt(prompt), developerInstructions }),
   prepareAgentWorkspaceContext: async () => ({
     instructionSnapshot: { instructions: "" },
     personaInstructions: "",
@@ -102,7 +115,8 @@ vi.mock("openclaw/plugin-sdk/llm", () => ({
 vi.mock("./agentsapi-tools.js", () => ({
   buildAgentsApiToolSurface: () => ({ declarations: [], toolMetas: [], delivery: {} }),
 }));
-vi.mock("./agentsapi-files.js", () => ({
+vi.mock("./agentsapi-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agentsapi-files.js")>()),
   prepareInputs: mocks.prepareInputs,
   uploadInputs: mocks.uploadInputs,
   collectOutputs: mocks.collectOutputs,
@@ -137,8 +151,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
   mocks.prepareInputs.mockReset().mockResolvedValue({ files: [], mappingText: "" });
-  mocks.uploadInputs.mockReset().mockResolvedValue(undefined);
+  mocks.uploadInputs.mockReset().mockResolvedValue({ status: "uploaded" });
   mocks.collectOutputs.mockReset().mockResolvedValue([]);
+  mocks.resolvePrompt.mockReset().mockImplementation((prompt) => prompt);
   mocks.fetch.mockImplementation(async ({ url }) => {
     const pathname = new URL(url).pathname;
     const response = pathname.endsWith("/items")
@@ -151,10 +166,44 @@ afterEach(() => {
   mocks.fetch.mockReset();
   mocks.commit.mockClear();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
 describe("Agents API attempt environment selection", () => {
+  it.each([
+    { nativeTools: [] },
+    {
+      nativeTools: [
+        { type: "web_search", mode: "cached", allowed_domains: ["example.com"] },
+        { type: "programmatic_tool_calling", enabled: false },
+        { type: "future_native_tool", options: { feature: true } },
+      ],
+    },
+  ])(
+    "forwards native tools $nativeTools unchanged only when creating a session",
+    async ({ nativeTools }) => {
+      const created = await attempt(undefined, undefined, undefined, undefined, { nativeTools });
+
+      expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
+      expect(await requestBody(0)).toHaveProperty("agent.tools", nativeTools);
+      mocks.fetch.mockClear();
+
+      const continued = await attempt(
+        undefined,
+        created.bind.mock.calls[0]![0],
+        undefined,
+        undefined,
+        {
+          nativeTools: nativeTools.length ? [] : [{ type: "web_search", mode: "live" }],
+        },
+      );
+
+      expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
+      expect(await requestBody(0)).toEqual({ agent: { reasoning: { effort: null } } });
+    },
+  );
+
   it.each([
     { access: "enabled" },
     { access: "disabled", allowed_domains: null },
@@ -256,7 +305,13 @@ describe("Agents API attempt environment selection", () => {
           environment === "self_hosted"
             ? { type: "self_hosted", workspace_directory: path.resolve(workspaceDir) }
             : { type: "openai_hosted" },
-        agent: { model: "fixture-model", tools: [{ type: "web_search", mode: "live" }] },
+        agent: {
+          model: "fixture-model",
+          tools: [
+            { type: "web_search", mode: "live" },
+            { type: "programmatic_tool_calling", enabled: true },
+          ],
+        },
       });
       if (environment === "self_hosted") {
         expect(createRequest).toHaveProperty("environment", {
@@ -420,8 +475,180 @@ describe("Agents API attempt environment selection", () => {
     expect(mocks.collectOutputs).toHaveBeenCalledOnce();
   });
 
-  it("rejects self-hosted inbound attachments before native writes", async () => {
-    const { result, bind } = await attempt("self_hosted", undefined, undefined, [
+  it.each([
+    {
+      name: "unprepared prompt",
+      preparedPrompt: false,
+      replacePrompt: false,
+      recorderMedia: false,
+    },
+    { name: "prepared prompt", preparedPrompt: true, replacePrompt: false, recorderMedia: false },
+    {
+      name: "hook-replaced prepared prompt",
+      preparedPrompt: true,
+      replacePrompt: true,
+      recorderMedia: false,
+    },
+    {
+      name: "deferred transcript media",
+      preparedPrompt: false,
+      replacePrompt: false,
+      recorderMedia: true,
+    },
+    {
+      name: "inline document pages with a hook-replaced prompt",
+      preparedPrompt: true,
+      replacePrompt: true,
+      recorderMedia: false,
+      images: [{ type: "image" as const, data: "cGFnZQ==", mimeType: "image/png" }],
+    },
+  ])(
+    "stages managed attachments for new and resumed self-hosted turns with $name",
+    async ({ preparedPrompt, replacePrompt, recorderMedia, images }) => {
+      const fixture = await workspaceAttachmentFixture();
+      let binding: AgentsApiBinding | undefined;
+      try {
+        for (const job of ["initial-import", "continued-import"]) {
+          const contents = [
+            Buffer.from(
+              `INFO import queued\nINFO import completed job_id=${job} rows_processed=42\n`,
+            ),
+            Buffer.from(`ERROR job_id=${job} record 9 has an invalid amount\n`),
+          ];
+          const media = await Promise.all(
+            contents.map(async (bytes, index) => {
+              const saved = await saveMediaBuffer(bytes, "text/plain", "inbound");
+              return {
+                path: saved.path,
+                url: `media://inbound/${saved.id}`,
+                fileName: `import-job-${index}.log`,
+                contentType: "text/plain",
+                sizeBytes: bytes.length,
+              };
+            }),
+          );
+          const originalMedia = structuredClone(media);
+          const prompt = `Check ${job} with grep.`;
+          const createRecorder = recorderMedia
+            ? await loadUserTurnTranscriptRecorderFactoryForTest()
+            : undefined;
+          const recorder = createRecorder?.({
+            target: () => undefined,
+            resolveInput: async () => ({ text: prompt, media }),
+          });
+          const priorNote = preparedPrompt
+            ? await prepareAgentWorkspaceAttachments({
+                workspaceDir: fixture.gatewayRoot,
+                turn: { media, timeoutMs: 1_000 },
+                assertCurrent: () => {},
+              })
+            : undefined;
+          if (replacePrompt) {
+            mocks.resolvePrompt.mockReturnValue(prompt);
+          }
+          const submitted = await attempt(
+            "self_hosted",
+            binding,
+            fixture.gatewayRoot,
+            recorderMedia ? undefined : media,
+            undefined,
+            priorNote ? `${prompt}\n\n${priorNote}` : prompt,
+            recorder,
+            images,
+          );
+
+          expect(submitted.result.terminal).toEqual({ kind: "ok" });
+          const request = (await requestBody(1)) as {
+            events: Array<{ input: Array<{ content: Array<{ text: string }> }> }>;
+          };
+          const text = request.events[0]!.input[0]!.content[0]!.text;
+          const attachmentPaths = [...text.matchAll(/\[media attached: ([^\]]+)\]/gu)].map(
+            (match) => match[1]!,
+          );
+          expect(attachmentPaths).toHaveLength(2);
+          expect(text).toContain(`${prompt}\n\n[media attached: ${attachmentPaths[0]}]`);
+          for (const [index, attachmentPath] of attachmentPaths.entries()) {
+            expect(attachmentPath.startsWith(`${fixture.remoteRoot}${path.sep}`)).toBe(true);
+            expect(await fs.readFile(attachmentPath)).toEqual(contents[index]);
+          }
+          if (images) {
+            expect(text).toContain("The Agents API harness does not support inline image inputs.");
+            expect(text).toContain(
+              "Original attachments are available at the prepared execution paths above.",
+            );
+            expect(text).toContain(
+              "inspect those files with available tools to try another approach",
+            );
+          }
+          expect(media).toEqual(originalMedia);
+          binding ??= submitted.bind.mock.calls[0]![0];
+          mocks.fetch.mockClear();
+        }
+      } finally {
+        fixture.release();
+      }
+    },
+  );
+
+  it("rejects a mixed managed and HTTPS-only attachment batch before session submission", async () => {
+    const fixture = await workspaceAttachmentFixture();
+    const saved = await saveMediaBuffer(Buffer.from("managed attachment"), "text/plain", "inbound");
+    try {
+      const { result } = await attempt("self_hosted", undefined, fixture.gatewayRoot, [
+        { path: saved.path, url: `media://inbound/${saved.id}` },
+        { url: "https://example.com/unavailable.txt", fileName: "unavailable.txt" },
+      ]);
+
+      expect(result).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({
+            message:
+              "Workspace attachment 2 could not be prepared; ensure every attachment is available to the registered attachment provider before retrying",
+          }),
+        },
+      });
+      expect(mocks.fetch).not.toHaveBeenCalled();
+    } finally {
+      fixture.release();
+    }
+  });
+
+  it.each(["ready", "not-ready", "stopped"])(
+    "keeps text-only transcript recorders usable with a %s workspace",
+    async (state) => {
+      const fixture = await workspaceAttachmentFixture();
+      const workspaceDir =
+        state === "not-ready" ? path.join(fixture.gatewayRoot, "pending") : fixture.gatewayRoot;
+      if (state === "not-ready") {
+        declareAgentWorkspaceAccess(workspaceDir);
+      } else if (state === "stopped") {
+        fixture.release();
+      }
+      const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+      const recorder = createRecorder({
+        target: () => undefined,
+        resolveInput: async () => ({ text: "Text-only request" }),
+      });
+      try {
+        const { result } = await attempt(
+          "self_hosted",
+          undefined,
+          workspaceDir,
+          undefined,
+          undefined,
+          "Text-only request",
+          recorder,
+        );
+        expect(result.terminal).toEqual({ kind: "ok" });
+      } finally {
+        fixture.release();
+      }
+    },
+  );
+
+  it("explains the missing self-hosted attachment provider", async () => {
+    const { result } = await attempt("self_hosted", undefined, undefined, [
       { path: "/fixture/input.txt" },
     ]);
 
@@ -429,13 +656,31 @@ describe("Agents API attempt environment selection", () => {
       terminal: {
         kind: "failed",
         error: expect.objectContaining({
-          message: "Agents API file transfers require an OpenAI-hosted environment",
+          message:
+            "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
         }),
       },
     });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(bind).not.toHaveBeenCalled();
-    expect(mocks.prepareInputs).not.toHaveBeenCalled();
+  });
+
+  it("preserves the workspace provider's managed-source boundary", async () => {
+    const fixture = await workspaceAttachmentFixture();
+    const source = path.join(fixture.gatewayRoot, "private-project-file.txt");
+    await fs.writeFile(source, "private project bytes");
+    try {
+      const { result } = await attempt("self_hosted", undefined, fixture.gatewayRoot, [
+        { path: source, fileName: "import-job.log" },
+      ]);
+
+      expect(result).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({ code: "path-not-allowed" }),
+        },
+      });
+    } finally {
+      fixture.release();
+    }
   });
 });
 
@@ -445,6 +690,9 @@ async function attempt(
   workspaceDir = "/fixture/project",
   media?: AgentHarnessAttemptParamsV2["media"],
   pluginConfig?: Record<string, unknown>,
+  prompt = "Fixture prompt",
+  userTurnTranscriptRecorder?: AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"],
+  images?: AgentHarnessAttemptParamsV2["images"],
 ) {
   // Authentication/tool construction are host-prepared and mocked at their boundaries.
   const authStorage = AuthStorage.inMemory();
@@ -456,8 +704,10 @@ async function attempt(
     workspaceDir,
     runId: "run-fixture",
     timeoutMs: 1_000,
-    prompt: "Fixture prompt",
+    prompt,
     media,
+    images,
+    userTurnTranscriptRecorder,
     provider: "openai",
     modelId: "fixture-model",
     model: {
@@ -509,8 +759,66 @@ async function attempt(
       storePath: "/fixture/sessions.json",
     },
     () => ({ ...(environment === undefined ? {} : { environment }), ...pluginConfig }),
+    new WeakMap(),
   );
   return { result, bind };
+}
+
+async function workspaceAttachmentFixture() {
+  const directory = tempDirs.make("agentsapi-self-hosted-attachments-");
+  const gatewayRoot = path.join(directory, "gateway");
+  const remoteRoot = path.join(directory, "executor");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(directory, "state"));
+  await fs.mkdir(gatewayRoot);
+  await fs.mkdir(remoteRoot);
+  const bridge: AgentWorkspaceAccess["bridge"] = {
+    readFile: ({ filePath }) => fs.readFile(path.join(remoteRoot, filePath)),
+    writeFile: async () => {
+      throw new Error("Attachment staging must use exclusive creation");
+    },
+    async createFileExclusive({ filePath, data, mkdir }) {
+      const destination = path.join(remoteRoot, filePath);
+      if (mkdir) {
+        await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      }
+      try {
+        await fs.writeFile(destination, data, { flag: "wx", mode: 0o600 });
+        return "created";
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          return "exists";
+        }
+        throw error;
+      }
+    },
+    async stat({ filePath }) {
+      try {
+        const stat = await fs.stat(path.join(remoteRoot, filePath));
+        return {
+          type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
+    },
+  };
+  const release = registerAgentWorkspaceAccess(gatewayRoot, {
+    bridge,
+    prepareTurnAttachments: createWorkspaceAttachmentPreparer({
+      remoteRoot,
+      createBridge: () => ({
+        readFile: bridge.readFile,
+        stat: bridge.stat,
+        createFileExclusive: bridge.createFileExclusive!,
+      }),
+    }),
+  });
+  return { gatewayRoot, remoteRoot, release };
 }
 
 function savedBinding(

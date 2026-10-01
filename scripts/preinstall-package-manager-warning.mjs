@@ -1,6 +1,6 @@
 // Enforces the package runtime contract, then warns for non-pnpm lifecycle installs.
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, rmSync } from "node:fs";
+import { accessSync, constants, readFileSync, realpathSync, rmSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "../node-version.mjs";
@@ -165,6 +165,7 @@ function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
  *   platform?: NodeJS.Platform;
  *   cwd?: string;
  *   execPath?: string;
+ *   access?: (path: string, mode: number) => void;
  *   realpath?: (path: string) => string;
  *   run?: PackageCliNodeProbeRun;
  * }} [options]
@@ -177,6 +178,7 @@ export function probePackageCliNodeRuntime(options = {}) {
     platform = process.platform,
     cwd = process.cwd(),
     execPath = process.execPath,
+    access = accessSync,
     realpath = realpathSync,
     run = spawnSync,
   } = options;
@@ -218,6 +220,15 @@ export function probePackageCliNodeRuntime(options = {}) {
       continue;
     }
     seen.add(candidate);
+    try {
+      // PATH lookup skips absent and nonexecutable files without launching them.
+      access(candidate, constants.X_OK);
+    } catch (error) {
+      if (["EACCES", "ENOENT", "ENOTDIR"].includes(error?.code)) {
+        continue;
+      }
+      return null;
+    }
     try {
       // Skip stock/fork Bun lifecycle shims, never persistent node aliases.
       if (

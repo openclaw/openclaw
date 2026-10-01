@@ -39,11 +39,14 @@ const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
 
-function toFtsQuery(query: string): string {
+function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
   return query
     .trim()
     .split(/\s+/u)
-    .map((token) => `"${token.replaceAll('"', '""')}"`)
+    .map(
+      (token, index, tokens) =>
+        `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
+    )
     .join(" AND ");
 }
 
@@ -175,7 +178,7 @@ export function searchSessionTranscriptsReadOnlySync(
               ])
               .where(
                 /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
-                sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query)}`,
+                sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query, params.match)}`,
               )
               .$if(params.sessionKeys === undefined, (builder) =>
                 builder.where((eb) =>

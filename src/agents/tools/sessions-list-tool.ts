@@ -10,7 +10,7 @@ import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/sessi
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { stringEnum } from "../schema/typebox.js";
+import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsListTool,
@@ -52,12 +52,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
-  user: Type.Optional(
-    Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
-    }),
-  ),
+  user: requesterProfileSchema(),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
@@ -346,9 +341,8 @@ export function createSessionsListTool(opts?: {
               typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
                 ? (entry as { ownerSessionKey?: string }).ownerSessionKey
                 : undefined,
-            spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
-            parentSessionKey:
-              typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
+            spawnedBy: readStringValue(entry.spawnedBy),
+            parentSessionKey: readStringValue(entry.parentSessionKey),
           });
           const kind = classifySessionListKind(entry);
           if (
@@ -411,8 +405,7 @@ export function createSessionsListTool(opts?: {
 
         const entryChannel = readStringValue(entry.channel);
         const entryOrigin = entry.origin;
-        const originChannel =
-          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
+        const originChannel = readStringValue(entryOrigin?.provider);
         const deliveryContext = entry.deliveryContext;
         const deliveryChannel = readStringValue(deliveryContext?.channel);
         const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
@@ -433,11 +426,7 @@ export function createSessionsListTool(opts?: {
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
         const parentSessionKeyRaw =
-          typeof entry.parentSessionKey === "string"
-            ? entry.parentSessionKey
-            : typeof entry.spawnedBy === "string"
-              ? entry.spawnedBy
-              : undefined;
+          readStringValue(entry.parentSessionKey) ?? readStringValue(entry.spawnedBy);
         const parentSessionKey = parentSessionKeyRaw
           ? visibleReference(parentSessionKeyRaw)
           : undefined;

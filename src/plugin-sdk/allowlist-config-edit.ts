@@ -307,16 +307,11 @@ function applyAccountScopedAllowlistConfigEdit(params: {
       changed = true;
     }
   } else {
-    const keep: string[] = [];
-    for (const entry of existing) {
+    next = existing.filter((entry) => {
       const normalized = params.normalize([entry]);
-      if (normalized.some(shouldMatch)) {
-        changed = true;
-        continue;
-      }
-      keep.push(entry);
-    }
-    next = keep;
+      return !normalized.some(shouldMatch);
+    });
+    changed = next.length !== existing.length;
   }
 
   if (changed) {

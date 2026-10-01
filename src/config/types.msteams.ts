@@ -1,4 +1,3 @@
-// Defines Microsoft Teams channel configuration types.
 import type { ChannelPreviewStreamingConfig } from "./types.base.js";
 import type {
   ChannelBotInteractionConfig,

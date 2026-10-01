@@ -1,12 +1,19 @@
 // Workboard tests cover tools plugin behavior.
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../api.js";
+import plugin from "../index.js";
+import { WorkboardStore } from "./store.js";
+import { startEmptySessionsBoardService } from "./test/sessions-board.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
 } from "./test/sqlite-store.js";
+import { createWorkboardSessionsBoardTools } from "./tools-sessions-board.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
 
@@ -15,6 +22,117 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("passes live invocation authority through the default-on Sessions board factory", async () => {
+    const store = createWorkboardSqliteTestStore();
+    await startEmptySessionsBoardService(store);
+    const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
+    using openStore = vi.spyOn(WorkboardStore, "openSqlite");
+    openStore.mockReturnValue(store);
+    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+    plugin.register(
+      createTestPluginApi({
+        runtimeSource: fileURLToPath(new URL("../index.ts", import.meta.url)),
+        registerTool,
+      }),
+    );
+    const [factory, options] = expectDefined(
+      registerTool.mock.calls.find(([, registration]) =>
+        registration?.names?.includes("workboard_sessions_board_update"),
+      ),
+      "Sessions board factory",
+    );
+    expect(options?.optional).not.toBe(true);
+    const context = {
+      assertInvocationCurrent() {
+        throw new Error("Caller authority is no longer active.");
+      },
+    };
+    const tools =
+      typeof factory === "function"
+        ? factory(context)
+        : "create" in factory
+          ? factory.create(context)
+          : undefined;
+    if (!Array.isArray(tools)) {
+      throw new Error("Expected Sessions board tools from the registered factory.");
+    }
+    for (const [name, input] of [
+      ["update", { instructions: "Revoked edit" }],
+      ["move", { sessionKey: "agent:main:one", columnId: "working" }],
+    ] as const) {
+      const tool = expectDefined(
+        tools.find((entry) => entry.name === `workboard_sessions_board_${name}`),
+        name,
+      );
+      await expect(tool.execute(`revoked-${name}`, input)).rejects.toThrow(
+        "Caller authority is no longer active.",
+      );
+    }
+    expect(factory).toMatchObject({ contextVersion: 2 });
+    expect(await store.getSessionsBoard("sessions")).toEqual(board);
+    expect(await store.listSessionPlacements("sessions")).toEqual([]);
+  });
+
+  it("defaults Sessions board tools only when one Sessions board exists", async () => {
+    vi.useFakeTimers();
+    const store = createWorkboardSqliteTestStore();
+    const sessionsBoard = await startEmptySessionsBoardService(store);
+    try {
+      const tools = new Map(
+        [
+          ...createWorkboardTools({ store }),
+          ...createWorkboardSessionsBoardTools({
+            store,
+            sessionsBoard,
+            caller: { assertCurrent() {} },
+          }),
+        ].map((tool) => [tool.name, tool]),
+      );
+      const read = expectDefined(tools.get("workboard_sessions_board_read"), "Sessions board read");
+      const update = expectDefined(
+        tools.get("workboard_sessions_board_update"),
+        "Sessions board update",
+      );
+      const move = expectDefined(tools.get("workboard_sessions_board_move"), "Sessions board move");
+      await expect(read.execute("none", {})).rejects.toThrow("No Sessions board exists");
+      const create = expectDefined(tools.get("workboard_board_create"), "Board create");
+      expect(Value.Check(create.parameters, { id: "sessions", kind: "sessions" })).toBe(true);
+      await create.execute("create", { id: "sessions", name: "My sessions", kind: "sessions" });
+      expect(readPayload(await read.execute("one", {}))).toMatchObject({
+        board: { id: "sessions", kind: "sessions" },
+        sessions: [],
+      });
+      await update.execute("update-one", { instructions: "Highlight approvals." });
+      await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
+        sessions: { instructions: "Highlight approvals." },
+      });
+      await store.upsertBoard({ id: "another", kind: "sessions" });
+      for (const [tool, input] of [
+        [read, {}],
+        [update, { instructions: "Ambiguous target." }],
+        [move, { sessionKey: "agent:main:example", columnId: "working" }],
+      ] as const) {
+        await expect(tool.execute("ambiguous", input)).rejects.toThrow(
+          "boardId is required when more than one Sessions board exists",
+        );
+      }
+      expect(readPayload(await read.execute("explicit", { boardId: "another" }))).toMatchObject({
+        board: { id: "another", kind: "sessions" },
+      });
+      await create.execute("create-cards", { id: "cards", kind: "cards" });
+      await expect(read.execute("cards", { boardId: "cards" })).rejects.toThrow(
+        "This board is not a Sessions board.",
+      );
+      await expect(read.execute("invalid", { boardId: 42 })).rejects.toThrow();
+      await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
+        sessions: { instructions: "Highlight approvals." },
+      });
+    } finally {
+      await sessionsBoard.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
     const store = createWorkboardSqliteTestStore();
     const restrictedContext = {

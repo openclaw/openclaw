@@ -35,7 +35,7 @@ import {
   testing,
 } from "./openclaw-test-instance.js";
 import { isProcessAlive, waitForDead, waitForFile, waitForFixtureFile } from "./process-wait.js";
-import { createDeferred, withTestTimeout } from "./promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 const MIGRATION_CONVERGENCE_REFUSAL =
@@ -44,6 +44,7 @@ const RESTART_MARKER =
   "[openclaw-test-instance] restarting gateway after migration convergence refusal";
 const LEGACY_STORE_PATH = "/fixture/sessions/sessions.json";
 const LEGACY_MIGRATION_REFUSAL = `Legacy session store requires migration: ${LEGACY_STORE_PATH}. Run "openclaw doctor --fix" against the same state/config before starting OpenClaw.`;
+const PROFILED_LEGACY_MIGRATION_REFUSAL = `Legacy session store requires migration: ${LEGACY_STORE_PATH}. Run "openclaw --profile qa-fixture doctor --fix" against the same state/config before starting OpenClaw.`;
 const LEGACY_STARTUP_FAILURE = [
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
   `- Legacy sessions store unreadable; left in place at ${LEGACY_STORE_PATH}`,
@@ -326,8 +327,8 @@ if (kind === "cli" || kind === "cli-drain") {
   process.exit(Number(argv[0]));
 }
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
-const legacyRefusal = kind.startsWith("startup-") ? ${JSON.stringify(LEGACY_STARTUP_FAILURE)} : ${JSON.stringify(LEGACY_MIGRATION_REFUSAL)};
-if (kind === "legacy-refuse" || kind === "startup-legacy-refuse") { process.stderr.write(legacyRefusal + "\\n"); process.exit(78); }
+const legacyRefusal = kind.startsWith("startup-") ? ${JSON.stringify(LEGACY_STARTUP_FAILURE)} : kind.startsWith("profile-") ? ${JSON.stringify(PROFILED_LEGACY_MIGRATION_REFUSAL)} : ${JSON.stringify(LEGACY_MIGRATION_REFUSAL)};
+if (kind === "legacy-refuse" || kind === "startup-legacy-refuse" || kind === "profile-legacy-refuse") { process.stderr.write(legacyRefusal + "\\n"); process.exit(78); }
 if (kind === "late-legacy-refuse" || kind === "startup-late-legacy-refuse") {
   spawnInheritedWriter("stderr", legacyRefusal + "\\n");
   process.exit(78);
@@ -592,7 +593,7 @@ describe("openclaw test instance", () => {
     const serverSpy = vi.spyOn(net, "createServer");
     const probe = net.connect(instance.port, "127.0.0.1");
     try {
-      await withTestTimeout(once(probe, "close"), 1_000, "reservation retained a probe connection");
+      await withinTest(once(probe, "close"), signal);
       await startGatewayForPortLifecycle(instance, signal);
       expect(instance.readiness).toMatchObject([
         { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
@@ -797,7 +798,11 @@ describe("openclaw test instance", () => {
       const timeoutMs = mode === "wait" ? 1_000 : 30_000;
       const command = trackOperation(scope.run(true, () => instance.cli([mode], { timeoutMs })));
       if (mode === "drain") {
-        await withTestTimeout(control!.reached, 5_000, "CLI stdout writer did not reach its gate");
+        await awaitGateBeforeSettlement(
+          control!.reached,
+          command,
+          "CLI stdout writer did not reach its gate",
+        );
         const [attempt] = await readAttempts();
         await waitForDead(attempt!.pid, 5_000);
         await control!.release();
@@ -851,9 +856,9 @@ describe("openclaw test instance", () => {
     const command = trackOperation(instance.cli(["fixture"], { timeoutMs: 10_000 }));
     let writerPid: number | undefined;
     try {
-      await withTestTimeout(
+      await awaitGateBeforeSettlement(
         control.reached,
-        5_000,
+        command,
         "CLI stderr fixture did not reach its release gate",
       );
       const [attempt] = await readAttempts();
@@ -1359,13 +1364,16 @@ describe("openclaw test instance", () => {
 
   it.for([
     "legacy-refuse",
+    "profile-legacy-refuse",
     "late-legacy-refuse",
     "startup-legacy-refuse",
     "startup-late-legacy-refuse",
   ])("reports a typed %s only after the child's stderr closes", async (action) => {
     const message = action.startsWith("startup-")
       ? LEGACY_STARTUP_FAILURE
-      : LEGACY_MIGRATION_REFUSAL;
+      : action === "profile-legacy-refuse"
+        ? PROFILED_LEGACY_MIGRATION_REFUSAL
+        : LEGACY_MIGRATION_REFUSAL;
     const control = action.includes("late-") ? await createGatewayControl() : undefined;
     const { instance, readAttempts } = await createFakeGateway(
       `${action},config-refuse`,
@@ -1373,6 +1381,9 @@ describe("openclaw test instance", () => {
       1_500,
       control,
     );
+    if (action === "profile-legacy-refuse" || action.startsWith("startup-")) {
+      instance.env.OPENCLAW_PROFILE = "qa-fixture";
+    }
     const exited = createDeferred();
     if (control) {
       control.observers.onLaunch = () => {
@@ -1411,10 +1422,14 @@ describe("openclaw test instance", () => {
     "legacy-stdout",
     "legacy-status1",
     "legacy-no-advice",
+    "profile-legacy-refuse",
     "startup-no-advice",
     "startup-warning",
   ])("does not classify %s as an explained legacy migration refusal", async (action) => {
     const { instance, readAttempts } = await createFakeGateway(action);
+    if (action === "profile-legacy-refuse") {
+      instance.env.OPENCLAW_PROFILE = "different-fixture";
+    }
     const error = await instance.startGateway().catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(GatewayStartupRefusedError);
@@ -1784,7 +1799,7 @@ describe("openclaw test instance", () => {
         });
         const exited = once(leader, "exit");
         const closed = once(leader, "close");
-        // A spawn error rejects both event promises; the bounded joins below own it.
+        // A spawn error rejects both event promises; the joins below own it.
         void closed.catch(() => undefined);
         // A timeout must reap the raw group even before preparation reaches its gate.
         const abortGroup = () => {
@@ -1831,7 +1846,7 @@ describe("openclaw test instance", () => {
             expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
               "dead",
             );
-            await withTestTimeout(closed, 500, "fixture pipes did not close after SIGKILL");
+            await withinTest(closed, signal);
             await waitForDead(resistantPid, 500);
             expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
               "dead",
@@ -1850,7 +1865,7 @@ describe("openclaw test instance", () => {
               }
             }
           }
-          await withTestTimeout(closed, 500, "fixture pipes did not close after SIGKILL");
+          await closed;
           if (resistantPid) {
             await waitForDead(resistantPid, 500);
           }
@@ -1955,14 +1970,10 @@ describe("openclaw test instance", () => {
         // A free socket is not evidence that the retained process owner has closed.
         await expect(isPortReserved(instance.port)).resolves.toBe(false);
 
-        // Register before release, but charge only post-release drain to the stop budget.
+        // Register before release so the native close cannot be missed.
         const closed = trackOperation(once(firstChild, "close"));
         await fs.writeFile(`${tracePath}.draining-release`, "");
-        await withTestTimeout(
-          closed,
-          stopTimeoutMs * 2,
-          "terminal fixture did not close after release",
-        );
+        await closed;
         expect(firstChild.stdout.closed).toBe(true);
         expect(firstChild.stderr.closed).toBe(true);
         clock.mockReturnValue(Date.now());
@@ -2200,8 +2211,7 @@ describe("openclaw test instance", () => {
       await stopTrimming?.();
     });
 
-    // Use the existing fixture-hook budget for TS bootstrap. Neither trimming
-    // deadline starts until the real helper reaches its held HTTP request.
+    // Use the fixture-hook budget for TS bootstrap before exercising trimming.
     beforeEach(async ({ signal }) => {
       const cases = [
         { chunks: ["€a", "b"], limit: 4, expected: "ab" },
@@ -2247,12 +2257,8 @@ describe("openclaw test instance", () => {
         await closed;
       };
       exerciseTrimming = async () => {
-        // Arm the anti-hang deadline after importing the real helper, before releasing it.
-        const { stdout } = await withTestTimeout(
-          control.release().then(() => completed),
-          10_000,
-          "UTF-8 log trimming did not complete after loading the actual helper",
-        );
+        await control.release();
+        const { stdout } = await completed;
         expect(stdout).toBe("UTF-8 cases completed");
       };
       await trackOperation(

@@ -24,7 +24,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
-} from "./components/chat-message.ts";
+} from "./components/chat-message-confirmation.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import { isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";

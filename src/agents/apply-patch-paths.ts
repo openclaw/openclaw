@@ -20,7 +20,7 @@ function relativePathEscapesRoot(relativePath: string): boolean {
 
 export function toDisplayPath(resolved: string, cwd: string): string {
   const relative = path.relative(cwd, resolved);
-  if (!relative || relative === "") {
+  if (!relative) {
     return path.basename(resolved);
   }
   if (relativePathEscapesRoot(relative)) {
@@ -114,23 +114,6 @@ function normalizePatchPath(
   }
 }
 
-function pushPath(
-  target: string[],
-  seen: Set<string>,
-  raw: string,
-  options: ApplyPatchPathExtractionOptions,
-): void {
-  const normalized = normalizePatchPath(raw, options);
-  if (!normalized) {
-    return;
-  }
-  if (seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  target.push(normalized);
-}
-
 /**
  * Walk an apply_patch envelope and return every destination path found, in
  * the order they appear. Duplicates are de-duplicated (the same file may be
@@ -141,12 +124,14 @@ export function extractApplyPatchTargetPaths(
   input: unknown,
   options: ApplyPatchPathExtractionOptions = {},
 ): string[] {
-  const paths: string[] = [];
-  const seen = new Set<string>();
+  const paths = new Set<string>();
   for (const target of extractApplyPatchTargets(input)) {
-    pushPath(paths, seen, target.path, options);
+    const normalized = normalizePatchPath(target.path, options);
+    if (normalized) {
+      paths.add(normalized);
+    }
   }
-  return paths;
+  return [...paths];
 }
 
 /** Derive policy-visible paths using the asynchronous resolver used by execution. */
@@ -154,8 +139,7 @@ export async function extractResolvedApplyPatchTargetPaths(
   input: unknown,
   options: ApplyPatchPathExtractionOptions = {},
 ): Promise<string[]> {
-  const paths: string[] = [];
-  const seen = new Set<string>();
+  const paths = new Set<string>();
   const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
   for (const target of extractApplyPatchTargets(input)) {
     try {
@@ -166,14 +150,13 @@ export async function extractResolvedApplyPatchTargetPaths(
         : resolved
           ? path.posix.normalize(resolved.containerPath)
           : path.normalize(resolveSandboxInputPath(filePath, cwd));
-      if (normalized && normalized !== "." && !seen.has(normalized)) {
-        seen.add(normalized);
-        paths.push(normalized);
+      if (normalized && normalized !== ".") {
+        paths.add(normalized);
       }
     } catch {
       options.signal?.throwIfAborted();
       // Derived paths are best-effort metadata; execution remains authoritative.
     }
   }
-  return paths;
+  return [...paths];
 }

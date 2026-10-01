@@ -33,6 +33,7 @@ import {
   assertSubagentRegistryWriteSourceCurrent,
   captureSubagentRunMutationSnapshot,
   publishSubagentRunPostimages,
+  replaceSubagentRunRecord,
 } from "./subagent-registry-persistence.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -173,6 +174,7 @@ export async function completeSubagentRunAttempt(
         previous: new Map([[currentEntry, previous]]),
         context: stateContext,
         persist: params.persistAsyncOrThrow,
+        withPublication: collectorSession?.withPublication,
         assertCurrent: () => {
           assertCurrent();
           collectorSession?.assertCurrent();
@@ -180,12 +182,6 @@ export async function completeSubagentRunAttempt(
         onPublished,
       });
       return result.publication === "published";
-    };
-    const restoreEntrySnapshot = (snapshot: SubagentRunRecord) => {
-      for (const key of Object.keys(currentEntry)) {
-        Reflect.deleteProperty(currentEntry, key);
-      }
-      Object.assign(currentEntry, snapshot);
     };
     const recoveryRequested = completeParams.recoverInterrupted === true;
     if (
@@ -400,7 +396,7 @@ export async function completeSubagentRunAttempt(
       entry.killReconciliation !== undefined
     ) {
       const killReconciliation = entry.killReconciliation;
-      const stableTaskCancellation = entry.killReconciliation?.taskCancellationAccepted === true;
+      const stableTaskCancellation = killReconciliation.taskCancellationAccepted === true;
       const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
       const completionPredatesCancellation =
         typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
@@ -640,7 +636,7 @@ export async function completeSubagentRunAttempt(
         entry.suppressCompletionDelivery = true;
       }
       const liveBeforeCommit = captureSubagentRunMutationSnapshot(currentEntry);
-      restoreEntrySnapshot(entry);
+      replaceSubagentRunRecord(currentEntry, entry);
       entry = currentEntry;
       if (!(await commit(liveBeforeCommit, () => context.bumpCleanupGeneration(currentEntry)))) {
         return;
@@ -655,7 +651,7 @@ export async function completeSubagentRunAttempt(
     // Only the canonical state/capture transition is serialized. Cleanup
     // remains re-entrant so a stalled browser close cannot strand a duplicate callback.
     releaseCompletionLock();
-    collectorSession?.release();
+    await collectorSession?.release();
   }
 
   if (!entry) {

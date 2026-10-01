@@ -52,6 +52,7 @@ import {
 } from "../thinking-runtime.js";
 import {
   createAgentAttemptLifecycleCallbacks,
+  resetAgentAttemptLifecycle,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
@@ -126,16 +127,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       })
     : undefined;
   params.trackInternalModelRunTarget(internalSessionTarget);
-  let attemptSessionTarget =
-    internalSessionTarget ??
-    (sessionKey && storePath
-      ? {
-          agentId: sessionAgentId,
-          sessionId,
-          sessionKey,
-          storePath,
-        }
-      : undefined);
+  let attemptSessionTarget = internalSessionTarget ?? sessionEffectsSource;
   const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
   const startedAt = Date.now();
@@ -357,9 +349,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           attemptMediaTaskIds = sessionKey
             ? getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId)
             : new Set<string>();
-          attemptLifecycleState.lifecycleError = undefined;
-          attemptLifecycleState.lifecycleFinishing = false;
-          attemptLifecycleState.lifecycleEnded = false;
+          resetAgentAttemptLifecycle(attemptLifecycleState);
           const isAutoFallbackPrimaryProbeCandidate =
             autoFallbackPrimaryProbe &&
             providerOverride === autoFallbackPrimaryProbe.provider &&
@@ -461,6 +451,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           effectiveTurnThinkLevel = candidateThinkLevel;
           try {
             return await attemptExecutionRuntime.runAgentAttempt({
+              ...runOptions,
               preparedRunAdmission: params.preparedRunAdmission,
               providerOverride,
               modelOverride,
@@ -473,7 +464,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               originalProvider: provider,
               cfg,
               sessionEntry: attemptSessionEntry,
-              agentHarnessRuntimeOverride,
               sessionId: attemptSessionTarget?.sessionId ?? sessionId,
               sessionKey,
               ...(attemptSessionTarget ? { sessionTarget: attemptSessionTarget } : {}),
@@ -483,12 +473,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               cwd,
               body,
               transcriptBody,
-              isFallbackRetry: runOptions.isFallbackRetry,
-              classifyResult: runOptions.classifyResult,
               preserveCliSessionBinding:
                 isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
                 params.preserveUserFacingSessionModelState,
-              modelRoutingProvenance: runOptions.modelRoutingProvenance,
               resolvedThinkLevel: candidateThinkLevel,
               fastMode,
               fastModeStartedAtMs,
@@ -496,7 +483,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 fastMode === "auto"
                   ? (params.opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
                   : fastModeState.fastAutoOnSeconds,
-              isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
               timeoutMs,
               runTimeoutOverrideMs,
               runId,
@@ -514,7 +500,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               pluginsEnabled,
               ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
               pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
-              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
                 !isNewSession ||
                 (await attemptExecutionRuntime.sessionTranscriptHasContent(
@@ -529,10 +514,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 (runOptions.isFallbackRetry &&
                   attemptLifecycleState.currentTurnUserMessagePersisted),
               userTurnTranscriptRecorder,
-              assistantErrorTranscript: runOptions.assistantErrorTranscript,
-              authProfileFailurePolicy: runOptions.authProfileFailurePolicy,
-              contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
-              onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
               onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
               onCompactionAccounting: candidateAccounting.observe,
               onCompactionRequestBudget: candidateAccounting.observeRequestBudget,

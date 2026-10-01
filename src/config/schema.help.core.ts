@@ -1,8 +1,8 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 import { META_FIELD_HELP } from "./schema.meta.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
+import { STORAGE_FIELD_HELP } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
@@ -83,6 +83,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
+  ...STORAGE_FIELD_HELP,
   ...DESKTOP_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
@@ -343,9 +344,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.entries.*.fastModeDefault":
-    'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
+    'Optional per-agent default for fast mode ("auto", "ultrafast", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.defaults.fastModeDefault":
-    'Default fast-mode policy for the agent loop ("auto", true, or false). Individual agent entries override it.',
+    'Default fast-mode policy for the agent loop ("auto", "ultrafast", true, or false). Individual agent entries override it.',
   "agents.entries.*.runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.entries.*.runtime.type":

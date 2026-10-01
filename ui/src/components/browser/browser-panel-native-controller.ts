@@ -161,14 +161,13 @@ export class BrowserPanelNativeController {
         });
       } else if (activatePopups && tab.openedBy === "native" && !previous.has(tab.id)) {
         if (!popupScopes.has(tab.id)) {
-          const eligible = [...presenters].filter((presenter) => presenter.includesTab(tab));
+          const eligible = [...presenters]
+            .filter((presenter) => presenter.includesTab(tab))
+            .toSorted((a, b) => b.presentation.lastPresented - a.presentation.lastPresented);
           const owner =
-            eligible
-              .filter((presenter) => presenter.presentation.presentedTabId === tab.openerTabId)
-              .toSorted((a, b) => b.presentation.lastPresented - a.presentation.lastPresented)[0] ??
-            eligible
-              .filter((presenter) => presenter.presentation.lastPresented > 0)
-              .toSorted((a, b) => b.presentation.lastPresented - a.presentation.lastPresented)[0];
+            eligible.find(
+              (presenter) => presenter.presentation.presentedTabId === tab.openerTabId,
+            ) ?? eligible.find((presenter) => presenter.presentation.lastPresented > 0);
           if (owner) {
             popupScopes.set(tab.id, owner.presentation.scope);
           }

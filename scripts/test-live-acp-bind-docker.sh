@@ -26,18 +26,6 @@ ACP_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_A
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
 DOCKER_TRUSTED_HARNESS_MOUNT=(-v "$TRUSTED_HARNESS_DIR":"$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR":ro)
 
-openclaw_live_acp_bind_append_build_extension() {
-  local extension="${1:?extension required}"
-  local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
-  case " $current " in
-    *" $extension "*)
-      ;;
-    *)
-      export OPENCLAW_DOCKER_BUILD_EXTENSIONS="${current:+$current }$extension"
-      ;;
-  esac
-}
-
 openclaw_live_acp_bind_resolve_auth_provider() {
   case "${1:-}" in
     claude) printf '%s\n' "claude-cli" ;;
@@ -208,17 +196,13 @@ WRAP
     ;;
 esac
 tmp_dir="$(mktemp -d)"
-openclaw_live_stage_source_tree "$tmp_dir"
-openclaw_live_stage_node_modules "$tmp_dir"
-openclaw_live_link_runtime_tree "$tmp_dir"
-openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
-openclaw_live_prepare_staged_config
+openclaw_live_stage_workspace "$tmp_dir"
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
 openclaw_live_run_staged_script scripts/test-live -- ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}
 EOF
 
-openclaw_live_acp_bind_append_build_extension acpx
+openclaw_live_require_build_extension acpx
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
 
 IFS=',' read -r -a ACP_AGENT_TOKENS <<<"$ACP_AGENT_LIST_RAW"

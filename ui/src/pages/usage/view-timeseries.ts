@@ -1,20 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { html, svg, nothing } from "lit";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { createMsFormatter, formatTimeMs } from "../../lib/format.ts";
 import { formatIsoDate, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.ts";
-import type { TimeSeriesPoint } from "./types.ts";
+import type { UsageProps } from "./types.ts";
 import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
 
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
 const CHART_MAX_BAR_WIDTH = 8; // Max bar width in SVG viewBox units
-const CHART_SELECTION_OPACITY = 0.06; // Opacity of range selection overlay
+const CHART_SELECTION_OPACITY = 0.06;
 const HANDLE_WIDTH = 5; // Width of drag handle in SVG units
-const HANDLE_HEIGHT = 12; // Height of drag handle
+const HANDLE_HEIGHT = 12;
 const HANDLE_GRIP_OFFSET = 0.7; // Offset of grip lines inside handle
 
 function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 1): number {
@@ -26,21 +25,24 @@ function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 
 }
 
 export function renderTimeSeriesCompact(
-  timeSeries: { points: TimeSeriesPoint[] } | null,
-  loading: boolean,
-  status: PanelRefreshStatus,
-  mode: "cumulative" | "per-turn",
-  onModeChange: (mode: "cumulative" | "per-turn") => void,
-  breakdownMode: "total" | "by-type",
-  onBreakdownChange: (mode: "total" | "by-type") => void,
-  startDate?: string,
-  endDate?: string,
-  selectedDays?: string[],
-  timeZone: "local" | "utc" = "local",
-  cursorStart?: number | null,
-  cursorEnd?: number | null,
-  onCursorRangeChange?: (start: number | null, end: number | null) => void,
+  detail: UsageProps["detail"],
+  callbacks: UsageProps["callbacks"]["details"],
+  {
+    startDate,
+    endDate,
+    selectedDays,
+    timeZone,
+  }: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">,
 ) {
+  const {
+    timeSeries,
+    timeSeriesLoading: loading,
+    timeSeriesStatus: status,
+    timeSeriesMode: mode,
+    timeSeriesBreakdownMode: breakdownMode,
+    timeSeriesCursorStart: cursorStart,
+    timeSeriesCursorEnd: cursorEnd,
+  } = detail;
   if ((loading || status.awaitingGateway) && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
@@ -157,7 +159,7 @@ export function renderTimeSeriesCompact(
   const cursorLeft = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeStartTs));
   const cursorRight = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeEndTs));
   const moveCursor = (side: "left" | "right", timestamp: number) => {
-    onCursorRangeChange?.(
+    callbacks.onTimeSeriesCursorRangeChange?.(
       side === "left" ? Math.max(firstTimestamp, Math.min(timestamp, cursorRight)) : cursorLeft,
       side === "right" ? Math.min(lastTimestamp, Math.max(timestamp, cursorLeft)) : cursorRight,
     );
@@ -200,7 +202,7 @@ export function renderTimeSeriesCompact(
                   <div class="settings-segmented settings-segmented--accent small">
                     <button
                       class="btn btn--sm settings-segmented__btn settings-segmented__btn--active"
-                      @click=${() => onCursorRangeChange?.(null, null)}
+                      @click=${() => callbacks.onTimeSeriesCursorRangeChange?.(null, null)}
                     >
                       ${t("usage.details.reset")}
                     </button>
@@ -213,8 +215,8 @@ export function renderTimeSeriesCompact(
             variant: "accent",
             className: "small",
             value: mode,
-            onChange: onModeChange,
-            onReselect: onModeChange,
+            onChange: callbacks.onTimeSeriesModeChange,
+            onReselect: callbacks.onTimeSeriesModeChange,
             options: [
               { value: "per-turn", label: t("usage.details.perTurn") },
               { value: "cumulative", label: t("usage.details.cumulative") },
@@ -227,8 +229,8 @@ export function renderTimeSeriesCompact(
                   variant: "accent",
                   className: "small",
                   value: breakdownMode,
-                  onChange: onBreakdownChange,
-                  onReselect: onBreakdownChange,
+                  onChange: callbacks.onTimeSeriesBreakdownChange,
+                  onReselect: callbacks.onTimeSeriesBreakdownChange,
                   options: [
                     { value: "total", label: t("usage.daily.total") },
                     { value: "by-type", label: t("usage.daily.byType") },
@@ -326,7 +328,10 @@ export function renderTimeSeriesCompact(
         <!-- Handle drag zones (only on handles, not full chart) -->
         ${(() => {
           const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
-            if (!onCursorRangeChange || !(e.currentTarget instanceof HTMLElement)) {
+            if (
+              !callbacks.onTimeSeriesCursorRangeChange ||
+              !(e.currentTarget instanceof HTMLElement)
+            ) {
               return;
             }
             e.preventDefault();

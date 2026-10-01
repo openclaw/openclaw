@@ -2,7 +2,11 @@ import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
+import {
+  extractQaMessageText,
+  readQaMessageFunctionCalls,
+  readQaTranscriptMessages,
+} from "./runtime-transcript.js";
 
 type GatewayLogSentinelKind =
   | "plugin-hook-failure"
@@ -48,11 +52,6 @@ type GatewayLogSentinelAssertOptions = GatewayLogSentinelScanOptions & {
 
 type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text"> & {
   test: (line: string) => boolean;
-};
-
-type GatewayLogSentinelToolCall = {
-  name: string;
-  args: unknown;
 };
 
 const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
@@ -145,42 +144,15 @@ function lineNumberForOffset(logs: string, offset: number) {
 }
 
 export function extractGatewayMessageText(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (typeof rawContent === "string") {
-    return rawContent.trim();
-  }
-  if (!Array.isArray(rawContent)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text = readNonEmptyString(block.text);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const nestedText = readNonEmptyString(block.content);
-    const normalizedType = readNonEmptyString(block.type)?.toLowerCase().replace(/_/g, "");
-    if (
-      nestedText &&
-      (normalizedType === "outputtext" ||
-        normalizedType === "text" ||
-        normalizedType === "message" ||
-        normalizedType === "toolresult")
-    ) {
-      parts.push(nestedText);
-    }
-  }
-  return parts.join("\n").trim();
+  return extractQaMessageText(message, (type) => {
+    const normalized = readNonEmptyString(type)?.toLowerCase().replace(/_/g, "");
+    return (
+      normalized === "outputtext" ||
+      normalized === "text" ||
+      normalized === "message" ||
+      normalized === "toolresult"
+    );
+  });
 }
 
 function parseJsonArguments(value: unknown): unknown {
@@ -194,8 +166,7 @@ function parseJsonArguments(value: unknown): unknown {
   }
 }
 
-function extractAssistantToolCalls(message: Record<string, unknown>): GatewayLogSentinelToolCall[] {
-  const calls: GatewayLogSentinelToolCall[] = [];
+function hasCurrentChatMessageSend(message: Record<string, unknown>) {
   const rawContent = message.content;
   if (Array.isArray(rawContent)) {
     for (const block of rawContent) {
@@ -211,34 +182,35 @@ function extractAssistantToolCalls(message: Record<string, unknown>): GatewayLog
       ) {
         continue;
       }
-      calls.push({
-        name: readNonEmptyString(block.name) ?? "unknown",
-        args: parseJsonArguments(block.input ?? block.arguments ?? block.args ?? null),
-      });
+      if (
+        isCurrentChatMessageSend(block.name, block.input ?? block.arguments ?? block.args ?? null)
+      ) {
+        return true;
+      }
     }
   }
 
   for (const call of readQaMessageFunctionCalls(message)) {
-    calls.push({
-      name: call.tool ?? "unknown",
-      args: parseJsonArguments(call.args),
-    });
+    if (isCurrentChatMessageSend(call.tool, call.args)) {
+      return true;
+    }
   }
-  return calls;
+  return false;
 }
 
-function isCurrentChatMessageSend(call: GatewayLogSentinelToolCall) {
-  if (call.name !== "message") {
+function isCurrentChatMessageSend(name: unknown, rawArgs: unknown) {
+  if (readNonEmptyString(name) !== "message") {
     return false;
   }
-  if (!isRecord(call.args) || readNonEmptyString(call.args.action)?.toLowerCase() !== "send") {
+  const args = parseJsonArguments(rawArgs);
+  if (!isRecord(args) || readNonEmptyString(args.action)?.toLowerCase() !== "send") {
     return false;
   }
   const explicitTarget =
-    readNonEmptyString(call.args.conversationId) ??
-    readNonEmptyString(call.args.conversation) ??
-    readNonEmptyString(call.args.to) ??
-    readNonEmptyString(call.args.target);
+    readNonEmptyString(args.conversationId) ??
+    readNonEmptyString(args.conversation) ??
+    readNonEmptyString(args.to) ??
+    readNonEmptyString(args.target);
   if (!explicitTarget) {
     return true;
   }
@@ -263,7 +235,7 @@ function createDirectReplyFinding(): GatewayLogSentinelFinding {
 
 export function createDirectReplyTranscriptSentinelScanner() {
   let lastAssistantText = "";
-  const toolCalls: GatewayLogSentinelToolCall[] = [];
+  let sentToCurrentChat = false;
   return {
     recordMessage(message: Record<string, unknown>) {
       if (message.role !== "assistant") {
@@ -273,12 +245,11 @@ export function createDirectReplyTranscriptSentinelScanner() {
       if (text) {
         lastAssistantText = text;
       }
-      toolCalls.push(...extractAssistantToolCalls(message));
+      sentToCurrentChat ||= hasCurrentChatMessageSend(message);
     },
     findings(): GatewayLogSentinelFinding[] {
       const hasDirectReply =
-        toolCalls.some(isCurrentChatMessageSend) &&
-        normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent.";
+        sentToCurrentChat && normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent.";
       return hasDirectReply ? [createDirectReplyFinding()] : [];
     },
   };

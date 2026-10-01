@@ -2,6 +2,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   buildSafeExternalPromptMock,
   callGatewayMock,
@@ -48,13 +49,12 @@ function makeJob(
   } as never;
 }
 function makeParams(job = makeJob()) {
-  return {
-    cfg: {},
-    deps: {} as never,
+  return makeIsolatedAgentParamsFixture({
+    deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
     job,
     message: "send a message",
     sessionKey: "cron:message-tool-policy",
-  };
+  });
 }
 function mockAnnounce(overrides: Record<string, unknown> = {}) {
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, ...announce, ...overrides });

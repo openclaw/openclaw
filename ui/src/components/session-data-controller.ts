@@ -25,6 +25,7 @@ import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refre
 import {
   applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
+  importSessionCatalog as importSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   applySessionCatalogChanged as applySessionCatalogChangedToData,
   invalidateSessionCatalogs as invalidateSessionCatalogData,
@@ -64,7 +65,7 @@ type ChildSessionQuery = {
 /** Gateway-backed session-list and external-catalog data ownership. */
 export class SessionDataController implements ReactiveController, SessionCatalogDataOwner {
   sessionCatalogs: SessionCatalog[] = [];
-  readonly pendingCatalogArchives = new Set<string>();
+  pendingCatalogArchives: ReadonlySet<string> = new Set();
   sessionCatalogRefreshStatus: PanelRefreshStatus = createPanelRefreshStatus();
   loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   visibleSessionLimits = new Map<string, number>();
@@ -132,14 +133,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       },
     });
     this.subscriptions
-      .watch(
+      .watchStore(
         () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway),
       )
-      .watch(
+      .watchStore(
         () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
         (sessions) => this.synchronizeSessions(sessions),
       )
       .effect(
@@ -154,9 +153,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
         () => this.context?.agents,
         (agents, notify) => subscribeSidebarAgentSessionCaches(agents, this, notify),
       )
-      .watch(
+      .watchStore(
         () => this.context?.agentSelection,
-        (agentSelection, notify) => agentSelection.subscribe(notify),
         () => this.synchronizeSessionScope(),
       );
   }
@@ -242,7 +240,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   retireSessionCatalogData(): void {
     this.sessionScopeGeneration += 1;
-    this.pendingCatalogArchives.clear();
+    this.pendingCatalogArchives = new Set();
     this.sessionsLoading = false;
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogLive.clear();
@@ -333,6 +331,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   invalidateSessionCatalogs = () => invalidateSessionCatalogData(this);
 
   archiveSessionCatalog = archiveSessionCatalogData.bind(null, this);
+
+  importSessionCatalog = importSessionCatalogData.bind(null, this);
 
   refreshSessionCatalogs = (): Promise<void> => refreshSessionCatalogData(this);
 
@@ -476,7 +476,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionsAgentId = null;
     this.sessionResultsByAgent = {};
     this.resetChildSessionState();
-    this.visibleSessionLimits.clear();
+    this.visibleSessionLimits = new Map();
     this.requestSessionDataUpdate();
   }
 
@@ -676,7 +676,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
-    this.visibleSessionLimits.set(sectionId, limit);
+    this.visibleSessionLimits = new Map(this.visibleSessionLimits).set(sectionId, limit);
     this.requestSessionDataUpdate();
   }
 
@@ -688,7 +688,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   resetSessionList(): void {
     this.retireFilteredSessions();
     this.sessionsLoading = false;
-    this.visibleSessionLimits.clear();
+    this.visibleSessionLimits = new Map();
     // A filter transition owns a new child/lineage generation; otherwise a
     // pending request from the retired view can repopulate its cleared rows.
     this.resetChildSessionState();

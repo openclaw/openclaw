@@ -48,6 +48,7 @@ function createPublicationDatabase(stateDir: string) {
   db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
     VALUES ('memory/current.md', 'memory', 'old', 1, 1)`);
   const input: PublicationFaultInput = {
+    kind: "publication",
     marker: path.join(stateDir, "entered"),
     failRollback: false,
     failClose: false,

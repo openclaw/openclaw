@@ -1,4 +1,3 @@
-// Msteams helper module supports Adaptive Card submit payload behavior.
 import {
   isRecord,
   normalizeOptionalLowercaseString,

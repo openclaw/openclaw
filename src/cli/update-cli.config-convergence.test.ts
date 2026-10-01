@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as configIo from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -11,6 +12,7 @@ import {
   expectNoSideEffects,
   freshRestartCalls,
   getLogOutput,
+  getErrorOutput,
   lastReplaceConfigCall,
   lastWriteJsonCall,
   mockMutableConfigSnapshot,
@@ -46,6 +48,7 @@ import {
   updateCliShared,
   updateCommand,
   updateGitCheckout,
+  listUpdateRuns,
 } from "./update-cli-modules.test-support.js";
 import {
   npmPluginUpdateResult,
@@ -87,6 +90,101 @@ describe("update-cli", () => {
     tempDirs,
     tempDirsToCleanup,
   } = createUpdateCliFixture();
+
+  it.each([undefined, "beta"] as const)(
+    "rereads a concurrent config write during database admission without losing it (channel=%s)",
+    async (changedChannel) => {
+      await mockPackageInstallAtCaseDir("openclaw-concurrent-config", VERSION);
+      readPackageVersion.mockResolvedValue(VERSION);
+      primeNpmChannelTag("latest", VERSION);
+      mockNoopPostUpdatePluginConvergence();
+      const configPath = path.join(profileStateDir(), "openclaw.json");
+      await writeJsonFixture(configPath, {
+        messages: { ackReaction: "before" },
+        update: { channel: "stable" },
+      });
+      const original = await fs.readFile(configPath, "utf8");
+      const createConfigIO = await useFileBackedConfigIO();
+      vi.mocked(readConfigFileSnapshot).mockImplementation(() =>
+        createConfigIO({ observe: false, pluginValidation: "skip" }).readConfigFileSnapshot(),
+      );
+      const admission = await import("./update-cli/update-command-managed-context.js");
+      const revalidate = admission.revalidateUpdateDatabaseContext;
+      const reading = createDeferred();
+      const written = createDeferred();
+      vi.spyOn(admission, "revalidateUpdateDatabaseContext").mockImplementationOnce(
+        async (context) => {
+          reading.resolve();
+          await written.promise;
+          return revalidate(context);
+        },
+      );
+      const updating = updateCommand({
+        yes: true,
+        restart: false,
+        json: true,
+        admission: "auto",
+      }).then(
+        () => ({ ok: true }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          reading.promise,
+          updating.then(() => {
+            throw new Error("Update ended before database admission");
+          }),
+        ]);
+        const captureRoot = `${profileStateDir()}.update-captures`;
+        const captures = (await fs.readdir(captureRoot, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name);
+        expect(captures).toHaveLength(1);
+        const captureDirectory = path.join(captureRoot, captures[0]!);
+        const { parseUpdateRecoveryBackupManifest } =
+          await import("../commands/backup-verify-manifest.js");
+        const manifest = parseUpdateRecoveryBackupManifest(
+          await fs.readFile(path.join(captureDirectory, "manifest.json"), "utf8"),
+        );
+        const capturedConfig = manifest.entries.find((entry) => entry.sourcePath === configPath);
+        if (capturedConfig?.kind !== "file") {
+          throw new Error("Original configuration was not captured before admission");
+        }
+        expect(
+          await fs.readFile(path.join(captureDirectory, capturedConfig.archivePath), "utf8"),
+        ).toBe(original);
+        await writeJsonFixture(configPath, {
+          messages: { ackReaction: "after" },
+          update: { channel: changedChannel ?? "stable" },
+        });
+        written.resolve();
+        expect(await updating, getErrorOutput()).toEqual({ ok: true });
+        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject({
+          messages: { ackReaction: "after" },
+        });
+        expect(syncPluginsForUpdateChannel).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: expect.objectContaining({ messages: { ackReaction: "after" } }),
+          }),
+        );
+        expect(getErrorOutput()).toContain(
+          "Warning: Configuration changed during database admission",
+        );
+        expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+          phase: "finished",
+          status: "skipped",
+          target: { channel: changedChannel ?? "stable" },
+        });
+        expect(resolveNpmChannelTag).toHaveBeenCalledWith(
+          expect.objectContaining({ channel: changedChannel ?? "stable" }),
+        );
+        expect(packageInstallCommandCall()).toBeUndefined();
+      } finally {
+        written.resolve();
+        await updating;
+      }
+    },
+  );
 
   it.each([{ channel: "stable", tag: "main" }])(
     "does not migrate authored config for a refused target $channel/$tag",

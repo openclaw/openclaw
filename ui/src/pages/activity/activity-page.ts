@@ -113,10 +113,7 @@ class ActivityPage extends OpenClawLightDomElement {
     isEnabled: () => this.autoFollow,
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
+    .watchStore(() => this.context?.agents)
     .effect(
       () => this.context?.gateway,
       (gateway) => {

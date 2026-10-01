@@ -57,8 +57,13 @@ export async function readSubagentRunAnnounceResultUsing(
 ): Promise<PreparedAnnounceResult> {
   const isCurrent = captureAnnounceResultAuthority(child);
   const terminalReply = child.completion?.terminalReply;
-  if (terminalReply?.disposition !== "visible" || child.execution.outcome?.status !== "ok") {
-    return { text: resolveSubagentCompletionResultText(child), isCurrent };
+  const capturedResult = resolveSubagentCompletionResultText(child);
+  if (
+    !capturedResult ||
+    terminalReply?.disposition !== "visible" ||
+    child.execution.outcome?.status !== "ok"
+  ) {
+    return { text: capturedResult, isCurrent };
   }
   const runId = child.runId;
   const childSessionKey = child.childSessionKey;
@@ -144,14 +149,6 @@ export type ChildCompletionRow = {
   completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
 };
 
-function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
-  return Boolean(
-    child.completion?.terminalReply ||
-    child.completion?.resultText?.trim() ||
-    child.completion?.fallbackResultText?.trim(),
-  );
-}
-
 export function buildChildCompletionFindings(
   children: Array<ChildCompletionRow>,
 ): string | undefined {
@@ -182,7 +179,10 @@ export function buildChildCompletionFindings(
     if (
       child.execution.outcome?.status === "ok" &&
       !resultText &&
-      hasCapturedChildCompletionReply(child)
+      child.completion?.terminalReply?.disposition !== "empty" &&
+      (child.completion?.terminalReply ||
+        child.completion?.resultText?.trim() ||
+        child.completion?.fallbackResultText?.trim())
     ) {
       continue;
     }

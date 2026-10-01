@@ -6,7 +6,6 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
@@ -15,7 +14,10 @@ import { resolveConfiguredThinkingDefaultCore } from "../agents/model-thinking-d
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../infra/bun-sqlite-library.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { getResolvedLoggerSettings } from "../logging.js";
@@ -68,6 +70,7 @@ export async function logGatewayStartup(params: {
       uv: process.versions.uv,
       openssl: process.versions.openssl,
       sqlite: sqliteLibrary.source === "runtime" ? process.versions.sqlite : sqliteLibrary.version,
+      sqliteClose: getSqliteRuntimeCapabilities(),
     })}`,
   );
   params.log.info(
@@ -124,19 +127,6 @@ export function formatAgentModelStartupLogLine(params: {
   };
 }
 
-/** True when a configured catalog entry disables reasoning for the startup model. */
-function isConfiguredReasoningDisabled(params: {
-  catalog: readonly ModelCatalogEntry[];
-  provider: string;
-  model: string;
-}): boolean {
-  return params.catalog.some(
-    (entry) =>
-      entry.provider === params.provider && entry.id === params.model && entry.reasoning === false,
-  );
-}
-
-/** Format model thinking and fast-mode details for the Gateway startup banner. */
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -149,11 +139,12 @@ export function formatAgentModelStartupDetails(params: {
     // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
     // only to discard their default below.
     if (
-      isConfiguredReasoningDisabled({
-        catalog: configuredCatalog,
-        provider: params.provider,
-        model: params.model,
-      })
+      configuredCatalog.some(
+        (entry) =>
+          entry.provider === params.provider &&
+          entry.id === params.model &&
+          entry.reasoning === false,
+      )
     ) {
       thinking = "off";
     } else {
@@ -253,7 +244,6 @@ function formatConfiguredChannelMissingOwnerStartupWarning(entry: {
   );
 }
 
-/** Format plugin count/list and optional startup duration for the ready log line. */
 function formatReadyDetails(
   loadedPluginIds: readonly string[],
   startupDurationLabel: string | null,

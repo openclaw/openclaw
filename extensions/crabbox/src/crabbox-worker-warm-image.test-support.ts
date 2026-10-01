@@ -29,6 +29,19 @@ export const NODE_RUNTIME_IDENTITY = {
   executionMode: "worker-turn" as const,
 };
 
+export function unsupportedCaptureReceipt(leaseId: string, provider = "aws") {
+  return {
+    schema: "crabbox.checkpoint.create.failure.v1",
+    outcome: "not_submitted",
+    reason: "native_unsupported",
+    provider,
+    leaseId,
+    localReservation: "none",
+    message:
+      "checkpoint create --mode native is unsupported for provider=aws target=linux through coordinator https://coordinator.example: the provider does not offer native checkpoints for coordinator-brokered leases with this mode and strategy; use --mode archive or a provider configuration that offers native checkpoints",
+  };
+}
+
 export const tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker> =
   useAutoCleanupTempDirTracker(afterEach);
 const { providers, createProvider } = createProviderFixtures({ sleep: async () => {} });

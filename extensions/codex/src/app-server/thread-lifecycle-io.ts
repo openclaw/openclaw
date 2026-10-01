@@ -59,6 +59,31 @@ import { buildThreadResumeParams, buildThreadStartParams } from "./thread-reques
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
 
+function recordCodexThreadReady(
+  params: CodexStartOrResumeThreadParams,
+  context: Pick<CodexResumeThreadContext, "contextEngineBinding" | "lifecycleTiming">,
+  threadId: string,
+  action: "resumed" | "rotated" | "started",
+): void {
+  const { contextEngineBinding, lifecycleTiming } = context;
+  const event = {
+    sessionId: params.params.sessionId,
+    sessionKey: params.params.sessionKey,
+    threadId,
+    action,
+  };
+  if (contextEngineBinding) {
+    embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+      ...event,
+      engineId: contextEngineBinding.engineId,
+      epoch: contextEngineBinding.projection?.epoch,
+      fingerprint: contextEngineBinding.projection?.fingerprint,
+    });
+  }
+  lifecycleTiming.mark("thread-ready");
+  lifecycleTiming.logSummary({ runId: params.params.runId, ...event });
+}
+
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
   context: CodexResumeThreadContext,
@@ -73,7 +98,6 @@ export async function resumeExistingCodexThread(
     webSearchThreadConfigFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
-    contextEngineBinding,
     hostSystemAgentActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
@@ -81,7 +105,7 @@ export async function resumeExistingCodexThread(
     lifecycleTiming,
     normalizeBindingModelProvider,
     throwIfAborted,
-    clearCurrentBinding,
+    stageBindingReplacement,
   } = context;
   let acceptedConfiguration: CodexThreadResumePreparation | undefined;
   let disposeConfiguration: (() => void) | undefined;
@@ -289,25 +313,7 @@ export async function resumeExistingCodexThread(
       );
     }
     assertHandoffCurrent();
-    if (contextEngineBinding) {
-      embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
-        sessionId: params.params.sessionId,
-        sessionKey: params.params.sessionKey,
-        threadId: response.thread.id,
-        engineId: contextEngineBinding.engineId,
-        epoch: contextEngineBinding.projection?.epoch,
-        fingerprint: contextEngineBinding.projection?.fingerprint,
-        action: "resumed",
-      });
-    }
-    lifecycleTiming.mark("thread-ready");
-    lifecycleTiming.logSummary({
-      runId: params.params.runId,
-      sessionId: params.params.sessionId,
-      sessionKey: params.params.sessionKey,
-      threadId: response.thread.id,
-      action: "resumed",
-    });
+    recordCodexThreadReady(params, context, response.thread.id, "resumed");
     const activeTurnIds = readActiveCodexTurnIdsFromResume(response);
     return {
       ...resumeBinding,
@@ -407,7 +413,7 @@ export async function resumeExistingCodexThread(
     embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
       error,
     });
-    await clearCurrentBinding("rotating a stale thread binding");
+    stageBindingReplacement("rotating a stale thread binding");
   } finally {
     disposeConfiguration?.();
   }
@@ -615,26 +621,16 @@ export async function startFreshCodexThread(
         ),
       );
     }
-    if (contextEngineBinding) {
-      embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
-        sessionId: params.params.sessionId,
-        sessionKey: params.params.sessionKey,
-        threadId: response.thread.id,
-        engineId: contextEngineBinding.engineId,
-        epoch: contextEngineBinding.projection?.epoch,
-        fingerprint: contextEngineBinding.projection?.fingerprint,
-        action: rotatedContextEngineBinding ? "rotated" : "started",
-      });
-    }
   }
-  lifecycleTiming.mark("thread-ready");
-  lifecycleTiming.logSummary({
-    runId: params.params.runId,
-    sessionId: params.params.sessionId,
-    sessionKey: params.params.sessionKey,
-    threadId: response.thread.id,
-    action: rotatedContextEngineBinding ? "rotated" : "started",
-  });
+  recordCodexThreadReady(
+    params,
+    {
+      lifecycleTiming,
+      contextEngineBinding: preserveExistingBinding ? undefined : contextEngineBinding,
+    },
+    response.thread.id,
+    rotatedContextEngineBinding ? "rotated" : "started",
+  );
   return {
     ...startedBinding,
     // Stored native-auth bindings omit redundant provider attribution; this

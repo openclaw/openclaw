@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   createUpdateDatabaseBackup,
@@ -14,6 +15,7 @@ import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { prepareOpenClawStateDatabaseRemoval } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
@@ -58,6 +60,30 @@ export async function captureUpdateDatabases(params: {
   try {
     const capture = async () => {
       params.assertCurrent();
+      if (maintenance && process.platform === "win32") {
+        try {
+          // Rollback closes this Windows probe before replacing files. Settle its
+          // checkpoint now so a retained progress reader's WAL is not later drift.
+          const exclusion = await prepareOpenClawStateDatabaseRemoval(
+            resolveOpenClawStateSqlitePath(env),
+            params.assertCurrent,
+          );
+          exclusion.release();
+        } catch (error) {
+          // A busy native probe still permits a snapshot for manual recovery;
+          // drainage and cleanup uncertainty must retain their failure.
+          if (
+            !(error instanceof Error) ||
+            error instanceof AggregateError ||
+            !isSqliteLockError(error.cause)
+          ) {
+            throw error;
+          }
+          unavailable = "another SQLite connection is active";
+        }
+        params.assertCurrent();
+        maintenance.assertCurrent();
+      }
       let backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
       if (execution.updateInstallKind === "git" && !execution.switchToGit) {
         // Database recovery outlives runtime retirement and stays outside the Git source fence.
@@ -104,6 +130,7 @@ export async function captureUpdateDatabases(params: {
   params.assertCurrent();
   const restorable =
     maintenance !== null &&
+    unavailable === undefined &&
     backup.databases.every((entry) => typeof backup.sourceGenerations[entry.path] === "string");
   if (!restorable) {
     backup.warnings.push(

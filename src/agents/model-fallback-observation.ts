@@ -1,7 +1,7 @@
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildTextObservationFields } from "./embedded-agent-error-observation.js";
-import type { FailoverReason } from "./embedded-agent-helpers.js";
+import type { FailoverReason } from "./failover/signal.js";
 import type {
   FallbackAttempt,
   ModelCandidate,

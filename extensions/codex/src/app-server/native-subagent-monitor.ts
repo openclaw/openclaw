@@ -206,7 +206,6 @@ class Monitor {
       isRegisteredChild: (child) => this.childStates.get(child.runId) === child,
       currentChild: (id) => this.currentChild(id),
       parentState: (id) => this.parentStates.get(id),
-      isRetiredParent: (state) => this.retiredParentStates.has(state),
       reconcileChildState: (child) => this.reconcileChildState(child),
       processCompletion: (state, child, completion, eventAt) =>
         this.processCompletion(state, child, completion, eventAt),

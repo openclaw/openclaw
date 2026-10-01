@@ -49,6 +49,7 @@ export type WorkboardProps = {
   showAgentFilter?: boolean;
   onOpenSession: ControlUiHost["sessions"]["open"];
   onBoardFilterChange?: (boardFilter: string) => void;
+  onNewBoard?: () => void;
   onRequestUpdate?: () => void;
 };
 

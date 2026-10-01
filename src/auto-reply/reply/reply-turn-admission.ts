@@ -668,11 +668,8 @@ export async function admitReplyTurn(
         if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
           continue;
         }
-        if (params.kind === "heartbeat") {
-          return { status: "skipped", reason: "active-run", activeOperation };
-        }
         // Visible and queued turns may wait for active runs when waitForActive is set.
-        if (params.waitForActive === false) {
+        if (params.kind === "heartbeat" || params.waitForActive === false) {
           return { status: "skipped", reason: "active-run", activeOperation };
         }
         const activeWaitTimeoutMs =

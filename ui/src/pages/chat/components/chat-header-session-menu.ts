@@ -72,12 +72,24 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) navigationAllowed = false;
   @property({ attribute: false }) copyMarkdownAllowed = false;
   @property({ attribute: false }) splitAllowed = false;
-  @property({ attribute: false }) settings: UiSettings = EMPTY_SETTINGS;
+  @property({
+    attribute: false,
+    hasChanged: (next: UiSettings, previous?: UiSettings) =>
+      next?.chatShowThinking !== previous?.chatShowThinking ||
+      next?.chatShowToolCalls !== previous?.chatShowToolCalls ||
+      next?.chatPersistCommentary !== previous?.chatPersistCommentary,
+  })
+  settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) layoutActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) boardWidgetMenu?: BoardWidgetPageMenu;
   @property({ attribute: false }) sharing: ChatSessionSharingProps | null = null;
-  @property({ attribute: false }) groups: readonly string[] = [];
+  @property({
+    attribute: false,
+    hasChanged: (next: readonly string[], previous?: readonly string[]) =>
+      next.length !== previous?.length || next.some((group, index) => group !== previous?.[index]),
+  })
+  groups: readonly string[] = [];
   @property({ attribute: false }) currentOwner: SessionCreatedActor | null = null;
   @property({ attribute: false }) actionDisabledReasons: Partial<
     Record<HeaderMenuActionKind, string>

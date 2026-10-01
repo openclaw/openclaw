@@ -19,16 +19,6 @@ export type TerminalPanelTab = {
 
 const TERMINAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3-3 3M8 11h5" /></svg>`;
 
-function terminalTabLabel(tab: TerminalPanelTab): string {
-  return tab.shellName ?? t("terminal.tabLabel", { n: String(tab.sequence) });
-}
-
-function terminalTabHint(tab: TerminalPanelTab): string | null {
-  return tab.agentId === null || tab.cwd === null
-    ? null
-    : t("terminal.tabHint", { agent: tab.agentId, cwd: tab.cwd });
-}
-
 function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
   if (tab.status === "connecting") {
     return t("terminal.connecting");
@@ -50,8 +40,11 @@ function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
 export function terminalPanelHostedTabs(tabs: TerminalPanelTab[]): PanelHostedTab[] {
   return tabs.map((tab) => ({
     id: tab.id,
-    label: terminalTabLabel(tab),
-    title: terminalTabHint(tab),
+    label: tab.shellName ?? t("terminal.tabLabel", { n: String(tab.sequence) }),
+    title:
+      tab.agentId === null || tab.cwd === null
+        ? null
+        : t("terminal.tabHint", { agent: tab.agentId, cwd: tab.cwd }),
     icon: TERMINAL_GLYPH,
     statusLabel: terminalTabStatusLabel(tab),
     badge: tab.agentOwned ? t("terminal.agentOwnedBadge") : null,

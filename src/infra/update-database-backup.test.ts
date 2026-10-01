@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as diskSpace from "./disk-space.js";
+import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
 import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
 
@@ -61,9 +62,117 @@ async function fixture(externalAgents = false) {
     shared,
     directory,
     external,
+    input,
+    inspectionPlan,
     capture: () => createUpdateDatabaseBackupInProcess({ ...input, inspectionPlan }),
   };
 }
+
+it.each(["legacy", "current"] as const)(
+  "captures the %s parent's database inventory",
+  async (dialect) => {
+    const f = await fixture();
+    const inspectionPlan = structuredClone(f.inspectionPlan);
+    if (dialect === "legacy") {
+      // Released parents parse only spellings and discard the candidate's optional ownership fields.
+      for (const [, database] of inspectionPlan.files) {
+        delete database.owners;
+      }
+    }
+    const before = await fs.readFile(f.shared);
+    const backup = await createUpdateDatabaseBackupInProcess({ ...f.input, inspectionPlan });
+    expect(backup.sourcePaths).toEqual(
+      f.inspectionPlan.files.flatMap(([, database]) => database.spellings).toSorted(),
+    );
+    expect(backup.databaseOwners).toEqual(
+      dialect === "legacy"
+        ? undefined
+        : [
+            { path: f.shared, role: "global" },
+            {
+              path: path.join(f.stateDir, "agents/main/agent/openclaw-agent.sqlite"),
+              role: "agent",
+              agentId: "main",
+            },
+          ].toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    );
+    expect(backup.databases).toHaveLength(1);
+    const published = await fs.readFile(backup.databases[0]!.snapshotPath);
+    expect(backup.databases[0]).toMatchObject({
+      sha256: createHash("sha256").update(published).digest("hex"),
+      sizeBytes: published.length,
+    });
+    const snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+    try {
+      expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([
+        { rowid: 42, value: "retained" },
+      ]);
+    } finally {
+      snapshot.close();
+    }
+    expect(await fs.readFile(f.shared)).toEqual(before);
+  },
+);
+
+it.each(["modified", "replaced"] as const)(
+  "keeps the verified digest when a snapshot is %s before backup metadata is recorded",
+  async (change) => {
+    const f = await fixture();
+    const createSnapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
+    let published: Buffer | undefined;
+    vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
+      async (options) => {
+        const result = await createSnapshot(options);
+        published = await fs.readFile(result.path);
+        const changed = Buffer.from(published);
+        const offset = changed.indexOf("retained");
+        assert(offset >= 0, "Snapshot must contain the captured row");
+        changed.write("modified", offset);
+        if (change === "modified") {
+          await fs.writeFile(result.path, changed);
+        } else {
+          const replacement = `${result.path}.replacement`;
+          await fs.writeFile(replacement, changed);
+          await fs.rename(replacement, result.path);
+        }
+        return result;
+      },
+    );
+
+    const backup = await f.capture();
+    assert(published, "Snapshot publication must complete before the injected change");
+    expect(backup.databases[0]).toMatchObject({
+      sha256: createHash("sha256").update(published).digest("hex"),
+      sizeBytes: published.length,
+    });
+    expect(await fs.readFile(backup.databases[0]!.snapshotPath)).not.toEqual(published);
+  },
+);
+
+it.each(["path", "owner"] as const)(
+  "still refuses a changed database %s after discovery",
+  async (change) => {
+    const f = await fixture(true);
+    const db = new DatabaseSync(f.shared);
+    db.exec("ALTER TABLE agent_databases ADD COLUMN agent_id TEXT");
+    db.prepare("UPDATE agent_databases SET agent_id = ?").run("before");
+    db.close();
+    const inspectionPlan = await discoverUpdateStateSchemaInspectionInProcess(f.input);
+    const changed = new DatabaseSync(f.shared);
+    try {
+      if (change === "owner") {
+        changed.prepare("UPDATE agent_databases SET agent_id = ?").run("after");
+      } else {
+        changed.exec("DELETE FROM agent_databases");
+      }
+    } finally {
+      changed.close();
+    }
+    await expect(
+      createUpdateDatabaseBackupInProcess({ ...f.input, inspectionPlan }),
+    ).rejects.toThrow("Update database inventory changed during backup");
+  },
+);
 
 it.each(["", "-wal", "-shm", "-journal"])(
   "refuses a hard-linked database family file %s before publishing any rollback snapshot",

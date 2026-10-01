@@ -167,7 +167,7 @@ it.each(["success", "failure"] as const)(
         nextConfig: first.cfgAtStart,
         sourceConfig: first.cfgAtStart,
         changedPaths: [],
-        prepareConfigEffects: () => async () => {},
+        prepareConfigEffects: () => ({ retire: () => {}, rollback: async () => {} }),
         pluginLifecycle: {
           reason: "reload",
           operationId: "concurrent-bootstrap",

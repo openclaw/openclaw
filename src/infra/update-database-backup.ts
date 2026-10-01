@@ -7,7 +7,6 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   ensureDurableDirectory,
   requireDirectorySync,
-  sha256File,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
@@ -153,6 +152,7 @@ async function checkDatabaseBackupSpace(directory: string, files: readonly strin
 
 async function canonicalDatabaseInventory(
   plan: InspectionPlan,
+  includeOwners: boolean,
   additionalPaths: readonly string[] = [],
   additionalFiles: readonly string[] = [],
 ) {
@@ -204,9 +204,11 @@ async function canonicalDatabaseInventory(
     present: [...present].toSorted(),
     missing: [...missing].toSorted(),
     sourcePaths: [...new Set(sources.flatMap((database) => database.spellings))].toSorted(),
-    databaseOwners: [...owners]
-      .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([, owner]) => owner),
+    databaseOwners: includeOwners
+      ? [...owners]
+          .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+          .map(([, owner]) => owner)
+      : undefined,
   };
 }
 
@@ -219,8 +221,14 @@ export async function createUpdateDatabaseBackupInProcess(
   },
 ): Promise<UpdateDatabaseBackup> {
   const directory = await fs.realpath(`${input.backupRoot}.databases`);
+  // Older parents strip owners from discovery before calling the candidate worker.
+  // Compare the same admitted dialect; absent metadata must not become an inventory change.
+  const includeOwners = input.inspectionPlan.files.some(
+    ([, database]) => database.owners !== undefined,
+  );
   const inventory = await canonicalDatabaseInventory(
     input.inspectionPlan,
+    includeOwners,
     input.additionalPaths,
     input.additionalFiles,
   );
@@ -271,17 +279,17 @@ export async function createUpdateDatabaseBackupInProcess(
         `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
       );
     }
-    const { digest, bytes: sizeBytes } = await sha256File(snapshotPath);
     databases.push({
       path: sourcePath,
       snapshotPath,
       userVersion: snapshot.userVersion,
-      sha256: digest,
-      sizeBytes,
+      sha256: snapshot.sha256,
+      sizeBytes: snapshot.sizeBytes,
     });
   }
   const current = await canonicalDatabaseInventory(
     await discoverUpdateStateSchemaInspectionInProcess(input),
+    includeOwners,
     input.additionalPaths,
     input.additionalFiles,
   );

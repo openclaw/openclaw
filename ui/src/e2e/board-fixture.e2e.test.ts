@@ -25,6 +25,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
   chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
@@ -398,7 +399,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const context = await browser.newContext({
       serviceWorkers: "block",
       viewport: { width: 1440, height: 1000 },
-      recordVideo: { dir: artifacts },
+      recordVideo: captureUiProof ? { dir: artifacts } : undefined,
     });
     await runQaGatewayFixture(
       async () => {
@@ -1007,7 +1008,9 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
     const artifactDir = createControlUiE2eArtifactDir("standalone-native-plugin-preview");
     const context = await previewBrowser.newContext({
       viewport: { width: 1440, height: 1000 },
-      recordVideo: { dir: artifactDir, size: { width: 1440, height: 1000 } },
+      recordVideo: captureUiProof
+        ? { dir: artifactDir, size: { width: 1440, height: 1000 } }
+        : undefined,
     });
     const page = await context.newPage();
     try {

@@ -180,7 +180,10 @@ async function createFixture(state: OpenClawTestState) {
     };
     const token = mintMessageActionTurnCapability({
       ...identity,
-      scheduled: { policy, assertCurrent: () => permission.signal.throwIfAborted() },
+      scheduled: {
+        policy,
+        assertCurrent: () => permission.signal.throwIfAborted(),
+      },
     });
     tokens.push(token);
     const messageActionContext = expectDefined(

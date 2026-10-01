@@ -1,4 +1,3 @@
-// Shared compaction formatting and user-facing notice payload helpers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -49,16 +48,6 @@ export function createCompactionNoticePayload(
   params: CompactionNoticeOptions & { phase: CompactionNoticePhase; text?: string },
 ): ReplyPayload {
   return createNoticePayload(params.text ?? COMPACTION_NOTICE_TEXT[params.phase], params);
-}
-
-export function readCompactionHookMessages(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
 }
 
 export function createCompactionHookNoticePayload(

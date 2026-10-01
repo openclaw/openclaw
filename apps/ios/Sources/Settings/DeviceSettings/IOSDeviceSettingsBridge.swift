@@ -17,7 +17,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
     private let onStatusRequest: (() -> Void)?
     private let producer: IOSDeviceSettingsSnapshotProducer
     private let permissions = IOSDeviceSettingsPermissions()
-    private let requests = IOSDeviceSettingsRequestQueue()
+    private let requests = DeviceSettingsRequestQueue()
     private let consent = IOSDeviceSettingsConsentPresenter()
     private weak var webView: WKWebView?
     private var gatewayURL: URL?
@@ -194,7 +194,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
             return
         }
         if request == .status { self.onStatusRequest?() }
-        self.requests.enqueue(operation: { [weak self] in
+        self.requests.enqueue { [weak self] in
             guard let self, self.isCurrent(sourceID) else {
                 reply.retire()
                 return
@@ -234,7 +234,9 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
                 self.refresh()
                 reply.finish(error: "Device settings could not be updated. Try again.")
             }
-        }, onCancel: { reply.retire() })
+        } onCancel: {
+            reply.retire()
+        }
     }
 
     private func isCurrent(_ sourceID: RequestIdentity) -> Bool {

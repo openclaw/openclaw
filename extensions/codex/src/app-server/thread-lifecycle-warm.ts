@@ -45,7 +45,7 @@ import {
 import {
   assertAdoptedCodexThreadResumeAllowed,
   CodexIncognitoPolicyChangeError,
-  refreshCodexThreadSkillsCatalog,
+  refreshCodexThreadInstructions,
 } from "./thread-policy.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
 
@@ -68,7 +68,6 @@ type CodexLiveThreadReleaseParams = {
   abandonClient?: () => Promise<void>;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   threadId: string;
-  cause?: unknown;
   assertCurrent?: () => void;
 };
 
@@ -104,7 +103,7 @@ export async function releaseCodexConsumedLiveThread(
   if (released) {
     return;
   }
-  return await abandonCodexLiveThreadRelease(options, options.cause);
+  return await abandonCodexLiveThreadRelease(options);
 }
 
 async function abandonCodexLiveThreadRelease(
@@ -381,19 +380,22 @@ export async function tryReuseCodexLiveThread(
       assertCurrent: assertWarmOwner,
     });
     assertWarmOwner();
-    if (ephemeralPolicy && ephemeralPolicy.skillsInstructions !== params.skillsInstructions) {
+    if (
+      ephemeralPolicy &&
+      ephemeralPolicy.refreshableInstructions !== params.refreshableInstructions
+    ) {
       try {
-        await refreshCodexThreadSkillsCatalog({
+        await refreshCodexThreadInstructions({
           client: params.client,
           threadId: binding.threadId,
-          skillsInstructions: params.skillsInstructions,
+          refreshableInstructions: params.refreshableInstructions,
           timeoutMs: params.appServer.requestTimeoutMs,
           signal: params.signal,
           assertCurrent: assertWarmOwner,
         });
       } catch (error) {
-        // The ephemeral conversation survives a failed catalog handoff; the retained
-        // record still names the old catalog, so the next turn delivers it again.
+        // The ephemeral conversation survives a failed instruction handoff; the retained
+        // record still names the old instructions, so the next turn delivers it again.
         preserveSubscription = true;
         throw error;
       }
@@ -453,7 +455,7 @@ export async function tryReuseCodexLiveThread(
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy: ephemeralPolicy && {
           ...ephemeralPolicy,
-          skillsInstructions: params.skillsInstructions,
+          refreshableInstructions: params.refreshableInstructions,
         },
         liveThreadOwnership: retainedThread,
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined

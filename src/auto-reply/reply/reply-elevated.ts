@@ -1,4 +1,3 @@
-// Resolves whether a reply turn may use elevated command capabilities.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
@@ -216,5 +215,5 @@ export function resolveElevatedPermissions(params: {
       key: `agents.entries.*.tools.elevated.allowFrom.${params.provider}`,
     });
   }
-  return { enabled, allowed: globalAllowed && agentAllowed, failures };
+  return { enabled, allowed: agentAllowed, failures };
 }

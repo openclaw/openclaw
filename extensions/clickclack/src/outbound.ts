@@ -12,11 +12,7 @@ import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
-import {
-  FormatCapabilityProfile,
-  renderMarkdownWithMarkers,
-  sanitizeAssistantVisibleText,
-} from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient, type ClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
@@ -24,19 +20,6 @@ import { parseClickClackTarget } from "./target.js";
 import type { ClickClackMessage, ClickClackMessageProvenance, CoreConfig } from "./types.js";
 
 const CLICKCLACK_MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
-
-const CLICKCLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({
-  mechanism: "markdown",
-  chunk: { limit: 1024 * 1024, unit: "bytes" },
-});
-
-function renderClickClackMarkdown(markdown: string): string {
-  return renderMarkdownWithMarkers(
-    { text: markdown, styles: [], links: [] },
-    { styleMarkers: {}, escapeText: (text) => text },
-    CLICKCLACK_FORMAT_PROFILE,
-  );
-}
 
 async function createTargetMessage(params: {
   client: ClickClackClient;
@@ -198,7 +181,7 @@ export async function sendClickClackText(params: {
 }): Promise<string | undefined> {
   // Custom inbound replies bypass shared outbound normalization, so this private
   // sender owns ClickClack assistant-text sanitization for every delivery path.
-  const text = renderClickClackMarkdown(sanitizeAssistantVisibleText(params.text));
+  const text = sanitizeAssistantVisibleText(params.text);
   if (!text) {
     return undefined;
   }
@@ -293,10 +276,7 @@ export async function sendClickClackMedia(params: {
     });
   }
   const text =
-    renderClickClackMarkdown(sanitizeAssistantVisibleText(params.text)) ||
-    mediaFilename ||
-    upload.filename ||
-    "attachment";
+    sanitizeAssistantVisibleText(params.text) || mediaFilename || upload.filename || "attachment";
   // Upload-first ordering lets crash recovery identify the durable object before
   // it creates or repairs the corresponding message.
   const message = await createTargetMessage({

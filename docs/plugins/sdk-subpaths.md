@@ -59,6 +59,63 @@ host and view types). The contract and Control UI subpaths are browser safe;
 | `plugin-sdk/health`                 | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                                                                |
 | `plugin-sdk/channel-entry-contract` | Bundled channel entry and setup-entry contracts, feature declarations, and lazy module-loading helpers                                                                                                  |
 
+### Control UI conversation dock
+
+`ControlUiHost` from `openclaw/plugin-sdk/control-ui` has this optional member:
+
+```typescript
+dock?: {
+  /** Dock a conversation beside the current page; replaces a conversation dock already open. */
+  openSession: (params: {
+    sessionKey: string;
+    agentId: string;
+    label: string;
+    context?: { page: string; detail?: Readonly<Record<string, string>> };
+  }) => void;
+  close: () => void;
+  readonly openSessionKey: string | null;
+};
+```
+
+Check `host.dock` before presenting a dock action. Supply both `sessionKey`
+and `agentId` for the intended conversation; `label` is its dock tab title.
+`openSession` reuses the Home chat pane, drafts, attachments, placement and
+size persistence, and close and placement controls. It replaces Home, Ask
+OpenClaw, or a previously docked conversation. `close()` leaves no dock open
+and does not restore the previous conversation.
+
+Navigation keeps the dock open, except that it hides while the same session
+and agent are open as the Chat or Dashboard page. Leaving that page reveals
+the dock again. `openSessionKey` is the visible plugin-opened session key,
+or `null` when there is none, including while hidden or showing Home or Ask
+OpenClaw. `host.subscribe(...)` listeners fire when that value changes.
+
+The plugin activation owns the opened dock. Disposing a mounted view retires
+its host handles but keeps the dock open during navigation. Disposing the
+activation closes the dock only if it still belongs to that activation;
+it does not close a replacement opened by another activation. Retained dock
+operations reject after their view or activation ends.
+
+The normal chat pane enforces the viewer's access. Read-only viewers can open
+the dock and receive the existing read-only composer behavior. A session the
+viewer cannot open displays the pane's normal error state. Docking grants no
+additional session access.
+
+The optional `context` supplies an untrusted ambient hint. `page` can name a
+plugin page; `detail` is a flat record of string fields. The host retains up
+to four detail fields in sorted key order, omits empty or oversized keys,
+and bounds each escaped key to 32 characters and each JSON-encoded value to
+128 characters. These limits include escaping; the value limit includes its
+JSON quotes. The page uses the existing 64-character work-context limit.
+When `context` is omitted, the host builds the current page's reference as it
+does for Home.
+
+The operator can remove the reference before sending. At send time the host
+captures a snapshot and formats it as quoted reference data, never
+instructions or permission to access another session. Sent messages retain
+the **Context attached** presentation; **Technical details** includes the
+plugin fields. Queues and retries keep the captured snapshot.
+
 ### Capability catalog entry
 
 A manifest's `capabilityCatalogEntry` default export satisfies
@@ -495,7 +552,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/realtime-voice-activation` | Private-local; dependency-light realtime-voice activation-name helpers (normalize, match, word-count, sort) for doctor contract closures and other control-plane paths that must not load the realtime voice runtime |
     | `plugin-sdk/realtime-voice` | Private-local after July 2026; Realtime voice provider types, registry helpers, shared audio-energy/speech-onset gates, and realtime voice behavior helpers, including the transport-independent session harness, output activity tracking, and `registerRealtimeVoiceSelection` for a channel-owned call. Bind each agent run to the exact call and current speaker authority; release its binding after the turn and unregister when the call closes. Replacements must revalidate the supplied request before adopting a ready connection. For official runtime consumers, sender-auth contract revision 1 forwards ingress-authenticated `senderId` and `senderIsOwner` unchanged; ingress owns authentication, and consumers requiring the handoff must fail closed on other revisions. |
     | `plugin-sdk/meeting-page-script-runtime` | Private-local JavaScript-only host runtime for official browser-meeting plugins; shared transcript and leave page-script source builders; not a third-party plugin API |
-    | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter`, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
+    | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter` and its declarative `defineBrowserMeetingPlugin` factory, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
     | `plugin-sdk/image-generation` | Private-local after July 2026; Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
     | `plugin-sdk/image-generation-core` | Private-local after July 2026; Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/music-generation` | Private-local after July 2026; Music generation provider/request/result types |

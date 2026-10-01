@@ -83,7 +83,10 @@ export async function startTuiFixture(
     logPath,
     releaseStartup: startupRelease.releaseStartup,
     releaseReconnect: reconnectRelease.releaseReconnect,
-    waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
+    waitForLogEntry: async (
+      predicate: (entry: FixtureLogEntry, index: number) => boolean,
+      timeoutMs?: number,
+    ) =>
       await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
     cleanup: async () => {
       await run.dispose();

@@ -1,4 +1,3 @@
-// Parses gateway process command lines for process discovery.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,7 +12,7 @@ import {
 } from "../daemon/runtime-binary.js";
 import { isLegacyPluginSourceCaptureName } from "../plugins/plugin-source-capture-path.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
-import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 
 function normalizeProcArg(arg: string): string {

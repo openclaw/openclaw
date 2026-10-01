@@ -1,4 +1,3 @@
-// Owns block-streaming policy and buffered delivery state for reply runs.
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveChannelStreamingBlockCoalesce } from "../../channels/streaming.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
@@ -120,19 +119,18 @@ export function resolveEffectiveBlockStreamingConfig(params: {
     chunking,
   );
   const coalescingMax = Math.max(1, Math.min(coalescingDefaults.maxChars, chunking.maxChars));
-  const coalescingMin = Math.min(coalescingDefaults.minChars, coalescingMax);
-  const coalescingIdleMs = clampPositiveInteger(params.coalesceIdleMs, coalescingDefaults.idleMs, {
-    min: 0,
-    max: 5_000,
-  });
-  const coalescing: BlockStreamingCoalescing = {
-    minChars: coalescingMin,
-    maxChars: coalescingMax,
-    idleMs: coalescingIdleMs,
-    joiner: coalescingDefaults.joiner,
+  return {
+    chunking,
+    coalescing: {
+      minChars: Math.min(coalescingDefaults.minChars, coalescingMax),
+      maxChars: coalescingMax,
+      idleMs: clampPositiveInteger(params.coalesceIdleMs, coalescingDefaults.idleMs, {
+        min: 0,
+        max: 5_000,
+      }),
+      joiner: coalescingDefaults.joiner,
+    },
   };
-
-  return { chunking, coalescing };
 }
 
 export function resolveBlockStreamingChunking(
@@ -166,9 +164,9 @@ export function resolveBlockStreamingChunking(
 
 function resolveBlockStreamingCoalescing(
   cfg: OpenClawConfig | undefined,
-  provider?: string,
-  accountId?: string | null,
-  chunking?: BlockStreamingChunking,
+  provider: string | undefined,
+  accountId: string | null | undefined,
+  chunking: BlockStreamingChunking,
 ): BlockStreamingCoalescing {
   const { providerKey, providerId, textLimit } = resolveProviderChunkContext(
     cfg,
@@ -187,12 +185,7 @@ function resolveBlockStreamingCoalescing(
   const coalesceCfg = providerCfg ?? cfg?.agents?.defaults?.blockStreamingCoalesce;
   const minRequested = Math.max(
     1,
-    Math.floor(
-      coalesceCfg?.minChars ??
-        providerDefaults?.minChars ??
-        chunking?.minChars ??
-        DEFAULT_BLOCK_STREAM_MIN,
-    ),
+    Math.floor(coalesceCfg?.minChars ?? providerDefaults?.minChars ?? chunking.minChars),
   );
   const maxRequested = Math.max(1, Math.floor(coalesceCfg?.maxChars ?? textLimit));
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
@@ -203,7 +196,7 @@ function resolveBlockStreamingCoalescing(
       coalesceCfg?.idleMs ?? providerDefaults?.idleMs ?? DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS,
     ),
   );
-  const preference = chunking?.breakPreference ?? "paragraph";
+  const preference = chunking.breakPreference;
   const joiner = preference === "sentence" ? " " : preference === "newline" ? "\n" : "\n\n";
   return {
     minChars,

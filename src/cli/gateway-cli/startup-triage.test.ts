@@ -20,22 +20,25 @@ it("leaves startup failure handling intact when an update removed the recovery m
   expect(runtime.exit).not.toHaveBeenCalled();
 });
 
-it.each(["completed", "failed"] as const)("preserves %s triage outcomes", async (outcome) => {
-  const failure = new Error("triage command failed");
-  vi.doMock("../../commands/triage-failure.js", () => ({
-    triageAfterFailure: async () => {
-      if (outcome === "failed") {
-        throw failure;
-      }
-      return "completed";
-    },
-  }));
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const result = triageGatewayStartupFailure(runtime, new Error("startup failed"));
-  if (outcome === "failed") {
-    await expect(result).rejects.toBe(failure);
-  } else {
-    await expect(result).resolves.toBe("completed");
-  }
-  expect(runtime.error).not.toHaveBeenCalled();
-});
+it.each(["completed", "failed", undefined, "rejected"] as const)(
+  "preserves %s triage outcomes",
+  async (outcome) => {
+    const failure = new Error("triage command failed");
+    vi.doMock("../../commands/triage-failure.js", () => ({
+      triageAfterFailure: async () => {
+        if (outcome === "rejected") {
+          throw failure;
+        }
+        return outcome;
+      },
+    }));
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const result = triageGatewayStartupFailure(runtime, new Error("startup failed"));
+    if (outcome === "rejected") {
+      await expect(result).rejects.toBe(failure);
+    } else {
+      await expect(result).resolves.toBe(outcome);
+    }
+    expect(runtime.error).not.toHaveBeenCalled();
+  },
+);

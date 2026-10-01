@@ -15,6 +15,7 @@ import { redactToolPayloadText } from "../../logging/redact.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
+import { requesterProfileSchema } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsHistoryTool,
@@ -49,12 +50,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
-  user: Type.Optional(
-    Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
-    }),
-  ),
+  user: requesterProfileSchema(),
   sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
   limit: ChatHistoryParamsSchema.properties.limit,
   offset: Type.With(ChatHistoryParamsSchema.properties.offset, {

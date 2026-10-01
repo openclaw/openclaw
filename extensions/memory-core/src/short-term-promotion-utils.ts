@@ -30,7 +30,8 @@ const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
 const RAW_SESSION_METADATA_RE =
   /\bSession Key\b.{0,260}\bSession ID\b|\bSession ID\b.{0,260}\bSession Key\b/i;
-const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
+const RAW_CONVERSATION_SUMMARY_RE =
+  /^(?:[-*+]\s*)?Conversation Summary:\s*(?:$|(?:[-*+]\s*)?(?:user|assistant|(?:\*\*)?Session (?:Key|ID)(?:\*\*)?):\s)/i;
 const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
 const MEMORY_FLUSH_PROMPT_RE =
   /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;

@@ -1,4 +1,3 @@
-// Creates and propagates lightweight W3C diagnostic trace contexts.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";

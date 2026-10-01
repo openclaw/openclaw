@@ -15,12 +15,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import {
-  ToolInputError,
-  readNumberParam,
-  readToolStringParam,
-  type AnyAgentTool,
-} from "./common.js";
+import { ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 import {
   hasSnapshotCapabilityProviderAvailability,
   loadCapabilityMetadataSnapshot,
@@ -38,7 +33,9 @@ import {
 import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
+  MEDIA_GENERATE_DESCRIPTIONS,
   normalizeMediaReferenceInputs,
+  readGenerationDurationSeconds,
   readGenerationTimeoutMs,
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
@@ -100,11 +97,7 @@ function readVideoReferenceInputs(
 }
 
 const VideoGenerateToolProperties = {
-  action: Type.Optional(
-    Type.String({
-      description: '"generate" default, "status" active task, "list" providers/models.',
-    }),
-  ),
+  action: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.action })),
   prompt: Type.Optional(Type.String({ description: "Video prompt." })),
   image: Type.Optional(
     Type.String({
@@ -157,11 +150,7 @@ const VideoGenerateToolProperties = {
   model: Type.Optional(
     Type.String({ description: "Provider/model override, e.g. qwen/wan2.6-t2v." }),
   ),
-  filename: Type.Optional(
-    Type.String({
-      description: "Output filename hint; basename preserved in managed media dir.",
-    }),
-  ),
+  filename: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.filename })),
   size: Type.Optional(
     Type.String({
       description: "Size hint, e.g. 1280x720, 1920x1080.",
@@ -370,7 +359,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
     description:
       "Create video, incl. image-to-video: image refs take first_frame/last_frame/reference_image roles; video refs condition style" +
       (includeAudioReferences ? "; audio refs condition sound" : "") +
-      ". resolution up to 4K; audio/watermark toggles. action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task. Duration may round to provider value.",
+      ". resolution up to 4K; audio/watermark toggles. action=list discovers providers/models. Session chat background: call once/request; result returns as a later turn that sends the media. This turn: short ack at most, then end; no poll/yield. status checks active task. Duration may round to provider value.",
     parameters: createVideoGenerateToolSchema({ includeAudioReferences }),
     execute: async (_toolCallId, rawArgs, signal) => {
       const args = rawArgs as Record<string, unknown>;
@@ -423,16 +412,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
           const size = readToolStringParam(args, "size");
           const aspectRatio = readToolStringParam(args, "aspectRatio");
           const resolution = normalizeResolution(readToolStringParam(args, "resolution"));
-          const durationSeconds = readNumberParam(args, "durationSeconds", {
-            positiveInteger: true,
-            strict: true,
-          });
-          if (
-            durationSeconds === undefined &&
-            readSnakeCaseParamRaw(args, "durationSeconds") !== undefined
-          ) {
-            throw new ToolInputError("durationSeconds must be a positive integer");
-          }
+          const durationSeconds = readGenerationDurationSeconds(args);
           const audio = readBooleanParam(args, "audio");
           const watermark = readBooleanParam(args, "watermark");
           const timeoutMs = readGenerationTimeoutMs(args) ?? videoGenerationModelConfig.timeoutMs;

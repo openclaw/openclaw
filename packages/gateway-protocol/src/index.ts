@@ -15,6 +15,7 @@ export {
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
+export * from "./schema/worker-gateway-tool.js";
 export * from "./schema/worker-computer.js";
 export * from "./schema/computer.js";
 export * from "./schema/skill-history.js";
@@ -51,6 +52,7 @@ export {
   type SessionOwnerSessionCount,
 } from "./schema/sessions-list.js";
 export * from "./schema/sessions-suggestions.js";
+export * from "./schema/sessions-reactions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
 export * from "./schema/sessions-goal.js";
@@ -61,6 +63,8 @@ export {
 } from "./schema/sessions-create.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
+export * from "./schema/storage.js";
+export * from "./schema/backup.js";
 export * from "./restart-unavailable.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";

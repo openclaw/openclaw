@@ -1,5 +1,3 @@
-// Defines model selection and provider configuration types.
-
 import type { z } from "zod";
 import type {
   ModelDataImageInputConfig,
@@ -100,11 +98,6 @@ export type BedrockDiscoveryConfig = {
   defaultContextWindow?: number;
   /** Max output tokens applied when discovery cannot infer one. */
   defaultMaxTokens?: number;
-};
-
-export type DiscoveryToggleConfig = {
-  /** Enables the named discovery source. */
-  enabled?: boolean;
 };
 
 export type ModelCatalogRefreshConfig = NonNullable<ModelsSchemaInput["catalogRefresh"]>;

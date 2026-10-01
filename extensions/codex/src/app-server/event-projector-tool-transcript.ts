@@ -86,7 +86,6 @@ export class CodexToolTranscriptProjection {
   private readonly trajectoryItemsById = new Map<string, CodexThreadItem>();
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private readonly nativeMcpAppResultDetails = new Map<string, unknown>();
-  private readonly nativeMcpAppResultDetailsAttempted = new Set<string>();
   private readonly approvalReviewsByCallId = new Map<string, ToolApprovalReviewState>();
   private readonly rawNativeToolOutputByCallId = new Map<string, string>();
   private readonly pendingRawOutputIds = new Set<string>();
@@ -391,13 +390,10 @@ export class CodexToolTranscriptProjection {
     if (this.nativeMcpAppResultDetails.has(item.id)) {
       return this.nativeMcpAppResultDetails.get(item.id);
     }
-    if (
-      this.nativeMcpAppResultDetailsAttempted.has(item.id) ||
-      !this.options.prepareNativeMcpAppResultDetails
-    ) {
+    if (!this.options.prepareNativeMcpAppResultDetails) {
       return undefined;
     }
-    this.nativeMcpAppResultDetailsAttempted.add(item.id);
+    this.nativeMcpAppResultDetails.set(item.id, undefined);
     try {
       const details = await this.options.prepareNativeMcpAppResultDetails(item);
       if (details !== undefined) {

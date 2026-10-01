@@ -25,8 +25,10 @@ import { SessionManager } from "../sessions/session-manager.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   createBackgroundMaintenanceEngine,
+  createMaintenanceSessionManagerOpenFixture,
   expectRecordFields,
   firstMaintainParams,
+  loadContextEngineMaintenanceModuleForTest,
   requireRecord,
 } from "./context-engine-maintenance.fixtures.test-support.js";
 import { resolveSessionLane } from "./lanes.js";
@@ -36,11 +38,8 @@ const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) =
   bytesFreed: 77,
   rewrittenEntries: 1,
 }));
-let openedSessionManager: { getSessionTarget: () => SessionTranscriptRuntimeTarget } | undefined;
-const sessionManagerOpenMock = vi.fn((target: SessionTranscriptRuntimeTarget) => {
-  openedSessionManager = { getSessionTarget: () => target };
-  return openedSessionManager;
-});
+const sessionManagerFixture = createMaintenanceSessionManagerOpenFixture();
+const sessionManagerOpenMock = sessionManagerFixture.open;
 const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string, unknown>) => ({
   agentId: scope.agentId ?? "main",
   sessionId: scope.sessionId,
@@ -71,23 +70,17 @@ vi.mock("./transcript-runtime-state.js", () => ({
     resolveRuntimeTranscriptReadTargetMock(scope),
 }));
 
-async function loadContextEngineMaintenanceModuleForTest() {
-  // Import once and reset the owned singleton state between cases.
-  ({ runContextEngineMaintenance, waitForDeferredTurnMaintenanceForSession } =
-    await import("./context-engine-maintenance.js"));
-  ({ resetDeferredTurnMaintenanceStateForTest } =
-    await import("./context-engine-maintenance.test-support.js"));
-  resetDeferredTurnMaintenanceStateForTest();
-}
-
 describe("runContextEngineMaintenance", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
-    openedSessionManager = undefined;
-    sessionManagerOpenMock.mockClear();
+    sessionManagerFixture.reset();
     resolveRuntimeTranscriptReadTargetMock.mockClear();
-    await loadContextEngineMaintenanceModuleForTest();
+    ({
+      runContextEngineMaintenance,
+      waitForDeferredTurnMaintenanceForSession,
+      resetDeferredTurnMaintenanceStateForTest,
+    } = await loadContextEngineMaintenanceModuleForTest());
   });
 
   it("passes a rewrite-capable runtime context into maintain()", async () => {
@@ -157,7 +150,7 @@ describe("runContextEngineMaintenance", () => {
       });
       expect(sessionManagerOpenMock).toHaveBeenCalledWith(sessionTarget);
       expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-        sessionManager: openedSessionManager,
+        sessionManager: sessionManagerFixture.current,
         replacements: [
           { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
         ],
@@ -396,7 +389,7 @@ describe("runContextEngineMaintenance", () => {
         expect(maintain).toHaveBeenCalledTimes(1);
         await waitForDeferredTurnMaintenanceForSession(sessionKey);
         expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-          sessionManager: openedSessionManager,
+          sessionManager: sessionManagerFixture.current,
           replacements: [
             {
               entryId: "entry-1",
@@ -431,57 +424,6 @@ describe("runContextEngineMaintenance", () => {
           waitForDeferredTurnMaintenanceForSession(sessionKey),
           foregroundTurn,
         ]);
-        vi.useRealTimers();
-      }
-    });
-  });
-
-  it("coalesces repeated requests into one active run plus one follow-up run for the same session", async () => {
-    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
-      vi.useFakeTimers();
-      const sessionKey = "agent:main:session-2";
-      const releaseMaintenance = createDeferred();
-      try {
-        resetCommandQueueStateForTest();
-
-        let maintenanceCalls = 0;
-        const maintain = vi.fn(async () => {
-          maintenanceCalls += 1;
-          if (maintenanceCalls === 1) {
-            await releaseMaintenance.promise;
-          }
-          return {
-            changed: false,
-            bytesFreed: 0,
-            rewrittenEntries: 0,
-          };
-        });
-
-        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
-
-        await runContextEngineMaintenance({
-          contextEngine: backgroundEngine,
-          sessionId: "session-2",
-          sessionKey,
-          sessionFile: "/tmp/session-2.jsonl",
-          reason: "turn",
-        });
-        await backgroundEngine.started;
-        expect(maintain).toHaveBeenCalledTimes(1);
-        await runContextEngineMaintenance({
-          contextEngine: backgroundEngine,
-          sessionId: "session-2",
-          sessionKey,
-          sessionFile: "/tmp/session-2.jsonl",
-          reason: "turn",
-        });
-
-        releaseMaintenance.resolve();
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
-        expect(maintain).toHaveBeenCalledTimes(2);
-      } finally {
-        releaseMaintenance.resolve();
-        await Promise.allSettled([waitForDeferredTurnMaintenanceForSession(sessionKey)]);
         vi.useRealTimers();
       }
     });
@@ -542,6 +484,7 @@ describe("runContextEngineMaintenance", () => {
           },
         });
         expect(deferredPromises).toHaveLength(2);
+        expect(maintain).toHaveBeenCalledTimes(1);
         let secondDeferredSettled = false;
         const secondDeferred = expectDefined(
           deferredPromises[1],
@@ -558,6 +501,8 @@ describe("runContextEngineMaintenance", () => {
         releaseSecondMaintenance.resolve();
         await secondDeferred;
         expect(secondDeferredSettled).toBe(true);
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        expect(maintain).toHaveBeenCalledTimes(2);
       } finally {
         releaseFirstMaintenance.resolve();
         releaseSecondMaintenance.resolve();
@@ -632,11 +577,16 @@ describe("runContextEngineMaintenance", () => {
         secondEngine.dispose.mockImplementation(async () => {
           secondDisposed.resolve();
         });
-        registerLegacyContextEngine();
+        await registerLegacyContextEngine();
         const sharedEngineId = "shutdown-shared-engine";
-        registerContextEngineForOwner(sharedEngineId, () => firstEngine, `test:${sharedEngineId}`, {
-          allowSameOwnerRefresh: true,
-        });
+        await registerContextEngineForOwner(
+          sharedEngineId,
+          () => firstEngine,
+          `test:${sharedEngineId}`,
+          {
+            allowSameOwnerRefresh: true,
+          },
+        );
         const contextEngineConfig = {
           plugins: { slots: { contextEngine: sharedEngineId } },
         };

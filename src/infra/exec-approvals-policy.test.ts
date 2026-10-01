@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { commandRequiresSecurityAuditSuppressionApproval } from "./exec-approvals-policy.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
@@ -103,6 +104,23 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
     note: "more aggressive ask wins",
   });
 }
+
+// This predicate remains only for the shipped, deprecated infra-runtime SDK.
+describe("legacy SDK suppression approval predicate", () => {
+  it.each([
+    { argv: ["openclaw", "config", "set", "security.audit.suppressions", "[]"], expected: true },
+    { argv: ["openclaw", "config", "get", "security.audit.suppressions"], expected: false },
+    { argv: ["rg", "security.audit.suppressions", "docs"], expected: true },
+    { argv: ["echo", "hello"], expected: false },
+  ])("preserves the shipped result for $argv", ({ argv, expected }) => {
+    expect(
+      commandRequiresSecurityAuditSuppressionApproval({
+        command: argv.join(" "),
+        segments: [{ argv }],
+      }),
+    ).toBe(expected);
+  });
+});
 
 describe("exec approvals policy helpers", () => {
   beforeAll(async () => {

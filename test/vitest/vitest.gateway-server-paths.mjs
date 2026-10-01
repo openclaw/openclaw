@@ -17,12 +17,14 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/chat-display-projection.cron.test.ts",
   "src/gateway/config-reload.activation.integration.test.ts",
   "src/gateway/config-reload.lease-retry.test.ts",
+  "src/gateway/config-reload.plugin-drain.test.ts",
   "src/gateway/config-reload.plugin-observation.test.ts",
   "src/gateway/config-reload.test.ts",
   "src/gateway/config-reload.transcripts.test.ts",
   "src/gateway/control-ui-assistant-media-policy.test.ts",
   "src/gateway/control-ui-session-pr-access.test.ts",
   "src/gateway/control-ui-session-prs-branch.test.ts",
+  "src/gateway/control-ui-session-prs-publication.test.ts",
   "src/gateway/control-ui-session-prs-retention.test.ts",
   "src/gateway/control-ui-session-prs-staleness.test.ts",
   "src/gateway/control-ui-session-prs.test.ts",
@@ -63,10 +65,15 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-repository-publication.test.ts",
   "src/gateway/github-shared-publication-events.test.ts",
   "src/gateway/github-shared-publication-read.test.ts",
+  "src/gateway/github-shared-publication-relevance.test.ts",
   "src/gateway/github-user-identity.cache.test.ts",
   "src/gateway/github-user-identity.oidc.test.ts",
   "src/gateway/github-user-identity.test.ts",
+  "src/gateway/health/collector.channel-discovery.test.ts",
+  "src/gateway/health/collector.deadline.test.ts",
+  "src/gateway/health/collector.legacy-owner.test.ts",
   "src/gateway/health/collector.queue-health.test.ts",
+  "src/gateway/health/collector.session-store-path.test.ts",
   "src/gateway/http-auth-utils.paired-device.test.ts",
   "src/gateway/http-auth-utils.test.ts",
   "src/gateway/internal-source-reply-persistence.test.ts",
@@ -79,6 +86,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-attachments.worker-custody.test.ts",
   "src/gateway/managed-image-record-store.test.ts",
   "src/gateway/managed-outgoing-gc-availability.test.ts",
+  "src/gateway/mcp-http.exec-egress.test.ts",
   "src/gateway/mention-directory.test.ts",
   "src/gateway/mention-inbox.test.ts",
   "src/gateway/node-claude-skill-runtime.test.ts",
@@ -109,6 +117,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/cron.list-scoped.test.ts",
   "src/gateway/server-methods/cron.runs.test.ts",
   "src/gateway/server-methods/cron.scheduled-policy-adoption.integration.test.ts",
+  "src/gateway/server-methods/cron.scratch-read.test.ts",
   "src/gateway/server-methods/cron.self-removal.test.ts",
   "src/gateway/server-methods/cron.validation.test.ts",
   "src/gateway/server-methods/models-auth-api-key.integration.test.ts",
@@ -123,6 +132,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/models-list.freshness.integration.test.ts",
   "src/gateway/server-methods/models-list.membership.integration.test.ts",
   "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
+  "src/gateway/server-methods/models-list.remote-catalog.integration.test.ts",
   "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
   "src/gateway/server-methods/models-manual-policy.integration.test.ts",
   "src/gateway/server-methods/native-hook-relay.test.ts",
@@ -208,6 +218,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/session-utils.queued-collector.test.ts",
   "src/gateway/session-utils.single-row-cache.test.ts",
+  "src/gateway/session-utils.snooze.test.ts",
   "src/gateway/session-utils.subagent-payloads.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",
@@ -268,6 +279,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-read-projection.worker.test.ts",
   "src/gateway/worker-environments/placement-reclaim-lifecycle.test.ts",
   "src/gateway/worker-environments/placement-session-retirement.test.ts",
+  "src/gateway/worker-environments/placement-session-tool-operations.worker.test.ts",
   "src/gateway/worker-environments/placement-startup-concurrency.test.ts",
   "src/gateway/worker-environments/placement-store-terminal.test.ts",
   "src/gateway/worker-environments/placement-store.activation.test.ts",
@@ -345,10 +357,10 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-launcher.test.ts",
   "src/gateway/worker-environments/worker-turn-media.boundary.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.computer.test.ts",
+  "src/gateway/worker-environments/worker-turn-rpc.gateway-tools.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-publication.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-reconnect.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.live-ack.test.ts",
-  "src/gateway/worker-environments/worker-turn-rpc.portal.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.transcript.test.ts",
   "src/gateway/worker-environments/worker-turn-run-owner.test.ts",
@@ -356,33 +368,13 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-trajectory.test.ts",
   "src/gateway/worker-environments/workspace-result-finalize.test.ts",
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
+  "src/gateway/worker-environments/workspace-result-repository.editor-admission.test.ts",
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
   "src/gateway/worker-workspace-recovery-binding.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",
   "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
-];
-
-export const gatewayCoreTestInclude = ["src/gateway/**/*.test.ts"];
-export const gatewayCoreTestExclude = [
-  ...databaseWorkerCoreTestFiles,
-  ...gatewayDatabaseWorkerTestFiles,
-  "src/gateway/server-methods/**/*.test.ts",
-  "packages/gateway-protocol/src/**/*.test.ts",
-  "src/gateway/**/*client*.test.ts",
-  "src/gateway/**/*reconnect*.test.ts",
-  "src/gateway/**/*android-node*.test.ts",
-  "src/gateway/**/*gateway-cli-backend*.test.ts",
-  "src/gateway/**/*server*.test.ts",
-  "src/gateway/gateway.test.ts",
-  "src/gateway/embeddings-http.test.ts",
-  "src/gateway/models-http.test.ts",
-  "src/gateway/openai-http.test.ts",
-  "src/gateway/openresponses-http.test.ts",
-  "src/gateway/probe.auth.integration.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
-  "src/gateway/sessions-history-http.test.ts",
 ];
 
 export const gatewayClientTestInclude = [
@@ -449,8 +441,10 @@ export const gatewayMethodsTestExclude = [
   ...databaseWorkerCoreTestFiles,
 ];
 
-// Gateway server tests that need a private module graph and the plain Vitest runner.
+// Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
+  // Sibling threads can fork and retain listener sockets until exec on Linux.
+  "src/gateway/server/plugin-legacy-listeners.test.ts",
   // Native source captures must not retain this fixture's forbidden process constructors.
   "src/gateway/server-startup-post-attach.test.ts",
   "src/gateway/server.agent-artifact-apis.test.ts",
@@ -475,6 +469,28 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
   "src/gateway/server.xai-fallback.test.ts",
+];
+
+export const gatewayCoreTestInclude = ["src/gateway/**/*.test.ts"];
+export const gatewayCoreTestExclude = [
+  ...gatewayServerIsolatedTestFiles,
+  ...databaseWorkerCoreTestFiles,
+  ...gatewayDatabaseWorkerTestFiles,
+  "src/gateway/server-methods/**/*.test.ts",
+  "packages/gateway-protocol/src/**/*.test.ts",
+  "src/gateway/**/*client*.test.ts",
+  "src/gateway/**/*reconnect*.test.ts",
+  "src/gateway/**/*android-node*.test.ts",
+  "src/gateway/**/*gateway-cli-backend*.test.ts",
+  "src/gateway/**/*server*.test.ts",
+  "src/gateway/gateway.test.ts",
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
+  "src/gateway/server.startup-matrix-migration.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
 ];
 
 export const gatewayServerExcludedTestFiles = [

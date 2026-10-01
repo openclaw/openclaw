@@ -118,7 +118,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   };
 }
 
-async function withInProcessGatewayDispatch<T>(
+export async function withInProcessGatewayDispatch<T>(
   method: string,
   params: unknown,
   options: DispatchGatewayMethodInProcessOptions | undefined,
@@ -140,17 +140,17 @@ async function withInProcessGatewayDispatch<T>(
       resolved.client = mergePluginRuntimeClientInternal(resolved.client, {
         operatorRunAuthority: captured.authority,
       });
-      const assertContextCurrent = resolved.assertContextCurrent;
-      resolved.assertContextCurrent = () => {
-        assertContextCurrent();
+      const withCapturedAuthority = (assertCurrent: () => void) => () => {
+        assertCurrent();
         captured.authority.assertCurrent();
       };
+      resolved.assertContextCurrent = withCapturedAuthority(resolved.assertContextCurrent);
+      resolved.assertSourceCurrent = withCapturedAuthority(resolved.assertSourceCurrent);
       const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
       if (assertCreatedInputSourceCurrent) {
-        resolved.assertCreatedInputSourceCurrent = () => {
-          assertCreatedInputSourceCurrent();
-          captured.authority.assertCurrent();
-        };
+        resolved.assertCreatedInputSourceCurrent = withCapturedAuthority(
+          assertCreatedInputSourceCurrent,
+        );
       }
     }
     // A launched agent is autonomous; retaining tool-call AsyncLocalStorage would
@@ -278,7 +278,8 @@ export async function dispatchGatewayMethodInProcess<T>(
       // Plugins may load through another source/bundle graph. Only the captured host can
       // create turns against its published runtime; a local import creates a second owner.
       const facade = await createAgentTurnFacade({
-        assertContextCurrent: resolved.assertContextCurrent,
+        assertContextCurrent:
+          method === "agent" ? resolved.assertSourceCurrent : resolved.assertContextCurrent,
         client: resolved.client,
         isWebchatConnect: resolved.isWebchatConnect,
       });

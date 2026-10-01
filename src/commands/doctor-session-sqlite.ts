@@ -127,10 +127,7 @@ const retainedArchivePlans = new WeakMap<
   }
 >();
 
-/**
- * Runs the targeted doctor SQLite session migration/inspection submode.
- * Destructive production callers hold the Gateway/SQLite-maintenance state lock for the full call.
- */
+/** Destructive production callers hold the Gateway/SQLite-maintenance state lock for the full call. */
 export async function runDoctorSessionSqlite(
   options: DoctorSessionSqliteOptions,
 ): Promise<DoctorSessionSqliteReport> {
@@ -454,6 +451,11 @@ export async function runDoctorSessionSqlite(
     }
   }
   return report;
+}
+
+/** Verified originals retained for unavailable plugins still await settlement. */
+export function hasRetainedDoctorSessionSources(report: DoctorSessionSqliteReport): boolean {
+  return retainedArchivePlans.has(report);
 }
 
 /** Retire only this import's verified originals before the last plugin obligation clears. */

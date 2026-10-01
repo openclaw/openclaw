@@ -47,7 +47,7 @@
             "type": "string"
           },
           "completionTarget": {
-            "description": "parent: return results in a private requester turn; no automatic channel delivery. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
+            "description": "parent: return results in a private requester turn; no automatic channel delivery. After sessions_yield, answer under the conversation's normal reply rules (NO_REPLY stays silent). Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
             "enum": ["parent"],
             "type": "string"
           },
@@ -71,6 +71,10 @@
               },
               {
                 "const": "auto",
+                "type": "string"
+              },
+              {
+                "const": "ultrafast",
                 "type": "string"
               }
             ]

@@ -4,8 +4,8 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { QaGatewayChild } from "../../gateway-child.js";
 import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
-import type { WhatsAppQaGateway } from "./whatsapp-live.contracts.js";
 
 const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
 const WHATSAPP_QA_READY_STABILITY_MS = 20_000;
@@ -34,7 +34,7 @@ function isWhatsAppChannelReady(status: WhatsAppChannelStatus | undefined) {
 }
 
 async function waitForWhatsAppChannelRunning(
-  gateway: WhatsAppQaGateway,
+  gateway: QaGatewayChild,
   accountId: string,
 ): Promise<WhatsAppChannelStatus> {
   const startedAt = Date.now();
@@ -69,7 +69,7 @@ async function waitForWhatsAppChannelRunning(
   );
 }
 
-export async function waitForWhatsAppChannelStable(gateway: WhatsAppQaGateway, accountId: string) {
+export async function waitForWhatsAppChannelStable(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
     const status = await waitForWhatsAppChannelRunning(gateway, accountId);

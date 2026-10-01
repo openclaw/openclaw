@@ -1,5 +1,5 @@
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
-import { protectLiteral, protectLocalInlineSyntax } from "./text-styles-inline.js";
+import { isEscaped, protectLiteral, protectLocalInlineSyntax } from "./text-styles-inline.js";
 import type { MarkdownIRWithBlockMetadata, TokenRegistry } from "./text-styles-shared.js";
 import {
   sourceBlockquotePrefixLength,
@@ -317,16 +317,9 @@ function protectUnpairedDelimiterRuns(
   }> = [];
   for (const marker of ["*", "_", "~"] as const) {
     const pattern = new RegExp(`${marker === "*" ? "\\*" : marker}+`, "gu");
-    const matches = [...original.matchAll(pattern)].filter((match) => {
-      if (preservedOffsets.has(match.index)) {
-        return false;
-      }
-      let backslashes = 0;
-      for (let index = match.index - 1; index >= 0 && original[index] === "\\"; index -= 1) {
-        backslashes += 1;
-      }
-      return backslashes % 2 === 0;
-    });
+    const matches = [...original.matchAll(pattern)].filter(
+      (match) => !preservedOffsets.has(match.index) && !isEscaped(original, match.index),
+    );
     const remaining = new Map(matches.map((match) => [match, match[0].length]));
     const opens = new Map<(typeof matches)[number], boolean>();
     const both = new Map<(typeof matches)[number], boolean>();

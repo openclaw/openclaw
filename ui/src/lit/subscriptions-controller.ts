@@ -25,6 +25,19 @@ export class SubscriptionsController implements ReactiveController {
     host.addController(this);
   }
 
+  watchStore<T extends { subscribe: (notify: () => void) => Cleanup }>(
+    getSource: () => T | null | undefined,
+    synchronize?: (source: T) => void,
+    commitInFrame?: () => void,
+  ): this {
+    return this.watch(
+      getSource,
+      (source, notify) => source.subscribe(notify),
+      synchronize,
+      commitInFrame,
+    );
+  }
+
   watch<T>(
     getSource: () => T | null | undefined,
     subscribe: (source: T, notify: () => void) => Cleanup,

@@ -108,6 +108,7 @@ export async function countPendingDescendantRuns(
       assertCurrent();
       return countPendingDescendantRunsFromRuns(new Map(runs), rootSessionKey);
     },
+    { sessionKeys: [rootSessionKey], descendants: true },
   );
   assertCurrent();
   return count;
@@ -159,13 +160,9 @@ export function listSubagentRunsForRequester(
 
 /** Returns the preferred child-session run from its scoped readable snapshot. */
 export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
   return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-    key,
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+    childSessionKey,
   );
 }
 
@@ -173,15 +170,10 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
 export function getLatestSubagentRunByChildSessionKey(
   childSessionKey: string,
 ): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-
   return (
     getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-      key,
+      getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+      childSessionKey,
     ) ?? null
   );
 }

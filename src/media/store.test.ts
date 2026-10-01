@@ -414,9 +414,11 @@ describe("media store", () => {
   it("rejects oversized media ID reads before materializing the file", async () => {
     const saved = await store.saveMediaBuffer(Buffer.from("too large"), "text/plain");
 
-    await expect(store.readMediaBuffer(saved.id, "inbound", 3)).rejects.toThrow(
-      "maximum is 3 bytes",
-    );
+    await expect(store.readMediaBuffer(saved.id, "inbound", 3)).rejects.toMatchObject({
+      name: "FsSafeError",
+      code: "too-large",
+      message: `readMediaBuffer: media ID ${JSON.stringify(saved.id)} is 9 bytes; maximum is 3 bytes`,
+    });
   });
 
   it("rejects traversal media subdirs before reading IDs", async () => {
@@ -826,19 +828,16 @@ describe("media store", () => {
         originalFilename: `${"a".repeat(59)}\u1100\u1161.txt`,
         expectedIdPattern: /^a{59}\uac00---[a-f0-9-]{36}\.txt$/,
         expectedExtractedFilename: `${"a".repeat(59)}\uac00.txt`,
-        maxBaseNameLength: 60,
       },
       {
         name: "truncates long original filenames",
         originalFilename: `${"a".repeat(100)}.txt`,
-        expectedIdPattern: /^a+---[a-f0-9-]{36}\.txt$/,
-        maxBaseNameLength: 60,
+        expectedIdPattern: /^a{1,60}---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "does not split supplementary-plane letters at the filename cap",
         originalFilename: `${"a".repeat(59)}𐐀.txt`,
         expectedIdPattern: /^a{59}---[a-f0-9-]{36}\.txt$/,
-        maxBaseNameLength: 60,
       },
       {
         name: "falls back to UUID-only when the original basename is blank",

@@ -8,8 +8,6 @@ import {
   validateCronListParams,
   validateCronRemoveParams,
   validateCronRunParams,
-  validateCronScratchGetParams,
-  validateCronScratchSetParams,
   validateCronStatusParams,
   validateCronUpdateParams,
   validateWakeParams,
@@ -25,7 +23,6 @@ import {
 import { cronJobReadView } from "../../cron/job-read-view.js";
 import { resolveCronJobBoundSessionKeys } from "../../cron/job-session-bindings.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
-import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronUpdateOptions } from "../../cron/service/state.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
@@ -89,6 +86,7 @@ import {
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
 import { compactCronListJob } from "./cron-list-projection.js";
 import { cronRunsHandler } from "./cron-runs.js";
+import { cronScratchHandlers } from "./cron-scratch.js";
 import {
   createCronSessionVisibility,
   cronJobIsVisible,
@@ -105,21 +103,6 @@ class CronJobConfigRevisionConflictError extends Error {
   ) {
     super("cron job definition no longer matches the loaded version");
   }
-}
-
-// Migration provenance (sourceSha256) stays internal; the closed result schema
-// exposes only content/revision/updatedAtMs.
-function publicCronScratch(
-  scratch: { content: string; revision: number; updatedAtMs: number } | undefined,
-) {
-  if (!scratch) {
-    return null;
-  }
-  return {
-    content: scratch.content,
-    revision: scratch.revision,
-    updatedAtMs: scratch.updatedAtMs,
-  };
 }
 
 function cronAddPayloadWithDeliveryPreview(params: {
@@ -436,61 +419,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       preserveCronGetWireMessage: true,
     },
   ),
-  "cron.scratch.get": scopedCronJobHandler(
-    "cron.scratch.get",
-    validateCronScratchGetParams,
-    async ({ respond, context }, { jobId }) => {
-      const state = await context.cron.readScratch(jobId);
-      respond(
-        true,
-        {
-          scratch: publicCronScratch(state.scratch),
-          currentRevision: state.currentRevision,
-          maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
-        },
-        undefined,
-      );
-    },
-  ),
-  "cron.scratch.set": scopedCronJobHandler(
-    "cron.scratch.set",
-    validateCronScratchSetParams,
-    async (
-      { params, respond, context, client, sessionMutationCommitGuard, hasCurrentClientAuthority },
-      { jobId, callerScope },
-    ) => {
-      const p = params;
-      try {
-        const commitGuard = resolveCronMutationCommitGuard(
-          client,
-          context,
-          { callerScope, jobId },
-          { sessionMutationCommitGuard, hasCurrentClientAuthority },
-        );
-        const result = await context.cron.writeScratch(jobId, {
-          content: p.content,
-          expectedRevision: p.expectedRevision,
-          ...(commitGuard ? { commitGuard } : {}),
-        });
-        if (!result.ok) {
-          respond(true, result, undefined);
-          return;
-        }
-        respond(
-          true,
-          {
-            ok: true,
-            scratch: publicCronScratch(result.scratch),
-            currentRevision: result.currentRevision,
-            maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
-          },
-          undefined,
-        );
-      } catch (error) {
-        respondInvalidCronParams(respond, "cron.scratch.set", formatErrorMessage(error));
-      }
-    },
-  ),
+  ...cronScratchHandlers,
   "cron.add": async ({
     params,
     respond,

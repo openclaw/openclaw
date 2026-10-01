@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.factory.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
@@ -41,7 +40,7 @@ async function fixture(authored: unknown, extra: ConfigIoFactoryOptions = {}) {
 }
 
 describe("config io compatibility", () => {
-  it("loads retired context-budget shapes and surfaces migration guidance without rewriting", async () => {
+  it("leaves retired context-budget shapes for Doctor instead of normalizing runtime reads", async () => {
     const authored = {
       models: {
         providers: {
@@ -57,40 +56,13 @@ describe("config io compatibility", () => {
         entries: { ops: { contextTokens: 32_000 } },
       },
     };
-    const { io, configPath, logger } = await fixture(authored, { pluginValidation: "core-only" });
+    const { io, configPath } = await fixture(authored, { pluginValidation: "core-only" });
     const raw = await fs.readFile(configPath, "utf-8");
-    const config = io.loadConfig();
+    expect(() => io.loadConfig()).toThrow(/contextTokens|contextWindow/);
     const snapshot = await io.readConfigFileSnapshot();
-    const provider = config.models?.providers?.openai;
-    const resolvedBudget = resolveContextTokensForModelFromCache({
-      cfg: config,
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-    expect(provider).not.toHaveProperty("contextTokens");
-    expect(provider).not.toHaveProperty("contextWindow");
-    expect(provider?.models?.[0]).toMatchObject({
-      contextTokens: 64_000,
-      contextWindow: 128_000,
-    });
-    expect(config.agents?.defaults).not.toHaveProperty("contextTokens");
-    expect(config.agents?.entries?.ops).not.toHaveProperty("contextTokens");
-    expect(resolvedBudget).toBe(64_000);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.sourceConfig).toMatchObject(authored);
     expect(snapshot.sourceConfigBeforeMigrations).toMatchObject(authored);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
-    );
-    expect(snapshot.warnings).toContainEqual({
-      path: "agents.defaults.contextTokens",
-      message: "Removed agents.defaults.contextTokens.",
-    });
-    expect(snapshot.warnings).toContainEqual({
-      path: "agents.defaults.contextTokens",
-      message: expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
-    });
-    expect(snapshot.warnings).not.toContainEqual(expect.objectContaining({ path: "" }));
     await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
   });
 

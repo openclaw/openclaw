@@ -22,7 +22,11 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
-import { publishServiceFile, readServiceFileState } from "./service-stage.js";
+import {
+  matchesServiceFilePublication,
+  publishServiceFile,
+  readServiceFileState,
+} from "./service-stage.js";
 import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
@@ -250,13 +254,7 @@ export async function publishScheduledTaskFiles(
       const current = await readServiceFileState(file.path);
       const prepared = file.prepared;
       if (prepared) {
-        // Rename can change ctime; the prepared inode and payload identify our publication.
-        if (
-          current &&
-          (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
-            (key) => current[key] === prepared[key],
-          )
-        ) {
+        if (matchesServiceFilePublication(current, prepared)) {
           file.after = current;
           file.changed = true;
         } else if (!isDeepStrictEqual(current, file.after)) {

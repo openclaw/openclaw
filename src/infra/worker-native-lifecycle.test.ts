@@ -16,6 +16,10 @@ async function runFixture(
     | "supervisor-loss"
     | "native-resource"
     | "resource-supervisor-loss"
+    | "resource-auto-close-success"
+    | "resource-auto-close-failure"
+    | "resource-auto-close-refusal"
+    | "resource-cold-supervisor-loss"
     | "resource-close-supervisor-loss"
     | "resource-late-attachment"
     | "resource-owner-reply-loss"
@@ -62,13 +66,26 @@ describe("retained native worker lifecycle", () => {
     });
   }, 20_000);
 
-  it("retains a real SQLite child through failed resource close and same-owner retry", async () => {
+  it("rejects cold supervisor recovery until the original broker becomes ready, then retries", async () => {
+    expect(await runFixture("resource-cold-supervisor-loss")).toEqual({
+      ending: "resource-cold-supervisor-loss",
+      unavailableBeforeReady: true,
+      sameSourceRetained: true,
+      sameBrokerRetried: true,
+      neverAdmittedResourceClosed: true,
+      brokerClosed: true,
+    });
+  }, 20_000);
+
+  it("preserves refused shutdown through same-owner SQLite retry and eventual native join", async () => {
     expect(await runFixture("native-resource")).toEqual({
       ending: "native-resource",
       firstCloseRejected: true,
       sameOwnerRetried: true,
       childClosedBeforeStopped: true,
       sqliteReusable: true,
+      shutdownRefused: true,
+      lateNativeJoin: true,
     });
   }, 20_000);
 
@@ -84,6 +101,32 @@ describe("retained native worker lifecycle", () => {
       sqliteReusable: true,
     });
   }, 20_000);
+
+  it.each([
+    "resource-auto-close-success",
+    "resource-auto-close-failure",
+    "resource-auto-close-refusal",
+  ] as const)(
+    "retains automatic broker cleanup after real resource supervisor loss during %s",
+    async (ending) => {
+      expect(await runFixture(ending)).toEqual({
+        ending,
+        rejectedWhileBlocked: true,
+        retryRejectedWhileBlocked: true,
+        brokerOwnerSurvived: true,
+        firstCloseRejected: true,
+        sameOwnerRetried: true,
+        childClosedBeforeStopped: true,
+        sqliteReusable: true,
+        originalBrokerJoined: true,
+        nativeBrokerCloses: 1,
+        ...(ending === "resource-auto-close-success"
+          ? { rotatedAfterBrokerClose: true }
+          : { originalFailureOccurrences: 1 }),
+      });
+    },
+    20_000,
+  );
 
   it("joins an accepted resource close when its supervising Worker is lost mid-close", async () => {
     expect(await runFixture("resource-close-supervisor-loss")).toEqual({
@@ -126,12 +169,14 @@ describe("retained native worker lifecycle", () => {
     });
   }, 20_000);
 
-  it("keeps an explicitly unbound source usable after the ambient generation releases", async () => {
+  it("reuses an unbound source after ambient release until explicit shutdown joins its owners", async () => {
     expect(await runFixture("explicit-unbound")).toEqual({
       ending: "explicit-unbound",
       ambientReleased: true,
       value: 42,
       nativeJoined: true,
+      idleReused: true,
+      shutdownJoined: true,
     });
   }, 20_000);
 

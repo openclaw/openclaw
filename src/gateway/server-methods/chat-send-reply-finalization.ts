@@ -54,9 +54,6 @@ type TranscriptMirrorResolution =
 function resolveTranscriptMirrorOwner(
   payloads: readonly ReplyPayload[],
 ): TranscriptMirrorResolution {
-  if (payloads.length === 0) {
-    return { kind: "none" };
-  }
   const owners = payloads.map(
     (payload) => getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror,
   );

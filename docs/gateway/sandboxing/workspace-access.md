@@ -31,6 +31,9 @@ configured workspace when it is selected with `worktree: true`. This authorizes
 source preparation, not direct access to that host directory. Arbitrary external
 `cwd` values and direct project bindings remain restricted.
 
+Visible child sessions keep their managed worktree as the sandbox workspace on
+later turns, including sessions created before an update.
+
 The private checkout contains the selected source commit, not the host's shared
 Git configuration, credential helpers, other branches, or ignored files selected
 by `.worktreeinclude`. Guest preparation does not run the repository's host setup
@@ -91,6 +94,8 @@ Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 
 Local container mounts and sandbox file tools enforce these read-only roots.
+The Gateway refreshes its own mirrored copies even when an earlier copy inherited
+read-only directory permissions; no manual permission repair is needed.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy
 for filesystem restrictions; `workspaceAccess` alone does not make remote shell
 paths read-only.

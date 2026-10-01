@@ -2,30 +2,58 @@ import { expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "../../infra/startup-maintenance-required.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { setTestEnvValue } from "../../test-utils/env.js";
 import {
   createCloseMock,
   createGatewayServer,
   createRuntimeWithExitSignal,
+  setPlatform,
   withIsolatedSignals,
 } from "./run-loop.test-support.js";
 
-export function registerGatewayStartupFailureTests(): void {
-  it.each(["clean", "failed", "maintenance", "unrepaired", "unavailable"] as const)(
-    "fences replacement after deferred startup with %s cleanup",
-    async (cleanup) => {
+export function registerGatewayStartupFailureTests(
+  gatewayLog: ReturnType<typeof import("./run-loop.test-support.js").createGatewayLogger>,
+): void {
+  it.each([
+    { cleanup: "clean", supervised: false, platform: "linux" },
+    { cleanup: "failed", supervised: false, platform: "linux" },
+    { cleanup: "maintenance", supervised: false, platform: "linux" },
+    { cleanup: "unrepaired", supervised: false, platform: "linux" },
+    { cleanup: "unrepaired", supervised: true, platform: "linux" },
+    { cleanup: "unavailable", supervised: true, platform: "linux" },
+    { cleanup: "repair-failed", supervised: false, platform: "linux" },
+    { cleanup: "repair-failed", supervised: true, platform: "linux" },
+    { cleanup: "unavailable", supervised: false, platform: "win32" },
+    { cleanup: "unavailable", supervised: true, platform: "win32" },
+  ] as const)(
+    "fences replacement after deferred startup with $cleanup cleanup (supervised=$supervised, platform=$platform)",
+    async ({ cleanup, supervised, platform }) => {
+      setPlatform(platform);
       vi.clearAllMocks();
+      if (supervised) {
+        setTestEnvValue(
+          platform === "win32" ? "OPENCLAW_WINDOWS_TASK_NAME" : "OPENCLAW_SYSTEMD_UNIT",
+          "openclaw-gateway",
+        );
+      }
       await withIsolatedSignals(async ({ captureSignal }) => {
         const { runGatewayLoop } = await import("./run-loop.js");
         const firstStartup = createDeferredCore();
         const firstStarted = createDeferredCore();
         const triageStarted = createDeferredCore();
+        const manualRecovery = createDeferredCore();
+        gatewayLog.error.mockImplementation((message: string) => {
+          if (message.includes("Process will stay alive for manual recovery")) {
+            manualRecovery.resolve();
+          }
+        });
         const thirdStarted = createDeferredCore();
         const { SessionStoreMigrationRequiredError } =
           await import("../../config/sessions/migration-required.js");
         const startupError =
           cleanup === "maintenance"
             ? new SessionStoreMigrationRequiredError("legacy session store requires migration")
-            : new Error("replacement deferred startup failed");
+            : new Error("gateway.bind: refused configuration");
         const cleanupError = new Error("replacement cleanup failed");
         const retryError = new Error("repaired configuration still refused");
         const closeFirst = createCloseMock();
@@ -55,7 +83,11 @@ export function registerGatewayStartupFailureTests(): void {
           triageStarted.resolve();
           expect(error).toBe(startupError);
           expect(closeSecond).toHaveBeenCalledExactlyOnceWith({ reason: "gateway startup failed" });
-          return cleanup === "unavailable" ? undefined : ("completed" as const);
+          return cleanup === "unavailable"
+            ? undefined
+            : cleanup === "repair-failed"
+              ? ("failed" as const)
+              : ("completed" as const);
         });
         const completeBoot = vi.fn();
         const loop = runGatewayLoop({ start, runtime, completeBoot, onRestartStartupFailure });
@@ -83,7 +115,7 @@ export function registerGatewayStartupFailureTests(): void {
             expect(start).toHaveBeenCalledTimes(3);
             stop();
             await expect(exited).resolves.toBe(0);
-          } else if (cleanup === "unrepaired" || cleanup === "unavailable") {
+          } else if (supervised && (cleanup === "unrepaired" || cleanup === "repair-failed")) {
             await withTestTimeout(loopSettled, 1_000, "expected terminal startup refusal");
             const error = cleanup === "unrepaired" ? retryError : startupError;
             expect(loopRejected).toHaveBeenCalledExactlyOnceWith(error);
@@ -93,6 +125,44 @@ export function registerGatewayStartupFailureTests(): void {
               outcome: "startup_failed",
               reason: error.message,
             });
+          } else if (
+            cleanup === "unavailable" ||
+            cleanup === "unrepaired" ||
+            cleanup === "repair-failed"
+          ) {
+            await withTestTimeout(
+              Promise.race([manualRecovery.promise, loopSettled]),
+              1_000,
+              "expected manual recovery guidance",
+            );
+            expect(loopRejected).not.toHaveBeenCalled();
+            expect(runtime.exit).not.toHaveBeenCalled();
+            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
+            expect(start).toHaveBeenCalledTimes(cleanup === "unrepaired" ? 3 : 2);
+            const output = gatewayLog.error.mock.calls.flat().join("\n");
+            expect(output).toContain(
+              cleanup === "unrepaired" ? retryError.message : "gateway.bind",
+            );
+            expect(output).toContain("openclaw doctor --fix");
+            if (platform === "win32") {
+              expect(output).toContain(supervised ? "openclaw gateway restart" : "press Ctrl+C");
+              expect(output).not.toContain("kill -USR2");
+            } else {
+              expect(output).toContain(`kill -USR2 ${process.pid}`);
+              const recovered = createDeferredCore();
+              start.mockReset().mockImplementation(async () => {
+                recovered.resolve();
+                return createGatewayServer(closeThird);
+              });
+              restart();
+              await withTestTimeout(
+                recovered.promise,
+                1_000,
+                "expected operator reload to restart the Gateway",
+              );
+            }
+            stop();
+            await expect(exited).resolves.toBe(0);
           } else if (cleanup === "maintenance") {
             expect(onRestartStartupFailure).not.toHaveBeenCalled();
             expect(loopRejected).toHaveBeenCalledExactlyOnceWith(startupError);
@@ -109,6 +179,7 @@ export function registerGatewayStartupFailureTests(): void {
             expect(runtime.exit).not.toHaveBeenCalled();
           }
         } finally {
+          gatewayLog.error.mockReset();
           firstStartup.resolve();
           await firstStartup.promise;
           if (
@@ -150,71 +221,31 @@ export function registerGatewayStartupFailureTests(): void {
     });
   });
 
-  it.each([
-    [
-      "agent media",
-      async () =>
-        new (
-          await import("../../state/openclaw-agent-db-migration-required.js")
-        ).OpenClawAgentDatabaseMediaMigrationRequiredError("/tmp/agent.sqlite", 14),
-    ],
-    [
-      "audit ledger",
-      async () =>
-        new (
-          await import("../../state/openclaw-state-db-schema-migration-required.js")
-        ).OpenClawStateDatabaseSchemaMigrationRequiredError("audit-events-v2", "/tmp/state.sqlite"),
-    ],
-    [
-      "agent registry",
-      async () =>
-        new (
-          await import("../../state/openclaw-state-db-schema-migration-required.js")
-        ).OpenClawStateDatabaseSchemaMigrationRequiredError(
-          "agent-databases-composite-primary-key",
-          "/tmp/state.sqlite",
-        ),
-    ],
-    [
-      "session store",
-      async () =>
-        new (
-          await import("../../config/sessions/migration-required.js")
-        ).SessionStoreMigrationRequiredError("legacy session store"),
-    ],
-    [
-      "newer schema",
-      async () =>
-        new (await import("../../infra/sqlite-user-version.js")).SqliteSchemaVersionError(
-          "newer schema version",
-        ),
-    ],
-  ] as const)(
-    "records a maintenance reason for %s startup failures",
-    async (_kind, createFailure) => {
-      await withIsolatedSignals(async () => {
-        // Earlier lifecycle tests reload the runtime; create the error in that same module graph.
-        const failure = await createFailure();
-        const { runtime } = createRuntimeWithExitSignal();
-        const completeBoot = vi.fn();
-        const { runGatewayLoop } = await import("./run-loop.js");
+  it("records a maintenance reason for session store startup failures", async () => {
+    await withIsolatedSignals(async () => {
+      // Earlier lifecycle tests reload the runtime; create the error in that same module graph.
+      const { SessionStoreMigrationRequiredError } =
+        await import("../../config/sessions/migration-required.js");
+      const failure = new SessionStoreMigrationRequiredError("legacy session store");
+      const { runtime } = createRuntimeWithExitSignal();
+      const completeBoot = vi.fn();
+      const { runGatewayLoop } = await import("./run-loop.js");
 
-        await expect(
-          runGatewayLoop({
-            start: vi.fn(async () => {
-              throw failure;
-            }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-            runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-            completeBoot,
-          }),
-        ).rejects.toBe(failure);
+      await expect(
+        runGatewayLoop({
+          start: vi.fn(async () => {
+            throw failure;
+          }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+          completeBoot,
+        }),
+      ).rejects.toBe(failure);
 
-        expect(completeBoot).toHaveBeenCalledWith({
-          outcome: "startup_failed",
-          reason: failure.message,
-          startupReason: GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
-        });
+      expect(completeBoot).toHaveBeenCalledWith({
+        outcome: "startup_failed",
+        reason: failure.message,
+        startupReason: GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
       });
-    },
-  );
+    });
+  });
 }

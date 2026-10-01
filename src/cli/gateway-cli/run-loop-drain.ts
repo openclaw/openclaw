@@ -5,7 +5,6 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
-import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import type { GatewayRunSignalAction, GatewayRunSignalRequest } from "./run-loop-request.js";
 import { formatDrainCounts, formatShutdownReason } from "./run-loop-shutdown-format.js";
 
@@ -16,7 +15,6 @@ export async function drainGatewayActiveWork({
   runtime,
   drainTimeoutMs,
   restartDrainDeadlineAt,
-  markDraining,
   recordCounts,
   recordWarning,
   logger,
@@ -25,7 +23,6 @@ export async function drainGatewayActiveWork({
   runtime: typeof import("./lifecycle.runtime.js");
   drainTimeoutMs: number | undefined;
   restartDrainDeadlineAt: number | undefined;
-  markDraining: (reason: GatewayDrainReason) => void;
   recordCounts: (counts: string) => void;
   recordWarning: (warning: string) => void;
   logger: Pick<SubsystemLogger, "info" | "warn">;
@@ -51,7 +48,8 @@ export async function drainGatewayActiveWork({
           runtime;
         // Reject new enqueues immediately during the drain window so
         // sessions get an explicit restart error instead of silent task loss.
-        markDraining(formatShutdownReason(request));
+        const drainReason = formatShutdownReason(request);
+        runtime.markGatewayDraining(drainReason);
         const initialSnapshot = createGatewayActiveWorkSnapshot();
         activeWorkAtDrainStart = initialSnapshot.counts.totalActive;
         activeRunsAtDrainStart = initialSnapshot.counts.embeddedRuns;

@@ -52,6 +52,12 @@ pnpm's isolated linker, which keeps dependencies in `node_modules/.pnpm` and lin
 them into each workspace package. On supported macOS volumes, this also lets pnpm
 reuse whole-package APFS clones instead of importing every file separately.
 
+Installation also prepares Kysely declarations from the SQL schemas in `src/state`.
+The generated files live in ignored `.artifacts/kysely/`; build, typecheck, and
+test entrypoints refresh them automatically, including after an install with
+`--ignore-scripts`. Unchanged inputs reuse the declarations without rewriting
+them. `pnpm db:kysely:check` checks schema projection and generator contracts.
+
 Give each source checkout its own physical dependency installation. Tooling does
 not automatically link a missing `node_modules` to another checkout. Existing
 borrowed installs can still serve direct Node tooling. Normal pnpm install checks

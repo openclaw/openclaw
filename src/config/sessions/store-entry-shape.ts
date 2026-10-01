@@ -151,16 +151,32 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     delete canonicalValue.archivedBy;
     delete canonicalValue.archiveReason;
   }
+  // An archived entry never carries a snooze: automatic archival (cap, age,
+  // stale-dashboard) writes archive facts without the patch path, and a later
+  // restore must not resurface a still-hidden session.
+  if (
+    canonicalValue.archivedAt !== undefined ||
+    typeof canonicalValue.snoozedUntil !== "number" ||
+    !Number.isFinite(canonicalValue.snoozedUntil) ||
+    canonicalValue.snoozedUntil <= 0
+  ) {
+    delete canonicalValue.snoozedUntil;
+    delete canonicalValue.snoozedAt;
+  }
   return canonicalValue as unknown as SessionEntry;
 }
 
 /** Removes the runtime-only skill catalog without mutating the live session snapshot. */
 export function stripRuntimeOnlySessionSkillsFields(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
-  if (snapshot?.resolvedSkills === undefined) {
+  if (snapshot?.resolvedSkills === undefined && snapshot?.discoverySkills === undefined) {
     return entry;
   }
-  const { resolvedSkills: _drop, ...skillsSnapshot } = snapshot;
+  const {
+    resolvedSkills: _dropResolved,
+    discoverySkills: _dropDiscovery,
+    ...skillsSnapshot
+  } = snapshot;
   return { ...entry, skillsSnapshot };
 }
 

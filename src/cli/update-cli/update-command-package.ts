@@ -52,7 +52,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { CLI_NAME } from "../cli-name.js";
-import { createUpdateProgress } from "./progress.js";
+import type { UpdateDisplayProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
   readPackageName,
@@ -79,64 +79,57 @@ export async function readPackageUpdateIdentity(root: string) {
   return { version, ...(buildId ? { buildId } : {}) };
 }
 
-type PackageDoctorOptions = {
-  root: string;
-  timeoutMs?: number;
-  /** Null leaves forward work unbounded; omission retains the caller's timeout. */
-  workTimeoutMs?: number | null;
-  progress: ReturnType<typeof createUpdateProgress>["progress"];
-  results?: UpdateStepResult[];
-  managedServiceEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-  nodeRunner?: string;
-  onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
-  getDoctorContext?: () =>
-    | {
-        runId: string;
-        executorFence: UpdateRecoveryFence;
-        requester?: Readonly<UpdateRequester>;
-        inputHash: string;
-        changes: UpdateDoctorConfigChange[];
-        databaseBackup?: UpdateDatabaseBackup;
-        originalRecoveryCapture?: UpdateRecoveryBaselineRef;
-        assertCurrent: () => void;
-        assertBoundChildCurrent: () => void;
-        onStateHandoff?: () => void;
-      }
-    | undefined;
-};
-
-export function preparePackageDoctorContext(params: {
-  capable: boolean;
-  runId?: string;
-  executorFence?: UpdateRecoveryFence;
+type PackageDoctorContext = {
+  runId: string;
+  executorFence: UpdateRecoveryFence;
   requester?: Readonly<UpdateRequester>;
-  inputHash?: string | null;
+  inputHash: string;
   changes: UpdateDoctorConfigChange[];
   databaseBackup?: UpdateDatabaseBackup;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   assertCurrent: () => void;
   assertBoundChildCurrent: () => void;
   onStateHandoff?: () => void;
+};
+
+type PackageDoctorOptions = {
+  root: string;
+  timeoutMs?: number;
+  /** Null leaves forward work unbounded; omission retains the caller's timeout. */
+  workTimeoutMs?: number | null;
+  progress: UpdateDisplayProgress;
+  results?: UpdateStepResult[];
+  managedServiceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+  nodeRunner?: string;
+  onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
+  getDoctorContext?: () => PackageDoctorContext | undefined;
+};
+
+export function preparePackageDoctorContext({
+  capable,
+  runId,
+  executorFence,
+  inputHash,
+  ...context
+}: Omit<PackageDoctorContext, "runId" | "executorFence" | "inputHash"> & {
+  capable: boolean;
+  runId?: string;
+  executorFence?: UpdateRecoveryFence;
+  inputHash?: string | null;
 }) {
-  params.assertCurrent();
-  if (!params.capable) {
+  context.assertCurrent();
+  if (!capable) {
     return undefined;
   }
-  if (!params.runId || !params.executorFence || params.inputHash === undefined) {
+  if (!runId || !executorFence || inputHash === undefined) {
     throw new Error("Validated Doctor requires its live update executor and captured config hash.");
   }
   return {
-    runId: params.runId,
-    executorFence: params.executorFence,
-    requester: params.requester,
-    inputHash: params.inputHash ?? hashConfigRaw(null),
-    changes: params.changes,
-    databaseBackup: params.databaseBackup,
-    originalRecoveryCapture: params.originalRecoveryCapture,
-    assertCurrent: params.assertCurrent,
-    assertBoundChildCurrent: params.assertBoundChildCurrent,
-    onStateHandoff: params.onStateHandoff,
+    ...context,
+    runId,
+    executorFence,
+    inputHash: inputHash ?? hashConfigRaw(null),
   };
 }
 
@@ -655,6 +648,7 @@ export async function runPackageInstallUpdate(
     getActivation: params.getActivation,
     installTarget,
     installSpec,
+    installCwd: params.invocationCwd,
     packageName,
     packageRoot: pkgRoot,
     // Artifact equality cannot skip a method switch or retained-runtime staging.

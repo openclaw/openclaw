@@ -1,4 +1,3 @@
-// Implements maintenance commands for OpenClaw-backed session cleanup.
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";

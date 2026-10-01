@@ -713,6 +713,12 @@ export async function dispatchChannelMessageAction(
       ) {
         return null;
       }
+      try {
+        await authorizedActionContext.onPlatformSendDispatch?.();
+      } catch (error) {
+        assertOutboundHandoffCurrent(authorizedActionContext.assertDirectAdapterHandoff);
+        throw error;
+      }
       assertOutboundHandoffCurrent(authorizedActionContext.assertDirectAdapterHandoff);
       prepared.assertReadAuthorityCurrent?.();
       if (typeof match === "function") {

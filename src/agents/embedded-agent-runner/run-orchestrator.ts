@@ -5,6 +5,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -212,11 +213,7 @@ async function runEmbeddedAgentInternal(
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
-    (channelHint
-      ? isMarkdownCapableMessageChannel(channelHint)
-        ? "markdown"
-        : "plain"
-      : "markdown");
+    (!channelHint || isMarkdownCapableMessageChannel(channelHint) ? "markdown" : "plain");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
   throwIfAborted();
 
@@ -266,6 +263,18 @@ async function runEmbeddedAgentInternal(
         if (cliDispatched) {
           return cliDispatched;
         }
+        const preReplyTarget = { ...runSessionTarget, ...params.sessionTarget };
+        const preReplyGeneration = await prepareCronRootSessionGeneration(
+          {
+            ...preReplyTarget,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey ?? preReplyTarget.sessionKey,
+            lifecycleRevision: preReplyTarget.expectedLifecycleRevision,
+          },
+          (reason) => laneController.laneTaskAbortController.abort(reason),
+        );
+        using _ = { [Symbol.dispose]: () => preReplyGeneration?.release() };
+        const preReplyAssertCurrent = preReplyGeneration?.assertCurrent;
         const startupStages = createStageTimingTracker(Date.now);
         const requestedWorkspaceResolution = resolveRunWorkspaceDir({
           workspaceDir: params.workspaceDir,
@@ -484,14 +493,10 @@ async function runEmbeddedAgentInternal(
                 modelId,
                 trigger: params.trigger,
                 ...buildAgentHookContextChannelFields(params),
-                ...buildAgentHookContextIdentityFields({
-                  trigger: params.trigger,
-                  senderId: params.senderId,
-                  chatId: params.chatId,
-                  channelContext: params.channelContext,
-                }),
+                ...buildAgentHookContextIdentityFields(params),
               };
               const hookResult = await runBeforeAgentReplyForTurn({
+                assertCurrent: preReplyAssertCurrent,
                 runId: params.runId,
                 trigger: params.trigger,
                 event: { cleanedBody: params.prompt },
@@ -538,6 +543,7 @@ async function runEmbeddedAgentInternal(
                     });
               const runTerminal = terminal;
               return await runPreparedEmbeddedLoop(refresh, {
+                preReplyGeneration,
                 onInitialWriterPrepared: (resource) => {
                   initialWriterResource = resource;
                 },

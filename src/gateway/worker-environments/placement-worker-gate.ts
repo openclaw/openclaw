@@ -49,18 +49,6 @@ export type WorkerSessionPlacementGate = {
   registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void;
 };
 
-function claimForBinding(
-  record: WorkerSessionPlacementRecord | undefined,
-  binding: WorkerPlacementBinding,
-): WorkerSessionTurnClaim | undefined {
-  const claim = record ? projectWorkerSessionTurnClaim(record) : undefined;
-  return claim?.sessionId === binding.sessionId &&
-    claim.owner.environmentId === binding.environmentId &&
-    claim.owner.ownerEpoch === binding.ownerEpoch
-    ? claim
-    : undefined;
-}
-
 function claimForOwnerRevocation(
   record: WorkerSessionPlacementRecord | undefined,
   binding: WorkerPlacementBinding,
@@ -97,11 +85,6 @@ export function createWorkerSessionPlacementGate(
   const validateWorkerTurn = (claim: WorkerSessionTurnClaim) =>
     !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)) &&
     store.validateTurnClaim(claim);
-
-  const readWorkerTurnClaim = (binding: WorkerPlacementBinding) => {
-    const claim = claimForBinding(store.get(binding.sessionId), binding);
-    return claim && store.validateTurnClaim(claim) ? claim : undefined;
-  };
 
   const fenceWorkerTurnForRecovery = (claim: WorkerSessionTurnClaim) => {
     if (claim.owner.kind === "worker") {
@@ -217,7 +200,16 @@ export function createWorkerSessionPlacementGate(
         throw error;
       }
     },
-    readWorkerTurnClaim,
+    readWorkerTurnClaim(binding) {
+      const record = store.get(binding.sessionId);
+      const claim = record ? projectWorkerSessionTurnClaim(record) : undefined;
+      return claim?.sessionId === binding.sessionId &&
+        claim.owner.environmentId === binding.environmentId &&
+        claim.owner.ownerEpoch === binding.ownerEpoch &&
+        store.validateTurnClaim(claim)
+        ? claim
+        : undefined;
+    },
     getExecutionIdentityCapability: (claim) =>
       getWorkerTurnExecutionIdentityCapability(store, claim),
     validateWorkerTurn,
@@ -254,10 +246,7 @@ export function createWorkerSessionPlacementGate(
         return;
       }
       const pending = findPendingWorkerWorkspaceResult(store, claim);
-      if (!pending) {
-        return;
-      }
-      if (pending.gatewayInstanceId !== store.workspaceResultInstanceId()) {
+      if (!pending || pending.gatewayInstanceId !== store.workspaceResultInstanceId()) {
         return;
       }
       if (

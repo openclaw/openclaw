@@ -1,4 +1,3 @@
-// Resolves ClawHub plugin catalog entries and install metadata.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -812,7 +811,9 @@ function validateClawHubPluginPackage(params: {
   detail: ClawHubPackageDetail;
   compatibility?: ClawHubPackageCompatibility | null;
   runtimeVersion: string;
-}): ClawHubInstallFailure | null {
+}):
+  | { ok: true; family: ClawHubPluginInstallRecordFields["clawhubFamily"] }
+  | ClawHubInstallFailure {
   const pkg = params.detail.package;
   if (!pkg) {
     return buildClawHubInstallFailure(
@@ -860,7 +861,7 @@ function validateClawHubPluginPackage(params: {
       allowLegacyBareSemver: true,
     });
     if (minGatewayVersionCheck.ok) {
-      return null;
+      return { ok: true, family: pkg.family };
     }
     if (minGatewayVersionCheck.kind === "invalid") {
       return buildClawHubInstallFailure(
@@ -879,7 +880,7 @@ function validateClawHubPluginPackage(params: {
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_GATEWAY,
     );
   }
-  return null;
+  return { ok: true, family: pkg.family };
 }
 
 export async function installPluginFromClawHub(
@@ -952,13 +953,13 @@ export async function installPluginFromClawHub(
       return versionState;
     }
     const runtimeVersion = resolveCompatibilityHostVersion(params.env);
-    const validationFailure = validateClawHubPluginPackage({
+    const validation = validateClawHubPluginPackage({
       detail,
       compatibility: versionState.compatibility,
       runtimeVersion,
     });
-    if (validationFailure) {
-      return validationFailure;
+    if (!validation.ok) {
+      return validation;
     }
     const runtimeIdResolution = resolveClawHubExpectedRuntimeId({
       detail,
@@ -967,12 +968,18 @@ export async function installPluginFromClawHub(
     if (!runtimeIdResolution.ok) {
       return runtimeIdResolution;
     }
-    return { ok: true as const, detail, versionState, runtimeIdResolution };
+    return {
+      ok: true as const,
+      detail,
+      versionState,
+      runtimeIdResolution,
+      clawhubFamily: validation.family,
+    };
   });
   if (!resolved.ok) {
     return resolved;
   }
-  const { detail, versionState, runtimeIdResolution } = resolved;
+  const { detail, versionState, runtimeIdResolution, clawhubFamily } = resolved;
   const expectedClawPackSha256 = resolveClawHubClawPackArtifactSha256(versionState.clawpack);
   const canonicalPackageName = detail.package?.name ?? parsed.name;
   const officialClawHubPackage = detail.package
@@ -1205,14 +1212,6 @@ export async function installPluginFromClawHub(
             artifactFormat: "zip",
           } satisfies Partial<ClawHubPluginInstallRecordFields>);
     const expectedTarballName = normalizeOptionalString(versionState.clawpack?.npmTarballName);
-    const clawhubFamily =
-      pkg.family === "code-plugin" || pkg.family === "bundle-plugin" ? pkg.family : null;
-    if (!clawhubFamily) {
-      return buildClawHubInstallFailure(
-        `Unsupported ClawHub package family: ${pkg.family}`,
-        CLAWHUB_INSTALL_ERROR_CODE.UNSUPPORTED_FAMILY,
-      );
-    }
     return {
       ...installResult,
       ...(trustResult?.warning ? { warning: trustResult.warning } : {}),

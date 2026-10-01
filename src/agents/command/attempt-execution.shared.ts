@@ -3,7 +3,6 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-/** Parameters for merging and persisting a session entry update. */
 type PersistSessionEntryParams = {
   agentId: string;
   sessionStore: Record<string, SessionEntry>;

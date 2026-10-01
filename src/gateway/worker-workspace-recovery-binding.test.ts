@@ -270,7 +270,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
     owner: { kind: "local", environmentId, ownerEpoch: attached.ownerEpoch },
   });
   const base = manifest();
-  placements.updateWorkspaceBaseManifest({ claim, manifestRef: base.ref });
+  await placements.updateWorkspaceBaseManifest({ claim, manifestRef: base.ref });
   placements.markWorkspaceResultPending(claim);
   placements.handoffWorkspaceResultRecovery(claim);
   const onReconcile = vi.fn<(request: WorkerWorkspaceReconcileRequest) => Promise<void>>(
@@ -291,7 +291,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
       if (request.source.kind !== "local") {
         throw new Error("Expected local workspace recovery");
       }
-      request.source.journal.commit(base.ref);
+      await request.source.journal.commit(base.ref);
       return {
         manifestRef: base.ref,
         changed: false,
@@ -490,7 +490,7 @@ describe("registered worker workspace recovery target binding", () => {
             throw new Error("Expected staged local recovery");
           }
           await stageResult(request.source.stagedResult.ref, base);
-          request.source.stagedResult.record(request.source.stagedResult.ref);
+          await request.source.stagedResult.record(request.source.stagedResult.ref);
           await applyStagedWorkerWorkspaceResult({
             root: boundary.worktreePath,
             stagedResultRef: request.source.stagedResult.ref,
@@ -519,11 +519,11 @@ describe("registered worker workspace recovery target binding", () => {
           ]);
           boundary.onReportQueued = undefined;
           const pending = placements.listPendingWorkspaceResults();
-          const journalOwners = placements.listWorkspaceReconciliationOwners();
+          const journalOwners = await placements.listWorkspaceReconciliationOwners();
           expect(pending).toHaveLength(1);
           expect(journalOwners).toHaveLength(1);
           const owner = journalOwners[0]!;
-          const journal = placements.loadWorkspaceReconciliation(owner);
+          const journal = await placements.loadWorkspaceReconciliation(owner);
           expect(journal?.appliedManifestRef).toBeDefined();
           // Model another durable owner taking over while this process waits on its writer.
           support.testState.stateDb.db
@@ -542,7 +542,7 @@ describe("registered worker workspace recovery target binding", () => {
             ),
           ).toEqual([]);
           expect(placements.listPendingWorkspaceResults()).toEqual(pending);
-          expect(placements.loadWorkspaceReconciliation(owner)).toEqual(journal);
+          expect(await placements.loadWorkspaceReconciliation(owner)).toEqual(journal);
           const ref = await runCommandWithTimeout(
             [
               "git",
@@ -645,7 +645,7 @@ describe("registered worker workspace recovery target binding", () => {
             throw new Error("Expected staged local recovery");
           }
           await stageResult(request.source.stagedResult.ref, base);
-          request.source.stagedResult.record(request.source.stagedResult.ref);
+          await request.source.stagedResult.record(request.source.stagedResult.ref);
           await applyStagedWorkerWorkspaceResult({
             root: boundary.worktreePath,
             stagedResultRef: request.source.stagedResult.ref,
@@ -665,10 +665,10 @@ describe("registered worker workspace recovery target binding", () => {
           const pending = placements.listPendingWorkspaceResults();
           expect(pending).toHaveLength(1);
           expect(pending[0]!.workspaceAcceptedAtMs).toBeNull();
-          const owners = placements.listWorkspaceReconciliationOwners();
+          const owners = await placements.listWorkspaceReconciliationOwners();
           expect(owners).toHaveLength(1);
           expect(
-            placements.loadWorkspaceReconciliation(owners[0]!)?.appliedManifestRef,
+            (await placements.loadWorkspaceReconciliation(owners[0]!))?.appliedManifestRef,
           ).toBeDefined();
           const ref = await runCommandWithTimeout(
             [

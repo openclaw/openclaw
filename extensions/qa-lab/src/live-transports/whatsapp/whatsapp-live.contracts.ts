@@ -4,7 +4,6 @@ import type {
 } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { QaGatewayChild } from "../../gateway-child.js";
-export { toQaError as toWhatsAppQaError } from "../../errors.js";
 
 export type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
@@ -29,12 +28,8 @@ type WhatsAppQaMessageSendMode =
       mediaType: string;
     };
 
-export type WhatsAppQaGateway = QaGatewayChild;
-export type WhatsAppQaGatewayRuntime = Pick<
-  WhatsAppQaGateway,
-  "call" | "restart" | "workspaceDir"
-> &
-  Partial<Pick<WhatsAppQaGateway, "logs" | "token" | "wsUrl">>;
+export type WhatsAppQaGatewayRuntime = Pick<QaGatewayChild, "call" | "restart" | "workspaceDir"> &
+  Partial<Pick<QaGatewayChild, "logs" | "token" | "wsUrl">>;
 export type WhatsAppQaGatewayCallContext = {
   gateway: Pick<WhatsAppQaGatewayRuntime, "call">;
   gatewayTarget: string;

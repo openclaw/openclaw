@@ -281,7 +281,6 @@ type PluginHarnessToolPolicyContext = Pick<
   | "groupId"
   | "groupChannel"
   | "groupSpace"
-  | "memberRoleIds"
   | "agentAccountId"
   | "senderId"
   | "senderName"
@@ -385,7 +384,6 @@ export function resolvePluginHarnessToolPolicies(
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    memberRoleIds: params.memberRoleIds,
     spawnedBy: params.spawnedBy,
     senderId: params.senderId,
     senderName: params.senderName,

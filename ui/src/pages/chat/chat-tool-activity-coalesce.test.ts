@@ -154,6 +154,32 @@ describe("tool activity preparation cache", () => {
     expect(first[0]).toEqual(next[0]);
   });
 
+  it.each(["startsTurn", "projected"] as const)(
+    "coalesces a new %s boundary's invocation without borrowing from the previous turn",
+    (boundary) => {
+      const previous = {
+        role: "assistant",
+        content: [{ type: "tool_call", id: "call", name: "custom", arguments: { turn: "old" } }],
+      };
+      const current = {
+        role: "assistant",
+        content: [{ type: "tool_call", id: "call", name: "custom", arguments: { turn: "new" } }],
+        ...(boundary === "projected" ? { __openclaw: { turnBoundary: true } } : {}),
+      };
+      const rows = coalesceToolActivityMessages([
+        item(previous, "previous"),
+        { ...item(current, "current"), ...(boundary === "startsTurn" ? { startsTurn: true } : {}) },
+        item({ role: "toolResult", content: [result("call")] }, "result"),
+      ]).filter((row) => row.kind === "message");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.message).toBe(previous);
+      expect(extractToolCardsCached(rows[1]?.message)[0]).toMatchObject({
+        callId: "call",
+        completed: true,
+      });
+    },
+  );
+
   it("reuses finalized bundles across prepends and invalidates only changed sources", () => {
     const invocation = (id: string) => {
       const call = {

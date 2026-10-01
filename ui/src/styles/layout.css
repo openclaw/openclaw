@@ -882,10 +882,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
-/* ===========================================
-   Topbar
-   =========================================== */
-
 /* Hidden by default: on desktop the sidebar owns navigation, so no topbar row
    renders. Narrow viewports show it as the drawer/search header
    (layout.mobile.css), and desktop chat split view brings it back as the
@@ -1046,10 +1042,6 @@ openclaw-settings-save-indicator:empty {
 .topbar .topbar-nav-toggle {
   display: none;
 }
-
-/* ===========================================
-   Navigation Sidebar
-   =========================================== */
 
 .shell-nav {
   grid-area: nav;
@@ -4464,10 +4456,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   stroke-linejoin: round;
 }
 
-/* ===========================================
-   Content Area
-   =========================================== */
-
 .content {
   grid-area: content;
   --content-inline-padding: 20px;
@@ -4642,7 +4630,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   }
 }
 
-/* Content header */
 .content-header {
   display: flex;
   align-items: flex-end;
@@ -4861,7 +4848,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   gap: 8px;
 }
 
-/* Chat view header adjustments */
 .content--chat .content-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
@@ -4891,10 +4877,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   overflow: visible;
 }
 
-/* ===========================================
-   Grid Utilities
-   =========================================== */
-
 .grid {
   display: grid;
   gap: 20px;
@@ -4918,10 +4900,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   gap: 8px;
   align-items: center;
 }
-
-/* ===========================================
-   Responsive - Tablet
-   =========================================== */
 
 @media (max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell--mobile-nav {
@@ -4957,7 +4935,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   background: var(--bg);
 }
 
-/* Sidebar sessions redesign: work-session subtitles, agent sections, draft row. */
 .sidebar-session-indicator {
   position: relative;
   display: inline-flex;
@@ -4987,6 +4964,21 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
+}
+
+.sidebar-session-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.sidebar-session-tool > svg {
+  width: 14px;
+  height: 14px;
 }
 
 .sidebar-recent-session__title-row {

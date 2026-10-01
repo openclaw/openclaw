@@ -12,6 +12,12 @@ function strokeIcon(body: SVGTemplateResult) {
   </svg>`;
 }
 export const icons = {
+  gitPullRequest: strokeIcon(
+    svg`<circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7M6 9v12" />`,
+  ),
+  gitMerge: strokeIcon(
+    svg`<circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M6 21V9a9 9 0 0 0 9 9" />`,
+  ),
   paperclip: strokeIcon(svg` <path
     d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
   />`),

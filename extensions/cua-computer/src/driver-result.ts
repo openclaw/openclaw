@@ -9,7 +9,6 @@ import { z } from "zod";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
 import {
   adoptGeneration,
-  clearDialogRef,
   invalidateBrowserReferences,
   issueBrowserElementRef,
   issueBrowserObservation,
@@ -649,7 +648,7 @@ export function browserDialogEnvelope(
   const structured = projectedToolDetails(result, "browser_dialog");
   const present = structured.present === true;
   if (!present) {
-    clearDialogRef(state);
+    state.dialog = undefined;
   }
   const details: Record<string, unknown> = { present };
   if (typeof structured.kind === "string") {

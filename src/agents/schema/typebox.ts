@@ -11,6 +11,15 @@ import {
 } from "../../infra/outbound/channel-target.js";
 export { optionalStringEnum, stringEnum } from "./string-enum.js";
 
+export function requesterProfileSchema() {
+  return Type.Optional(
+    Type.String({
+      description:
+        "The person's requester_profile.id, required when several people have steered this turn.",
+    }),
+  );
+}
+
 /** Describe the intended work; completion is reported by the tool result. */
 export function executionTitleSchema(options: { required: true }): TString;
 export function executionTitleSchema(options?: { required?: false }): TOptional<TString>;

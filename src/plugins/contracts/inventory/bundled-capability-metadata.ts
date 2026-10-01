@@ -25,6 +25,7 @@ export type BundledPluginContractSnapshot = {
   providerIds: string[];
   providerEnvVars: Record<string, string[]>;
   workerProviderIds: string[];
+  storageProviderIds: string[];
   embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -132,6 +133,10 @@ function buildBundledPluginContractSnapshot(
     workerProviderIds: normalizeContractStringValues(manifest.contracts?.workerProviders, (value) =>
       value.trim(),
     ),
+    storageProviderIds: normalizeContractStringValues(
+      manifest.contracts?.storageProviders,
+      (value) => value.trim(),
+    ),
     embeddingProviderIds: normalizeContractStringValues(
       manifest.contracts?.embeddingProviders,
       (value) => value.trim(),
@@ -198,6 +203,7 @@ function hasBundledPluginContractSnapshotCapabilities(
     entry.cliBackendIds.length > 0 ||
     entry.providerIds.length > 0 ||
     entry.workerProviderIds.length > 0 ||
+    entry.storageProviderIds.length > 0 ||
     entry.embeddingProviderIds.length > 0 ||
     entry.speechProviderIds.length > 0 ||
     entry.realtimeTranscriptionProviderIds.length > 0 ||

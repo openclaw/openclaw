@@ -183,6 +183,8 @@ const qaScenarioGatewayRuntimeSchema = z.object({
   allowUnhealthyStartup: z.boolean().optional(),
   forwardHostHome: z.boolean().optional(),
   preserveDebugArtifacts: z.boolean().optional(),
+  // QA-only child-gateway knobs (for example diagnostic timing overrides).
+  env: z.record(z.string().regex(/^QA_[A-Z0-9_]+$/u), z.string()).optional(),
 });
 
 export const QA_RUNTIME_PAIR_LANES = ["core", "extended", "soak"] as const;

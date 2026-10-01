@@ -2,7 +2,11 @@ import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type {
@@ -58,7 +62,6 @@ import {
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -765,14 +768,10 @@ describe("session deletion and native owner state", () => {
       },
     });
     const deletion = owner.run(() =>
-      applySessionStoreProjection({
+      applySessionEntryLifecycleMutation({
         storePath,
         skipMaintenance: true,
-        update: (store) => {
-          delete store[baseKey];
-          delete store[sessionKey];
-          return { persist: true, result: undefined };
-        },
+        removals: [{ sessionKey: baseKey }, { sessionKey }],
       }),
     );
     await expect(deletion).rejects.toMatchObject({
@@ -785,9 +784,9 @@ describe("session deletion and native owner state", () => {
     expect(bindings.get(baseKey)).toBe(`thread:${baseKey}`);
   });
 
-  it.each(["prepare", "finalize"] as const)(
+  it.for(["prepare", "finalize"] as const)(
     "lets unrelated session writers progress during native %s",
-    async (phase) => {
+    async (phase, { signal }) => {
       await seed();
       await seed(baseKey);
       const entered = createDeferred();
@@ -799,15 +798,22 @@ describe("session deletion and native owner state", () => {
       const owner = nativeOwner(phase === "prepare" ? { prepare: wait } : { finalize: wait });
       const deletion = owner.run(() => remove());
       try {
-        await withTestTimeout(entered.promise, 5_000, "native deletion did not start");
-        await withTestTimeout(
+        // Native cleanup stays held; bind waits to the test so a stall still releases it below.
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            deletion,
+            "native deletion settled before preparation or finalization",
+          ),
+          signal,
+        );
+        await withinTest(
           owner.run(() =>
             patchSessionEntryCore({ sessionKey: baseKey, storePath }, () => ({
               label: "writer progressed",
             })),
           ),
-          5_000,
-          "native cleanup blocked another session writer",
+          signal,
         );
         expect(read(baseKey)?.label).toBe("writer progressed");
       } finally {
@@ -919,7 +925,7 @@ describe("session deletion and native owner state", () => {
     ]);
   });
 
-  it.each(["entry replacement", "whole-store projection", "maintenance"] as const)(
+  it.each(["entry replacement", "lifecycle removal", "maintenance"] as const)(
     "preserves successor bindings and removes deleted keys through %s",
     async (surface) => {
       await seed();
@@ -940,14 +946,11 @@ describe("session deletion and native owner state", () => {
           });
           return;
         }
-        if (surface === "whole-store projection") {
-          await applySessionStoreProjection({
+        if (surface === "lifecycle removal") {
+          await applySessionEntryLifecycleMutation({
             storePath,
             skipMaintenance: true,
-            update: (store) => {
-              delete store[sessionKey];
-              return { persist: true, result: undefined };
-            },
+            removals: [{ sessionKey }],
           });
           return;
         }

@@ -116,6 +116,13 @@ export function scrollTranscriptToEnd(
     source: source === "auto" && current?.target === "end" ? current.source : source,
   };
   instance.scrollToEnd({ behavior });
+  // Instant commands and smooth no-ops can reach their target before any
+  // native offset event. Do not let delayed idle reclaim a departed reader.
+  const element = instance.scrollElement;
+  const max = maxTranscriptScrollOffset(element);
+  if (element && max !== null && Math.abs(max - element.scrollTop) <= 1) {
+    cancelScroll();
+  }
 }
 
 export function scrollTranscriptOffset(
@@ -391,21 +398,22 @@ export function observeTranscriptOffset(
     if (!scrolling && owner.prependAnchor.hasPrepend) {
       owner.requestUpdate();
     }
-    // Idle can arrive between smooth retargets. Completion needs the
-    // restore path's 1px precision, not the 8px UI-follow boundary.
-    // The input listeners above own reader takeover.
-    const settledAtEnd =
-      !scrolling &&
-      Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) <= 1;
-    // End-idle cannot retire a message reveal still waiting for its DOM commit.
-    if (settledAtEnd && element && owner.state.scrollCommand?.target === "end") {
+    // Retire a completed journey before delayed native idle can recapture a
+    // reader who has since been resize-clamped to a different end. Completion
+    // must not stop a smooth animation on its penultimate 1px frame; retain
+    // the restore path's rounding tolerance only after native scrolling settles.
+    const reachedEnd =
+      Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) <=
+      (scrolling ? 0 : 1);
+    // Reaching the end cannot retire a message reveal awaiting its DOM commit.
+    if (reachedEnd && element && owner.state.scrollCommand?.target === "end") {
       if (owner.state.scrollCommand.behavior === "smooth") {
         owner.cancelScroll();
       } else {
         owner.state.scrollCommand = null;
-        // Native idle can precede the queued reconciliation frame. Retire its
+        // Arrival can precede the queued reconciliation frame. Retire its
         // index target too, without cancelling the reader’s end-follow intent.
-        // The idle notification can lag a newer native write; hold the current viewport.
+        // The notification can lag a newer native write; hold the current viewport.
         instance.scrollToOffset(element.scrollTop, { behavior: "instant" });
       }
       owner.endAnchor.capture(element);

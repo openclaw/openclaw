@@ -1,11 +1,7 @@
 import type { messagingApi } from "@line/bot-sdk";
-import {
-  messageAction,
-  normalizeLineAction,
-  postbackAction,
-  uriAction,
-  type Action,
-} from "./actions.js";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
 import type { LineTemplateActionPayload, LineTemplateMessagePayload } from "./types.js";
 
 type TemplateMessage = messagingApi.TemplateMessage;
@@ -14,7 +10,6 @@ type CarouselColumn = messagingApi.CarouselColumn;
 
 const COMPACT_TEMPLATE_TEXT_LIMIT = 60;
 const TEMPLATE_ALT_TEXT_LIMIT = 1500;
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function buildTemplatePayloadAction(action: LineTemplateActionPayload): Action {
   if (action.type === "uri" && action.uri) {
@@ -45,49 +40,13 @@ function resolveTemplateTextLimit(params: {
 }
 
 function truncateTemplateText(text: string, limit: number): string {
-  let result = "";
-  for (const { segment } of graphemeSegmenter.segment(text)) {
-    if (result.length + segment.length > limit) {
-      // A pathological grapheme can exceed LINE's whole field limit. Preserve
-      // graphemes normally, but keep required text non-empty without splitting
-      // a surrogate pair when the first grapheme alone cannot fit.
-      if (!result) {
-        for (const codePoint of segment) {
-          if (result.length + codePoint.length > limit) {
-            break;
-          }
-          result += codePoint;
-        }
-      }
-      break;
-    }
-    result += segment;
-  }
-  return result;
-}
-
-function truncateOptionalTemplateText(
-  value: string | undefined,
-  limit: number,
-): string | undefined {
-  return value === undefined ? undefined : truncateTemplateText(value, limit);
+  const end = findGraphemeChunkEnd(text, 0, limit, limit, false);
+  // Required text still needs a surrogate-safe prefix when its first grapheme exceeds the cap.
+  return end > 0 ? text.slice(0, end) : truncateUtf16Safe(text, limit);
 }
 
 function resolveTemplateAltText(value: string | undefined, fallback: string): string {
   return truncateTemplateText(value ?? fallback, TEMPLATE_ALT_TEXT_LIMIT);
-}
-
-function normalizeCarouselColumn(column: CarouselColumn): CarouselColumn {
-  return {
-    ...column,
-    title: column.title || undefined,
-    actions: column.actions
-      .map((action) => normalizeLineAction(action))
-      .filter((action) => action.label !== undefined && action.label !== "")
-      .slice(0, 3),
-    defaultAction:
-      column.defaultAction === undefined ? undefined : normalizeLineAction(column.defaultAction),
-  };
 }
 
 type CarouselNormalizationOutcome =
@@ -111,7 +70,7 @@ function normalizeCarousel(
   columns: CarouselColumn[],
   altText?: string,
 ): CarouselNormalizationOutcome {
-  const normalized = columns.slice(0, 10).map(normalizeCarouselColumn);
+  const normalized = columns.slice(0, 10);
   const first = normalized[0];
   // Thumbnails are deliberately not part of this check. Outbound normalization
   // already strips every column's image when one of them is unusable
@@ -153,7 +112,7 @@ export function buildTemplateMessageFromPayload(
           actions: [
             buildInferredTemplateAction(payload.confirmLabel, payload.confirmData),
             buildInferredTemplateAction(payload.cancelLabel, payload.cancelData),
-          ].map((action) => normalizeLineAction(action)),
+          ],
         },
       };
 
@@ -174,10 +133,7 @@ export function buildTemplateMessageFromPayload(
           type: "buttons",
           ...(title ? { title: truncateTemplateText(title, 40) } : {}),
           text: truncateTemplateText(payload.text, textLimit),
-          actions: payload.actions
-            .slice(0, 4)
-            .map(buildTemplatePayloadAction)
-            .map((action) => normalizeLineAction(action)),
+          actions: payload.actions.slice(0, 4).map(buildTemplatePayloadAction),
           thumbnailImageUrl: payload.thumbnailImageUrl,
           imageAspectRatio: "rectangle",
           imageSize: "cover",
@@ -188,21 +144,24 @@ export function buildTemplateMessageFromPayload(
     }
 
     case "carousel": {
-      const columns = payload.columns.map((column) => {
+      const columns = payload.columns.map((column): CarouselColumn => {
         const title = column.title || undefined;
         const textLimit = resolveTemplateTextLimit({
           title,
           thumbnailImageUrl: column.thumbnailImageUrl,
           textOnlyLimit: 120,
         });
-        return normalizeCarouselColumn({
-          title: truncateOptionalTemplateText(title, 40),
+        return {
+          title: title === undefined ? undefined : truncateTemplateText(title, 40),
           text: truncateTemplateText(column.text, textLimit),
-          actions: column.actions.map(buildTemplatePayloadAction),
+          actions: column.actions
+            .map(buildTemplatePayloadAction)
+            .filter((action) => action.label !== undefined && action.label !== "")
+            .slice(0, 3),
           thumbnailImageUrl: column.thumbnailImageUrl,
           imageBackgroundColor: undefined,
           defaultAction: undefined,
-        });
+        };
       });
       const outcome = normalizeCarousel(columns, payload.altText);
       if (outcome.kind === "empty") {

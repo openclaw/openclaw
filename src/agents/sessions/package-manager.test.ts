@@ -1,7 +1,7 @@
 // Package manager tests cover resource discovery boundaries for package,
 // project, and npm-declared agent resources.
-import { mkdir, stat, symlink, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -192,6 +192,34 @@ describe("DefaultPackageManager", () => {
 
     expect(await resolveSkillPaths(join(home, ".openclaw"))).toContain(personalSkill);
     expect(await resolveSkillPaths(join(root, "scratch-state"))).not.toContain(personalSkill);
+  });
+
+  it("discovers ancestor skills nearest-first through the repository root", async () => {
+    const root = tempDirs.make("openclaw-package-manager-ancestors-");
+    const repository = join(root, "repository");
+    const cwd = join(repository, "nested");
+    const skillPaths = [cwd, repository, root].map((dir) =>
+      join(dir, ".agents", "skills", "example", "SKILL.md"),
+    );
+    for (const skillPath of skillPaths) {
+      await mkdir(dirname(skillPath), { recursive: true });
+      await writeFile(skillPath, "# Example\n");
+    }
+    await mkdir(join(repository, ".git"));
+    const manager = new DefaultPackageManager({
+      cwd,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory(),
+    });
+    const discovered = async () =>
+      (await manager.resolve()).skills
+        .map((skill) => skill.path)
+        .filter((path) => skillPaths.includes(path));
+
+    expect(await discovered()).toEqual(skillPaths.slice(0, 2));
+
+    await rm(join(repository, ".git"), { recursive: true });
+    expect(await discovered()).toEqual(skillPaths);
   });
 
   it("keeps auto-discovered project resources inside their resource roots", async () => {

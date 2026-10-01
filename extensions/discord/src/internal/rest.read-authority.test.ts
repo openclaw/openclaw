@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (original) => ({
 
 afterEach(() => {
   scope.current = undefined;
+  vi.useRealTimers();
 });
 
 type AuthorityKind = "read" | "action";
@@ -106,6 +107,7 @@ describe("Discord request authority", () => {
   });
 
   it("does not retry read requests after rate-limit revocation", async () => {
+    vi.useFakeTimers();
     const caller = authority();
     const fetch = vi.fn(async () => {
       caller.revoke();
@@ -115,9 +117,11 @@ describe("Discord request authority", () => {
       );
     });
     const client = new RequestClient("synthetic-token", { fetch });
-    await expect(
+    const rejected = expect(
       withAuthority("read", caller.assert, () => submitRequest(client, "read")),
     ).rejects.toThrow("read authority revoked");
+    await vi.runAllTimersAsync();
+    await rejected;
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -153,6 +157,7 @@ describe("Discord request authority", () => {
   });
 
   it("fences directory helper retries after authority is revoked", async () => {
+    vi.useFakeTimers();
     const reader = authority();
     const fetcher = vi.fn(async () => {
       reader.revoke();
@@ -160,11 +165,13 @@ describe("Discord request authority", () => {
       return Response.json({ retry_after: 0.001 }, { status: 429 });
     });
     scope.current = reader.assert;
-    await expect(
+    const rejected = expect(
       fetchDiscord("/users/@me/guilds", "synthetic-token", fetcher, {
         retry: { attempts: 2, minDelayMs: 1, maxDelayMs: 1, jitter: 0 },
       }),
     ).rejects.toThrow("read authority revoked");
+    await vi.runAllTimersAsync();
+    await rejected;
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

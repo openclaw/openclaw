@@ -133,9 +133,7 @@ class OpenClawShell
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar: HTMLElement & { requestUpdate?: () => void } = document.createElement(
-    APP_SIDEBAR_ELEMENT.tagName,
-  );
+  readonly navigationSidebar: HTMLElement = document.createElement(APP_SIDEBAR_ELEMENT.tagName);
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
@@ -251,6 +249,8 @@ class OpenClawShell
   storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {
     const gatewaySnapshot = context.gateway.snapshot;
     return {
+      client: gatewaySnapshot.client,
+      connected: gatewaySnapshot.phase === "connected",
       settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
       assistantAgentId: gatewaySnapshot.assistantAgentId,
       agentsList: context.agents.state.agentsList,
@@ -324,33 +324,14 @@ class OpenClawShell
           };
         },
       )
-      .watch(
-        () => this.context?.nativeDeviceSettings,
-        (settings, notify) => settings.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.navigation,
-        (navigation, notify) => navigation.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.plugins,
-        (plugins, notify) => plugins.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.settingsAgentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentIdentity,
-        (identity, notify) => identity.subscribe(notify),
-      )
-      .watch(
+      .watchStore(() => this.context?.nativeDeviceSettings)
+      .watchStore(() => this.context?.navigation)
+      .watchStore(() => this.context?.plugins)
+      .watchStore(() => this.context?.agentSelection)
+      .watchStore(() => this.context?.settingsAgentSelection)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(
         () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => {
           this.shellChrome.synchronizeCommandPaletteScope();
           this.shellGateway.synchronizeGateway(gateway.snapshot);
@@ -361,17 +342,10 @@ class OpenClawShell
         () => this.context?.gateway,
         (gateway) => gateway.subscribeEvents(this.handleGatewayEvent),
       )
-      .watch(
-        () => this.context?.config,
-        (config, notify) => config.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.theme,
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
+      .watchStore(() => this.context?.config)
+      .watchStore(() => this.context?.theme)
+      .watchStore(
         () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
         (agents) => {
           this.refreshStoredOutboxSummary();
           const snapshot = this.context?.gateway.snapshot;
@@ -391,17 +365,13 @@ class OpenClawShell
           );
         },
       )
-      .watch(
-        () => this.context?.overlays,
-        (overlays, notify) => overlays.subscribe(notify),
-      )
+      .watchStore(() => this.context?.overlays)
       .effect(
         () => this.context?.sessions,
         (sessions) => this.shellGateway.observeSessions(sessions, () => this.syncDocumentTitle()),
       )
-      .watch(
+      .watchStore(
         () => this.context?.placementStartup,
-        (startup, notify) => startup.subscribe(notify),
         () => {
           if (this.context) {
             this.recoverDeletedActiveSession(this.context.sessions.state);
@@ -488,10 +458,8 @@ class OpenClawShell
   }
 
   private readonly refreshStoredOutboxPresentation = () => {
-    // A sidebar update may already be queued when the outbox publishes.
     this.refreshStoredOutboxSummary();
     this.requestUpdate();
-    this.navigationSidebar.requestUpdate?.();
   };
 
   private resetForContextEpoch() {

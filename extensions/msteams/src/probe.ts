@@ -53,11 +53,7 @@ function readStringArray(value: unknown): string[] | undefined {
 }
 
 function readScopes(value: unknown): string[] | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const out = normalizeStringEntries(value.split(/\s+/));
-  return out.length > 0 ? out : undefined;
+  return typeof value === "string" ? readStringArray(value.split(/\s+/)) : undefined;
 }
 
 export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsResult> {

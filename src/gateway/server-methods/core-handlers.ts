@@ -94,6 +94,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () => import("./migrations.js").then((module) => module.migrationsHandlers),
+  backup: () => import("./backup.js").then((module) => module.backupHandlers),
+  storage: () => import("./storage.js").then((module) => module.storageHandlers),
   push: () => import("./push.js").then((module) => module.pushHandlers),
   restart: () => import("./restart.js").then((module) => module.restartHandlers),
   suspend: () => import("./suspend.js").then((module) => module.suspendHandlers),
@@ -135,6 +137,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-subscriptions.js").then((module) => module.sessionSubscriptionHandlers),
   "sessions-suggestions": () =>
     import("./sessions-suggestions.js").then((module) => module.sessionSuggestionHandlers),
+  "sessions-reactions": () =>
+    import("./sessions-reactions.js").then((module) => module.sessionReactionHandlers),
   "session-catalog": () =>
     import("./session-catalog.js").then((module) => module.sessionCatalogHandlers),
   "session-discussion": () =>

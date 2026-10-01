@@ -42,6 +42,7 @@ import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -249,8 +250,19 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   if (Buffer.byteLength(serialized) > 4 * 1024 * 1024) {
     return unavailable();
   }
+  // The service's payload owner also controls updates invoked from another installation.
+  const layout = await summarizeGatewayServiceLayout(command);
+  const installOwner = await readInstallOwner(layout?.packageRootReal ?? null);
+  if (installOwner) {
+    throw new GatewayServiceUpdateOwnershipError(
+      formatInstallOwnerMessage(installOwner),
+      undefined,
+      undefined,
+      "service-mutation-refused",
+    );
+  }
   // Early selection verifies the service's own package before it may redirect the invoker.
-  const root = params.root ?? (await summarizeGatewayServiceLayout(command))?.packageRootReal;
+  const root = params.root ?? layout?.packageRootReal;
   if (!root) {
     return unavailable();
   }

@@ -1,4 +1,3 @@
-// Gateway methods expose session files and workspace browsing.
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -55,14 +54,11 @@ import {
   type TouchedFile,
 } from "./workspace-files.js";
 
-type FileKind = TouchedFile["kind"];
-
 type TouchedFilesCacheEntry = {
   cursor: string;
   files: Map<string, TouchedFile>;
 };
 
-const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 // Control UI requests fan out per visible session; keep enough folds to avoid
 // eviction and full-transcript reparsing across realistic concurrent viewers.
 const TOUCHED_FILES_CACHE_LIMIT = 256;
@@ -110,7 +106,7 @@ function readPathArg(args: Record<string, unknown>): string | undefined {
 function addTouchedFile(
   files: Map<string, TouchedFile>,
   filePath: string | undefined,
-  kind: FileKind,
+  kind: TouchedFile["kind"],
 ) {
   if (!filePath) {
     return;
@@ -368,19 +364,9 @@ function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, 
     false,
     undefined,
     sessionFilesError("session_file_too_large", "session file is too large to preview", {
-      maxPreviewBytes: MAX_PREVIEW_BYTES,
+      maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
       path: file.path || filePath,
       size: file.size,
-    }),
-  );
-}
-
-function respondSessionFileUnsafe(respond: RespondFn, filePath: string) {
-  respond(
-    false,
-    undefined,
-    sessionFilesError("session_file_unsafe", "session file could not be written safely", {
-      path: filePath,
     }),
   );
 }
@@ -480,7 +466,6 @@ async function handleSessionFilesRead(
   }
 }
 
-/** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
   "sessions.files.list": defineValidatedGatewayHandler(
     "sessions.files.list",
@@ -536,7 +521,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         sessionFilesError("session_file_too_large", "session file content is too large", {
-          maxPreviewBytes: MAX_PREVIEW_BYTES,
+          maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
           path: params.path,
           size: update.size,
         }),
@@ -555,7 +540,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     if (update.status === "unsafe") {
-      respondSessionFileUnsafe(respond, params.path);
+      respond(
+        false,
+        undefined,
+        sessionFilesError("session_file_unsafe", "session file could not be written safely", {
+          path: params.path,
+        }),
+      );
       return;
     }
     respond(true, {

@@ -8,7 +8,6 @@ import {
 } from "../agents/harness/context-engine-logical-turn.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
-import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearMemoryPluginState,
@@ -23,6 +22,10 @@ import {
 } from "../plugins/runtime.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import {
+  createPassthroughEngineMethods,
+  MockContextEngine,
+} from "./context-engine.test-support.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -49,14 +52,7 @@ import {
   captureContextEngineRegistryStateForTests,
   resetContextEngineRuntimeQuarantineForTests,
 } from "./registry.test-support.js";
-import type {
-  ContextEngine,
-  ContextEngineInfo,
-  ContextEngineSessionTarget,
-  AssembleResult,
-  CompactResult,
-  IngestResult,
-} from "./types.js";
+import type { ContextEngine, ContextEngineSessionTarget } from "./types.js";
 
 type ContextEngineFactory = Parameters<typeof registerContextEngineForOwner>[1];
 type ContextEngineFactoryContext = Parameters<ContextEngineFactory>[0];
@@ -130,14 +126,14 @@ function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): A
   return { role, content: text, timestamp: Date.now() } as AgentMessage;
 }
 
-let restoreContextEngineRegistry = () => {};
+let restoreContextEngineRegistry: () => Promise<void> = async () => {};
 
 beforeAll(() => {
   restoreContextEngineRegistry = captureContextEngineRegistryStateForTests();
 });
 
-afterAll(() => {
-  restoreContextEngineRegistry();
+afterAll(async () => {
+  await restoreContextEngineRegistry();
 });
 
 let uniqueEngineIdCounter = 0;
@@ -150,10 +146,10 @@ async function withCompactionDelegateFixture(
   acceptSessionKey: boolean,
   run: (engine: ContextEngine) => Promise<void>,
 ) {
-  registerLegacyContextEngine();
+  await registerLegacyContextEngine();
   const engineId = uniqueEngineId("compaction-projection");
   const compact = vi.fn<ContextEngine["compact"]>(delegateCompactionToRuntime);
-  registerTestContextEngine(engineId, () => ({
+  await registerTestContextEngine(engineId, () => ({
     info: {
       id: engineId,
       name: "Compaction projection",
@@ -185,9 +181,9 @@ async function withCompactionDelegateFixture(
   }
 }
 
-function registerPromptTrackingEngine(engineId: string) {
+async function registerPromptTrackingEngine(engineId: string) {
   const calls: Array<Record<string, unknown>> = [];
-  registerTestContextEngine(engineId, () => ({
+  await registerTestContextEngine(engineId, () => ({
     info: {
       id: engineId,
       name: "Prompt Tracker",
@@ -208,20 +204,6 @@ function registerPromptTrackingEngine(engineId: string) {
   return calls;
 }
 
-function createPassthroughEngineMethods(): Pick<ContextEngine, "ingest" | "assemble" | "compact"> {
-  return {
-    async ingest() {
-      return { ingested: true };
-    },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
-    },
-    async compact() {
-      return { ok: true, compacted: false };
-    },
-  };
-}
-
 function requireFactoryContext(
   context: ContextEngineFactoryContext | undefined,
 ): ContextEngineFactoryContext {
@@ -233,65 +215,6 @@ function requireFactoryContext(
 
 function requireRegistryState() {
   return { engines: requireActivePluginRegistry().contextEngines };
-}
-
-/** A minimal mock engine that satisfies the ContextEngine interface. */
-class MockContextEngine implements ContextEngine {
-  readonly info: ContextEngineInfo = {
-    id: "mock",
-    name: "Mock Engine",
-    version: "0.0.1",
-  };
-
-  async ingest(_params: {
-    sessionId: string;
-    sessionKey?: string;
-    message: AgentMessage;
-    isHeartbeat?: boolean;
-  }): Promise<IngestResult> {
-    return { ingested: true };
-  }
-
-  async assemble(params: {
-    sessionId: string;
-    sessionKey?: string;
-    messages: AgentMessage[];
-    tokenBudget?: number;
-    availableTools?: Set<string>;
-    citationsMode?: MemoryCitationsMode;
-  }): Promise<AssembleResult> {
-    return {
-      messages: params.messages,
-      estimatedTokens: 42,
-      systemPromptAddition: "mock system addition",
-    };
-  }
-
-  async compact(_params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId?: string;
-    sessionTarget?: ContextEngineSessionTarget;
-    tokenBudget?: number;
-    compactionTarget?: "budget" | "threshold";
-    customInstructions?: string;
-    runtimeContext?: Record<string, unknown>;
-  }): Promise<CompactResult> {
-    return {
-      ok: true,
-      compacted: true,
-      reason: "mock compaction",
-      result: {
-        summary: "mock summary",
-        tokensBefore: 100,
-        tokensAfter: 50,
-      },
-    };
-  }
-
-  async dispose(): Promise<void> {
-    // no-op
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -307,7 +230,7 @@ describe("Engine contract tests", () => {
 
   it("a mock engine implementing ContextEngine can be registered and resolved", async () => {
     const factory = () => new MockContextEngine();
-    registerTestContextEngine("mock", factory);
+    await registerTestContextEngine("mock", factory);
 
     const engine = await resolveContextEngine(configWithSlot("mock"));
     expect(engine).toBeInstanceOf(MockContextEngine);
@@ -612,19 +535,19 @@ describe("Engine contract tests", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Registry tests", () => {
-  it("registering the same id with the same owner refreshes the factory", () => {
+  it("registering the same id with the same owner refreshes the factory", async () => {
     const factory1 = () => new MockContextEngine();
     const factory2 = () => new MockContextEngine();
 
     expect(
-      registerContextEngineForOwner("reg-overwrite", factory1, "owner-a", {
+      await registerContextEngineForOwner("reg-overwrite", factory1, "owner-a", {
         allowSameOwnerRefresh: true,
       }),
     ).toEqual({ ok: true });
     expect(getContextEngineRegistration("reg-overwrite")?.factory).toBe(factory1);
 
     expect(
-      registerContextEngineForOwner("reg-overwrite", factory2, "owner-a", {
+      await registerContextEngineForOwner("reg-overwrite", factory2, "owner-a", {
         allowSameOwnerRefresh: true,
       }),
     ).toEqual({ ok: true });
@@ -632,16 +555,16 @@ describe("Registry tests", () => {
     expect(getContextEngineRegistration("reg-overwrite")?.factory).not.toBe(factory1);
   });
 
-  it("rejects context engine registrations from a different owner", () => {
+  it("rejects context engine registrations from a different owner", async () => {
     const factory1 = () => new MockContextEngine();
     const factory2 = () => new MockContextEngine();
 
     expect(
-      registerContextEngineForOwner("reg-owner-guard", factory1, "owner-a", {
+      await registerContextEngineForOwner("reg-owner-guard", factory1, "owner-a", {
         allowSameOwnerRefresh: true,
       }),
     ).toEqual({ ok: true });
-    expect(registerContextEngineForOwner("reg-owner-guard", factory2, "owner-b")).toEqual({
+    expect(await registerContextEngineForOwner("reg-owner-guard", factory2, "owner-b")).toEqual({
       ok: false,
       existingOwner: "owner-a",
     });
@@ -664,9 +587,14 @@ describe("Registry tests", () => {
 
   it("exposes the trusted plugin owner for a resolved registered engine", async () => {
     const engineId = `owner-policy-${Date.now().toString(36)}`;
-    registerContextEngineForOwner(engineId, () => new MockContextEngine(), "plugin:lossless-claw", {
-      allowSameOwnerRefresh: true,
-    });
+    await registerContextEngineForOwner(
+      engineId,
+      () => new MockContextEngine(),
+      "plugin:lossless-claw",
+      {
+        allowSameOwnerRefresh: true,
+      },
+    );
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
 
@@ -680,11 +608,11 @@ describe("Registry tests", () => {
 
 describe("Default engine selection", () => {
   // Ensure both legacy and a custom test engine are registered before these tests.
-  beforeEach(() => {
+  beforeEach(async () => {
     // Registration is idempotent (Map.set), so calling again is safe.
-    registerLegacyContextEngine();
+    await registerLegacyContextEngine();
     // Register a lightweight custom stub so we don't need external resources.
-    registerTestContextEngine("test-engine", () => {
+    await registerTestContextEngine("test-engine", () => {
       const engine: ContextEngine = {
         info: { id: "test-engine", name: "Custom Test Engine", version: "0.0.0" },
         ...createPassthroughEngineMethods(),
@@ -826,7 +754,7 @@ describe("Default engine selection", () => {
       const dispose = vi.spyOn(engine, "dispose").mockImplementation(async () => {
         disposed.resolve();
       });
-      registerTestContextEngine(engineId, () => engine);
+      await registerTestContextEngine(engineId, () => engine);
       const lease = await createContextEngineLogicalTurnLease({
         identity: { runId: "retained-run", sessionId: "retained-session" },
         config: configWithSlot(engineId),
@@ -912,7 +840,7 @@ describe("Default engine selection", () => {
 
   it("still rejects an attempted custom-engine transition after the turn starts", async () => {
     const engineId = uniqueEngineId("logical-turn-late-transition");
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: {
         id: engineId,
         name: "Late Transition",
@@ -959,9 +887,14 @@ describe("Default engine selection", () => {
 
   it("degrades and warns when configured engine discovery is read-only", async () => {
     const engineId = uniqueEngineId("logical-turn-discovery");
-    registerContextEngineForOwner(engineId, () => new MockContextEngine(), `test:${engineId}`, {
-      lifecycle: "readOnlyDiscovery",
-    });
+    await registerContextEngineForOwner(
+      engineId,
+      () => new MockContextEngine(),
+      `test:${engineId}`,
+      {
+        lifecycle: "readOnlyDiscovery",
+      },
+    );
     const warn = vi.fn();
 
     const lease = await createContextEngineLogicalTurnLease({
@@ -980,7 +913,7 @@ describe("Default engine selection", () => {
 
   it("degrades and warns when the configured engine factory fails", async () => {
     const engineId = uniqueEngineId("logical-turn-factory");
-    registerTestContextEngine(engineId, () => {
+    await registerTestContextEngine(engineId, () => {
       throw new Error("factory unavailable");
     });
     const warn = vi.fn();
@@ -999,7 +932,7 @@ describe("Default engine selection", () => {
 
   it("uses registered identity when custom engine metadata is also legacy", async () => {
     const engineId = uniqueEngineId("logical-turn-legacy-alias");
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: "legacy", name: "Legacy Alias" },
       ...createPassthroughEngineMethods(),
     }));
@@ -1031,7 +964,7 @@ describe("Default engine selection", () => {
       .fn<ContextEngine["assemble"]>()
       .mockRejectedValueOnce(new Error("configured engine unavailable"))
       .mockImplementation(async ({ messages }) => ({ messages, estimatedTokens: 0 }));
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Logical Turn Retry" },
       async ingest() {
         return { ingested: true };
@@ -1075,7 +1008,7 @@ describe("Default engine selection", () => {
 
   it("rejects an incompatible fallback host after the logical turn starts", async () => {
     const engineId = uniqueEngineId("logical-turn-host-transition");
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: {
         id: engineId,
         name: "Host Transition",
@@ -1149,7 +1082,7 @@ describe("Default engine selection", () => {
     },
   ])("selects $expectedEngine for a turn $label", async (testCase) => {
     const engineId = uniqueEngineId("logical-turn-recorder-state");
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: {
         id: engineId,
         name: "Recorder State",
@@ -1212,7 +1145,7 @@ describe("Factory context passing", () => {
         ...createPassthroughEngineMethods(),
       };
     };
-    registerTestContextEngine(engineId, factory);
+    await registerTestContextEngine(engineId, factory);
 
     const cfg = configWithSlot(engineId);
     await resolveContextEngine(cfg, {
@@ -1237,7 +1170,7 @@ describe("Factory context passing", () => {
         ...createPassthroughEngineMethods(),
       };
     };
-    registerTestContextEngine(engineId, factory);
+    await registerTestContextEngine(engineId, factory);
 
     const engine = await resolveContextEngine(configWithSlot(engineId), {
       agentDir: "/tmp/agent",
@@ -1252,7 +1185,7 @@ describe("Factory context passing", () => {
     let receivedCtx: ContextEngineFactoryContext | undefined;
 
     // Override the default "legacy" engine to intercept the no-config path
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       "legacy",
       (ctx: ContextEngineFactoryContext) => {
         receivedCtx = ctx;
@@ -1275,9 +1208,9 @@ describe("Factory context passing", () => {
 });
 
 describe("Read-only plugin discovery registrations", () => {
-  beforeEach(() => {
-    registerLegacyContextEngine();
-    resetContextEngineRuntimeQuarantineForTests();
+  beforeEach(async () => {
+    await registerLegacyContextEngine();
+    await resetContextEngineRuntimeQuarantineForTests();
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -1291,7 +1224,7 @@ describe("Read-only plugin discovery registrations", () => {
     let readOnlyFactoryCalls = 0;
     let runtimeFactoryCalls = 0;
 
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => {
         readOnlyFactoryCalls += 1;
@@ -1305,12 +1238,14 @@ describe("Read-only plugin discovery registrations", () => {
 
     expect(discoveryFallback.info.id).toBe("legacy");
     expect(readOnlyFactoryCalls).toBe(0);
-    expect(listContextEngineQuarantines().some((entry) => entry.engineId === engineId)).toBe(false);
+    expect(
+      (await listContextEngineQuarantines()).some((entry) => entry.engineId === engineId),
+    ).toBe(false);
     expect(console.warn).toHaveBeenCalledWith(
       `[context-engine] Context engine "${engineId}" owner=${owner} is registered for read-only discovery only; falling back to default engine "legacy" without quarantine until runtime activation registers it.`,
     );
 
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => {
         runtimeFactoryCalls += 1;
@@ -1328,9 +1263,11 @@ describe("Read-only plugin discovery registrations", () => {
     expect(runtimeEngine.info.id).toBe("lossless-claw");
     expect(readOnlyFactoryCalls).toBe(0);
     expect(runtimeFactoryCalls).toBe(1);
-    expect(listContextEngineQuarantines().some((entry) => entry.engineId === engineId)).toBe(false);
+    expect(
+      (await listContextEngineQuarantines()).some((entry) => entry.engineId === engineId),
+    ).toBe(false);
 
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => {
         readOnlyFactoryCalls += 1;
@@ -1353,9 +1290,9 @@ describe("Read-only plugin discovery registrations", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Invalid engine fallback", () => {
-  beforeEach(() => {
-    registerLegacyContextEngine();
-    resetContextEngineRuntimeQuarantineForTests();
+  beforeEach(async () => {
+    await registerLegacyContextEngine();
+    await resetContextEngineRuntimeQuarantineForTests();
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -1375,8 +1312,8 @@ describe("Invalid engine fallback", () => {
       {
         name: "factory throws",
         engineId: uniqueEngineId("factory-throw"),
-        register: (engineId: string) => {
-          registerTestContextEngine(engineId, () => {
+        register: async (engineId: string) => {
+          await registerTestContextEngine(engineId, () => {
             throw new Error("plugin version mismatch");
           });
         },
@@ -1386,8 +1323,8 @@ describe("Invalid engine fallback", () => {
       {
         name: "missing info metadata",
         engineId: uniqueEngineId("invalid-info"),
-        register: (engineId: string) => {
-          registerTestContextEngine(
+        register: async (engineId: string) => {
+          await registerTestContextEngine(
             engineId,
             () =>
               ({
@@ -1409,8 +1346,8 @@ describe("Invalid engine fallback", () => {
       {
         name: "missing lifecycle methods",
         engineId: uniqueEngineId("invalid-methods"),
-        register: (engineId: string) => {
-          registerTestContextEngine(
+        register: async (engineId: string) => {
+          await registerTestContextEngine(
             engineId,
             () =>
               ({
@@ -1427,8 +1364,8 @@ describe("Invalid engine fallback", () => {
       {
         name: "contract validation throws",
         engineId: uniqueEngineId("validation-throw"),
-        register: (engineId: string) => {
-          registerTestContextEngine(engineId, () => 42n as unknown as ContextEngine);
+        register: async (engineId: string) => {
+          await registerTestContextEngine(engineId, () => 42n as unknown as ContextEngine);
         },
         expectedError: (engineId: string) =>
           new RegExp(
@@ -1439,7 +1376,7 @@ describe("Invalid engine fallback", () => {
 
     for (const testCase of cases) {
       vi.mocked(console.error).mockClear();
-      testCase.register(testCase.engineId);
+      await testCase.register(testCase.engineId);
 
       const engine = await resolveContextEngine(configWithSlot(testCase.engineId));
 
@@ -1449,7 +1386,9 @@ describe("Invalid engine fallback", () => {
         typeof expectedError === "string" ? expectedError : expect.stringMatching(expectedError),
       );
       expect(
-        listContextEngineQuarantines().some((entry) => entry.engineId === testCase.engineId),
+        (await listContextEngineQuarantines()).some(
+          (entry) => entry.engineId === testCase.engineId,
+        ),
       ).toBe(true);
     }
   });
@@ -1460,7 +1399,7 @@ describe("Invalid engine fallback", () => {
       throw new Error("lcm db is corrupt");
     });
     let factoryCalls = 0;
-    registerTestContextEngine(engineId, () => {
+    await registerTestContextEngine(engineId, () => {
       factoryCalls += 1;
       return {
         info: { id: "lcm", name: "Lossless Context Manager" },
@@ -1486,7 +1425,7 @@ describe("Invalid engine fallback", () => {
     expect(nextEngine.info.id).toBe("legacy");
     expect(factoryCalls).toBe(1);
     expect(assemble).toHaveBeenCalledTimes(1);
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({
         engineId,
         owner: `test:${engineId}`,
@@ -1501,7 +1440,7 @@ describe("Invalid engine fallback", () => {
 
   it("coalesces fallback initialization across concurrent lifecycle failures", async () => {
     const defaultFactory = vi.fn(async () => new LegacyContextEngine());
-    registerContextEngineForOwner("legacy", defaultFactory, "core", {
+    await registerContextEngineForOwner("legacy", defaultFactory, "core", {
       allowSameOwnerRefresh: true,
     });
     const engineId = uniqueEngineId("concurrent-runtime-fail");
@@ -1509,7 +1448,7 @@ describe("Invalid engine fallback", () => {
       await Promise.resolve();
       throw new Error("plugin context unavailable");
     });
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Concurrent Context Engine" },
       async ingest() {
         return { ingested: true };
@@ -1533,7 +1472,7 @@ describe("Invalid engine fallback", () => {
     );
     expect(assemble).toHaveBeenCalledTimes(2);
     expect(defaultFactory).toHaveBeenCalledTimes(1);
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({ engineId, operation: "assemble" }),
     ]);
   });
@@ -1543,7 +1482,7 @@ describe("Invalid engine fallback", () => {
     const assemble = vi.fn(async () => {
       throw new Error("plugin store unavailable");
     });
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => ({
         info: {
@@ -1587,7 +1526,7 @@ describe("Invalid engine fallback", () => {
     const assemble = vi.fn(async () => {
       throw new SessionTranscriptReadFenceError("admitted user row is unavailable");
     });
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => ({
         info: {
@@ -1620,7 +1559,7 @@ describe("Invalid engine fallback", () => {
 
     expect(engine.info.id).toBe("legacy");
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({
         engineId,
         operation: "assemble",
@@ -1636,7 +1575,7 @@ describe("Invalid engine fallback", () => {
     const compact = vi.fn(async () => {
       throw new Error("plugin compaction failed");
     });
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       engineId,
       () => ({
         info: {
@@ -1677,7 +1616,7 @@ describe("Invalid engine fallback", () => {
     const missingEngine = await resolveContextEngine(configWithSlot(engineId));
 
     expect(missingEngine.info.id).toBe("legacy");
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({
         engineId,
         operation: "resolve",
@@ -1685,14 +1624,14 @@ describe("Invalid engine fallback", () => {
       }),
     ]);
 
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Late Registered Engine" },
       ...createPassthroughEngineMethods(),
     }));
 
     const registeredEngine = await resolveContextEngine(configWithSlot(engineId));
 
-    expect(listContextEngineQuarantines()).toEqual([]);
+    expect(await listContextEngineQuarantines()).toEqual([]);
     expect(registeredEngine.info.id).toBe(engineId);
   });
 
@@ -1701,8 +1640,8 @@ describe("Invalid engine fallback", () => {
     await resolveContextEngine(configWithSlot(engineId));
     const builder = createEmptyPluginRegistry();
 
-    withPluginRegistrationContext(builder, "context-builder", () => {
-      registerContextEngineForOwner(
+    await withPluginRegistrationContext(builder, "context-builder", async () => {
+      await registerContextEngineForOwner(
         engineId,
         () => new MockContextEngine(),
         "plugin:context-builder",
@@ -1712,13 +1651,13 @@ describe("Invalid engine fallback", () => {
 
     expect(builder.contextEngines.has(engineId)).toBe(true);
     expect(getContextEngineRegistration(engineId)).toBeUndefined();
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({ engineId, reason: "not registered" }),
     ]);
 
     setActivePluginRegistry(builder);
     activateContextEngineRegistrations(builder);
-    expect(listContextEngineQuarantines()).toEqual([]);
+    expect(await listContextEngineQuarantines()).toEqual([]);
   });
 
   it("does not quarantine causal abort rejections from lifecycle methods", async () => {
@@ -1733,7 +1672,7 @@ describe("Invalid engine fallback", () => {
     });
     maintainAbortError.name = "AbortError";
     const maintainController = new AbortController();
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Abort Aware Engine" },
       async ingest() {
         return { ingested: true };
@@ -1770,7 +1709,7 @@ describe("Invalid engine fallback", () => {
 
     const nextEngine = await resolveContextEngine(configWithSlot(engineId));
     expect(nextEngine.info.id).toBe(engineId);
-    expect(listContextEngineQuarantines()).toEqual([]);
+    expect(await listContextEngineQuarantines()).toEqual([]);
     expect(console.error).not.toHaveBeenCalled();
   });
 
@@ -1781,7 +1720,7 @@ describe("Invalid engine fallback", () => {
       bytesFreed: 0,
       rewrittenEntries: 0,
     }));
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Pre-Abort Engine" },
       ...createPassthroughEngineMethods(),
       maintain,
@@ -1801,7 +1740,7 @@ describe("Invalid engine fallback", () => {
 
     expect(maintain).not.toHaveBeenCalled();
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
-    expect(listContextEngineQuarantines()).toEqual([]);
+    expect(await listContextEngineQuarantines()).toEqual([]);
   });
 
   it("does not quarantine standard AbortError from aborted maintenance", async () => {
@@ -1810,7 +1749,7 @@ describe("Invalid engine fallback", () => {
     const abortError = new Error("This operation was aborted");
     abortError.name = "AbortError";
     let observedSignal: AbortSignal | undefined;
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Standard Abort Engine" },
       ...createPassthroughEngineMethods(),
       async maintain({ abortSignal }) {
@@ -1833,7 +1772,7 @@ describe("Invalid engine fallback", () => {
 
     await expect(maintenance).rejects.toBe(abortError);
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
-    expect(listContextEngineQuarantines()).toEqual([]);
+    expect(await listContextEngineQuarantines()).toEqual([]);
   });
 
   it("quarantines standard AbortError when maintenance was not aborted", async () => {
@@ -1841,7 +1780,7 @@ describe("Invalid engine fallback", () => {
     const controller = new AbortController();
     const abortError = new Error("This operation was aborted");
     abortError.name = "AbortError";
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Unrelated Standard Abort Engine" },
       ...createPassthroughEngineMethods(),
       async maintain() {
@@ -1860,7 +1799,7 @@ describe("Invalid engine fallback", () => {
 
     expect(controller.signal.aborted).toBe(false);
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({
         engineId,
         operation: "maintain",
@@ -1871,7 +1810,7 @@ describe("Invalid engine fallback", () => {
 
   it("quarantines subagent preparation failures while failing the active spawn closed", async () => {
     const engineId = uniqueEngineId("prepare-subagent-fail");
-    registerTestContextEngine(engineId, () => ({
+    await registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Spawn Aware Engine" },
       ...createPassthroughEngineMethods(),
       async prepareSubagentSpawn() {
@@ -1891,7 +1830,7 @@ describe("Invalid engine fallback", () => {
 
     const nextEngine = await resolveContextEngine(configWithSlot(engineId));
     expect(nextEngine.info.id).toBe("legacy");
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({
         engineId,
         operation: "prepareSubagentSpawn",
@@ -1917,7 +1856,7 @@ describe("Invalid engine fallback", () => {
   it("propagates error when default engine factory throws", async () => {
     // Override the default "legacy" engine with a throwing factory via the
     // core-owner path so the registration is accepted.
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       "legacy",
       () => {
         throw new Error("default engine init failed");
@@ -1930,7 +1869,7 @@ describe("Invalid engine fallback", () => {
   });
 
   it("propagates error when default engine fails contract validation", async () => {
-    registerContextEngineForOwner(
+    await registerContextEngineForOwner(
       "legacy",
       () => ({ broken: true }) as unknown as ContextEngine,
       "core",
@@ -1949,7 +1888,7 @@ describe("Invalid engine fallback", () => {
     // (e.g. "lcm"). That id is metadata, not the lookup key.
     const engineId = `plugin-slot-${Date.now().toString(36)}`;
     const internalInfoId = "lcm";
-    registerTestContextEngine(
+    await registerTestContextEngine(
       engineId,
       () =>
         ({
@@ -2028,7 +1967,7 @@ describe("assemble() prompt forwarding", () => {
 
     for (const testCase of cases) {
       const engineId = uniqueEngineId(`prompt-${testCase.name.replace(/\s+/g, "-")}`);
-      const calls = registerPromptTrackingEngine(engineId);
+      const calls = await registerPromptTrackingEngine(engineId);
 
       const engine = await resolveContextEngine(configWithSlot(engineId));
       await engine.assemble({
@@ -2055,8 +1994,8 @@ describe("Initialization guard", () => {
   it("ensureContextEnginesInitialized() is idempotent and registers legacy", async () => {
     const { ensureContextEnginesInitialized } = await import("./init.js");
 
-    expect(ensureContextEnginesInitialized()).toBeUndefined();
-    expect(ensureContextEnginesInitialized()).toBeUndefined();
+    expect(await ensureContextEnginesInitialized()).toBeUndefined();
+    expect(await ensureContextEnginesInitialized()).toBeUndefined();
 
     expect(getContextEngineRegistration("legacy")).toBeDefined();
   });
@@ -2093,7 +2032,7 @@ describe("Bundle chunk isolation (#40096)", () => {
       info: { id: engineId, name: "Cross-chunk Engine", version: "0.0.1" },
       ...createPassthroughEngineMethods(),
     });
-    chunks[0].registerContextEngineForOwner(engineId, factory, `test:${engineId}`);
+    await chunks[0].registerContextEngineForOwner(engineId, factory, `test:${engineId}`);
 
     expect(chunks[1].getContextEngineRegistration(engineId)?.factory).toBe(factory);
     const engine = await chunks[1].resolveContextEngine(configWithSlot(engineId));
@@ -2101,9 +2040,9 @@ describe("Bundle chunk isolation (#40096)", () => {
 
     const ids = chunks.map((_, i) => `concurrent-${ts}-${i}`);
     const registrationTasks = chunks.map((chunk, i) =>
-      Promise.resolve().then(() => {
+      Promise.resolve().then(async () => {
         const id = `concurrent-${ts}-${i}`;
-        chunk.registerContextEngineForOwner(id, () => new MockContextEngine(), `test:${id}`);
+        await chunk.registerContextEngineForOwner(id, () => new MockContextEngine(), `test:${id}`);
       }),
     );
     await Promise.all(registrationTasks);
