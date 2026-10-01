@@ -14,6 +14,10 @@ const POLICY_INCLUDE = 'source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install
 
 // The source can come from a sealed archive. Never evaluate candidate shell code
 // or load its generator while assembling a privileged install-smoke payload.
+/**
+ * @param {string} source
+ * @param {() => string} readPolicy
+ */
 export function assembleStandaloneInstaller(source, readPolicy) {
   if (!source.includes(POLICY_INCLUDE)) {
     return source;
