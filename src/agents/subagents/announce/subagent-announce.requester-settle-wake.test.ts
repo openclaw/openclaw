@@ -142,6 +142,74 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     }
   });
 
+  it.each([
+    { elapsed: false, transport: true },
+    { elapsed: true, transport: true },
+    { elapsed: true, transport: false },
+  ])(
+    "preserves newer retry state after a delayed valid read (elapsed: $elapsed, transport: $transport)",
+    async ({ elapsed, transport }) => {
+      let now = 10_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const children = ["run-a", "run-b"].map((runId) =>
+        makeSettledChild({
+          runId,
+          requesterSettleWake: {
+            status: "pending",
+            attemptCount: 0,
+            requesterYieldBatch: true,
+            rearmGeneration: 1,
+            batchRunIds: ["run-a", "run-b"],
+          },
+        }),
+      );
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+      const readStarted = createDeferred();
+      const delayedRead = createDeferred<{ unsettled: boolean; active: number }>();
+      if (!transport) {
+        readDescendantFacts.mockResolvedValue({ unsettled: true, active: 0 });
+      }
+      readDescendantFacts.mockImplementationOnce(() => {
+        readStarted.resolve();
+        return delayedRead.promise;
+      });
+      if (transport) {
+        deliverSpy.mockRejectedValueOnce(new Error("retry this transport"));
+      }
+      const first = maybeWakeRequesterAfterAllChildrenSettled(
+        wakeParams({ settledEntry: children[0] }),
+      );
+      try {
+        await readStarted.promise;
+        await expect(
+          maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+        ).resolves.toBe(false);
+        const retry = structuredClone(children[1]?.requesterSettleWake);
+        expect(retry).toMatchObject(
+          transport
+            ? { status: "dispatching", attemptCount: 1, replayCount: 1, nextAttemptAt: 40_000 }
+            : { status: "pending", attemptCount: 0, deferralCount: 1, nextAttemptAt: 40_000 },
+        );
+        if (elapsed) {
+          now = 40_001;
+        }
+        delayedRead.resolve({ unsettled: true, active: 0 });
+        await expect(first).resolves.toBe(false);
+        for (const child of children) {
+          expect(child.requesterSettleWake).toEqual(
+            elapsed ? { ...retry, nextAttemptAt: 70_001, deferralCount: transport ? 1 : 2 } : retry,
+          );
+        }
+        expect(deliverSpy).toHaveBeenCalledTimes(transport ? 1 : 0);
+        expect(completeBatchSpy).not.toHaveBeenCalled();
+      } finally {
+        delayedRead.resolve({ unsettled: true, active: 0 });
+        await first;
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("includes the whole connected drained wave for a staggered fan-out", async () => {
     // A overlaps B and B overlaps C, but A never overlaps C. When C settles
     // last, A's results must still ride the wake and the idempotency key must

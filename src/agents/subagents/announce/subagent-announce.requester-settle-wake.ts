@@ -228,6 +228,33 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const resolveGatewayContext = getSharedGatewayContextResolver(settledBatch);
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const batchSessionKeys = [...new Set(settledBatch.map((run) => run.childSessionKey))].toSorted();
+  const currentCompletionRows = (rows: SubagentRunRecord[]) =>
+    frozenBatchRunIds?.length
+      ? rows.filter((entry) =>
+          isRequesterCompletionCohortCurrent(
+            entry,
+            settledBatch,
+            getLatestLiveSubagentRunByChildSessionKey,
+          ),
+        )
+      : dedupeLatestChildCompletionRows(
+          filterCurrentDirectChildCompletionRows(rows, {
+            requesterSessionKey,
+            requesterAgentId,
+            getLatestSubagentRunByChildSessionKey,
+          }),
+        );
+  const isBatchCurrent = () => {
+    const currentRuns = currentCompletionRows(
+      listSubagentRunsForRequester(requesterSessionKey, { requesterAgentId, requesterStorePath }),
+    );
+    return settledBatch.every(
+      (entry) =>
+        currentRuns.includes(entry) &&
+        !entry.requesterTurnRunId &&
+        isRequesterWakeStateCurrent(entry, currentRearmGeneration, Boolean(pauseNotice)),
+    );
+  };
   const selectedState = readSharedBatchState(settledBatch);
   const { batchKey: wakeKeyBase } = buildRequesterSettleWakeIdentity({
     requesterSessionKey,
@@ -321,7 +348,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return false;
     }
     async function deferBatch(
-      state: RequesterSettleWakeBatchState,
+      overrides: Partial<Pick<RequesterSettleWakeBatchState, "status" | "lastError">> = {},
       countTowardsLimitOverride?: boolean,
     ): Promise<void> {
       let countTowardsLimit = countTowardsLimitOverride;
@@ -332,8 +359,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         }
         countTowardsLimit = descendants.active === 0;
       }
+      if (!acquireBatch() || !params.isSourceCurrent() || !isBatchCurrent()) {
+        return;
+      }
+      const state = { ...readSharedBatchState(settledBatch), ...overrides };
       const now = Date.now();
-      if ((state.nextAttemptAt ?? 0) > now || !acquireBatch()) {
+      if ((state.nextAttemptAt ?? 0) > now) {
         return;
       }
       // Live descendant or requester work is not a stale settle loop.
@@ -364,7 +395,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     }
     if (hasUnsettledDescendants) {
       if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
-        await deferBatch(selectedState);
+        await deferBatch();
       }
       return false;
     }
@@ -411,22 +442,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       sessionId: requesterEntry.sessionId,
       lifecycleRevision: requesterEntry.lifecycleRevision,
     };
-    const currentCompletionRows = (rows: SubagentRunRecord[]) =>
-      frozenBatchRunIds?.length
-        ? rows.filter((entry) =>
-            isRequesterCompletionCohortCurrent(
-              entry,
-              settledBatch,
-              getLatestLiveSubagentRunByChildSessionKey,
-            ),
-          )
-        : dedupeLatestChildCompletionRows(
-            filterCurrentDirectChildCompletionRows(rows, {
-              requesterSessionKey,
-              requesterAgentId,
-              getLatestSubagentRunByChildSessionKey,
-            }),
-          );
     const completionRows = currentCompletionRows(settledBatch);
     // Delivered children remain in yield cohorts. One private result makes the
     // aggregate private; public siblings keep their individual completion route.
@@ -490,7 +505,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return false;
     }
     if (!pauseNotice && currentDescendants.unsettled) {
-      await deferBatch(state);
+      await deferBatch();
       return false;
     }
 
@@ -552,17 +567,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       }
       return isRequesterRunCurrent(getRequesterRun(), directIdempotencyKey);
     };
-    const isBatchCurrent = () => {
-      const currentRuns = currentCompletionRows(
-        listSubagentRunsForRequester(requesterSessionKey, { requesterAgentId, requesterStorePath }),
-      );
-      return settledBatch.every(
-        (entry) =>
-          currentRuns.includes(entry) &&
-          !entry.requesterTurnRunId &&
-          isRequesterWakeStateCurrent(entry, currentRearmGeneration, Boolean(pauseNotice)),
-      );
-    };
     const isSourceSessionEffectsAllowed = () =>
       !params.signal?.aborted &&
       params.isSourceCurrent() &&
@@ -579,10 +583,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       if (isBatchDeliveryClosed() || !isRequesterCurrent()) {
         if (pauseNotice && !isBatchDeliveryClosed() && isRequesterSessionCurrent()) {
           // Requester turnover revokes this attempt, not the child's need for direction.
-          await deferBatch(
-            { ...state, status: knownUndelivered ? "pending" : state.status },
-            false,
-          );
+          await deferBatch(knownUndelivered ? { status: "pending" } : {}, false);
           return true;
         }
         await completeBatch(settledBatch, state);
@@ -706,13 +707,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return false;
     }
     if (pauseNotice && delivery.reason === "source_owner_changed") {
-      await deferBatch({ ...state, status: "pending" }, false);
+      await deferBatch({ status: "pending" }, false);
       return false;
     }
     if (delivery.reason === "requester_turn_pending") {
       // An existing Gateway turn still owns the input. Observe the same request
       // without spending failure attempts or closing its completion obligation.
-      await deferBatch({ ...state, lastError: undefined }, false);
+      await deferBatch({ lastError: undefined }, false);
       return false;
     }
     if (
