@@ -363,7 +363,7 @@ export function streamOpenAICompletionsRequest(
                   beforeContentBlock: directEvents.beforeContentBlock,
                   provisionalCommentaryTags,
                 }
-              : {}),
+              : { mode: "managed" as const }),
             signal: options?.signal,
             emitReasoning,
             strictReasoningTags: reasoningTagTextPolicy.isStrict(options),

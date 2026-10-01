@@ -150,7 +150,7 @@ async function convertContentBlocks(
   return blocks;
 }
 
-export async function convertAnthropicMessages(
+async function convertAnthropicMessages(
   transformedMessages: Context["messages"],
   model: Model<"anthropic-messages">,
   isOAuthToken: boolean,
@@ -345,7 +345,7 @@ export async function convertAnthropicMessages(
 }
 
 /** Shared generation contract, after each entry point resolves its defaults and tool policy. */
-export function buildAnthropicGenerationParams({
+function buildAnthropicGenerationParams({
   model,
   options,
   tools,
@@ -440,7 +440,7 @@ export function buildAnthropicGenerationParams({
   return params;
 }
 
-export function convertAnthropicTools(
+function convertAnthropicTools(
   tools: Tool[],
   isOAuthTokenLocal: boolean,
   supportsEagerToolInputStreaming = false,
