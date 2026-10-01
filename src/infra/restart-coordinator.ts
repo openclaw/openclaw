@@ -71,7 +71,7 @@ export function createSafeGatewayRestartPreflight(
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
   });
-  const counts: SafeGatewayRestartCounts = {
+  const counts = {
     queueSize: snapshot.counts.queueSize,
     pendingReplies: snapshot.counts.pendingReplies,
     embeddedRuns: snapshot.counts.embeddedRuns,
@@ -81,17 +81,8 @@ export function createSafeGatewayRestartPreflight(
     agentRuns: snapshot.counts.agentRuns,
     acpRuns: snapshot.counts.acpRuns,
     mediaRuns: snapshot.counts.mediaRuns,
-    totalActive:
-      snapshot.counts.queueSize +
-      snapshot.counts.pendingReplies +
-      snapshot.counts.embeddedRuns +
-      snapshot.counts.cronRuns +
-      snapshot.counts.backgroundExecSessions +
-      snapshot.counts.rootRequests +
-      snapshot.counts.agentRuns +
-      snapshot.counts.acpRuns +
-      snapshot.counts.mediaRuns,
   };
+  const totalActive = Object.values(counts).reduce((total, count) => total + count, 0);
   const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
 
   const summary =
@@ -99,8 +90,8 @@ export function createSafeGatewayRestartPreflight(
       ? "safe to restart now"
       : `restart deferred: ${blockers.map((blocker) => blocker.message).join("; ")}`;
   return {
-    safe: counts.totalActive === 0,
-    counts,
+    safe: totalActive === 0,
+    counts: { ...counts, totalActive },
     blockers,
     summary,
   };

@@ -296,6 +296,53 @@ describe("buildSubagentList", () => {
     expect(list.recent[0]?.line).toContain(" failed");
   });
 
+  it("shows finished ancestors as done while suspended child results remain available", async () => {
+    const now = Date.now();
+    const parent = {
+      runId: "finished-parent",
+      childSessionKey: "agent:main:subagent:finished-parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      execution: { status: "terminal", endedAt: now - 60_000, outcome: { status: "ok" } },
+    } satisfies SubagentRunRecord;
+    const child = {
+      ...parent,
+      runId: "suspended-child",
+      childSessionKey: "agent:main:subagent:suspended-child",
+      requesterSessionKey: parent.childSessionKey,
+      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(parent);
+    addSubagentRunForTests(child);
+    const list = () => buildSubagentList({ cfg: {}, runs: [parent, child], recentMinutes: 30 });
+
+    const finished = await list();
+    expect(finished.active).toEqual([]);
+    expect(finished.recent).toMatchObject([
+      { runId: parent.runId, status: "done", pendingDescendants: 0 },
+      { runId: child.runId, status: "done", deliveryStatus: "suspended" },
+    ]);
+    expect(finished.text).not.toContain("waiting on");
+
+    addSubagentRunForTests({
+      ...parent,
+      runId: "live-grandchild",
+      childSessionKey: "agent:main:subagent:live-grandchild",
+      requesterSessionKey: child.childSessionKey,
+      createdAt: now,
+      execution: { status: "running", startedAt: now },
+    });
+    const active = await list();
+    expect(active.active).toMatchObject([
+      { runId: parent.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
+      { runId: child.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
+    ]);
+    expect(active.recent).toEqual([]);
+  });
+
   it.each([
     {
       name: "a killed parent with an earlier successful provider outcome",

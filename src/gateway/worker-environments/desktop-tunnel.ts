@@ -64,6 +64,21 @@ function successful(result: Awaited<ReturnType<WorkerSshRunner["run"]>>): boolea
   return result.termination === "exit" && result.code === 0;
 }
 
+function desktopSshCommand(prepared: PreparedWorkerSsh, argv: readonly string[]): string[] {
+  return [
+    "ssh",
+    ...workerSshOptions(prepared, { forwarding: "disabled" }),
+    "-a",
+    "-x",
+    "-T",
+    "-p",
+    String(prepared.port),
+    "--",
+    prepared.sshTarget,
+    workerSshRemoteCommand(argv),
+  ];
+}
+
 /** Owns worker-specific desktop SSH acquisition and app launch processes. */
 export function createWorkerDesktopTunnels(deps: {
   runner: WorkerSshRunner;
@@ -165,18 +180,7 @@ export function createWorkerDesktopTunnels(deps: {
       let vncPassword: string | undefined;
       if (request.desktop.passwordFilePath) {
         const result = await deps.runner.run(
-          [
-            "ssh",
-            ...workerSshOptions(prepared, { forwarding: "disabled" }),
-            "-a",
-            "-x",
-            "-T",
-            "-p",
-            String(prepared.port),
-            "--",
-            prepared.sshTarget,
-            workerSshRemoteCommand(["cat", request.desktop.passwordFilePath]),
-          ],
+          desktopSshCommand(prepared, ["cat", request.desktop.passwordFilePath]),
           workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
         );
         assertCurrent();
@@ -307,18 +311,7 @@ export function createWorkerDesktopTunnels(deps: {
         // Launchers are stateful: SSH exit 255 cannot prove the remote app did not start.
         // Use the lifecycle-selected port once so an ambiguous disconnect cannot launch twice.
         const result = await deps.runner.run(
-          [
-            "ssh",
-            ...workerSshOptions(prepared, { forwarding: "disabled" }),
-            "-a",
-            "-x",
-            "-T",
-            "-p",
-            String(prepared.port),
-            "--",
-            prepared.sshTarget,
-            workerSshRemoteCommand([request.app.executablePath, ...(request.app.args ?? [])]),
-          ],
+          desktopSshCommand(prepared, [request.app.executablePath, ...(request.app.args ?? [])]),
           workerSshCommandOptions({
             timeoutMs: remainingLaunchMs,
             signal: abortController.signal,

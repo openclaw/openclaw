@@ -183,16 +183,11 @@ function resolveMatrixApprovalReactionDecision(
   if (!normalizedReaction) {
     return null;
   }
-  const allowed = new Set(allowedDecisions);
-  for (const decision of MATRIX_APPROVAL_REACTION_ORDER) {
-    if (!allowed.has(decision)) {
-      continue;
-    }
-    if (MATRIX_APPROVAL_REACTION_META[decision].emoji === normalizedReaction) {
-      return decision;
-    }
-  }
-  return null;
+  return (
+    listMatrixApprovalReactionBindings(allowedDecisions).find(
+      ({ emoji }) => emoji === normalizedReaction,
+    )?.decision ?? null
+  );
 }
 
 export async function registerMatrixApprovalReactionTarget(params: {

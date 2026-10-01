@@ -14,7 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -111,13 +111,8 @@ function normalizeCreatedAtMs(value: unknown): number | null {
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {
-  if (!modality) {
-    return ["text"];
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(modality);
-  const parts = normalized.split(/[^a-z]+/).filter(Boolean);
-  const hasImage = parts.includes("image");
-  return hasImage ? ["text", "image"] : ["text"];
+  const parts = normalizeLowercaseStringOrEmpty(modality).split(/[^a-z]+/);
+  return parts.includes("image") ? ["text", "image"] : ["text"];
 }
 
 function parseNumberString(value: unknown): number | null {
@@ -199,7 +194,7 @@ async function fetchOpenRouterModels(
             if (!id) {
               return null;
             }
-            const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+            const name = normalizeOptionalString(obj.name) ?? id;
             const topProvider = asOptionalRecord(obj.top_provider);
 
             const contextLength =
@@ -213,33 +208,19 @@ async function fetchOpenRouterModels(
               asPositiveSafeInteger(obj.max_output_tokens) ??
               null;
 
-            const supportedParameters = Array.isArray(obj.supported_parameters)
-              ? normalizeStringEntries(
-                  obj.supported_parameters.filter((value) => typeof value === "string"),
-                )
-              : [];
-
-            const supportedParametersCount = supportedParameters.length;
-            const supportsToolsMeta = supportedParameters.includes("tools");
-
-            const modality =
-              typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
-
-            const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
-            const createdAtMs = normalizeCreatedAtMs(obj.created_at);
-            const pricing = parseOpenRouterPricing(obj.pricing);
+            const supportedParameters = normalizeTrimmedStringList(obj.supported_parameters);
 
             return {
               id,
               name,
               contextLength,
               maxCompletionTokens,
-              supportedParametersCount,
-              supportsToolsMeta,
-              modality,
-              inferredParamB,
-              createdAtMs,
-              pricing,
+              supportedParametersCount: supportedParameters.length,
+              supportsToolsMeta: supportedParameters.includes("tools"),
+              modality: normalizeOptionalString(obj.modality) ?? null,
+              inferredParamB: inferParamBFromIdOrName(`${id} ${name}`),
+              createdAtMs: normalizeCreatedAtMs(obj.created_at),
+              pricing: parseOpenRouterPricing(obj.pricing),
             } satisfies OpenRouterModelMeta;
           })
           .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));

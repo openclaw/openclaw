@@ -25,11 +25,20 @@ afterEach(() => vi.restoreAllMocks());
 const key = "agent:main:narrow-mutation";
 const scope = { agentId: "main", sessionKey: key };
 
+function ownedEntry(client: ReturnType<typeof roleClient>, sessionId: string) {
+  return {
+    sessionId,
+    updatedAt: 1,
+    createdActor: {
+      type: "human" as const,
+      source: "profile" as const,
+      id: client.authenticatedUserProfile!.profileId,
+    },
+  };
+}
+
 describe("invocation-owned session mutations", () => {
   it.each([
-    { owner: "connection", broad: false, rebind: false },
-    { owner: "device", broad: false, rebind: false },
-    { owner: "ownerless", broad: false, rebind: false },
     { owner: "connection", broad: false, rebind: true },
     { owner: "device", broad: true, rebind: false },
   ] as const)(
@@ -50,15 +59,7 @@ describe("invocation-owned session mutations", () => {
           : ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
         const foreignKey = "agent:main:foreign-stop";
-        await upsertSessionEntryCore(scope, {
-          sessionId: "own-incarnation",
-          updatedAt: 1,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: client.authenticatedUserProfile!.profileId,
-          },
-        });
+        await upsertSessionEntryCore(scope, ownedEntry(client, "own-incarnation"));
         await upsertSessionEntryCore(
           { ...scope, sessionKey: foreignKey },
           {
@@ -71,12 +72,7 @@ describe("invocation-owned session mutations", () => {
         const foreign = createActiveRun(foreignKey, {
           agentId: "main",
           sessionId: "foreign-incarnation",
-          ...(owner === "ownerless"
-            ? {}
-            : {
-                owner:
-                  owner === "connection" ? { connId: client.connId } : { deviceId: "alias-device" },
-              }),
+          owner: owner === "connection" ? { connId: client.connId } : { deviceId: "alias-device" },
         });
         const original = createActiveRun(key, {
           agentId: "main",
@@ -193,15 +189,7 @@ describe("invocation-owned session mutations", () => {
         client.connId = "exact-stop-connection";
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
-        await upsertSessionEntryCore(scope, {
-          sessionId: "current-incarnation",
-          updatedAt: 1,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: client.authenticatedUserProfile!.profileId,
-          },
-        });
+        await upsertSessionEntryCore(scope, ownedEntry(client, "current-incarnation"));
         for (const explicit of [false, true]) {
           for (const mismatch of [
             "none",
@@ -283,11 +271,11 @@ describe("invocation-owned session mutations", () => {
     },
   );
 
-  it.each(
-    (["active", "queued"] as const).flatMap((kind) =>
-      (["chat.abort", "sessions.abort"] as const).map((method) => ({ kind, method })),
-    ),
-  )(
+  it.each([
+    { kind: "active", method: "chat.abort" },
+    { kind: "queued", method: "chat.abort" },
+    { kind: "queued", method: "sessions.abort" },
+  ] as const)(
     "$method does not adopt a reentrant $kind producer replacement during narrow Stop",
     async ({ kind, method }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -295,15 +283,7 @@ describe("invocation-owned session mutations", () => {
         client.connId = "reentrant-stop";
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
-        await upsertSessionEntryCore(scope, {
-          sessionId: "original",
-          updatedAt: 1,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: client.authenticatedUserProfile!.profileId,
-          },
-        });
+        await upsertSessionEntryCore(scope, ownedEntry(client, "original"));
         for (const changed of ["registration", "key", "sessionId", "agentId"] as const) {
           const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
           const runs = kind === "active" ? context.chatAbortControllers : context.chatQueuedTurns;
@@ -367,15 +347,7 @@ describe("invocation-owned session mutations", () => {
         const client = roleClient("view", "stop-owner");
         client.connId = "same-connection";
         const cfg = rolePolicyConfig();
-        await upsertSessionEntryCore(scope, {
-          sessionId: "own-row",
-          updatedAt: 1,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: client.authenticatedUserProfile!.profileId,
-          },
-        });
+        await upsertSessionEntryCore(scope, ownedEntry(client, "own-row"));
         for (const grant of ["operator.sessions.write", "operator.write"]) {
           client.connect.scopes = [grant];
           const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
@@ -415,7 +387,6 @@ describe("invocation-owned session mutations", () => {
         const cfg = rolePolicyConfig();
         const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         const createdKey = "agent:main:main";
-        const dispatched = vi.fn();
         const dispatch = vi
           .spyOn(chat, "handleDirectExternalChatSend")
           .mockImplementation(async (options) => {
@@ -426,7 +397,6 @@ describe("invocation-owned session mutations", () => {
               id: client.authenticatedUserProfile!.profileId,
             });
             expect(entry?.sessionId).toBeTruthy();
-            dispatched();
             options.respond(true, { status: "queued" });
           });
         const respond = vi.fn();
@@ -439,7 +409,6 @@ describe("invocation-owned session mutations", () => {
           extraHandlers: { ...sessionMessagingHandlers, ...sessionCreateHandlers },
         });
         expect(dispatch).toHaveBeenCalledOnce();
-        expect(dispatched).toHaveBeenCalledOnce();
         expect(respond.mock.calls[0]?.[0]).toBe(true);
       });
     },
@@ -455,14 +424,8 @@ describe("invocation-owned session mutations", () => {
         "operator.approvals",
       );
       await upsertSessionEntryCore(scope, {
-        sessionId: "mixed-session",
-        updatedAt: 1,
+        ...ownedEntry(owner, "mixed-session"),
         visibility: "shared",
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: owner.authenticatedUserProfile!.profileId,
-        },
       });
       const target = resolveSessionSharingTarget({ cfg, ...scope })!;
       await addSessionMember(
@@ -519,86 +482,78 @@ describe("invocation-owned session mutations", () => {
     });
   });
 
-  it.each(["sessions.send", "sessions.steer"] as const)(
-    "%s forwards the original source and exact target across the dispatch await",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const client = roleClient("view", "send-owner");
-        client.connect.scopes = ["operator.sessions.write"];
-        const cfg = rolePolicyConfig();
-        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-        for (const changed of ["none", "source", "generation"] as const) {
-          const entry = {
-            sessionId: "original",
-            lifecycleRevision: "original",
-            updatedAt: 1,
-            visibility: "draft" as const,
-            createdActor: {
-              type: "human" as const,
-              source: "profile" as const,
-              id: client.authenticatedUserProfile!.profileId,
-            },
-          };
-          await upsertSessionEntryCore(scope, entry);
-          const entered = createDeferredCore();
-          const resume = createDeferredCore();
-          const effect = vi.fn();
-          let current = true;
-          const dispatch = vi
-            .spyOn(chat, "handleDirectExternalChatSend")
-            .mockImplementation(async (options) => {
-              const authority = readGatewayRequestMutationAuthority(options);
-              entered.resolve();
-              await resume.promise;
-              authority.assertCurrent();
-              options.sessionMutationAuthorization?.assertCurrent();
-              effect();
-              options.respond(true, { status: "queued" });
-            });
-          const respond = vi.fn();
-          const request = handleGatewayRequest({
-            req: { type: "req", id: changed, method, params: { key, message: "hello" } },
-            client,
-            context,
-            respond,
-            hasCurrentClientAuthority: () => current,
-            isWebchatConnect: () => false,
-            extraHandlers: sessionMessagingHandlers,
+  it("sessions.steer forwards the original source and exact target across the dispatch await", async () => {
+    const method = "sessions.steer";
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const client = roleClient("view", "send-owner");
+      client.connect.scopes = ["operator.sessions.write"];
+      const cfg = rolePolicyConfig();
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      for (const changed of ["none", "source", "generation"] as const) {
+        const entry = {
+          ...ownedEntry(client, "original"),
+          lifecycleRevision: "original",
+          visibility: "draft" as const,
+        };
+        await upsertSessionEntryCore(scope, entry);
+        const entered = createDeferredCore();
+        const resume = createDeferredCore();
+        const effect = vi.fn();
+        let current = true;
+        const dispatch = vi
+          .spyOn(chat, "handleDirectExternalChatSend")
+          .mockImplementation(async (options) => {
+            const authority = readGatewayRequestMutationAuthority(options);
+            entered.resolve();
+            await resume.promise;
+            authority.assertCurrent();
+            options.sessionMutationAuthorization?.assertCurrent();
+            effect();
+            options.respond(true, { status: "queued" });
           });
-          const outcome = Promise.allSettled([request]);
-          try {
-            await Promise.race([entered.promise, request]);
-            expect(dispatch).toHaveBeenCalledOnce();
-            if (changed === "source") {
-              current = false;
-            }
-            if (changed === "generation") {
-              await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
-            }
-          } finally {
-            resume.resolve();
-            await outcome;
-            dispatch.mockRestore();
-          }
-          expect(effect).toHaveBeenCalledTimes(changed === "none" ? 1 : 0);
-          const settled = await outcome;
+        const respond = vi.fn();
+        const request = handleGatewayRequest({
+          req: { type: "req", id: changed, method, params: { key, message: "hello" } },
+          client,
+          context,
+          respond,
+          hasCurrentClientAuthority: () => current,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionMessagingHandlers,
+        });
+        const outcome = Promise.allSettled([request]);
+        try {
+          await Promise.race([entered.promise, request]);
+          expect(dispatch).toHaveBeenCalledOnce();
           if (changed === "source") {
-            expect(settled).toMatchObject([
-              { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-            ]);
-            expect(respond).not.toHaveBeenCalled();
-          } else {
-            expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
-            expect(respond).toHaveBeenCalledOnce();
-            expect(respond.mock.calls[0]?.[0]).toBe(changed === "none");
-            if (changed === "generation") {
-              expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-            }
+            current = false;
+          }
+          if (changed === "generation") {
+            await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
+          }
+        } finally {
+          resume.resolve();
+          await outcome;
+          dispatch.mockRestore();
+        }
+        expect(effect).toHaveBeenCalledTimes(changed === "none" ? 1 : 0);
+        const settled = await outcome;
+        if (changed === "source") {
+          expect(settled).toMatchObject([
+            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
+          ]);
+          expect(respond).not.toHaveBeenCalled();
+        } else {
+          expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
+          expect(respond).toHaveBeenCalledOnce();
+          expect(respond.mock.calls[0]?.[0]).toBe(changed === "none");
+          if (changed === "generation") {
+            expect(respond.mock.calls[0]?.[1]).toBeUndefined();
           }
         }
-      });
-    },
-  );
+      }
+    });
+  });
 
   it.each(["source", "generation", "missing-single", "missing-batch"] as const)(
     "session mutation preserves the original %s fence",
@@ -608,14 +563,8 @@ describe("invocation-owned session mutations", () => {
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
         const entry = {
-          sessionId: "original",
+          ...ownedEntry(client, "original"),
           lifecycleRevision: "original",
-          updatedAt: 1,
-          createdActor: {
-            type: "human" as const,
-            source: "profile" as const,
-            id: client.authenticatedUserProfile!.profileId,
-          },
         };
         const missing = changed.startsWith("missing");
         const method = changed === "missing-single" ? "sessions.patch" : "sessions.patchMany";

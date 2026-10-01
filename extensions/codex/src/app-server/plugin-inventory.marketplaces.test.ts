@@ -14,6 +14,19 @@ import {
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
+function configuredPlugin(
+  marketplaceName: string,
+  pluginName: string,
+  configKey = `${pluginName}@${marketplaceName}`,
+) {
+  return {
+    codexPlugins: {
+      enabled: true,
+      plugins: { [configKey]: { marketplaceName, pluginName } },
+    },
+  };
+}
+
 describe("Codex marketplace-qualified plugin inventory", () => {
   it("resolves an owner-installed repository plugin from its exact marketplace", async () => {
     const appCache = new CodexAppInventoryCache();
@@ -26,17 +39,7 @@ describe("Codex marketplace-qualified plugin inventory", () => {
     const calls: Array<{ method: string; params: unknown }> = [];
 
     const inventory = await readCodexPluginInventory({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "security-review@company-tools": {
-              marketplaceName: "company-tools",
-              pluginName: "security-review",
-            },
-          },
-        },
-      },
+      pluginConfig: configuredPlugin("company-tools", "security-review"),
       appCache,
       appCacheKey: "runtime",
       configCwd: "/repo/company",
@@ -84,19 +87,8 @@ describe("Codex marketplace-qualified plugin inventory", () => {
 
   it("never admits the same plugin name from a different marketplace", async () => {
     const inventory = await readCodexPluginInventory({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "audit@trusted-company": {
-              marketplaceName: "trusted-company",
-              pluginName: "audit",
-            },
-          },
-        },
-      },
+      pluginConfig: configuredPlugin("trusted-company", "audit"),
       configCwd: "/repo/company",
-      readPluginDetails: false,
       request: async (method, params) => {
         expect(params).toEqual({ cwds: ["/repo/company"] });
         if (method === "plugin/installed" || method === "plugin/list") {
@@ -122,17 +114,7 @@ describe("Codex marketplace-qualified plugin inventory", () => {
 
   it("selects the authorized marketplace when two catalogs contain the same plugin name", async () => {
     const inventory = await readCodexPluginInventory({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "audit@trusted-company": {
-              marketplaceName: "trusted-company",
-              pluginName: "audit",
-            },
-          },
-        },
-      },
+      pluginConfig: configuredPlugin("trusted-company", "audit"),
       request: async (method, params) => {
         if (method === "plugin/installed") {
           return {
@@ -174,19 +156,8 @@ describe("Codex marketplace-qualified plugin inventory", () => {
   it("discovers an uninstalled repository plugin with its current conversation cwd", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const inventory = await readCodexPluginInventory({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "security-review@company-tools": {
-              marketplaceName: "company-tools",
-              pluginName: "security-review",
-            },
-          },
-        },
-      },
+      pluginConfig: configuredPlugin("company-tools", "security-review"),
       configCwd: "/repo/company",
-      readPluginDetails: false,
       request: async (method, params) => {
         calls.push({ method, params });
         if (method === "plugin/installed") {
@@ -204,6 +175,12 @@ describe("Codex marketplace-qualified plugin inventory", () => {
             },
           );
         }
+        if (method === "plugin/read") {
+          return pluginDetail("security-review", [], {
+            marketplaceName: "company-tools",
+            marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+          });
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -211,6 +188,13 @@ describe("Codex marketplace-qualified plugin inventory", () => {
     expect(calls).toEqual([
       { method: "plugin/installed", params: { cwds: ["/repo/company"] } },
       { method: "plugin/list", params: { cwds: ["/repo/company"] } },
+      {
+        method: "plugin/read",
+        params: {
+          marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+          pluginName: "security-review",
+        },
+      },
     ]);
     expect(inventory.records[0]).toMatchObject({
       policy: { marketplaceName: "company-tools" },
@@ -220,17 +204,11 @@ describe("Codex marketplace-qualified plugin inventory", () => {
 
   it("uses the opaque remote id for installed shared-marketplace plugins", async () => {
     const inventory = await readCodexPluginInventory({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "audit@workspace-shared-with-me": {
-              marketplaceName: "workspace-shared-with-me",
-              pluginName: "audit@workspace-shared-with-me",
-            },
-          },
-        },
-      },
+      pluginConfig: configuredPlugin(
+        "workspace-shared-with-me",
+        "audit@workspace-shared-with-me",
+        "audit@workspace-shared-with-me",
+      ),
       request: async (method, params) => {
         if (method === "plugin/installed") {
           return pluginInstalled(
@@ -285,7 +263,6 @@ describe("Codex marketplace-qualified plugin inventory", () => {
       appCacheKey: "runtime",
       configCwd: "/repo/company",
       metadataCache,
-      readPluginDetails: false,
       request: async (method) => {
         if (method === "plugin/installed") {
           return { marketplaces: [], marketplaceLoadErrors: [] };
@@ -302,6 +279,9 @@ describe("Codex marketplace-qualified plugin inventory", () => {
                 path: "/managed/openai-curated/marketplace.json",
               });
         }
+        if (method === "plugin/read") {
+          return pluginDetail(catalogCalls === 1 ? "security-review" : "calendar", []);
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -317,17 +297,7 @@ describe("Codex marketplace-qualified plugin inventory", () => {
   it("never exposes plugins disabled by an administrator", async () => {
     const calls: string[] = [];
     const inventory = await readCodexPluginInventory({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            "audit@enterprise": {
-              marketplaceName: "enterprise",
-              pluginName: "audit",
-            },
-          },
-        },
-      },
+      pluginConfig: configuredPlugin("enterprise", "audit"),
       request: async (method, params) => {
         calls.push(method);
         if (method === "plugin/installed") {

@@ -21,11 +21,9 @@ import {
   ensureValue,
   extractPackageJsonFromTgz,
   extractLastOpenClawVersionFromLog,
-  isLikelyMacosDesktopHome,
   makeTempDir,
   packOpenClaw,
   packageBuildCommitFromTgz,
-  parseMacosDsclUserHomeLine,
   parsePlatformList,
   parseProvider,
   readPositiveIntEnv,
@@ -50,6 +48,7 @@ import {
 } from "./common.ts";
 import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
 import { resolveMacosPrlctlInvocation, runMacosHostCommand } from "./macos-exec.ts";
+import { resolveMacosDesktopHome, resolveMacosDesktopUser } from "./macos-users.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
 import { ensureVmRunning, resolveMacosVmName, resolveUbuntuVmName } from "./parallels-vm.ts";
 import { runParallelsPrerequisiteEval } from "./provider-auth-prerequisite.mjs";
@@ -863,7 +862,7 @@ export class NpmUpdateSmoke {
       rerunCommand: this.formatRerun("bash", args, commandEnv),
       startedAt,
     };
-    job.promise = this.spawnLogged(
+    job.promise = spawnLoggedCommand(
       "bash",
       args,
       logPath,
@@ -1090,17 +1089,6 @@ export class NpmUpdateSmoke {
     return platform === "windows" ? this.windowsAuth : this.auth;
   }
 
-  private spawnLogged(
-    command: string,
-    args: string[],
-    logPath: string,
-    env: NodeJS.ProcessEnv = {},
-    onOutput: (text: string) => void = () => undefined,
-    options: SpawnLoggedOptions = {},
-  ): Promise<number> {
-    return spawnLoggedCommand(command, args, logPath, env, onOutput, options);
-  }
-
   private async monitorJobs(label: string, jobs: Job[]): Promise<void> {
     const pending = new Set(jobs.map((job) => job.label));
     while (pending.size > 0) {
@@ -1141,14 +1129,17 @@ export class NpmUpdateSmoke {
       "openclaw-parallels-npm-update-macos",
       { execArgs: macosUpdateExec.execArgs, mode: "700", runCommand: runMacosHostCommand },
     );
-    runMacosHostCommand(
-      "prlctl",
-      ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
-      {
-        timeoutMs: 30_000,
-      },
-    );
+    const cleanup = () => this.removeGuestScript(this.macosVm, scriptPath, runMacosHostCommand);
+    // Checked host commands can exit the process; finally only handles thrown failures.
+    process.once("exit", cleanup);
     try {
+      runMacosHostCommand(
+        "prlctl",
+        ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
+        {
+          timeoutMs: 30_000,
+        },
+      );
       const invocation = resolveMacosPrlctlInvocation(
         "prlctl",
         ["exec", this.macosVm, ...macosUpdateExec.execArgs, "/bin/bash", scriptPath],
@@ -1164,7 +1155,8 @@ export class NpmUpdateSmoke {
         throw new Error(`macOS update command failed with exit code ${status}`);
       }
     } finally {
-      this.removeGuestScript(this.macosVm, scriptPath, runMacosHostCommand);
+      process.off("exit", cleanup);
+      cleanup();
     }
   }
 
@@ -1215,56 +1207,19 @@ export class NpmUpdateSmoke {
   }
 
   private resolveMacosDesktopUser(): string {
-    const consoleUser =
-      runMacosHostCommand(
-        "prlctl",
-        ["exec", this.macosVm, "/usr/bin/stat", "-f", "%Su", "/dev/console"],
-        {
-          check: false,
-          quiet: true,
-          timeoutMs: 30_000,
-        },
-      )
-        .stdout.trim()
-        .replaceAll("\r", "")
-        .split("\n")
-        .at(-1) ?? "";
-    if (
-      /^[A-Za-z0-9._-]+$/.test(consoleUser) &&
-      consoleUser !== "root" &&
-      consoleUser !== "loginwindow"
-    ) {
-      return consoleUser;
-    }
-    const users = runMacosHostCommand(
-      "prlctl",
-      ["exec", this.macosVm, "/usr/bin/dscl", ".", "-list", "/Users", "NFSHomeDirectory"],
-      { check: false, quiet: true, timeoutMs: 30_000 },
-    ).stdout.replaceAll("\r", "");
-    for (const line of users.split("\n")) {
-      const parsed = parseMacosDsclUserHomeLine(line);
-      const user = parsed?.user;
-      if (
-        user &&
-        isLikelyMacosDesktopHome(parsed?.home) &&
-        !user.startsWith("_") &&
-        user !== "Shared" &&
-        user !== ".localized"
-      ) {
-        return user;
-      }
-    }
-    return "";
+    return resolveMacosDesktopUser((args) => this.readMacosDesktopUserOutput(args));
   }
 
   private resolveMacosDesktopHome(user: string): string {
-    const output = runMacosHostCommand(
-      "prlctl",
-      ["exec", this.macosVm, "/usr/bin/dscl", ".", "-read", `/Users/${user}`, "NFSHomeDirectory"],
-      { check: false, quiet: true, timeoutMs: 30_000 },
-    ).stdout.replaceAll("\r", "");
-    const match = /^NFSHomeDirectory:\s+(.+)$/m.exec(output);
-    return match?.[1]?.trim() || `/Users/${user}`;
+    return resolveMacosDesktopHome(user, (args) => this.readMacosDesktopUserOutput(args));
+  }
+
+  private readMacosDesktopUserOutput(args: string[]): string {
+    return runMacosHostCommand("prlctl", ["exec", this.macosVm, ...args], {
+      check: false,
+      quiet: true,
+      timeoutMs: 30_000,
+    }).stdout;
   }
 
   private async guestWindows(
@@ -1326,16 +1281,16 @@ export class NpmUpdateSmoke {
     const execArgs = options.execArgs ?? [];
     const mode = options.mode ?? "755";
     const scriptPath = `/tmp/${prefix}-${randomUUID()}.sh`;
-    const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
-      check: false,
-      input: script,
-      quiet: true,
-      timeoutMs: 120_000,
-    });
-    if (write.status !== 0) {
-      throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
-    }
     try {
+      const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
+        check: false,
+        input: script,
+        quiet: true,
+        timeoutMs: 120_000,
+      });
+      if (write.status !== 0) {
+        throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
+      }
       const chmod = runCommand(
         "prlctl",
         ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath],

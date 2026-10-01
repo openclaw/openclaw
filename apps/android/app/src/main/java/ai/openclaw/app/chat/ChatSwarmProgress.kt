@@ -14,10 +14,6 @@ enum class ChatSwarmDotStatus {
   Queued,
   Failed,
   Done,
-  ;
-
-  val label: String
-    get() = name
 }
 
 data class ChatSwarmDot(

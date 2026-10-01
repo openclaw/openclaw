@@ -5,9 +5,11 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
+import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import { CRON_STUCK_RUN_MS } from "../store/run-receipt-store.js";
 import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
@@ -90,10 +92,7 @@ export function errorBackoffMs(
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
 ): number {
   const idx = Math.min(consecutiveErrors - 1, scheduleMs.length - 1);
-  return (
-    expectDefined(scheduleMs[Math.max(0, idx)], "schedule ms entry at math.max(0, idx)") ??
-    DEFAULT_ERROR_BACKOFF_SCHEDULE_MS[0]
-  );
+  return expectDefined(scheduleMs[Math.max(0, idx)], "schedule ms entry at math.max(0, idx)");
 }
 
 /** Returns the earliest retry timestamp after a failed cron run and its runtime duration. */
@@ -434,22 +433,6 @@ function normalizeJobTickState(params: {
     changed = true;
   }
 
-  if (job.schedule.kind === "every" && !hasInvalidExplicitEveryAnchor(job.schedule)) {
-    const normalizedAnchorMs = resolveEveryAnchorMs({
-      schedule: job.schedule,
-      fallbackAnchorMs: isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs,
-    });
-    if (job.schedule.anchorMs !== normalizedAnchorMs) {
-      job.schedule = {
-        ...job.schedule,
-        anchorMs: normalizedAnchorMs,
-      };
-      job.state.pacedNextRunAtMs = undefined;
-      job.state.forcePreservedNextRunAtMs = undefined;
-      changed = true;
-    }
-  }
-
   // Event schedules cannot retain a timed slot, including one preserved by a force run.
   if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
     for (const key of TIME_SCHEDULE_STATE_FIELDS) {
@@ -709,7 +692,14 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
     if (rawEnabled) {
       enabledCount += 1;
     }
-    if ((rawEnabled ?? true) && isTimeScheduledJob(job) && hasNextRun) {
+    if (
+      (rawEnabled ?? true) &&
+      (!state.deps.legacyDefaultAgentId ||
+        tryResolveCronJobEffectiveAgentId(job, undefined, state.deps.legacyDefaultAgentId)) &&
+      hasCanonicalCronDeliveryMode(job.delivery) &&
+      isTimeScheduledJob(job) &&
+      hasNextRun
+    ) {
       nextWake = nextWake === undefined ? nextRun : Math.min(nextWake, nextRun);
     }
   }
@@ -726,11 +716,11 @@ export function nextWakeAtMs(state: CronServiceState) {
 }
 
 /** Applies one canonical server-authored authority envelope to a tool-bearing job. */
-export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">) {
+export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">, activeInProcess?: boolean) {
   return (
     typeof job.state.queuedAtMs === "number" ||
     typeof job.state.runningAtMs === "number" ||
-    isCronJobActive(job.id)
+    (activeInProcess ?? isCronJobActive(job.id))
   );
 }
 

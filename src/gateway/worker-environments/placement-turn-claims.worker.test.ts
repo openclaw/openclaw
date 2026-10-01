@@ -21,6 +21,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { ActiveTurnClaimError, createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { executeLocalTurn } from "./worker-turn-admission.js";
 
@@ -159,27 +160,81 @@ it("fences retained authority before release commit and closes observers after s
   }
 });
 
-it("returns committed claim custody after its real worker reply is corrupted", async () => {
-  const requested = input("lost-reply");
-  const receive = brokerReply.receiveSqliteWorkerReply;
-  let corrupted = 0;
-  vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
-    if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-      const value: unknown = deserialize(reply.value);
-      if (isRecord(value) && isRecord(value.claim) && value.claim.claimId === requested.claimId) {
-        corrupted += 1;
-        return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
-      }
+it.each(["claim", "staged result", "workspace manifest"] as const)(
+  "returns committed %s custody after its real worker reply is corrupted",
+  async (operation) => {
+    const requested = input(`lost-reply-${operation.replaceAll(" ", "-")}`);
+    const ref = `refs/openclaw/worker-results/${requested.claimId}`;
+    let stagedClaim: Awaited<ReturnType<typeof placements.claimTurn>> | undefined;
+    if (operation !== "claim") {
+      const active = await advancePlacementFixtureToActive(
+        placements,
+        database,
+        {
+          sessionId: requested.sessionId,
+          agentId: requested.agentId,
+          sessionKey: requested.sessionKey,
+          executionMode: "remote-exec",
+        },
+        { environmentId: `lost-reply-environment-${operation.replaceAll(" ", "-")}` },
+      );
+      stagedClaim = await placements.claimTurn({
+        ...requested,
+        owner: {
+          kind: "local",
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+      });
+      placements.markWorkspaceResultPending(stagedClaim);
     }
-    return receive(slot, reply, owner);
-  });
-  const claim = await placements.claimTurn(requested);
-  expect(corrupted).toBe(1);
-  expect(claim).toMatchObject({ claimId: requested.claimId, runId: requested.runId });
-  expect(placements.get(claim.sessionId)?.turnClaim).toMatchObject({ claimId: requested.claimId });
-  await placements.releaseTurn(claim);
-  expect(placements.get(claim.sessionId)?.turnClaim).toBeNull();
-});
+    const receive = brokerReply.receiveSqliteWorkerReply;
+    let corrupted = 0;
+    vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
+      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
+        const value: unknown = deserialize(reply.value);
+        const matches =
+          isRecord(value) &&
+          (operation === "claim"
+            ? isRecord(value.claim) && value.claim.claimId === requested.claimId
+            : isRecord(value.placement) && value.placement.sessionId === requested.sessionId);
+        if (matches) {
+          corrupted += 1;
+          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
+        }
+      }
+      return receive(slot, reply, owner);
+    });
+    if (stagedClaim) {
+      if (operation === "workspace manifest") {
+        const manifestRef = `sha256:${"a".repeat(64)}`;
+        const accepted = await placements.updateWorkspaceBaseManifest({
+          claim: stagedClaim,
+          manifestRef,
+        });
+        expect(accepted.workspaceBaseManifestRef).toBe(manifestRef);
+        expect(placements.get(requested.sessionId)?.workspaceBaseManifestRef).toBe(manifestRef);
+      } else {
+        await placements.recordStagedWorkspaceResult(stagedClaim, ref);
+        expect(placements.listPendingWorkspaceResults(requested.sessionId)).toMatchObject([
+          { claimId: stagedClaim.claimId, stagedResultRef: ref },
+        ]);
+      }
+      expect(corrupted).toBe(1);
+      placements.acceptWorkspaceResult(stagedClaim);
+      placements.completeWorkspaceResultAndReleaseTurn(stagedClaim);
+    } else {
+      const claim = await placements.claimTurn(requested);
+      expect(corrupted).toBe(1);
+      expect(claim).toMatchObject({ claimId: requested.claimId, runId: requested.runId });
+      expect(placements.get(claim.sessionId)?.turnClaim).toMatchObject({
+        claimId: requested.claimId,
+      });
+      await placements.releaseTurn(claim);
+    }
+    expect(placements.get(requested.sessionId)?.turnClaim).toBeNull();
+  },
+);
 
 it("keeps a later same-byte native claim authoritative when the old release reply arrives", async () => {
   const requested = input("late-reply");

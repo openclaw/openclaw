@@ -12,7 +12,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 
-const { executionParams, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
@@ -115,7 +115,7 @@ it.each(["package", "artifact", "git"] as const)(
           return { ...successfulUpdate, mode: "git" };
         },
       );
-      const result = await executeMutableUpdate(params);
+      const result = await executeMutableUpdate(await bindExecutionGuards(params));
       expect(result?.result.status, JSON.stringify(mocks.runtimeError.mock.calls)).toBe("ok");
       expect(result?.mutationStarted).toBe(true);
       expect(activated).toBe(true);
@@ -181,7 +181,7 @@ it.each([
             run.executorFence = { assertCurrent() {} };
           }
         });
-        const result = await executeMutableUpdate(params);
+        const result = await executeMutableUpdate(await bindExecutionGuards(params));
         expect(result?.result.status).toBe("error");
         expect(result?.mutationStarted).toBe(false);
         expect(admitted).toBe(change === "replacement-after-admission");

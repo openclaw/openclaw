@@ -52,20 +52,20 @@ export async function prepareCronSessionWorkspace(params: {
     ).resolveAcpAgentWorkspaceProvisioningForTurn({
       cfg: params.cfg,
       agentId: params.agentId,
-      workspaceDir: selected.workspaceDir,
+      workspaceDir: params.defaultWorkspaceDir,
       cwd: selected.cwd,
       sessionKey: params.sessionKey,
       sessionEntry: params.cronSession.sessionEntry,
     });
     assertCurrent();
-    const workspace = await ensureAgentWorkspace({
-      dir: selected.workspaceDir,
+    await ensureAgentWorkspace({
+      dir: params.defaultWorkspaceDir,
       ensureBootstrapFiles: !params.agentCfg.skipBootstrap && !params.isFastTestEnv,
       skipOptionalBootstrapFiles: params.agentCfg.skipOptionalBootstrapFiles,
       provisioning,
     });
     assertCurrent();
-    return { ...selected, workspaceDir: workspace.dir };
+    return selected;
   } catch (error) {
     await selected.lease?.release();
     throw error;

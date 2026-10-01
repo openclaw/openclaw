@@ -19,7 +19,7 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
@@ -161,7 +161,7 @@ describe("one-shot recovery", () => {
           advanceCronActiveJobGeneration();
         }
         failureDatabase?.exec(`
-          CREATE TEMP TRIGGER reject_manual_terminal_row
+          CREATE TRIGGER reject_manual_terminal_row
           BEFORE UPDATE ON cron_jobs
           WHEN NEW.job_id = 'shutdown-one-shot'
             AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL
@@ -287,7 +287,11 @@ describe("one-shot recovery", () => {
         await settledStartup;
         failureDatabase?.exec("DROP TRIGGER IF EXISTS reject_manual_terminal_row");
         if (successor) {
-          finishCronRunReceipt({ handle: successor, status: "skipped", finishedAtMs: nowMs });
+          await finishCronRunReceiptAsync({
+            handle: successor,
+            status: "skipped",
+            finishedAtMs: nowMs,
+          });
           clearCronJobActive(job.id, successorMarker);
         }
       }

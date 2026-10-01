@@ -101,10 +101,7 @@ class SystemsSidebar extends OpenClawLightDomElement {
 
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
-      () => this.controller,
-      (controller, notify) => controller.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.controller);
   }
 
   override render() {

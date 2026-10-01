@@ -26,10 +26,13 @@ export async function verifyCancelledDrainRollbackLease(
       assert(reloadLease);
       reloadLease.assertOwned();
     },
-    prepareConfigEffects: () => async () => {
-      rollbackStarted.resolve();
-      await finishRollback.promise;
-    },
+    prepareConfigEffects: () => ({
+      retire: () => {},
+      rollback: async () => {
+        rollbackStarted.resolve();
+        await finishRollback.promise;
+      },
+    }),
   });
   const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
   assert(instance);

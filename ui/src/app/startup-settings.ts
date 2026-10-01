@@ -3,7 +3,7 @@ import {
   normalizeGatewayClientMode,
 } from "@openclaw/gateway-protocol/client-info";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
@@ -145,9 +145,7 @@ export function resolveApplicationStartupSettings(
     const platform = normalizeOptionalString(client?.platform);
     const deviceFamily = normalizeOptionalString(client?.deviceFamily);
     const instanceId = normalizeOptionalString(client?.instanceId);
-    const scopes = Array.isArray(client?.scopes)
-      ? uniqueStrings(client.scopes.flatMap((scope) => normalizeOptionalString(scope) ?? []))
-      : [];
+    const scopes = normalizeUniqueTrimmedStringList(client?.scopes);
     if (clientName && mode && platform && deviceFamily && scopes.length > 0) {
       nativeClient = {
         clientName,

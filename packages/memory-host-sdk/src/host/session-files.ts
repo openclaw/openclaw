@@ -5,7 +5,7 @@ import { safeStatSync } from "@openclaw/fs-safe/path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeAgentId } from "./config-utils.js";
-import { readRegularFile, statRegularFile } from "./fs-utils.js";
+import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import {
   captureSensitiveTextRedactionSnapshot,
@@ -274,22 +274,9 @@ function isCronRunGeneratedRecord(record: unknown): boolean {
   );
 }
 
-function normalizeComparablePath(pathname: string): string {
-  const resolved = path.resolve(pathname);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function resolveSessionStoreTranscriptPath(
-  sessionsDir: string,
-  entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
-): string | null {
-  const resolved = resolveSessionStoreTranscriptResolvedPath(sessionsDir, entry);
-  return resolved ? normalizeComparablePath(resolved) : null;
-}
-
 function resolveSessionStoreTranscriptResolvedPath(
   sessionsDir: string,
-  entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
+  entry: SessionTranscriptStoreEntry | undefined,
 ): string | null {
   if (typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0) {
     const sessionFile = entry.sessionFile.trim();
@@ -322,10 +309,11 @@ function loadSessionTranscriptClassificationForSessionsDir(
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
   for (const [sessionKey, entry] of Object.entries(store)) {
-    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
-    if (!transcriptPath) {
+    const resolved = resolveSessionStoreTranscriptResolvedPath(sessionsDir, entry);
+    if (!resolved) {
       continue;
     }
+    const transcriptPath = normalizeComparablePath(resolved);
     if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
       dreamingTranscriptPaths.add(transcriptPath);
     }

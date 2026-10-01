@@ -213,12 +213,14 @@ async function waitForDeferredAccountStart(
   if (abortSignal.aborted) {
     return;
   }
-  await Promise.race([
-    deferred,
-    new Promise<void>((resolve) => {
-      abortSignal.addEventListener("abort", () => resolve(), { once: true });
-    }),
-  ]);
+  const aborted = createDeferredCore();
+  const onAbort = () => aborted.resolve();
+  abortSignal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await Promise.race([deferred, aborted.promise]);
+  } finally {
+    abortSignal.removeEventListener("abort", onAbort);
+  }
 }
 
 export type ChannelManager = {
@@ -452,10 +454,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const getChannelRuntime = async (): Promise<PluginRuntimeChannel | undefined> => {
-    if (channelRuntime) {
-      return channelRuntime;
-    }
-    return await resolveChannelRuntime?.();
+    return channelRuntime ?? (await resolveChannelRuntime?.());
   };
   const createAccountContext = (
     channelId: ChannelId,

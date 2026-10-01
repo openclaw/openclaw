@@ -653,7 +653,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.configureGateway).toHaveBeenLastCalledWith(
       expect.objectContaining({
         baseConfig: concurrent,
-        localPort: 19000,
         quickstartGateway: expect.objectContaining({ port: 19000, bind: "lan" }),
       }),
     );

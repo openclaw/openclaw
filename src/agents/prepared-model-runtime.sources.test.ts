@@ -69,6 +69,7 @@ function fixture(mode: "merge" | "replace" = "merge") {
   const generation = {
     pluginMetadataSnapshot: metadata,
     inlineProviderModels: [],
+    remoteCatalog: null,
     configuredCatalogEntries: [],
     providerStaticModels: [],
     preparedStaticProviderCatalog,

@@ -1,4 +1,3 @@
-// Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
@@ -12,7 +11,6 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
   resolveConfigSnapshotHash,
-  resolveGatewayPort,
   validateConfigObjectWithPlugins,
 } from "../config/config.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -361,10 +359,8 @@ export async function applySystemAgentSetup(
       flow: "quickstart",
       baseConfig: currentBaseConfig,
       nextConfig: candidate,
-      localPort: resolveGatewayPort(currentBaseConfig),
       quickstartGateway: resolveQuickstartGatewayDefaults(currentBaseConfig),
       prompter,
-      runtime,
     });
     return {
       nextConfig: onboardHelpers.applyWizardMetadata(gateway.nextConfig, {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
@@ -36,6 +36,7 @@ import {
   writeNpmPackageInstall,
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
+import { stubNodeRuntime } from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -51,6 +52,8 @@ describe("update-cli", () => {
     setupServicePackageAtPrefix,
     tempDirs,
   } = createUpdateCliFixture();
+
+  beforeEach(() => stubNodeRuntime());
 
   it("uses the owning npm binary for package updates when PATH npm points elsewhere", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");

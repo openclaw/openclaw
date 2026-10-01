@@ -95,7 +95,7 @@ describe("migration command resources", () => {
     const fixture = createMigrationResourceFixture();
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
-        const active = loadAndActivateRootPluginRegistry({ config: fixture.config });
+        const active = await loadAndActivateRootPluginRegistry({ config: fixture.config });
         expect(active.migrationProviders.map(({ provider }) => provider.id)).toContain(fixture.id);
         fixture.state.resumeApply.resolve();
         const result = await migrateDefaultCommand(createNonExitingRuntime(), {

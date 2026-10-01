@@ -136,6 +136,10 @@ current session:
 /tool image_generate action=status
 ```
 
+Task status and duplicate detection are scoped to the requesting chat, even
+when direct chats share the main session transcript. Completion returns to
+the peer who requested the image.
+
 ## Provider capabilities
 
 | Capability            | ComfyUI            | DeepInfra | fal                                                         | Google         | Microsoft Foundry | MiniMax               | OpenAI         | Vydra | xAI            |

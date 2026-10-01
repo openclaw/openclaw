@@ -1,4 +1,3 @@
-// Parses config command set/unset requests into typed config operations.
 import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
 
 type ConfigCommand =

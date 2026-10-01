@@ -183,6 +183,8 @@ export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayCon
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
+  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+  await initializeSqliteRuntimeCapabilities();
   ensureNodeHostStateReady();
   const cfg = getRuntimeConfig();
   const savedConfig = await loadNodeHostConfig();

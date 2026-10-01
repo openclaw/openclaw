@@ -1,4 +1,6 @@
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HostDesktopStatus } from "../gateway/desktop/host-source.js";
+import { formatKTokens } from "./status.format.js";
 
 export function formatHostDesktopStatus(status?: HostDesktopStatus): string {
   if (!status || status.state === "disabled") {
@@ -68,36 +70,27 @@ export function buildStatusEventsValue(params: { queuedSystemEvents: string[] })
     : "none";
 }
 
-export function buildStatusProbesValue(params: {
-  health?: unknown;
-  ok: (value: string) => string;
-  muted: (value: string) => string;
-}) {
-  return params.health ? params.ok("enabled") : params.muted("skipped (use --deep)");
+export function buildStatusProbesValue(params: { health?: unknown }) {
+  return params.health ? theme.success("enabled") : theme.muted("skipped (use --deep)");
 }
 
 export function buildStatusPluginCompatibilityValue(params: {
   notices: PluginCompatibilityNoticeLike[];
-  ok: (value: string) => string;
-  warn: (value: string) => string;
 }) {
   if (params.notices.length === 0) {
-    return params.ok("none");
+    return theme.success("none");
   }
   const pluginCount = new Set(
     params.notices.map((notice) => notice.pluginId ?? notice.plugin ?? ""),
   ).size;
-  return params.warn(
+  return theme.warn(
     `${params.notices.length} notice${params.notices.length === 1 ? "" : "s"} · ${pluginCount} plugin${pluginCount === 1 ? "" : "s"}`,
   );
 }
 
-export function buildStatusSessionsOverviewValue(params: {
-  sessions: SummarySessionsLike;
-  formatKTokens: (value: number) => string;
-}) {
+export function buildStatusSessionsOverviewValue(params: { sessions: SummarySessionsLike }) {
   const defaultCtx = params.sessions.defaults.contextTokens
-    ? ` (${params.formatKTokens(params.sessions.defaults.contextTokens)} ctx)`
+    ? ` (${formatKTokens(params.sessions.defaults.contextTokens)} ctx)`
     : "";
   const storeLabel =
     params.sessions.paths.length > 1

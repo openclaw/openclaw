@@ -103,13 +103,14 @@ function resolvePrompt(
   return `${base} Respond in at most ${maxChars} characters.`;
 }
 
-/** Resolves the effective max response characters for a model entry and capability. */
-function resolveMaxChars(params: {
+type MediaEntryRunParams = {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
-}): number | undefined {
+};
+
+function resolveMaxChars(params: MediaEntryRunParams): number | undefined {
   const { capability, entry, cfg } = params;
   const configured =
     entry.maxChars ?? params.config?.maxChars ?? cfg.tools?.media?.[capability]?.maxChars;
@@ -120,12 +121,7 @@ function resolveMaxChars(params: {
 }
 
 /** Resolves the effective input byte cap for a model entry and capability. */
-export function resolveMaxBytes(params: {
-  capability: MediaUnderstandingCapability;
-  entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
-  config?: MediaUnderstandingConfig;
-}): number {
+export function resolveMaxBytes(params: MediaEntryRunParams): number {
   const configured =
     params.entry.maxBytes ??
     params.config?.maxBytes ??
@@ -136,12 +132,7 @@ export function resolveMaxBytes(params: {
   return DEFAULT_MAX_BYTES[params.capability];
 }
 
-export function resolveEntryRunOptions(params: {
-  capability: MediaUnderstandingCapability;
-  entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
-  config?: MediaUnderstandingConfig;
-}): {
+export function resolveEntryRunOptions(params: MediaEntryRunParams): {
   maxBytes: number;
   maxChars?: number;
   timeoutMs: number;
@@ -149,8 +140,8 @@ export function resolveEntryRunOptions(params: {
   hasConfiguredPrompt: boolean;
 } {
   const { capability, entry, cfg } = params;
-  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
-  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
+  const maxBytes = resolveMaxBytes(params);
+  const maxChars = resolveMaxChars(params);
   const timeoutMs = resolveTimeoutMs(
     entry.timeoutSeconds ??
       params.config?.timeoutSeconds ??

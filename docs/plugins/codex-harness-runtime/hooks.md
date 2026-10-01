@@ -79,10 +79,12 @@ succeed; Gateway invocation waits for that snapshot independently of publication
 Registration returns a synchronous handle whose optional `deferMcpToolApprovals`
 field remains undefined until policy preparation finishes.
 
-The cold hook CLI reads the locator on a dedicated read-only worker, closes its
-database, and joins the worker before using the result. The worker preserves
-schema admission without loading shared-state writer startup. The caller retains
-the existing retry and deadline rules.
+The cold hook CLI reads the locator without loading shared-state writer startup.
+On Node, this one-shot process uses a read-only connection with no SQLite lock
+wait; transient lock contention yields to the existing retry and deadline owner.
+On Bun, it uses a dedicated read-only worker and joins that worker before using
+the result so native database handles are released. Both paths preserve schema
+admission and close the database after lookup.
 
 Bridge publication, renewal, lookup, and removal run in the shared-state worker.
 Publication and renewal recheck the current host registration inside their write

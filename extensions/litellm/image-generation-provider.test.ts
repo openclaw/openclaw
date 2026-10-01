@@ -3,7 +3,7 @@ import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 
 const {
@@ -128,8 +128,19 @@ describe("litellm image generation provider", () => {
 
     const form = mockObjectArg(postMultipartRequestMock).body as FormData;
     // Sending both part names is an error.
-    expect(form.getAll("image[]")).toHaveLength(2);
     expect(form.getAll("image")).toHaveLength(0);
+    const images = form.getAll("image[]");
+    expect(
+      await Promise.all(
+        images.map(async (image) => {
+          assert(image instanceof Blob);
+          return { bytes: Buffer.from(await image.arrayBuffer()), mimeType: image.type };
+        }),
+      ),
+    ).toEqual([
+      { bytes: Buffer.from("first"), mimeType: "image/png" },
+      { bytes: Buffer.from("second"), mimeType: "image/jpeg" },
+    ]);
   });
 
   it("throws a clear error when the API key is missing", async () => {
@@ -142,8 +153,11 @@ describe("litellm image generation provider", () => {
     const cases = [
       "http://127.255.255.254:4000",
       "http://[::1]:4000",
+      "http://[0:0:0:0:0:0:0:1]:4000",
       "http://host.docker.internal:4000",
       "https://localhost:4000",
+      "https://LOCALHOST:4000",
+      "http://proxy.localhost:4000",
     ] as const;
     for (const baseUrl of cases) {
       await generateAt(baseUrl);
@@ -159,6 +173,7 @@ describe("litellm image generation provider", () => {
       "http://192.168.5.10:4000",
       "http://printer.local:4000",
       "http://127.evil.com:4000",
+      "http://[::ffff:127.0.0.1]:4000",
     ] as const;
     for (const baseUrl of cases) {
       await generateAt(baseUrl);

@@ -9,6 +9,7 @@ import {
 import { withTrustedWebSearchEndpoint } from "openclaw/plugin-sdk/provider-web-search";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { ParallelSearchResponse } from "./parallel-search-normalize.js";
 
 // Free hosted Search MCP. This keyless transport is used only after the user
 // explicitly selects the `parallel-free` web_search provider. Docs:
@@ -30,15 +31,6 @@ const USER_AGENT = `openclaw-parallel/${PLUGIN_VERSION} (${process.platform})`;
 type JsonRpcMessage = Record<string, unknown>;
 
 type McpToolPayload = Record<string, unknown>;
-
-/** ParallelSearchResponse-compatible shape consumed by the runtime normalizer. */
-type ParallelMcpSearchResponse = {
-  search_id?: unknown;
-  session_id?: unknown;
-  results: unknown[];
-  warnings?: unknown;
-  usage?: unknown;
-};
 
 function mcpHeaders(params: {
   sessionId?: string;
@@ -277,7 +269,7 @@ export async function runParallelMcpSearch(params: {
   modelName?: string;
   timeoutSeconds?: number;
   signal?: AbortSignal;
-}): Promise<ParallelMcpSearchResponse> {
+}): Promise<ParallelSearchResponse & { results: unknown[] }> {
   const sessionId = normalizeMcpSessionId(params.sessionId);
   const args: Record<string, unknown> = {
     // MCP requires a non-empty objective (REST treats it as optional); when the

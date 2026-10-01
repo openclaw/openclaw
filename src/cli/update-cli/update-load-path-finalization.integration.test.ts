@@ -210,7 +210,7 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
         } else {
           expect(latest.steps).not.toContainEqual(expectedStep);
         }
-        const runStatus = readUpdateRunStatus();
+        const runStatus = await readUpdateRunStatus();
         if (runStatus.runStatusError !== undefined) {
           throw new Error(runStatus.runStatusError);
         }

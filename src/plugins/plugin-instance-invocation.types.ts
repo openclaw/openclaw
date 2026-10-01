@@ -4,10 +4,16 @@ import type { PluginInvocationInstance } from "./plugin-instance.types.js";
 
 export type PluginInstanceInvocation = { instance: PluginInvocationInstance; token: object };
 
+export type PluginSourceCaptureStorage = Readonly<{
+  stateDir: string;
+  placement: "state" | "temporary";
+}>;
+
 export type PluginExecutionScopes = {
   readonly invocation?: PluginInstanceInvocation;
   readonly metadataScope?: ScopedPluginMetadataSnapshot;
   readonly cacheScope?: PluginCacheScope;
+  readonly sourceCaptureStorage?: PluginSourceCaptureStorage;
 };
 
 /** Runtime owners preserve their context when these independent scopes change. */

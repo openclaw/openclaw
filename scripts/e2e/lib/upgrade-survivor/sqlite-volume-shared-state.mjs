@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { readJson, write, writeJson } from "../fixtures/common.mjs";
 
 const VOLUME_PLUGIN_ID = "upgrade-survivor";
 const VOLUME_PLUGIN_NAMESPACES = ["archive-cursors", "operator-preferences"];
@@ -33,19 +34,6 @@ const VOLUME_WORKSPACE_FILES = new Map([
 
 function assertJsonEqual(actual, expected, message) {
   assert.equal(JSON.stringify(actual), JSON.stringify(expected), message);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
-
-function writeJson(file, value) {
-  write(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function withReadonlySharedDatabase(stateDir, operation) {

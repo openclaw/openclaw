@@ -1,6 +1,17 @@
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it } from "vitest";
+import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
 import {
+  type AnthropicResponse,
+  ANTHROPIC_GUEST_CODE_MODE_TOOLS,
+  expectAnthropicMessagesJson,
+  readDebugRequest,
+  makeAnthropicUserText,
+  makeAnthropicToolResult,
+  guestCodeModeExecTool,
+  requireRecord,
   QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   createMockServerTestHarness,
   expectNonStreamingResponsesJson,
@@ -124,6 +135,25 @@ it("plans runtime-fixture sessions_spawn happy and failure calls deterministical
   expect(callArgs(outputToolCall(await turn.request(), "sessions_spawn"))).toEqual({ task: "" });
 });
 
+it("routes the directory fixture through ls with valid happy and missing-directory inputs", async () => {
+  const config = readQaScenarioExecutionConfig("runtime-tool-fs-list") ?? {};
+  const toolName = normalizeOptionalString(config.toolName) ?? "";
+  const turn = await startTurn("", {
+    tools: ["ls", "read"].map((name) => ({ type: "function", name })),
+  });
+  const cases: Array<[prompt: string, expectedPath: string]> = [
+    [normalizeOptionalString(config.happyPrompt) ?? `tool search qa check target=${toolName}`, "."],
+    [
+      normalizeOptionalString(config.failurePrompt) ?? `tool search qa failure target=${toolName}`,
+      "runtime-tool-fixture-missing-directory",
+    ],
+  ];
+  for (const [prompt, expectedPath] of cases) {
+    turn.input.splice(0, 1, makeUserInput(prompt));
+    expect(callArgs(outputToolCall(await turn.request(), "ls"))).toEqual({ path: expectedPath });
+  }
+});
+
 it("does not mistake shell exec or discovery without invocation for spawn authority", async () => {
   const turn = await startTurn("Subagent terminal reply QA check: visible.", {
     model: "gpt-5.6-luna",
@@ -207,7 +237,7 @@ it("sends a private-source completion once through the catalog and never respawn
   expect(outputText(await turn.complete(call, catalogResult("message", { ok: true })))).toBe("");
 });
 
-it("keeps the private second-child completion silent with catalog-only tools", async () => {
+it("records the private second-child handoff with catalog-only tools", async () => {
   const turn = await startTurn("Subagent terminal reply QA check: private.", {
     model: "gpt-5.6-luna",
   });
@@ -223,7 +253,7 @@ it("keeps the private second-child completion silent with catalog-only tools", a
   });
   expect(
     outputText(await turn.complete(call, catalogResult("sessions_spawn", { status: "accepted" }))),
-  ).toBe("NO_REPLY");
+  ).toBe("Second worker started.");
 });
 
 it("drives yielded-parent fallback through catalog spawn and namespaced yield", async () => {
@@ -417,4 +447,148 @@ it("binds crossed same-case catalog responses to their matching workers", async 
   await settleParent(1);
   expect(outputText(await (await expectOk(first)).json())).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   expect(settled).toEqual([2, 1]);
+});
+
+it("routes Anthropic hidden tools through Code Mode and preserves scenario evidence", async () => {
+  const server = await startMockServer();
+  const prompt =
+    "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
+  const tools = ANTHROPIC_GUEST_CODE_MODE_TOOLS;
+  const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
+  const emittedToolUseIds: string[] = [];
+
+  const request = async (expectedToolResultId?: string) => {
+    const body = await expectAnthropicMessagesJson(server, { tools, messages });
+    const debug = await readDebugRequest(server);
+    if (expectedToolResultId) {
+      expect(debug.toolOutputCallId).toBe(expectedToolResultId);
+    } else {
+      expect(debug).not.toHaveProperty("toolOutputCallId");
+    }
+    return body;
+  };
+  const readToolUse = (body: AnthropicResponse) => {
+    expect(body.stop_reason).toBe("tool_use");
+    const toolUse = body.content.find((block) => block.type === "tool_use");
+    if (!toolUse || typeof toolUse.id !== "string" || typeof toolUse.name !== "string") {
+      throw new Error("Expected Anthropic tool_use block");
+    }
+    expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
+    expect(toolUse.id.length).toBeLessThanOrEqual(64);
+    emittedToolUseIds.push(toolUse.id);
+    return toolUse;
+  };
+  const appendToolResult = (toolUse: Record<string, unknown>, result: Record<string, unknown>) => {
+    messages.push(
+      { role: "assistant", content: [toolUse] },
+      makeAnthropicToolResult(toolUse.id, JSON.stringify(result)),
+    );
+  };
+  const expectPlan = async (
+    name: string,
+    args: Record<string, unknown>,
+    callId: string,
+    wireName = "exec",
+  ) => {
+    const debug = await readDebugRequest(server);
+    expect(debug.plannedToolCallId).toBe(callId);
+    expect(debug.plannedToolName).toBe(name);
+    expect(debug.plannedWireToolName).toBe(wireName);
+    expect(debug.plannedToolArgs).toEqual(args);
+  };
+
+  const readAgent = readToolUse(await request());
+  expect(readAgent.name).toBe("exec");
+  const readAgentArgs = requireRecord(readAgent.input, "exec input");
+  validateToolArguments(guestCodeModeExecTool, {
+    type: "toolCall",
+    id: String(readAgent.id),
+    name: "exec",
+    arguments: readAgentArgs,
+  });
+  expect(readAgentArgs).toEqual({ title: expect.any(String), code: expect.any(String) });
+  const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
+  expect(readAgentCode).toContain("await catalog.search(targetName)");
+  expect(readAgentCode).toContain("await target(targetArgs)");
+  expect(readAgentCode).not.toContain("ALL_TOOLS");
+  expect(readAgentCode).toContain("value.content.slice(0, 2048)");
+  await expectPlan("read", { path: "AGENT.md" }, String(readAgent.id));
+
+  appendToolResult(readAgent, { status: "waiting", runId: "qa-code-mode-read-agent" });
+  const waitForAgent = readToolUse(await request(String(readAgent.id)));
+  expect(waitForAgent.name).toBe("wait");
+  const waitDebug = requireRecord(
+    await fetch(`${server.baseUrl}/debug/last-request`).then((response) => response.json()),
+    "wait debug request",
+  );
+  expect(waitDebug.plannedToolCallId).toBe(waitForAgent.id);
+  expect(waitDebug.plannedToolName).toBe("wait");
+  expect(waitDebug).not.toHaveProperty("plannedWireToolName");
+  expect(waitDebug.plannedToolArgs).toEqual({ runId: "qa-code-mode-read-agent" });
+
+  appendToolResult(waitForAgent, {
+    status: "completed",
+    value: { kind: "text", content: "# Repo contract\nDo not stop after planning." },
+  });
+  const readSoul = readToolUse(await request(String(waitForAgent.id)));
+  expect(readSoul.name).toBe("exec");
+  await expectPlan("read", { path: "SOUL.md" }, String(readSoul.id));
+
+  appendToolResult(readSoul, {
+    status: "completed",
+    value: { kind: "text", content: "# Execution style\nStay action-first." },
+  });
+  const readInput = readToolUse(await request(String(readSoul.id)));
+  expect(readInput.name).toBe("exec");
+  await expectPlan("read", { path: "FOLLOWTHROUGH_INPUT.md" }, String(readInput.id));
+
+  appendToolResult(readInput, {
+    status: "completed",
+    value: {
+      kind: "text",
+      content:
+        "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt",
+    },
+  });
+  const writeSummary = readToolUse(await request(String(readInput.id)));
+  expect(writeSummary.name).toBe("exec");
+  await expectPlan(
+    "write",
+    {
+      path: "repo-contract-summary.txt",
+      content:
+        "Mission: prove you followed the repo contract.\nEvidence: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md\nStatus: complete",
+    },
+    String(writeSummary.id),
+  );
+
+  const pendingWriteMessageCount = messages.length;
+  for (const waitForWrite of [false, true]) {
+    messages.splice(pendingWriteMessageCount);
+    let completedWrite = writeSummary;
+    if (waitForWrite) {
+      appendToolResult(writeSummary, { status: "waiting", runId: "qa-code-mode-write" });
+      completedWrite = readToolUse(await request(String(writeSummary.id)));
+      expect(completedWrite.name).toBe("wait");
+    }
+    appendToolResult(completedWrite, {
+      status: "completed",
+      value: waitForWrite
+        ? { changed: false }
+        : {
+            changed: true,
+            created: true,
+            diff: "+1 Failed step: publishing was not attempted.",
+            patch:
+              "--- repo-contract-summary.txt\n+++ repo-contract-summary.txt\n@@ -0,0 +1,1 @@\n+Failed step: publishing was not attempted.\n",
+          },
+    });
+    const final = await request(String(completedWrite.id));
+    expect(final.stop_reason).toBe("end_turn");
+    const text = final.content.find((block) => block.type === "text")?.text;
+    expect(text).toBe(
+      "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md\nWrote: repo-contract-summary.txt\nStatus: complete",
+    );
+  }
+  expect(new Set(emittedToolUseIds).size).toBe(emittedToolUseIds.length);
 });

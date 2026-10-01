@@ -25,7 +25,6 @@ const {
   generateBearerTokenFromIam,
   getCachedIamToken,
   MANTLE_IAM_TOKEN_MARKER,
-  mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
@@ -826,58 +825,5 @@ describe("bedrock mantle discovery", () => {
       `https://bedrock-mantle.${expectedRegion}.api.aws/v1/models`,
       expect.any(Object),
     );
-  });
-
-  const implicitProvider = {
-    baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
-    api: "openai-completions",
-    auth: "api-key",
-    apiKey: "env:AWS_BEARER_TOKEN_BEDROCK",
-    models: [
-      {
-        id: "openai.gpt-oss-120b",
-        name: "GPT-OSS 120B",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32000,
-        maxTokens: 4096,
-      },
-    ],
-  } satisfies Parameters<typeof mergeImplicitMantleProvider>[0]["implicit"];
-
-  it("merges implicit models when existing provider has empty models", () => {
-    const result = mergeImplicitMantleProvider({
-      existing: {
-        baseUrl: "https://custom.example.com/v1",
-        models: [],
-      },
-      implicit: implicitProvider,
-    });
-
-    expect(result.baseUrl).toBe("https://custom.example.com/v1");
-    expect(result.models?.map((m) => m.id)).toEqual(["openai.gpt-oss-120b"]);
-  });
-
-  it("preserves existing models over implicit ones", () => {
-    const result = mergeImplicitMantleProvider({
-      existing: {
-        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
-        models: [
-          {
-            id: "custom-model",
-            name: "My Custom Model",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 64000,
-            maxTokens: 8192,
-          },
-        ],
-      },
-      implicit: implicitProvider,
-    });
-
-    expect(result.models?.map((m) => m.id)).toEqual(["custom-model"]);
   });
 });

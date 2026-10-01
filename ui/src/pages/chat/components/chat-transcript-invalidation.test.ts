@@ -19,8 +19,8 @@ import {
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import * as chatMessage from "./chat-message-group.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import * as chatMessage from "./chat-message.ts";
 import {
   renderTranscriptSearch,
   resetTranscriptSession,

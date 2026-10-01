@@ -6,20 +6,12 @@ import {
   resolveHookManifestMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
-import type { OpenClawHookMetadata } from "./types.js";
 
 function requireString(value: string | undefined, label: string): string {
   if (typeof value !== "string") {
     throw new Error(`expected ${label}`);
   }
   return value;
-}
-
-function requireOpenClawMetadata(metadata: OpenClawHookMetadata | undefined): OpenClawHookMetadata {
-  if (!metadata) {
-    throw new Error("expected openclaw metadata");
-  }
-  return metadata;
 }
 
 describe("parseHookFrontmatter", () => {
@@ -55,7 +47,7 @@ describe("resolveHookManifestMetadata", () => {
     };
 
     const result = resolveHookManifestMetadata(frontmatter);
-    const openclaw = requireOpenClawMetadata(result);
+    const openclaw = expectDefined(result, "hook metadata");
     expect(openclaw.emoji).toBe("🔥");
     expect(openclaw.events).toEqual(["command:new", "command:reset"]);
     expect(openclaw.requires?.config).toEqual(["workspace.dir"]);
@@ -135,7 +127,7 @@ metadata:
       '"command:reset"',
     );
 
-    const openclaw = requireOpenClawMetadata(resolveHookManifestMetadata(frontmatter));
+    const openclaw = expectDefined(resolveHookManifestMetadata(frontmatter), "hook metadata");
     expect(openclaw.emoji).toBe("💾");
     expect(openclaw.events).toEqual(["command:new", "command:reset", "session:auto-reset"]);
     expect(openclaw.requires?.config).toEqual(["workspace.dir"]);

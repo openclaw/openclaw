@@ -154,6 +154,13 @@ function logResourceCloseFailure(pathname: string, error: unknown): void {
   agentDbLog.warn("Agent database resource close failed", { path: pathname, error });
 }
 
+function unregisterUnusedAgentDatabaseExitClose(): void {
+  if (cache.databases.size === 0 && cache.retainedCloses.size === 0) {
+    cache.unregisterExitClose?.();
+    cache.unregisterExitClose = null;
+  }
+}
+
 export function resolveAgentDatabaseIntegrityGateReason(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   proof: {
@@ -314,10 +321,7 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
         closeCachedOpenClawAgentDatabase(database, { eviction: true });
         cache.databases.delete(database.path);
         cache.failures.delete(database.path);
-        if (cache.databases.size === 0 && cache.retainedCloses.size === 0) {
-          cache.unregisterExitClose?.();
-          cache.unregisterExitClose = null;
-        }
+        unregisterUnusedAgentDatabaseExitClose();
       } catch (error) {
         // Keep native/lease custody on the original entry until cleanup succeeds.
         logResourceCloseFailure(database.path, error);
@@ -430,10 +434,7 @@ export function closeOpenClawAgentDatabaseByPath(
   if (incognito) {
     cache.generation += 1;
   }
-  if (cache.databases.size === 0 && cache.retainedCloses.size === 0) {
-    cache.unregisterExitClose?.();
-    cache.unregisterExitClose = null;
-  }
+  unregisterUnusedAgentDatabaseExitClose();
   return true;
 }
 
@@ -492,10 +493,7 @@ export function settleOpenClawAgentDatabaseWorkerClose(
       if (incognito) {
         cache.generation += 1;
       }
-      if (cache.databases.size === 0 && cache.retainedCloses.size === 0) {
-        cache.unregisterExitClose?.();
-        cache.unregisterExitClose = null;
-      }
+      unregisterUnusedAgentDatabaseExitClose();
     }
   }
 

@@ -244,6 +244,20 @@ export async function runWriteConfigHealth(
                 );
               }
             }
+            const { repairLegacyCronOwnersBeforeConfigWrite } =
+              await import("../commands/doctor/cron/legacy-owner.js");
+            const cronOwnerChanges = await repairLegacyCronOwnersBeforeConfigWrite({
+              snapshot,
+              nextConfig,
+              env: ctx.env ?? process.env,
+              assertCurrent: () => {
+                authority?.assertCurrent();
+                assertOwned?.();
+              },
+            });
+            for (const change of cronOwnerChanges) {
+              ctx.runtime.log(change);
+            }
             return { nextConfig };
           },
           afterWrite: { mode: "auto" },

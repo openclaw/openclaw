@@ -1,5 +1,3 @@
-// Gateway OpenAI-compatible chat completions endpoint.
-// Translates OpenAI chat requests to OpenClaw agent runs and SSE/JSON responses.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
@@ -15,7 +13,6 @@ import {
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { z } from "zod";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
@@ -59,10 +56,7 @@ import { rejectDisabledGatewayUpload } from "./http-upload-policy.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeOpenAiCompatibleHttpSession,
-  isAgentSelectionRequiredError,
-  isGatewaySessionKeyOverrideError,
-  isInvalidGatewayModelError,
-  isUnknownGatewayAgentError,
+  isGatewayRequestContextError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveSharedSecretHttpOperatorScopes,
@@ -70,13 +64,13 @@ import {
 } from "./http-utils.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import {
-  resolveOpenAiCompatError,
   validateOpenAiSamplingParams,
   resolveResponseFormat,
   resolveStopSequences,
 } from "./openai-compat-errors.js";
 import {
   readOpenAiHttpRunTerminal,
+  resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
   type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
@@ -86,10 +80,8 @@ import {
 } from "./openai-compatible-input-limits.js";
 import {
   applyToolChoice,
-  isToolChoiceConstraintSatisfied,
   resolveChatToolChoice,
-  resolveUnsatisfiedToolChoiceMessage,
-  type ToolChoiceConstraint,
+  resolveToolChoiceConstraintError,
 } from "./openai-tool-choice.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
@@ -621,12 +613,7 @@ export async function handleOpenAiHttpRequest(
       useMessageChannelHeader: true,
     }));
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isUnknownGatewayAgentError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isGatewaySessionKeyOverrideError(err)
-    ) {
+    if (isGatewayRequestContextError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }
@@ -666,18 +653,10 @@ export async function handleOpenAiHttpRequest(
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext);
-  let resolvedClientTools: ClientToolDefinition[];
-  let toolChoicePrompt: string | undefined;
-  let toolChoiceConstraint: ToolChoiceConstraint | undefined;
+  let toolChoice: ReturnType<typeof applyToolChoice>;
   try {
     const parsedClientTools = extractClientToolsFromChatRequest(payload.tools);
-    const toolChoiceResult = applyToolChoice(
-      parsedClientTools,
-      resolveChatToolChoice(payload.tool_choice),
-    );
-    resolvedClientTools = toolChoiceResult.tools;
-    toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
-    toolChoiceConstraint = toolChoiceResult.constraint;
+    toolChoice = applyToolChoice(parsedClientTools, resolveChatToolChoice(payload.tool_choice));
   } catch (err) {
     sendInvalidRequest(res, `Invalid tools/tool_choice: ${formatErrorMessage(err).trim()}`);
     return true;
@@ -724,7 +703,7 @@ export async function handleOpenAiHttpRequest(
   const runId = `chatcmpl_${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   const streamIdentity = { runId, model, created };
-  const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoicePrompt]
+  const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoice.extraSystemPrompt]
     .filter((part): part is string => Boolean(part))
     .join("\n\n");
   const runAgentCommand = () =>
@@ -732,7 +711,7 @@ export async function handleOpenAiHttpRequest(
       message: prompt.message,
       extraSystemPrompt: mergedExtraSystemPrompt,
       images,
-      clientTools: resolvedClientTools,
+      clientTools: toolChoice.tools,
       modelOverride,
       sessionKey,
       runId,
@@ -761,19 +740,14 @@ export async function handleOpenAiHttpRequest(
       }
       const usage = resolveChatCompletionUsage(result);
 
-      // `tool_choice` is an HTTP client-tool contract. The provider may still
-      // ignore the prompt, so enforce after the run using structured pending
-      // client tool calls instead of accepting prose that only says it called.
-      if (
-        toolChoiceConstraint &&
-        !isToolChoiceConstraintSatisfied({
-          constraint: toolChoiceConstraint,
-          pendingToolCalls,
-        })
-      ) {
+      const toolChoiceError = resolveToolChoiceConstraintError(
+        toolChoice.constraint,
+        pendingToolCalls,
+      );
+      if (toolChoiceError) {
         sendJson(res, 502, {
           error: {
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+            message: toolChoiceError,
             type: "api_error",
           },
         });
@@ -815,18 +789,8 @@ export async function handleOpenAiHttpRequest(
         return true;
       }
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        sendInvalidRequest(res, "invalid tool configuration");
-        return true;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        sendJson(res, mapped.status, { error: mapped.error });
-        return true;
-      }
-      sendJson(res, 500, {
-        error: { message: "internal error", type: "api_error" },
-      });
+      const mapped = resolveOpenAiCompatibleAgentError(err);
+      sendJson(res, mapped.status, { error: mapped.error });
     }
     return true;
   }
@@ -932,7 +896,7 @@ export async function handleOpenAiHttpRequest(
       const merged = mergeAssistantText(previous, input, "append-only");
       assistantText = merged;
       // Hold prose until the run proves the requested client-tool call exists.
-      if (toolChoiceConstraint) {
+      if (toolChoice.constraint) {
         return;
       }
       // SSE cannot retract bytes already delivered, even for an item correction.
@@ -1017,18 +981,13 @@ export async function handleOpenAiHttpRequest(
 
       finalUsage = resolveChatCompletionUsage(result);
 
-      // Streaming enforces the same post-run client-tool contract as the
-      // non-streaming path; buffered assistant prose is only flushed when the
-      // matching structured call is present.
-      if (
-        toolChoiceConstraint &&
-        !isToolChoiceConstraintSatisfied({
-          constraint: toolChoiceConstraint,
-          pendingToolCalls,
-        })
-      ) {
+      const toolChoiceError = resolveToolChoiceConstraintError(
+        toolChoice.constraint,
+        pendingToolCalls,
+      );
+      if (toolChoiceError) {
         finishStreamWithError({
-          message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+          message: toolChoiceError,
           type: "api_error",
         });
         return;
@@ -1046,23 +1005,7 @@ export async function handleOpenAiHttpRequest(
       }
       terminalLifecyclePhase = "error";
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        finishStreamWithError({
-          message: "invalid tool configuration",
-          type: "invalid_request_error",
-        });
-        return;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        finishStreamWithError(mapped.error);
-        return;
-      }
-      if (terminalStreamError) {
-        finishStreamWithError(terminalStreamError);
-        return;
-      }
-      finishStreamWithError({ message: "internal error", type: "api_error" });
+      finishStreamWithError(resolveOpenAiCompatibleAgentError(err, terminalStreamError).error);
     } finally {
       releaseAgentRootWork?.();
       // The provider owns observed terminals; a second end would erase a failed session.

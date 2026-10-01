@@ -54,7 +54,7 @@ function isSlackCustomIdentityRejectedError(err: unknown): boolean {
   return code === "invalid_arguments" || code === "invalid_arg_name";
 }
 
-function hasCustomIdentity(identity?: SlackPostMessageIdentity): boolean {
+export function hasSlackMessageIdentity(identity?: SlackPostMessageIdentity): boolean {
   return Boolean(identity?.username || identity?.iconUrl || identity?.iconEmoji);
 }
 
@@ -71,7 +71,11 @@ export async function postSlackMessageWithIdentityFallback<T>(params: {
     }
     return await post({ ...basePayload, ...buildSlackMessageIdentityPayload(identity) }, identity);
   } catch (err) {
-    if (!identity || !hasCustomIdentity(identity) || !isSlackCustomIdentityRejectedError(err)) {
+    if (
+      !identity ||
+      !hasSlackMessageIdentity(identity) ||
+      !isSlackCustomIdentityRejectedError(err)
+    ) {
       throw err;
     }
     if (

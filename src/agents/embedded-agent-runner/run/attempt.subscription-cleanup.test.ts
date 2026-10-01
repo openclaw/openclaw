@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({ warn: vi.fn() }));
@@ -18,13 +19,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("waitForSessionsYieldAbortSettle", () => {
+describe("waitForEmbeddedAbortSettle for sessions_yield", () => {
   it("logs rejected settlement and clears its pending timer", async () => {
-    const { waitForSessionsYieldAbortSettle } = await import("./attempt-sessions-yield.js");
-    await waitForSessionsYieldAbortSettle({
-      settlePromise: Promise.reject(new Error("settle failed")),
+    const { waitForEmbeddedAbortSettle } = await import("./attempt-subscription-cleanup.js");
+    await waitForEmbeddedAbortSettle({
+      promise: Promise.reject(new Error("settle failed")),
       runId: "run-1",
       sessionId: "session-1",
+      reason: "sessions_yield",
     });
 
     expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
@@ -34,11 +36,12 @@ describe("waitForSessionsYieldAbortSettle", () => {
   });
 
   it("skips missing settlement without scheduling a timer", async () => {
-    const { waitForSessionsYieldAbortSettle } = await import("./attempt-sessions-yield.js");
-    await waitForSessionsYieldAbortSettle({
-      settlePromise: null,
+    const { waitForEmbeddedAbortSettle } = await import("./attempt-subscription-cleanup.js");
+    await waitForEmbeddedAbortSettle({
+      promise: null,
       runId: "run-1",
       sessionId: "session-1",
+      reason: "sessions_yield",
     });
 
     expect(vi.getTimerCount()).toBe(0);

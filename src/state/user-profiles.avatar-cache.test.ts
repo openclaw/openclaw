@@ -8,8 +8,9 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { retainUserProfileCatalog } from "./user-profile-list.js";
+import { setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { createProfileAvatarReader } from "./user-profiles-avatar.js";
-import { ensureProfileForEmail, setAvatar, setDisplayName } from "./user-profiles.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 const paths: string[] = [];
 const releases: (() => void)[] = [];

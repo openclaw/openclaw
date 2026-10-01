@@ -1,8 +1,4 @@
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
-/**
- * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
- * checks, shared-client leasing, and isolated-client shutdown handling.
- */
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
 import type {

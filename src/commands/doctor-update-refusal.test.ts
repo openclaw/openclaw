@@ -383,10 +383,10 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
   it("retains npm schema recovery and omits direct Doctor recovery for an update child", async () => {
     await withFixture("npm", async ({ root, schemas, state }) => {
       const expectedSchema =
-        "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2: this updater reopens the ledger with old code after migration, and version publication could not be deferred safely. " +
+        "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2: this updater reopens the ledger with old code after migration, and version publication could not be deferred safely.\n" +
         `agent database ${state.path("agent.sqlite")}: on-disk schema 1, this build's schema 2. ` +
-        "The blocked schema change was not applied. Let the updater restore the previous package, then update manually: " +
-        `openclaw gateway stop && npm install -g openclaw@${VERSION} --allow-scripts=openclaw && openclaw doctor --fix && openclaw gateway start. ` +
+        "The blocked schema change was not applied.\nLet the updater restore the previous package and exit. Then use an independent shell with the original service account, package prefix, profile, and state/config overrides.\n" +
+        `Manual update: openclaw gateway stop && npm install -g openclaw@${VERSION} --allow-scripts=openclaw && openclaw doctor --fix && openclaw gateway start.\n` +
         `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${VERSION}; Bun: bun add -g --trust openclaw@${VERSION}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`;
       expect(
         (await refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime }))).message,

@@ -5,7 +5,7 @@ import WebKit
 @testable import OpenClaw
 
 /// WebKit fixtures are compiled locally and executed only in the disposable macOS runner.
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct NativeConversationBridgeTests {
     @Test func `Dashboard handoff removes exactly the document mount`() throws {
@@ -27,7 +27,7 @@ struct NativeConversationBridgeTests {
         defer { document.webView.stopLoading() }
         for path in ["/control/chat/main", "/outside"] {
             document.load(server.url(path))
-            try await Self.waitUntil {
+            try await TestWait.state("conversation page \(path)") {
                 let current = try? await document.webView.evaluateJavaScript(
                     "window.fixtureChrome ? location.pathname : null")
                 return current as? String == path
@@ -51,7 +51,7 @@ struct NativeConversationBridgeTests {
         handler.owner = bridge
         defer { bridge.close() }
         bridge.load(server.url("/control/chat/main"))
-        try await Self.waitUntil { bridge.currentDocumentId != nil }
+        try await TestWait.observed("current conversation document") { bridge.currentDocumentId != nil }
         let oldID = try #require(bridge.currentDocumentId)
         let accepted = try await Self.post("{type:'state', ...fixtureState(1, 'First')}", in: document.webView)
         #expect(accepted["ok"] as? Bool == true)
@@ -79,7 +79,9 @@ struct NativeConversationBridgeTests {
         #expect(bridge.state?.title == "First")
 
         bridge.load(server.url("/control/chat/main"))
-        try await Self.waitUntil { bridge.currentDocumentId != nil && bridge.currentDocumentId != oldID }
+        try await TestWait.observed("replacement conversation document") {
+            bridge.currentDocumentId != nil && bridge.currentDocumentId != oldID
+        }
         let oldLiteral = try String(decoding: JSONEncoder().encode(oldID), as: UTF8.self)
         let retired = try await Self.post(
             "{type:'state', ...fixtureState(99, 'Retired'), documentId:\(oldLiteral)}", in: document.webView)
@@ -91,10 +93,15 @@ struct NativeConversationBridgeTests {
         #expect(bridge.state == nil)
 
         var stopped = false
-        bridge.close { stopped = true }
+        let closed = AsyncTestGate()
+        bridge.close {
+            stopped = true
+            closed.open()
+        }
         // Initiating navigation is not proof that the old page stopped executing.
         #expect(!stopped)
-        try await Self.waitUntil { stopped }
+        await closed.wait()
+        try Task.checkCancellation()
         #expect(document.webView.url?.absoluteString == "about:blank")
     }
 
@@ -108,12 +115,12 @@ struct NativeConversationBridgeTests {
         handler.owner = bridge
         defer { bridge.close() }
         bridge.load(server.url("/control/chat/main"))
-        try await Self.waitUntil { bridge.currentDocumentId != nil }
+        try await TestWait.observed("current conversation document") { bridge.currentDocumentId != nil }
         let id = bridge.currentDocumentId
         let other = Self.document(server: server, handler: handler)
         defer { other.webView.stopLoading() }
         other.load(server.url("/control/chat/main"))
-        try await Self.waitUntil {
+        try await TestWait.state("other web view refusal") {
             await (try? other.webView.evaluateJavaScript("window.fixtureReadyReply?.ok === false")) as? Bool == true
         }
         #expect(bridge.currentDocumentId == id)
@@ -150,14 +157,6 @@ struct NativeConversationBridgeTests {
             in: nil,
             contentWorld: .page)
         return try #require(result as? [String: Any])
-    }
-
-    private static func waitUntil(_ condition: () async throws -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while try await !condition() {
-            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
-            try await Task.sleep(for: .milliseconds(10))
-        }
     }
 
     private static let html = """

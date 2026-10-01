@@ -427,6 +427,8 @@ describe("session delivery queue runtime", () => {
       let stopping: Promise<void> | undefined;
       const wakes: Promise<void>[] = [];
       const stop = startRuntime({ deliver, log: logger });
+      const sibling = vi.fn();
+      time.scheduler.schedule({ id: "unrelated-owner", delayMs: 1, run: sibling });
 
       try {
         await scheduleSessionDelivery(id, queueContext);
@@ -446,6 +448,8 @@ describe("session delivery queue runtime", () => {
         expect(stopped).toBe(false);
         await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(false);
 
+        await time.advanceBy(1);
+        expect(sibling).toHaveBeenCalledOnce();
         delivery.resolve();
         await stopping;
         expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
@@ -791,7 +795,7 @@ describe("session delivery queue runtime", () => {
     });
   });
 
-  it("retries a transient startup pending-entry scan failure", async () => {
+  it("keeps the earliest retry after repeated startup pending-entry scan failures", async () => {
     await withRuntime(async (startRuntime, queueContext, time) => {
       await enqueueSessionDelivery(
         {
@@ -806,6 +810,7 @@ describe("session delivery queue runtime", () => {
       const listPending = vi
         .fn<typeof loadPendingSessionDeliveries>()
         .mockRejectedValueOnce(new Error("database busy"))
+        .mockRejectedValueOnce(new Error("database still busy"))
         .mockImplementation(() => loadPendingSessionDeliveries(queueContext));
       const stop = startRuntime({ deliver, log: logger, listPending });
 
@@ -813,10 +818,12 @@ describe("session delivery queue runtime", () => {
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("failed to scan"));
       expect(deliver).not.toHaveBeenCalled();
 
-      await time.advanceBy(999);
+      await time.advanceBy(500);
+      await schedulePendingSessionDeliveries();
+      await time.advanceBy(499);
       expect(deliver).not.toHaveBeenCalled();
       await time.advanceBy(1);
-      await expect(listPending.mock.results[1]?.value).resolves.toHaveLength(1);
+      await expect(listPending.mock.results[2]?.value).resolves.toHaveLength(1);
       await time.advanceBy(0);
       await stop();
       expect(deliver).toHaveBeenCalledTimes(1);

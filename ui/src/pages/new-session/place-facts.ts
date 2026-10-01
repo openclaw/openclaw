@@ -47,6 +47,7 @@ export function environmentMenuFacts(
   options: { connected?: boolean; nowMs?: number } = {},
 ): string[] {
   const updateIssue = environment?.issues?.find((issue) => issue.code === "update-required");
+  const hostIssue = environment?.issues?.find((issue) => issue.code === "worker-host-unavailable");
   const lifecycle = environmentLifecycleFact({
     environment,
     connected: options.connected ?? true,
@@ -57,7 +58,7 @@ export function environmentMenuFacts(
         updateCommand: updateIssue.updateCommand,
         restartCommand: updateIssue.headlessReconnectCommand,
       })
-    : lifecycle;
+    : (hostIssue?.message ?? lifecycle);
   const facts = priorityFact ? [priorityFact] : [];
   if (environment?.platform) {
     facts.push(prettifyPlatform(environment.platform));

@@ -61,6 +61,8 @@ type AgentRuntimePluginRegistryParams = {
   basePluginIds?: readonly string[];
   /** Exact registry from the supplied lifecycle metadata generation. */
   reusableRegistry?: PluginRegistry;
+  /** Live Gateway registry whose unchanged instances this load borrows instead of loading. */
+  borrowRegistry?: PluginRegistry;
   selections?: readonly AgentHarnessPluginSelection[];
   /** Config-wide harness runtimes carried by a prepared lifecycle batch. */
   configuredHarnessRuntimes?: readonly string[];
@@ -142,6 +144,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
     onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
     channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
+    borrowRegistry: params.borrowRegistry,
   };
 }
 

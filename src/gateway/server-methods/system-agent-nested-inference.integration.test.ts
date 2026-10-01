@@ -5,7 +5,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchestrator.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
@@ -242,9 +246,9 @@ async function createConversation() {
 }
 
 describe("system-agent nested inference through real Gateway admission", () => {
-  it.each(["chat", "greeting"] as const)(
+  it.for(["chat", "greeting"] as const)(
     "completes %s while its parent occupies the only main slot",
-    async (entry) => {
+    async (entry, { signal }) => {
       const conversation = await createConversation();
       expect(getCommandLaneSnapshot(CommandLane.Main).maxConcurrent).toBe(1);
       const releaseParent = createDeferred();
@@ -260,10 +264,14 @@ describe("system-agent nested inference through real Gateway admission", () => {
         throw new Error("gateway handler did not start");
       }
       try {
-        const observation = await withTestTimeout(
-          conversation.observed.promise,
-          2_000,
-          "fixture did not reach the real runner admission boundary",
+        // The parent holds the process-wide main lane until finally; bind the wait to the test.
+        const observation = await withinTest(
+          awaitGateBeforeSettlement(
+            conversation.observed.promise,
+            handler,
+            "fixture did not reach the real runner admission boundary",
+          ),
+          signal,
         );
         await new Promise<void>((resolve) => {
           setImmediate(resolve);

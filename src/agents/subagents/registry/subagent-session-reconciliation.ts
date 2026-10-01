@@ -1,8 +1,3 @@
-/**
- * Subagent session-store reconciliation.
- *
- * Infers child completion from persisted session entries when registry updates arrive late.
- */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
@@ -11,10 +6,12 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../../state/openclaw-state-db-readonly.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -32,7 +29,6 @@ export type SubagentRunOrphanReason =
   | "missing-session-id"
   | "stale-unended-run";
 
-/** Completion inferred from the child session store. */
 export type SubagentSessionCompletion = {
   startedAt?: number;
   endedAt: number;
@@ -86,7 +82,6 @@ export function loadSubagentSessionEntry(params: {
   });
 }
 
-/** Resolves whether a registry row is orphaned from its child session entry. */
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   includeStaleUnended?: boolean;
@@ -142,7 +137,6 @@ export function resolveSubagentRunOrphanReason(params: {
   }
 }
 
-/** Convert persisted session status into a subagent completion outcome. */
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,
   fallbackEndedAt: number,
@@ -185,36 +179,55 @@ export function resolveCompletionFromSessionEntry(
   };
 }
 
-/** Resolve child completion by reading its persisted session entry. */
-export function resolveSubagentSessionCompletion(params: {
+export async function resolveSubagentSessionCompletion(params: {
   childSessionKey: string;
+  childAgentId?: string;
   fallbackEndedAt: number;
   notBeforeMs?: number;
   cfg?: OpenClawConfig;
-}): SubagentSessionCompletion | null {
-  return resolveCompletionFromSessionEntry(
-    loadSubagentSessionEntry({
-      childSessionKey: params.childSessionKey,
-      cfg: params.cfg,
+  assertCurrent?: () => void;
+}): Promise<SubagentSessionCompletion | null> {
+  return withSubagentSessionEntry(params, (entry) =>
+    resolveCompletionFromSessionEntry(entry, params.fallbackEndedAt, {
+      notBeforeMs: params.notBeforeMs,
     }),
-    params.fallbackEndedAt,
-    { notBeforeMs: params.notBeforeMs },
   );
 }
 
-/** Resolve a fresh child session start time for lifecycle reconciliation. */
-export function resolveSubagentSessionStartedAt(params: {
+async function withSubagentSessionEntry<T>(
+  params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    cfg?: OpenClawConfig;
+    assertCurrent?: () => void;
+  },
+  consume: (entry: SessionEntry | undefined) => T,
+): Promise<T> {
+  const cfg = params.cfg ?? getRuntimeConfig();
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
+  return withSessionEntryReadOnlyInWorker(
+    { agentId, storePath, sessionKey: params.childSessionKey },
+    () => params.assertCurrent?.(),
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return consume(read.value);
+    },
+  );
+}
+
+export async function resolveSubagentSessionStartedAt(params: {
   childSessionKey: string;
   notBeforeMs?: number;
   cfg?: OpenClawConfig;
-}): number | undefined {
-  const sessionEntry = loadSubagentSessionEntry({
-    childSessionKey: params.childSessionKey,
-    cfg: params.cfg,
-  });
-  return isFreshForRun(sessionEntry, params.notBeforeMs)
-    ? freshSessionStartedAt(sessionEntry, params.notBeforeMs)
-    : undefined;
+  assertCurrent?: () => void;
+}): Promise<number | undefined> {
+  return withSubagentSessionEntry(params, (entry) =>
+    isFreshForRun(entry, params.notBeforeMs)
+      ? freshSessionStartedAt(entry, params.notBeforeMs)
+      : undefined,
+  );
 }
 
 /** Startup may only settle session-only rows; any run/task generation retains ownership. */

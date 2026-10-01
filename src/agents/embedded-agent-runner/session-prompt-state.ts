@@ -43,14 +43,6 @@ export function createToolResultPromptProjectionState(): ToolResultPromptProject
   };
 }
 
-function createSessionPromptState(): EmbeddedSessionPromptState {
-  return {
-    activeProjectKeys: [],
-    toolResults: createToolResultPromptProjectionState(),
-    sentUserTurnIds: new Set<string>(),
-  };
-}
-
 export function cloneToolResultPromptProjectionState(
   state: ToolResultPromptProjectionState,
 ): ToolResultPromptProjectionState {
@@ -129,7 +121,11 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
     sessionPromptStates.set(sessionId, existing);
     return existing;
   }
-  const created = createSessionPromptState();
+  const created: EmbeddedSessionPromptState = {
+    activeProjectKeys: [],
+    toolResults: createToolResultPromptProjectionState(),
+    sentUserTurnIds: new Set(),
+  };
   sessionPromptStates.set(sessionId, created);
   pruneMapToMaxSize(sessionPromptStates, MAX_SESSION_PROMPT_STATES);
   return created;
@@ -175,7 +171,6 @@ export function prepareEmbeddedSessionActiveProjectKeys(
       MAX_ACTIVE_PROJECT_KEYS,
     );
   }
-  // Consumers use set membership today; LRU order is retained for a possible future graduated boost.
   return [...state.activeProjectKeys];
 }
 

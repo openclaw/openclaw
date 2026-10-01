@@ -47,6 +47,12 @@ type WorkspaceRecoveryContext = {
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>;
   assertCurrent?: () => void;
 };
+function workspaceRecoveryConflict(entryPath: string): ConcurrentWorkspacePathError {
+  return new ConcurrentWorkspacePathError(
+    `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
+  );
+}
+
 async function requireGit(
   cwd: string,
   args: string[],
@@ -292,9 +298,7 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
         if (baseEntry && appliedEntry) {
           // A missing replacement path is ambiguous: Git may have removed the
           // old entry mid-apply, or the user may have deleted it afterward.
-          throw new ConcurrentWorkspacePathError(
-            `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-          );
+          throw workspaceRecoveryConflict(entryPath);
         }
         continue;
       }
@@ -324,9 +328,7 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
             params.isRetainedInput,
           )));
       if (!isJournalDirectory) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
     }
     const actualTree = await writeRawWorkspaceTree({
@@ -360,9 +362,7 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
   for (const entryPath of baseDirectoryPaths) {
     const node = await localWorkspaceNode(params.root, entryPath);
     if (node?.type !== "directory") {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-      );
+      throw workspaceRecoveryConflict(entryPath);
     }
   }
   const basePaths = new Set(baseEntries.map((entry) => entry.path));
@@ -393,9 +393,7 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       continue;
     }
     if (existing) {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entry.path}`,
-      );
+      throw workspaceRecoveryConflict(entry.path);
     }
   }
   for (const entryPath of appliedDirectoryPaths) {
@@ -414,9 +412,7 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
         ))
       )
     ) {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-      );
+      throw workspaceRecoveryConflict(entryPath);
     }
   }
 }
@@ -444,17 +440,13 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
           params.isRetainedInput,
         ))
       ) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
       continue;
     }
     if (!local) {
       if (baseDirectories.has(entryPath) && appliedDirectories.has(entryPath)) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
       continue;
     }
@@ -466,9 +458,7 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
     ) {
       continue;
     }
-    throw new ConcurrentWorkspacePathError(
-      `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-    );
+    throw workspaceRecoveryConflict(entryPath);
   }
 }
 

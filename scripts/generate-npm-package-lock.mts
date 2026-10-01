@@ -1158,22 +1158,22 @@ type OverrideViolation = {
   path: string;
 };
 
-// Maintainer-approved for the Bun-only npm plugin installer: pnpm overrides cannot
-// replace npm's bundled dependencies. Remove when npm 11.x ships refreshed bundles.
+// pnpm overrides cannot replace npm's bundled dependencies. Keep these exact
+// exceptions bound to the reviewed npm tarball and its bundled package markers.
 // Exact paths, versions, and bundle markers keep this exception out of other trees.
-const NPM_11_20_0_BUNDLED_EXCEPTIONS = new Map([
+const NPM_12_1_0_BUNDLED_EXCEPTIONS = new Map([
   ["node_modules/npm/node_modules/minimatch", "10.2.5"],
   ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
   ["node_modules/npm/node_modules/ip-address", "10.5.0"],
 ]);
 
 function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {
-  const expectedVersion = NPM_11_20_0_BUNDLED_EXCEPTIONS.get(lockPath);
+  const expectedVersion = NPM_12_1_0_BUNDLED_EXCEPTIONS.get(lockPath);
   const npm = recordAt(packages, "node_modules/npm");
   const dependency = recordAt(packages, lockPath);
   return (
     expectedVersion !== undefined &&
-    npm?.version === "11.20.0" &&
+    npm?.version === "12.1.0" &&
     (npm.name === undefined || npm.name === "npm") &&
     dependency?.inBundle === true &&
     dependency.version === expectedVersion &&
@@ -1691,13 +1691,13 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
       ),
     );
     let npmBundleTarball: Buffer | undefined;
-    if (recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version === "11.20.0") {
+    if (recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version === "12.1.0") {
       runNpm(
-        ["pack", "npm@11.20.0", "--ignore-scripts", "--pack-destination", tempDir],
+        ["pack", "npm@12.1.0", "--ignore-scripts", "--pack-destination", tempDir],
         tempDir,
         env,
       );
-      npmBundleTarball = readFileSync(path.join(tempDir, "npm-11.20.0.tgz"));
+      npmBundleTarball = readFileSync(path.join(tempDir, "npm-12.1.0.tgz"));
     }
     assertNpmLockMatchesPnpmLock(generated, localPackageArtifacts, npmBundleTarball);
     return `${JSON.stringify(generated, null, 2)}\n`;
@@ -1720,13 +1720,13 @@ function verifiedNpmBundlePackages(
   const npm = recordAt(packages, "node_modules/npm");
   const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
   if (
-    npm?.version !== "11.20.0" ||
+    npm?.version !== "12.1.0" ||
     (npm.name !== undefined && npm.name !== "npm") ||
     npm.integrity !== integrity ||
-    !pnpmIntegrities.get("npm@11.20.0")?.has(integrity)
+    !pnpmIntegrities.get("npm@12.1.0")?.has(integrity)
   ) {
     throw new Error(
-      "npm bundled dependency tarball does not match the pnpm-locked npm@11.20.0 integrity",
+      "npm bundled dependency tarball does not match the pnpm-locked npm@12.1.0 integrity",
     );
   }
   let parseError: Error | undefined;
@@ -1763,7 +1763,7 @@ function verifiedNpmBundlePackages(
     throw parseError;
   }
   const root = manifests.get("");
-  if (root?.name !== "npm" || root.version !== "11.20.0") {
+  if (root?.name !== "npm" || root.version !== "12.1.0") {
     throw new Error("npm bundled dependency tarball has an unexpected package identity");
   }
   return new Map(

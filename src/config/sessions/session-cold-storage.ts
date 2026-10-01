@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -10,6 +11,7 @@ import {
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
@@ -21,9 +23,14 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
+  createOpenClawAgentDatabasePathMatcher,
+  isIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
+import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawConfig } from "../types.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 import { runSqliteTranscriptArchiveWorkerOperation } from "./session-accessor.sqlite-archive.js";
@@ -35,6 +42,7 @@ import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
+  prepareSqliteTranscriptReadScope,
   resolveSqliteTranscriptReadScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -53,7 +61,9 @@ import type {
 } from "./session-cold-storage-worker.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { resolveSessionStoreTargets } from "./targets.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const operations = new KeyedAsyncQueue();
 const log = createSubsystemLogger("session-cold-storage");
@@ -387,7 +397,72 @@ export async function restoreSessionColdTranscript(
   preparation?: SessionColdReadPreparation,
 ): Promise<void> {
   assertCurrent?.();
-  const resolved = preparation?.target ?? resolveSqliteTranscriptReadScope(scope);
+  let resolved = preparation?.target;
+  if (
+    !resolved &&
+    (isIncognitoSessionKey(scope.sessionKey) ||
+      (scope.agentId &&
+        scope.storePath &&
+        isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
+          agentId: scope.agentId,
+          env: scope.env,
+        })))
+  ) {
+    resolved = resolveSqliteTranscriptReadScope(scope);
+  }
+  if (!resolved) {
+    const captured = {
+      ...scope,
+      ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
+      env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+    };
+    const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
+    const assertPreparedCurrent = () => {
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      assertCurrent?.();
+    };
+    const target = await prepareSqliteTranscriptReadScope(captured);
+    assertPreparedCurrent();
+    target.path = resolveOpenClawAgentSqlitePath(toDatabaseOptions(target));
+    resolved = target;
+    const options = toDatabaseOptions(target);
+    if (!isIncognitoOpenClawAgentSqlitePath(target.path, options)) {
+      // Synchronous inspection stays within the admission check above.
+      try {
+        statSync(target.path);
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        // First writers may create this store; there is no cold transcript to restore yet.
+        return;
+      }
+      const source = createOpenClawAgentDatabasePathMatcher();
+      source(target.path, target.path);
+      return await withSessionHistoryWorkerDatabase(options, async (owner) => {
+        const assertAllowed = () => {
+          assertPreparedCurrent();
+          owner.assertCurrent();
+          if (!source.isCurrent()) {
+            throw new Error(
+              "Session store changed while preparing its metadata. Retry the request.",
+            );
+          }
+        };
+        return await restoreSessionColdTranscript(captured, assertAllowed, {
+          target,
+          readMetadata: async () => {
+            const metadata = await owner.readColdMetadata({
+              sessionId: target.sessionId,
+              env: captured.env,
+            });
+            return metadata.archive;
+          },
+        });
+      });
+    }
+  }
   const options = toDatabaseOptions(resolved);
   const storePath = resolveOpenClawAgentSqlitePath(options);
   const key = `${storePath}\0${resolved.sessionId}`;
@@ -398,7 +473,7 @@ export async function restoreSessionColdTranscript(
     );
     return result.found ? result.value : undefined;
   };
-  // Write-side callers keep their original synchronous preflight and admission order.
+  // Incognito retains its process-held database; durable readers always supply preparation.
   const initial = preparation ? await preparation.readMetadata("initial") : readNativeMetadata();
   if (preparation) {
     assertCurrent?.();
@@ -424,6 +499,7 @@ export async function restoreSessionColdTranscript(
       },
       assertCurrent,
     );
+    assertCurrent?.();
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.
     const now = Date.now();
     for (const [id, until] of restoredUntil) {

@@ -19,10 +19,14 @@ export function recordUpdateDatabaseWrites(
       "Doctor did not provide complete database write-generation evidence; rollback requires the last verified generation to remain unchanged.",
     ];
   } else {
+    const expected = backup.migration?.to ?? backup.sourceGenerations;
+    // Released Doctor receipts bind their input through unchanged; new ones also report that input.
+    const from = writes.fromGenerations ?? expected;
     const fingerprint = sha256Hex(
       JSON.stringify(paths.map((file) => [file, writes.generations[file]])),
     );
     const diagnostics = [
+      `Doctor interval ${step.name}; backup ${backup.directory}; from SHA-256 ${sha256Hex(JSON.stringify(paths.map((file) => [file, from[file]])))} to SHA-256 ${fingerprint}.`,
       `Post-migration write inventory: ${paths.length} databases; SHA-256 ${fingerprint}. Snapshots: ${backup.directory}.`,
       ...paths.map(
         (file) => `Database write fingerprint: ${file}; ${writes.generations[file] ?? "absent"}`,
@@ -37,10 +41,15 @@ export function recordUpdateDatabaseWrites(
       diagnostics,
     };
     step.diagnostics = [...(step.diagnostics ?? []), ...diagnostics];
-    if (!writes.unchanged) {
+    if (!writes.unchanged || paths.some((file) => from[file] !== expected[file])) {
       backup.restoreRefusal ??= "databases changed after snapshot capture; the writer is unknown";
     } else if (!backup.restoreRefusal) {
-      backup.postMigrationGenerations = writes.generations;
+      backup.migration = {
+        name: step.name,
+        backup: backup.directory,
+        from,
+        to: writes.generations,
+      };
     }
   }
   if (backup.restoreRefusal) {

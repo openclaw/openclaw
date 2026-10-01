@@ -298,7 +298,11 @@ describe("prepared reply dispatch runtime", () => {
       const config = {
         agents: { defaults: { model: "custom/model" } },
         plugins: {
-          slots: { memory: "none" },
+          // A shared-capability fallback cannot excuse a missing selected model owner.
+          slots: {
+            memory: "none",
+            ...(outcome === "not-imported" ? { contextEngine: "qwen" } : {}),
+          },
           entries: { qwen: { enabled: outcome !== "disabled" } },
         },
       };

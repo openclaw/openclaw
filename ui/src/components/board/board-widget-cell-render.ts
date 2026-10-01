@@ -108,7 +108,6 @@ export function renderBoardWidgetMenuItems(options: {
 }
 
 export function renderBoardWidgetRejected(options: {
-  widget: BoardWidget;
   disabled: boolean;
   onRemove: () => void;
 }): TemplateResult {

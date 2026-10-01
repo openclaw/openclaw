@@ -336,6 +336,10 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await waitForText(app.locator("#host-theme"), "dark");
+        // A light proxy between dark documents paints an opaque UA canvas.
+        const proxyColorScheme = () =>
+          app.parentFrame()?.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+        await expect.poll(proxyColorScheme).toBe("dark");
         await waitForTextContaining(
           app.locator("#host-variables"),
           '"--color-background-primary":"#161920"',
@@ -359,6 +363,7 @@ suite.define(() => {
           setTheme?.("light");
         });
         await waitForText(app.locator("#host-theme"), "light");
+        await expect.poll(proxyColorScheme).toBe("light");
         await waitForTextContaining(
           app.locator("#host-variables"),
           '"--color-background-primary":"#ffffff"',

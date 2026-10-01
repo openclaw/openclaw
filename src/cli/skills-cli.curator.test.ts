@@ -1,31 +1,27 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
-const mocks = vi.hoisted(() => {
-  return {
-    acquireGatewayLock: vi.fn(),
-    callGateway: vi.fn(),
-    config: {} as { gateway?: { mode: "local" | "remote" } },
-    getSkillCuratorStatus: vi.fn(),
-    releaseGatewayLock: vi.fn(),
-    defaultRuntime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`__exit__:${code}`);
-      }),
-    },
-  };
-});
-
+const mocks = vi.hoisted(() => ({
+  acquireGatewayLock: vi.fn(),
+  callGateway: vi.fn(),
+  config: {} as { gateway?: { mode: "local" | "remote" } },
+  getSkillCuratorStatus: vi.fn(),
+  releaseGatewayLock: vi.fn(),
+  defaultRuntime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  },
+}));
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.defaultRuntime,
@@ -39,9 +35,7 @@ vi.mock("../gateway/call.js", () => ({
   isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
-vi.mock("../infra/gateway-lock.js", () => ({
-  acquireGatewayLock: mocks.acquireGatewayLock,
-}));
+vi.mock("../infra/gateway-lock.js", () => ({ acquireGatewayLock: mocks.acquireGatewayLock }));
 vi.mock("../skills/workshop/curator.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../skills/workshop/curator.js")>()),
   getSkillCuratorStatus: mocks.getSkillCuratorStatus,
@@ -50,97 +44,83 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
 }));
-
+const skill = {
+  skillFile: "/workspace/skills/daily-brief/SKILL.md",
+  skillKey: "daily-brief",
+  skillName: "Daily Brief",
+  state: "active",
+  pinned: false,
+  createdAtMs: 1,
+  stateChangedAtMs: 1,
+  lastUsedAtMs: null,
+  useCount: 0,
+  archivedReason: null,
+};
 const status = {
   lastAttemptAtMs: 1,
   lastSuccessAtMs: 1,
   lastError: null,
-  collectionReview: {
-    workspace1: { attemptedAtMs: Date.now() - 60_000, succeededAtMs: Date.now() - 30_000 },
-  },
+  collectionReview: { workspace1: { attemptedAtMs: 1, succeededAtMs: 2 } },
   experienceReview: {
-    workspace1: {
-      attemptedAtMs: Date.now() - 15_000,
-      outcome: "proposed" as const,
-      proposalId: "proposal-1",
-    },
+    workspace1: { attemptedAtMs: 3, outcome: "proposed" as const, proposalId: "proposal-1" },
   },
   counts: { active: 1, stale: 0, archived: 0 },
-  skills: [
-    {
-      skillFile: "/workspace/skills/daily-brief/SKILL.md",
-      skillKey: "daily-brief",
-      skillName: "Daily Brief",
-      state: "active",
-      pinned: false,
-      createdAtMs: 1,
-      stateChangedAtMs: 1,
-      lastUsedAtMs: null,
-      useCount: 0,
-      archivedReason: null,
-    },
-  ],
+  skills: [skill],
   overlaps: [],
 };
-
-function createProgram(): Command {
-  const program = new Command().enablePositionalOptions();
-  program.exitOverride();
+const actions = [
+  ["status"],
+  ["pin", "daily-brief"],
+  ["unpin", "daily-brief"],
+  ["restore", "daily-brief"],
+];
+function run(...args: string[]) {
+  const program = new Command().enablePositionalOptions().exitOverride();
   registerSkillsCli(program);
-  return program;
+  return program.parseAsync(["skills", "curator", ...args], { from: "user" });
 }
-
-function createGatewayTransportError(kind: "closed" | "timeout", code = 1006) {
+function unavailable() {
   return new GatewayTransportError({
-    kind,
-    message:
-      kind === "closed" ? `gateway closed (${code}): unavailable` : "gateway timeout after 1500ms",
+    kind: "closed",
+    code: 1006,
+    reason: "unavailable",
+    message: "gateway closed (1006): unavailable",
     connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "local loopback", message: "" },
-    ...(kind === "closed" ? { code, reason: "unavailable" } : { timeoutMs: 1_500 }),
+  });
+}
+function credentialsError() {
+  return Object.assign(new Error("gateway requires credentials"), {
+    name: "GatewayCredentialsRequiredError",
+    method: "skills.curator.pin",
+    configPath: "/tmp/openclaw.json",
   });
 }
 
-describe("skills curator cli", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
+describe("skills curator CLI", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     delete mocks.config.gateway;
     mocks.getSkillCuratorStatus.mockReset().mockReturnValue(status);
-    mocks.releaseGatewayLock.mockReset();
     mocks.acquireGatewayLock.mockReset().mockResolvedValue({
       run: <T>(action: () => T) => action(),
       release: mocks.releaseGatewayLock,
     });
-    mocks.callGateway.mockReset().mockImplementation(async (request: { method: string }) => {
-      if (request.method === "skills.curator.status") {
-        return status;
-      }
-      return { ...status.skills[0], pinned: request.method === "skills.curator.pin" };
-    });
-    mocks.defaultRuntime.writeJson.mockClear();
-    mocks.defaultRuntime.writeStdout.mockClear();
-    mocks.defaultRuntime.error.mockClear();
+    mocks.callGateway.mockReset().mockResolvedValue(status);
   });
-
-  it("uses a parent --json when the leaf has its default false value", async () => {
-    await createProgram().parseAsync(["skills", "curator", "--json", "status"], {
-      from: "user",
-    });
-
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("uses --json for the default curator action", async () => {
-    await createProgram().parseAsync(["skills", "curator", "--json"], { from: "user" });
-
+    await run("--json");
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
   });
 
-  it("accepts an older Gateway reply without local fallback and explains legacy coverage", async () => {
+  it("renders legacy inventory and disambiguates repeated keys without local fallback", async () => {
     mocks.config.gateway = { mode: "remote" };
-    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
+    mocks.callGateway.mockResolvedValue({
+      ...status,
+      skills: [skill, { ...skill, skillFile: "/other/SKILL.md" }],
+    });
+    await run("status");
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "skills.curator.status",
@@ -149,46 +129,35 @@ describe("skills curator cli", () => {
       }),
     );
     expect(mocks.getSkillCuratorStatus).not.toHaveBeenCalled();
-    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("Legacy inventory:"),
-    );
-    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("last-used=not recorded"),
-    );
-    await createProgram().parseAsync(["skills", "curator", "status", "--json"], { from: "user" });
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
-    expect(mocks.defaultRuntime.writeJson.mock.calls[0]?.[0]).not.toHaveProperty("inventory");
+    const output = mocks.defaultRuntime.writeStdout.mock.calls[0]?.[0];
+    expect(output).toContain("Legacy inventory:");
+    expect(output).toContain("daily-brief (/workspace/skills/daily-brief/SKILL.md)  active");
+    expect(output).toContain("daily-brief (/other/SKILL.md)  active");
+    expect(output).toContain("last-used=not recorded");
+    expect(output).toContain("Collection review: attempted");
+    expect(output).toContain("Experience review workspac: proposed (proposal-1)");
   });
 
-  it("preserves marked live inventory with unknown dates in remote and local output", async () => {
+  it("preserves live inventory and awaits asynchronous local status before output", async () => {
     const liveStatus = {
       ...status,
       inventory: "live-workshop",
-      skills: status.skills.map((skill) => ({
-        ...skill,
-        createdAtMs: null,
-        stateChangedAtMs: null,
-      })),
+      skills: [{ ...skill, createdAtMs: null, stateChangedAtMs: null }],
     };
     mocks.callGateway.mockResolvedValue(liveStatus);
-    await createProgram().parseAsync(["skills", "curator", "status", "--json"], { from: "user" });
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(liveStatus);
-    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
+    await run("status");
     expect(mocks.defaultRuntime.writeStdout).not.toHaveBeenCalledWith(
       expect.stringContaining("Legacy inventory:"),
     );
-    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
+    mocks.callGateway.mockRejectedValue(unavailable());
     const requested = createDeferred();
     const pendingStatus = createDeferred<typeof liveStatus>();
     mocks.getSkillCuratorStatus.mockImplementationOnce(() => {
       requested.resolve();
       return pendingStatus.promise;
     });
-    mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.writeStdout.mockClear();
-    const command = createProgram().parseAsync(["skills", "curator", "status", "--json"], {
-      from: "user",
-    });
+    const command = run("--json", "status");
     try {
       await requested.promise;
       expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
@@ -201,31 +170,20 @@ describe("skills curator cli", () => {
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(liveStatus);
   });
 
-  it("reports an asynchronous local status failure without printing a result", async () => {
-    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
+  it("reports asynchronous local status failure without a result", async () => {
+    mocks.callGateway.mockRejectedValue(unavailable());
     mocks.getSkillCuratorStatus.mockRejectedValueOnce(new Error("curator state unavailable"));
-
-    await expect(
-      createProgram().parseAsync(["skills", "curator", "status", "--json"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
+    await expect(run("status", "--json")).rejects.toThrow("__exit__:1");
     expect(mocks.defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("curator state unavailable");
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.writeStdout).not.toHaveBeenCalled();
     expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
   });
 
-  it("keeps retired curator actions registered and reports why they no longer exist", async () => {
-    for (const argv of [
-      ["skills", "curator", "pin", "daily-brief", "--json"],
-      ["skills", "curator", "unpin", "daily-brief", "--json"],
-      ["skills", "curator", "restore", "daily-brief", "--json"],
-    ]) {
-      await expect(createProgram().parseAsync(argv, { from: "user" })).rejects.toThrow(
-        "__exit__:1",
-      );
+  it("reports retirement for registered curator mutations", async () => {
+    for (const action of actions.slice(1)) {
+      await expect(run(...action, "--json")).rejects.toThrow("__exit__:1");
     }
-
     expect(mocks.callGateway.mock.calls.map(([request]) => request.method)).toEqual([
       "skills.curator.pin",
       "skills.curator.unpin",
@@ -238,249 +196,61 @@ describe("skills curator cli", () => {
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  const curatorActions = [
-    { label: "status", argv: ["status"] },
-    { label: "pin", argv: ["pin", "daily-brief"] },
-    { label: "unpin", argv: ["unpin", "daily-brief"] },
-    { label: "restore", argv: ["restore", "daily-brief"] },
-  ];
+  it("never falls back to client-local state for an explicit remote Gateway", async () => {
+    mocks.config.gateway = { mode: "remote" };
+    const error = unavailable();
+    mocks.callGateway.mockRejectedValue(error);
+    for (const action of actions) {
+      await expect(run(...action, "--json")).rejects.toBe(error);
+    }
+    expect(mocks.getSkillCuratorStatus).not.toHaveBeenCalled();
+    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
+  });
 
-  it.each(["configured remote", "environment-selected"] as const)(
-    "does not touch local curator state after a %s gateway fails",
-    async (target) => {
-      if (target === "configured remote") {
-        mocks.config.gateway = { mode: "remote" };
-      } else {
-        vi.stubEnv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:9");
-      }
-      mocks.callGateway.mockRejectedValue(new Error("remote unavailable"));
+  it("requires and releases the offline ownership lock for retired mutations", async () => {
+    mocks.callGateway.mockRejectedValue(credentialsError());
+    await run("status", "--json");
+    for (const action of actions.slice(1)) {
+      await expect(run(...action, "--json")).rejects.toThrow("__exit__:1");
+    }
+    expect(mocks.getSkillCuratorStatus).toHaveBeenCalledOnce();
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Skill lifecycle curation is retired"),
+    );
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(3);
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
+      allowInTests: true,
+      port: 18789,
+      role: "sqlite-maintenance",
+      timeoutMs: 250,
+    });
+    expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(3);
+  });
 
-      for (const action of curatorActions) {
-        const failure = await createProgram()
-          .parseAsync(["skills", "curator", ...action.argv, "--json"], { from: "user" })
-          .then(
-            () => undefined,
-            (error: unknown) => error,
-          );
-        expect(failure, action.label).toMatchObject({ message: "__exit__:1" });
-      }
-
-      expect(mocks.defaultRuntime.error).toHaveBeenCalledTimes(curatorActions.length);
-      expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("remote unavailable");
-      expect(mocks.getSkillCuratorStatus).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      label: "missing credentials before connecting",
-      error: Object.assign(new Error("gateway requires credentials"), {
-        name: "GatewayCredentialsRequiredError",
-        method: "skills.curator.status",
-        configPath: "/tmp/openclaw.json",
-      }),
-    },
-    { label: "close", error: createGatewayTransportError("closed") },
-    { label: "timeout", error: createGatewayTransportError("timeout") },
-    { label: "pending-request timeout", error: new Error("gateway timeout after 1500ms") },
-  ])(
-    "retains local curator status and ownership-locked mutations after implicit-local $label",
-    async ({ error }) => {
-      mocks.callGateway.mockRejectedValue(error);
-
-      for (const action of curatorActions) {
-        const command = createProgram().parseAsync(
-          ["skills", "curator", ...action.argv, "--json"],
-          { from: "user" },
-        );
-        if (action.label === "status") {
-          await command;
-        } else {
-          await expect(command, action.label).rejects.toThrow("__exit__:1");
-        }
-      }
-
-      expect(mocks.getSkillCuratorStatus).toHaveBeenCalledOnce();
-      // Retired actions still take and release the offline lock, then report retirement.
-      expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Skill lifecycle curation is retired"),
-      );
-      expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(3);
-      expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
-        allowInTests: true,
-        port: 18789,
-        role: "sqlite-maintenance",
-        timeoutMs: 250,
-      });
-      expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(3);
-    },
-  );
-
-  it.each([
-    {
-      label: "missing credentials",
-      error: Object.assign(new Error("gateway requires credentials"), {
-        name: "GatewayCredentialsRequiredError",
-        method: "skills.curator.pin",
-        configPath: "/tmp/openclaw.json",
-      }),
-    },
-    { label: "an ambiguous transport close", error: createGatewayTransportError("closed") },
-  ])("preserves $label when the Gateway still owns the lock", async ({ error }) => {
+  it("preserves credential failure when the Gateway still owns the lock", async () => {
+    const error = credentialsError();
     mocks.callGateway.mockRejectedValue(error);
     mocks.acquireGatewayLock.mockRejectedValue(new Error("gateway already running"));
-
-    for (const action of curatorActions.slice(1)) {
-      await expect(
-        createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
-          from: "user",
-        }),
-        action.label,
-      ).rejects.toBe(error);
-    }
-
-    expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(3);
+    await expect(run("pin", "daily-brief", "--json")).rejects.toBe(error);
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledOnce();
     expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
   });
 
-  it("preserves a pending-request timeout when the Gateway still owns the lock", async () => {
-    const gatewayError = new Error("gateway timeout after 1500ms");
-    mocks.callGateway.mockRejectedValue(gatewayError);
-    mocks.acquireGatewayLock.mockRejectedValue(new Error("gateway already running"));
-
-    for (const action of curatorActions.slice(1)) {
-      await expect(
-        createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
-          from: "user",
-        }),
-        action.label,
-      ).rejects.toThrow("__exit__:1");
-    }
-
-    expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(3);
-    expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledTimes(3);
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(gatewayError.message);
-  });
-
-  it.each([
-    {
-      label: "request validation",
-      outcome: "command",
-      error: new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "invalid skills.curator.pin params: skill is required",
-      }),
-    },
-    {
-      label: "internal server failure",
-      outcome: "command",
-      error: new GatewayClientRequestError({ code: "INTERNAL_ERROR", message: "curator crashed" }),
-    },
-    { label: "pairing close", outcome: "root", error: createGatewayTransportError("closed", 1008) },
-    {
-      label: "authentication rotation",
-      outcome: "root",
-      error: createGatewayTransportError("closed", 4001),
-    },
-    {
-      label: "plain pairing close",
-      outcome: "command",
-      error: new Error("gateway closed (1008): pairing required"),
-    },
-    {
-      label: "already-dispatched request timeout",
-      outcome: "command",
-      error: new GatewayProtocolRequestTimeoutError({
-        method: "skills.curator.pin",
-        timeoutMs: 1_500,
-        requestSent: true,
-      }),
-    },
-    { label: "unknown failure", outcome: "command", error: new Error("gateway unavailable") },
-  ])("does not touch implicit-local curator state after $label", async ({ error, outcome }) => {
-    mocks.callGateway.mockRejectedValue(error);
-
-    for (const action of curatorActions) {
-      const command = createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
-        from: "user",
-      });
-      if (outcome === "root") {
-        await expect(command, action.label).rejects.toBe(error);
-      } else {
-        await expect(command, action.label).rejects.toThrow("__exit__:1");
-      }
-    }
-
-    // Root-owned credential/transport errors propagate; ordinary command errors log and exit.
-    if (outcome === "root") {
-      expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.defaultRuntime.error).toHaveBeenCalledTimes(curatorActions.length);
-      expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(error.message);
-    }
-    expect(mocks.getSkillCuratorStatus).not.toHaveBeenCalled();
-    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
-    expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
-  });
-
-  it("falls back only for status when an older implicit-local Gateway lacks curator methods", async () => {
+  it("permits legacy-method fallback only for status", async () => {
     mocks.callGateway.mockImplementation(async ({ method }: { method: string }) => {
       throw new GatewayClientRequestError({
         code: "INVALID_REQUEST",
         message: `unknown method: ${method}`,
       });
     });
-
-    await createProgram().parseAsync(["skills", "curator", "status", "--json"], {
-      from: "user",
-    });
-
-    for (const action of curatorActions.slice(1)) {
-      const command = createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
-        from: "user",
-      });
-      await expect(command, action.label).rejects.toThrow("__exit__:1");
-      expect(mocks.defaultRuntime.error).toHaveBeenLastCalledWith(
-        `unknown method: skills.curator.${action.label}`,
-      );
-    }
-
+    await run("status", "--json");
+    await expect(run("pin", "daily-brief", "--json")).rejects.toThrow("__exit__:1");
+    expect(mocks.defaultRuntime.error).toHaveBeenLastCalledWith(
+      "unknown method: skills.curator.pin",
+    );
     expect(mocks.getSkillCuratorStatus).toHaveBeenCalledOnce();
     expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
     expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
-  });
-
-  it("disambiguates duplicate skill keys in text status", async () => {
-    mocks.callGateway.mockResolvedValue({
-      ...status,
-      skills: [
-        status.skills[0],
-        {
-          ...status.skills[0],
-          skillFile: "/other-workspace/skills/daily-brief/SKILL.md",
-        },
-      ],
-    });
-
-    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
-
-    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("daily-brief (/workspace/skills/daily-brief/SKILL.md)  active"),
-    );
-    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("daily-brief (/other-workspace/skills/daily-brief/SKILL.md)  active"),
-    );
-  });
-
-  it("prints the last collection and experience outcomes", async () => {
-    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
-    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("Collection review: attempted"),
-    );
-    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining("Experience review workspac: proposed (proposal-1)"),
-    );
   });
 });

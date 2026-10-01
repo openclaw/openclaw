@@ -78,15 +78,5 @@ export type QaDreamingStatus = {
   };
 };
 
-export type QaRawSessionStoreEntry = {
-  sessionId?: string;
-  sessionFile?: string;
-  status?: string;
-  spawnedBy?: string;
-  label?: string;
-  abortedLastRun?: boolean;
-  updatedAt?: number;
-};
-
 export type QaRuntimeActionHandlerEnv = Pick<QaSuiteRuntimeEnv, "cfg" | "transport">;
 export type { QaTransportActionName };

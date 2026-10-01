@@ -92,6 +92,34 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     });
   });
 
+  it("runs a command prompt from an automatic snapshot without shell tools", options, async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(["message", "read"], { toolsAllowIsDefault: true, message: command }),
+    );
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(["*"]);
+  });
+
+  it.each([
+    { label: "runs with its owner's tools", job: {}, expected: ["*"] },
+    {
+      label: "keeps its list without a valid owner policy",
+      job: { owner: { agentId: "main", sessionKey: policy.ownerSessionKey } },
+      expected: ["message", "read"],
+    },
+    {
+      label: "keeps its list behind a condition trigger",
+      job: { trigger: { script: "return { fire: true }" } },
+      expected: ["message", "read"],
+    },
+  ])("an automatic creator snapshot $label", options, async ({ job, expected }) => {
+    // Older builds saved this snapshot without the creator's native shell.
+    await runCronIsolatedAgentTurn(
+      makeParams(["message", "read"], { toolsAllowIsDefault: true }, job),
+    );
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(expected);
+  });
+
   it.each([
     ["unavailable shell tools", ["terminal", "node_exec", "node_process"]],
     ["a blank entry", [" "]],
@@ -183,6 +211,18 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
         },
       },
     });
+    expect(result.status).toBe("ok");
+    expect(result.diagnostics).toBeUndefined();
+  });
+
+  it("does not warn about web_search recorded in an automatic snapshot", options, async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(
+        ["read", "web_search"],
+        { toolsAllowIsDefault: true },
+        { trigger: { script: "return { fire: true }" } },
+      ),
+    );
     expect(result.status).toBe("ok");
     expect(result.diagnostics).toBeUndefined();
   });

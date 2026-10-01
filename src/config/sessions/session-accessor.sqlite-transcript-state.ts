@@ -10,10 +10,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryPlaceholderInsertion } from "./session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import {
-  parseSessionEntryJson,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   assertCanonicalSqliteSessionRootWrite,
   canonicalSessionKeyMigrationRequiredError,
@@ -172,7 +169,7 @@ export function ensureTranscriptSessionRoot(
       db
         .selectFrom("session_nodes")
         .select(["current_session_id", "entry_valid", "session_key", "updated_at"])
-        .select(sessionEntryMetadataJson)
+        .select("entry_json")
         .where("session_key", "in", lookupKeys),
     ).rows;
     for (const candidate of candidates) {
@@ -387,4 +384,38 @@ export function deleteTranscriptEventsInTransaction(
     db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
   );
   return (result.numAffectedRows ?? 0n) > 0n;
+}
+
+export function pruneTranscriptReactionsInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  removedEventIds?: readonly string[],
+): void {
+  const db = getSessionKysely(database.db);
+  const query = db
+    .deleteFrom("session_reactions")
+    .where("session_key", "=", scope.sessionKey)
+    .where("session_id", "=", scope.sessionId)
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("transcript_event_identities")
+            .select("event_id")
+            .whereRef("session_id", "=", "session_reactions.session_id")
+            .whereRef("event_id", "=", "session_reactions.message_id"),
+        ),
+      ),
+    );
+  if (removedEventIds === undefined) {
+    executeSqliteQuerySync(database.db, query);
+    return;
+  }
+  // A suffix rewrite must not prune a retained, legacy unindexed prefix.
+  for (let start = 0; start < removedEventIds.length; start += 500) {
+    executeSqliteQuerySync(
+      database.db,
+      query.where("message_id", "in", removedEventIds.slice(start, start + 500)),
+    );
+  }
 }
