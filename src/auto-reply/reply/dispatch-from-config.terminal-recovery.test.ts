@@ -455,15 +455,21 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     { reason: "stuck_recovery", continued: false, notice: true },
     { reason: "stuck_recovery", continued: true, notice: false },
     { reason: "finalization_stalled", continued: true, notice: false },
+    // A final message-tool answer reached the source before the watchdog fired.
+    { reason: "stuck_recovery", continued: true, notice: false, answered: true },
   ] as const)(
     "sends the stall notice only as a last resort ($reason, continued=$continued)",
-    async ({ reason, continued, notice }) => {
+    async ({ reason, continued, notice, ...testCase }) => {
+      const answered = "answered" in testCase;
       const resolverStarted = createDeferred();
       const continueStalledTurn = vi.fn(() => continued === true);
       const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
         const runState = resolveReplyOperationRunState(options);
         if (runState && continued !== undefined) {
           runState.continueStalledTurn = continueStalledTurn;
+        }
+        if (answered) {
+          replyRunRegistry.get(sessionKey)?.markSourceReplyDelivered();
         }
         resolverStarted.resolve();
         await new Promise<void>((resolve) => {
@@ -482,7 +488,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
 
       await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: notice });
       expect(continueStalledTurn).toHaveBeenCalledTimes(
-        continued !== undefined && reason !== "finalization_stalled" ? 1 : 0,
+        continued !== undefined && reason !== "finalization_stalled" && !answered ? 1 : 0,
       );
       if (notice) {
         expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
