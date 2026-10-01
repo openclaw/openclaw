@@ -140,8 +140,6 @@ test/plugins/team-reports-http.gateway.test.ts	1
 test/scripts/ci-run-node-test-shard.test.ts	3
 test/scripts/compiler-input-snapshot.test.ts	1
 test/scripts/plugin-gateway-gauntlet.test.ts	3
-test/scripts/run-tsgo.test.ts	2
-test/scripts/run-with-env.test.ts	1
 test/scripts/test-projects-build-admission.test.ts	7
 test/scripts/upstream-repository-advisories.test.ts	2
 test/scripts/vitest-fork-os-diagnostics.test.ts	1
