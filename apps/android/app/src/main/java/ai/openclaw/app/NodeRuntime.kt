@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandOutbox
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatReactionAccess
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.chat.ChatWidgetResource
@@ -89,6 +90,7 @@ import ai.openclaw.app.node.TalkHandler
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
+import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
 import ai.openclaw.app.node.resolveGatewayAccentArgb
 import ai.openclaw.app.node.resolveGatewayThemeFamily
@@ -905,7 +907,12 @@ class NodeRuntime private constructor(
 
   // Reentry retains this runtime, so requester data and both capability paths must share its original mode.
   private val screenshotBranchesEnabled = mode == NodeRuntimeMode.ScreenshotFixture && AndroidScreenshotFixture.branchesEnabled
-  private val screenshotRequester by lazy { AndroidScreenshotFixture.createRequester(branchesEnabled = screenshotBranchesEnabled) }
+  private val screenshotRequester by lazy {
+    AndroidScreenshotFixture.createRequester(
+      branchesEnabled = screenshotBranchesEnabled,
+      onEvent = { event, payload -> chat.handleGatewayEvent(event, payload) },
+    )
+  }
   private val gatewayAuthLifecycleLock = Any()
   private var gatewayAuthResetInProgress = false
   private var gatewayConnectOperationsInFlight = 0
@@ -1609,6 +1616,9 @@ class NodeRuntime private constructor(
         _gatewayUpdateAvailable.value = hello.updateAvailable
         val operatorScopes = normalizeOperatorScopes(hello.authScopes)
         _operatorScopes.value = operatorScopes
+        chat.setReactionAccess(
+          ChatReactionAccess(role = hello.authRole, scopes = operatorScopes.toSet(), sessionCap = hello.authSessionCap),
+        )
         synchronized(gatewayDataScopeLock) { appearancePreferenceScopeOwner = null }
         replaceGatewayMethods(hello.methods)
         replaceGatewayCapabilities(hello.capabilities)
@@ -1642,6 +1652,11 @@ class NodeRuntime private constructor(
         systemAgentChatController.refresh(startIfNeeded = false)
         micCapture.onGatewayConnectionChanged(true)
         wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
+        scope.launch {
+          val gatewayScope = captureGatewayDataScope() ?: return@launch
+          val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return@launch
+          refreshCurrentProfileId(gatewayScope, lease)
+        }
         scope.launch {
           subscribeOperatorSessionEvents()
           refreshBrandingFromGateway()
@@ -1924,6 +1939,7 @@ class NodeRuntime private constructor(
     replaceGatewayCapabilities(null)
     _gatewayControlPage.value = _gatewayControlPage.value?.copy(browserFocusAvailable = false)
     _operatorScopes.value = emptyList()
+    chat.setReactionAccess(ChatReactionAccess())
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _gatewayAccentArgb.value = null
     _gatewaySourcePreviewConfig.value = null
@@ -2598,18 +2614,12 @@ class NodeRuntime private constructor(
     problem: GatewayConnectionProblem? = null,
     operation: GatewayConnectionOperation? = null,
   ) {
-    synchronized(gatewayStatusLock) {
+    updateStatus(preserveStandalone = true) {
       // Accepted TLS can finish behind a newer UI request; retain its result below that request's progress.
       if (operation == null || gatewayConnectionOperation == null || gatewayConnectionOperation === operation) {
         gatewayRetirementDisplay = null
       }
-      val standalone = GatewayConnectionDisplay(operatorConnected, statusText, problem)
-      gatewayStandaloneDisplay = standalone
-      val display = gatewayRetirementDisplay ?: standalone
-      _gatewayConnectionDisplay.value = display
-      _isConnected.value = display.isConnected
-      _statusText.value = display.statusText
-      _gatewayConnectionProblem.value = display.problem
+      gatewayStandaloneDisplay = GatewayConnectionDisplay(operatorConnected, statusText, problem)
     }
   }
 
@@ -3063,16 +3073,10 @@ class NodeRuntime private constructor(
 
   fun refreshHealthLogs() = launchGatewayRefresh { refreshHealthLogsFromGateway() }
 
-  val instanceId: StateFlow<String> = prefs.instanceId
-  val displayName: StateFlow<String> = prefs.displayName
   val cameraEnabled: StateFlow<Boolean> = prefs.cameraEnabled
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
-  val preventSleep: StateFlow<Boolean> = prefs.preventSleep
-  val manualHost: StateFlow<String> = prefs.manualHost
-  val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
-  val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
 
   /** Clears setup credentials plus paired device tokens for both Android gateway roles. */
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean =
@@ -3139,16 +3143,6 @@ class NodeRuntime private constructor(
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
-  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
-  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
-    prefs.notificationForwardingMode
-  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
-  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
-    prefs.notificationForwardingQuietHoursEnabled
-  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
-  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
-  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
-    prefs.notificationForwardingMaxEventsPerMinute
 
   private var didAutoConnect = false
 
@@ -3164,6 +3158,8 @@ class NodeRuntime private constructor(
     replaceGatewayMethods(
       buildSet {
         add(GatewayMethod.DesktopObserve.rawValue)
+        add(GatewayMethod.SessionReactionsList.rawValue)
+        add(GatewayMethod.SessionReactionsSet.rawValue)
         if (AndroidScreenshotFixture.attentionEnabled) {
           addAll(listOf("approval.get", "approval.resolve", "exec.approval.list", "plugin.approval.list", "openclaw.approval.list"))
         }
@@ -3199,6 +3195,9 @@ class NodeRuntime private constructor(
       )
     _cronJobs.value = parseScreenshotCronJobs()
     _operatorScopes.value = listOf(OperatorAdminScope)
+    chat.setReactionAccess(
+      ChatReactionAccess(role = "operator", scopes = setOf(OperatorAdminScope), sessionCap = "write", viewerId = "screenshot-viewer"),
+    )
     systemAgentChatSupported.value = true
     _nodesDevicesSummary.value = AndroidScreenshotFixture.nodes
     channelsSummary.update { it.copy(summary = AndroidScreenshotFixture.channels) }
@@ -4180,9 +4179,6 @@ class NodeRuntime private constructor(
 
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
-
-  val preferredAudioInputDevice: StateFlow<String?>
-    get() = prefs.preferredAudioInputDevice
 
   fun setSpeakerEnabled(value: Boolean) {
     prefs.setSpeakerEnabled(value)
@@ -6685,7 +6681,7 @@ class NodeRuntime private constructor(
       when ((root?.get("status") as? JsonPrimitive)?.contentOrNull) {
         "ok" -> {
           val entries = root.get("entries").asObjectOrNull() ?: return GatewayAppearancePreferencesRead.Unavailable
-          val profileId = fetchCurrentProfileId(gatewayScope, lease)
+          val profileId = refreshCurrentProfileId(gatewayScope, lease)
           // Writable values without an authenticated owner must not replace a
           // previous profile's appearance while its offline edits remain queued.
           if (profileId == null && operatorScopesAllowWrite(_operatorScopes.value)) {
@@ -6724,7 +6720,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun fetchCurrentProfileId(
+  private suspend fun refreshCurrentProfileId(
     gatewayScope: GatewayDataScope,
     lease: GatewaySession.RequestLease,
   ): String? =
@@ -6736,13 +6732,18 @@ class NodeRuntime private constructor(
           GatewayMethod.UsersSelf.rawValue,
           "{}",
         )
-      json
-        .parseToJsonElement(res)
-        .asObjectOrNull()
-        ?.get("profile")
-        .asObjectOrNull()
-        ?.get("id")
-        .asStringOrNull()
+      val profileId =
+        json
+          .parseToJsonElement(res)
+          .asObjectOrNull()
+          ?.get("profile")
+          .asObjectOrNull()
+          ?.get("id")
+          .asStringOrNull()
+      lease.commitIfCurrent {
+        publishGatewayData(gatewayScope) { chat.setReactionViewerId(profileId) }
+      }
+      profileId
     } catch (cancelled: CancellationException) {
       throw cancelled
     } catch (_: Throwable) {
@@ -9111,11 +9112,7 @@ class NodeRuntime private constructor(
   private fun parseMaybeJsonObject(value: String?): JsonObject? {
     val trimmed = value?.trim().orEmpty()
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
-    return try {
-      json.parseToJsonElement(trimmed).asObjectOrNull()
-    } catch (_: Throwable) {
-      null
-    }
+    return parseJsonParamsObject(trimmed)
   }
 
   private fun normalizeLogLevel(value: String?): String? {

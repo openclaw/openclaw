@@ -1,6 +1,6 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
@@ -11,6 +11,7 @@ import {
 } from "./lib/ci-native-generated-scope.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import nativeProtocolInputs from "./native-protocol-inputs.json" with { type: "json" };
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runMacosNode: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
@@ -174,7 +175,7 @@ const NATIVE_I18N_SCOPE_RE =
 const FAST_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
-  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/install(?:-cli)?\.sh$|scripts\/install\.ps1$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|qr-import-docker\.sh|bun-global-install-smoke\.sh)$|\.github\/workflows\/(?:install-smoke|website-installer-sync)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
+  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/(?:install(?:-cli|-policy)?\.sh|build-installers\.mjs|lib\/standalone-installers\.mjs)$|scripts\/install\.ps1$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|qr-import-docker\.sh|bun-global-install-smoke\.sh)$|\.github\/workflows\/(?:install-smoke|website-installer-sync)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE =
   /^(?:src\/(?:channels|gateway|plugin-sdk|plugins)\/|packages\/gateway-(?:client|protocol)\/src\/)/;
 const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
@@ -247,6 +248,11 @@ export function detectChangedScope(changedPaths) {
     }
 
     const isAppleBuildInput = isAppleSharedBuildInput(path);
+    const isNativeProtocolInput =
+      nativeProtocolInputs.files.includes(path) ||
+      (/\.(?:ts|mts|mjs|json)$/.test(path) &&
+        !/\.(?:test|spec)\./.test(path) &&
+        nativeProtocolInputs.directories.some((directory) => path.startsWith(`${directory}/`)));
 
     if (facts.surface === "docs") {
       continue;
@@ -272,12 +278,13 @@ export function detectChangedScope(changedPaths) {
         isMacosToolingPath(path) ||
         WORKER_DEPLOY_ARTIFACT_SCOPE_RE.test(path) ||
         APPLE_SHARED_CONTRACT_FIXTURE_RE.test(path) ||
-        isAppleBuildInput)
+        isAppleBuildInput ||
+        isNativeProtocolInput)
     ) {
       runMacos = true;
     }
 
-    if (IOS_BUILD_RE.test(path) || isAppleBuildInput) {
+    if (IOS_BUILD_RE.test(path) || isAppleBuildInput || isNativeProtocolInput) {
       runIosBuild = true;
     }
 
@@ -285,7 +292,8 @@ export function detectChangedScope(changedPaths) {
       !NATIVE_PROTOCOL_GEN_RE.test(path) &&
       (ANDROID_NATIVE_RE.test(path) ||
         ANDROID_TALK_CONTRACT_FIXTURE_RE.test(path) ||
-        MERMAID_ASSET_INPUT_RE.test(path))
+        MERMAID_ASSET_INPUT_RE.test(path) ||
+        isNativeProtocolInput)
     ) {
       runAndroid = true;
     }
@@ -520,6 +528,9 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
   if (isNativeCanonicalV2Migration(changedPaths, generatedPaths)) {
     return;
   }
+  if (isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths)) {
+    return;
+  }
   throw new NativeGeneratedArtifactsMixedError(
     [
       "Native generated locale artifacts must be isolated from source changes.",
@@ -528,6 +539,47 @@ export function assertNativeGeneratedArtifactsIsolated(changedPaths, branchName 
       ...generatedCompanionPaths.map((filePath) => `- generated companion: ${filePath}`),
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
+  );
+}
+
+/**
+ * The projection retirement must carry its output-only translations into canonical inputs.
+ * Requiring the deleted lookup path confines this exception to the cutover diff.
+ * @param {string[]} changedPaths
+ * @param {string[]} generatedPaths
+ * @param {string[]} sourcePaths
+ */
+function isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePaths) {
+  const retiredLookup =
+    "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt";
+  const owners = [
+    ".github/workflows/native-app-locale-refresh.yml",
+    "apps/.i18n/native-source.json",
+    "apps/android/app/build.gradle.kts",
+    "scripts/android-app-i18n.ts",
+    "scripts/native-app-i18n.ts",
+    "scripts/ci-changed-scope.mjs",
+    "test/scripts/android-app-i18n.test.ts",
+    "test/scripts/native-app-i18n.test.ts",
+    "src/scripts/ci-changed-scope.native-i18n.test.ts",
+  ];
+  return (
+    changedPaths.includes(retiredLookup) &&
+    !existsSync(new URL(`../${retiredLookup}`, import.meta.url)) &&
+    owners.every((owner) => changedPaths.includes(owner)) &&
+    sourcePaths.every(
+      (filePath) =>
+        owners.includes(filePath) ||
+        filePath === "package.json" ||
+        filePath === "apps/android/README.md",
+    ) &&
+    generatedPaths.every(
+      (filePath) =>
+        filePath === retiredLookup ||
+        /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/res\/values-[^/]+\/strings\.xml)$/.test(
+          filePath,
+        ),
+    )
   );
 }
 

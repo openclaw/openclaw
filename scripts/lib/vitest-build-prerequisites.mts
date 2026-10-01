@@ -5,6 +5,7 @@ import path from "node:path";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { uiE2eRealGatewayTestFiles } from "../../test/vitest/vitest.ui-paths.mjs";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 
@@ -175,6 +176,15 @@ const runtimeConsumers = [
   },
   {
     file: "src/gateway/server-methods/models-list.freshness.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/gateway/server-methods/models-list.remote-catalog.integration.test.ts",
     configs: [
       "test/vitest/vitest.gateway-database-workers.config.ts",
       "test/vitest/vitest.gateway.config.ts",
@@ -494,6 +504,8 @@ export async function prepareVitestRuntime(
   env: NodeJS.ProcessEnv = process.env,
   options: { runtimePrepared?: boolean; signal?: AbortSignal } = {},
 ): Promise<number> {
+  options.signal?.throwIfAborted();
+  await ensureKyselyTypes();
   const controlUi =
     !isE2eBuildSkipped(env) &&
     env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY !== "1" &&
@@ -512,11 +524,14 @@ export async function prepareVitestRuntime(
   }
   options.signal?.throwIfAborted();
   const cwd = path.resolve(import.meta.dirname, "../..");
-  if (!options.runtimePrepared) {
+  if (!options.runtimePrepared || controlUi) {
     console.error(`[test] preparing ${mode} runtime before Vitest workers`);
     const code = await runManagedCommand({
       bin: process.execPath,
-      args: ["scripts/prepare-vitest-runtime.mjs"],
+      args: [
+        "scripts/prepare-vitest-runtime.mjs",
+        ...(controlUi ? ["--require-current-head"] : []),
+      ],
       cwd,
       env: { ...env, ...(mode === "private-qa" ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}) },
       signal: options.signal,
@@ -654,7 +669,7 @@ function isMissingVitestResolveError(error: unknown): error is NodeJS.ErrnoExcep
 /**
  * Builds the actionable dependency-install message when Vitest is unavailable.
  */
-export function resolveMissingVitestDependencyMessage(
+function resolveMissingVitestDependencyMessage(
   baseDir = resolveRepoRoot(import.meta.url),
   fsImpl: Pick<VitestFs, "existsSync"> = fs,
 ): string {

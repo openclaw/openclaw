@@ -1,6 +1,7 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -1611,7 +1612,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.not.objectContaining({ agentId: expect.anything() }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1634,7 +1635,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1708,7 +1709,7 @@ describe("loadChatHistory filtering", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
@@ -1717,7 +1718,7 @@ describe("loadChatHistory filtering", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1772,7 +1773,7 @@ describe("loadChatHistory retry handling", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(request).toHaveBeenCalledTimes(1);
     expect(getChatHistoryLoadState(state)).toMatchObject({
@@ -2197,13 +2198,11 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("shows a targeted message when chat history is unauthorized", async () => {
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "PERMISSION_DENIED",
-        message: "not allowed",
-        details: { code: "AUTH_UNAUTHORIZED" },
-      }),
-    );
+    const scopeError = missingScopeErrorShape({
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    });
+    const request = vi.fn().mockRejectedValue(new GatewayRequestError(scopeError));
     const state = createHistoryState(request, {
       chatMessages: [textMessage("assistant", "old")],
       chatThinkingLevel: "high",

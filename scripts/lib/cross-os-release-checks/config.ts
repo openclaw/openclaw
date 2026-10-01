@@ -511,8 +511,7 @@ export function looksLikeCommitSha(ref: string) {
 }
 
 export function resolveExpectedDevUpdateRef(ref?: string) {
-  const trimmed = normalizeRequestedRef(ref) || "main";
-  return trimmed || "main";
+  return normalizeRequestedRef(ref) || "main";
 }
 
 export function resolveDevUpdateVerificationRef(ref: string, sourceSha?: string) {
@@ -540,13 +539,8 @@ export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
   return updateEnv;
 }
 
-function isExtendedStableBaselineVersion(baselineVersion: string | undefined) {
-  const parsed = baselineVersion ? parseReleaseVersion(baselineVersion) : null;
-  return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
-}
-
-function isExtendedStableCandidateVersion(candidateVersion: string | undefined) {
-  const parsed = candidateVersion ? parseReleaseVersion(candidateVersion) : null;
+function isExtendedStableVersion(version: string | undefined) {
+  const parsed = version ? parseReleaseVersion(version) : null;
   return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
 }
 
@@ -554,10 +548,7 @@ function usesExtendedStableRegistryRoute(
   baselineVersion: string | undefined,
   candidateVersion: string | undefined,
 ) {
-  return (
-    isExtendedStableBaselineVersion(baselineVersion) &&
-    isExtendedStableCandidateVersion(candidateVersion)
-  );
+  return isExtendedStableVersion(baselineVersion) && isExtendedStableVersion(candidateVersion);
 }
 
 function buildPackagedUpgradeUpdateEnv(
@@ -576,10 +567,7 @@ function buildPackagedUpgradeUpdateEnv(
   return updateEnv;
 }
 
-export function verifyPackagedUpgradeUpdateResult(
-  result: CommandResult,
-  _options?: { candidateVersion?: string },
-) {
+export function verifyPackagedUpgradeUpdateResult(result: CommandResult) {
   if (result.exitCode === 0) {
     return;
   }

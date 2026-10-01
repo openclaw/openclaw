@@ -200,8 +200,6 @@ final class TalkModeManager: NSObject {
         case ignored
     }
 
-    private static let realtimeStableSessionSeconds: TimeInterval = 30
-    private static let realtimeRestartDelaysNanoseconds: [UInt64] = [500_000_000, 2_000_000_000]
     private static let realtimeVoiceSessionCloseRetryDelaysNanoseconds: [UInt64] = [0, 500_000_000, 2_000_000_000]
 
     private var isStarting = false
@@ -367,18 +365,6 @@ final class TalkModeManager: NSObject {
         isEnabled && gatewayConnected && captureIsContinuous
     }
 
-    private static func realtimeRestartAttempt(
-        previousRapidRestarts: Int,
-        activeDuration: TimeInterval) -> Int
-    {
-        activeDuration >= self.realtimeStableSessionSeconds ? 1 : previousRapidRestarts + 1
-    }
-
-    private static func realtimeRestartDelayNanoseconds(attempt: Int) -> UInt64? {
-        guard attempt > 0, attempt <= self.realtimeRestartDelaysNanoseconds.count else { return nil }
-        return self.realtimeRestartDelaysNanoseconds[attempt - 1]
-    }
-
     private func resetRealtimeRestartState() {
         self.realtimeRestartGeneration += 1
         self.realtimeSessionReadyAt = nil
@@ -459,11 +445,11 @@ final class TalkModeManager: NSObject {
 
         self.realtimeRestartGeneration += 1
         let restartGeneration = self.realtimeRestartGeneration
-        let attempt = Self.realtimeRestartAttempt(
+        let attempt = RealtimeTalkRecovery.restartAttempt(
             previousRapidRestarts: self.rapidRealtimeRestartCount,
             activeDuration: activeDuration)
         self.rapidRealtimeRestartCount = attempt
-        guard let delay = Self.realtimeRestartDelayNanoseconds(attempt: attempt) else {
+        guard let delay = RealtimeTalkRecovery.restartDelayNanoseconds(attempt: attempt) else {
             let issue = realtimeIssue(
                 message: "Realtime disconnected repeatedly.",
                 phase: "reconnect")
@@ -1934,11 +1920,11 @@ final class TalkModeManager: NSObject {
                     code: 2,
                     userInfo: [NSLocalizedDescriptionKey: "Gateway returned a mismatched chat run ID"])
             }
-            let normalizedStatus = Self.normalizedChatSendStatus(acknowledgement.status)
+            let normalizedStatus = ChatSendStatus.normalized(acknowledgement.status)
             self.logger.info(
                 "chat.send ok runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send ok runId=\(runId) status=\(normalizedStatus)")
-            if Self.isTerminalChatSendFailure(acknowledgement.status) {
+            if ChatSendStatus.acceptance(of: acknowledgement.status) == .terminalFailure {
                 streamingOwner.terminalStatus = (
                     normalizedStatus == "error"
                         ? String(localized: "Chat error")
@@ -1996,7 +1982,7 @@ final class TalkModeManager: NSObject {
             streamingOwner.speechGeneration = self.speechGeneration
         }
         let completion: ChatCompletionResult
-        if Self.isTerminalChatSendSuccess(acknowledgement.status) {
+        if ChatSendStatus.acceptance(of: acknowledgement.status) == .terminalSuccess {
             GatewayDiagnostics.log("talk: chat.send terminal ok runId=\(runId); using history fallback")
             completion = ChatCompletionResult(state: .final, assistantText: nil)
         } else {
@@ -2879,10 +2865,6 @@ final class TalkModeManager: NSObject {
             includeVoiceDirectiveHint: false)
     }
 
-    private static func normalizedChatSendStatus(_ status: String) -> String {
-        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
     private nonisolated static func matchesChatEvent(_ event: EventFrame, runId: String) -> Bool {
         guard event.event == "chat", let payload = event.payload else { return false }
         let chatEvent = try? GatewayPayloadDecoding.decode(
@@ -2891,20 +2873,11 @@ final class TalkModeManager: NSObject {
         return chatEvent?.runId == runId
     }
 
-    private static func isTerminalChatSendSuccess(_ status: String) -> Bool {
-        self.normalizedChatSendStatus(status) == "ok"
-    }
-
-    private static func isTerminalChatSendFailure(_ status: String) -> Bool {
-        let normalized = self.normalizedChatSendStatus(status)
-        return normalized == "timeout" || normalized == "error"
-    }
-
     private static func chatSendHistorySince(
         response: OpenClawChatSendResponse,
         startedAt: Double) -> Double?
     {
-        self.isTerminalChatSendSuccess(response.status) ? nil : startedAt
+        ChatSendStatus.acceptance(of: response.status) == .terminalSuccess ? nil : startedAt
     }
 
     private func sendChat(
@@ -4875,19 +4848,6 @@ extension TalkModeManager {
             isEnabled: isEnabled,
             gatewayConnected: gatewayConnected,
             captureIsContinuous: captureIsContinuous)
-    }
-
-    static func _test_realtimeRestartAttempt(
-        previousRapidRestarts: Int,
-        activeDuration: TimeInterval) -> Int
-    {
-        self.realtimeRestartAttempt(
-            previousRapidRestarts: previousRapidRestarts,
-            activeDuration: activeDuration)
-    }
-
-    static func _test_realtimeRestartDelayNanoseconds(attempt: Int) -> UInt64? {
-        self.realtimeRestartDelayNanoseconds(attempt: attempt)
     }
 
     static func _test_isPCMFormatRejectedByAPI(_ error: Error?) -> Bool {

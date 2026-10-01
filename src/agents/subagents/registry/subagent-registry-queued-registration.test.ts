@@ -17,13 +17,13 @@ import {
   SubagentRegistryWriteError,
   withSubagentRegistryWriteAuthority,
 } from "./subagent-registry-persistence.js";
+import * as registryPublication from "./subagent-registry-publication.js";
 import { registerQueuedRegistrationAdmissionCases } from "./subagent-registry-queued-admission.test-support.js";
 import { registerQueuedCancelledLaunchCases } from "./subagent-registry-queued-cancelled-launch.test-support.js";
 import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued-registration-claims.test-support.js";
 import { createQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
-import * as registryState from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -77,12 +77,19 @@ beforeEach(() => {
       };
     },
   );
-  vi.spyOn(registryState, "onSubagentRegistryPersisted").mockImplementation((listener) => {
-    mocks.persisted.add(listener);
-    return () => {
-      mocks.persisted.delete(listener);
-    };
-  });
+  const subscribe = registryPublication.subscribeSubagentRunChanges;
+  vi.spyOn(registryPublication, "subscribeSubagentRunChanges").mockImplementation(
+    (phase, listener) => {
+      if (phase === "projection") {
+        return subscribe(phase, listener);
+      }
+      const wake = () => listener({ runIds: undefined, sessionKeys: undefined });
+      mocks.persisted.add(wake);
+      return () => {
+        mocks.persisted.delete(wake);
+      };
+    },
+  );
   vi.clearAllMocks();
   mocks.lifecycle = "original";
   mocks.database = "original-db";

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { normalizePersistedSessionEntryShape } from "../../commands/doctor/shared/session-entry-shape.js";
 import { withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
@@ -13,7 +14,6 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
-import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
 
 it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);

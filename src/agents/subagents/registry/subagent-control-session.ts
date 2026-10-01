@@ -1,5 +1,4 @@
 import { cloneEnvWithPlatformSemantics } from "../../../config/config-env-vars.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { withSessionEntryWorker } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
@@ -18,10 +17,11 @@ import {
   type OpenClawAgentDatabaseExecution,
 } from "../../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
-import { resolveSessionAgentId } from "../../agent-scope.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 
 export type SubagentKillSession = {
+  agentId: string;
   storePath: string;
   entry?: SessionEntry;
   assertCurrent: () => void;
@@ -35,12 +35,16 @@ export async function prepareSubagentKillSession(
   sessionKey: string,
   assertOwner: () => void,
   expected?: AgentRunSessionTarget,
+  childAgentId?: string,
 ): Promise<SubagentKillSession> {
-  const agentId = resolveSessionAgentId({ config: cfg, sessionKey });
+  const childOwner = resolveSubagentChildSessionOwner(
+    { childSessionKey: sessionKey, childAgentId },
+    cfg,
+  );
+  const { agentId } = childOwner;
   const env = cloneEnvWithPlatformSemantics(process.env);
   const selected = expected?.sessionKey === sessionKey ? { ...expected } : undefined;
-  const storePath =
-    selected?.storePath ?? resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const storePath = selected?.storePath ?? childOwner.storePath;
   let releaseLifetime: (() => void) | undefined;
   let execution: OpenClawAgentDatabaseExecution | undefined;
   const release = async () => {
@@ -126,6 +130,7 @@ export async function prepareSubagentKillSession(
         };
         assertCurrent();
         return {
+          agentId,
           storePath,
           entry,
           release,
@@ -155,7 +160,6 @@ export async function persistSubagentAbortedLastRun(params: {
   abortedLastRun: boolean;
   isCurrent?: (current: SessionEntry) => boolean;
   assertCommitAllowed?: () => void;
-  strict?: boolean;
 }): Promise<boolean> {
   if (!params.hasSessionEntry) {
     return true;
@@ -202,9 +206,6 @@ export async function persistSubagentAbortedLastRun(params: {
     return true;
   } catch (error) {
     if (hasSqliteWorkerOutcomeUnknown(error)) {
-      throw error;
-    }
-    if (params.strict) {
       throw error;
     }
     logVerbose(

@@ -106,14 +106,14 @@ function nextLedgerRead(kind?: "run" | "status") {
 
 function nextPollSchedule() {
   const scheduled = createDeferredCore();
-  const schedule = scheduler.schedule.bind(scheduler);
-  const observer = vi.spyOn(scheduler, "schedule").mockImplementation((input) => {
-    const job = schedule(input);
-    if (input.id === "update.run-poll") {
+  const arm = clock.clock.arm;
+  const observer = vi.spyOn(clock.clock, "arm").mockImplementation((run, delayMs) => {
+    const cancel = arm(run, delayMs);
+    if (delayMs === 2_000) {
       observer.mockRestore();
       scheduled.resolve();
     }
-    return job;
+    return cancel;
   });
   return scheduled.promise;
 }
@@ -438,15 +438,18 @@ describe("Gateway update run watcher", () => {
     expect(ledger.reads).toHaveBeenCalledTimes(reads);
   });
 
-  it("stops polling and cannot be woken after teardown", async () => {
+  it("stops polling and cannot be woken after teardown while sibling jobs remain live", async () => {
     beginRun();
     const initial = createDeferredCore();
     const broadcast = vi.fn(() => initial.resolve());
     watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
     await initial.promise;
+    const sibling = vi.fn();
+    scheduler.schedule({ id: "sibling", delayMs: 1_000, run: sibling });
     await watcher.stop();
     const reads = ledger.reads.mock.calls.length;
     await clock.advanceBy(60_000);
+    expect(sibling).toHaveBeenCalledOnce();
     expect(ledger.reads).toHaveBeenCalledTimes(reads);
     expect(broadcast).toHaveBeenCalledOnce();
     wakeUpdateRunWatcher();

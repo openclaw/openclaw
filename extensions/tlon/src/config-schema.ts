@@ -1,4 +1,3 @@
-// Tlon helper module supports config schema behavior.
 import {
   ChannelImplicitMentionsSchema,
   buildChannelConfigSchema,

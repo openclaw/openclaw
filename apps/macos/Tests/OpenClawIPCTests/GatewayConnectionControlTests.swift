@@ -97,15 +97,12 @@ final class GatewayConnectionEndpointSource: @unchecked Sendable {
 }
 
 actor GatewayConnectionSuspensionGate {
-    private var didStart = false
+    private let started = AsyncTestGate()
     private var isOpen = false
-    private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
 
     func suspend() async {
-        self.didStart = true
-        self.startWaiters.forEach { $0.resume() }
-        self.startWaiters.removeAll()
+        self.started.open()
         if !self.isOpen {
             await withCheckedContinuation { continuation in
                 self.releaseWaiters.append(continuation)
@@ -114,10 +111,7 @@ actor GatewayConnectionSuspensionGate {
     }
 
     func waitUntilStarted() async {
-        guard !self.didStart else { return }
-        await withCheckedContinuation { continuation in
-            self.startWaiters.append(continuation)
-        }
+        await self.started.wait()
     }
 
     func open() {
@@ -236,7 +230,7 @@ private func assertConfigLookupCannotRecreateRoute(
     #expect(await connection._test_configuredURL() == nil)
 }
 
-@Suite(.serialized) struct GatewayConnectionControlTests {
+@Suite(.serialized, .testWaitLimit) struct GatewayConnectionControlTests {
     @Test func `direct shared connection success retires only its current route mismatch`() async throws {
         let urlA = try #require(URL(string: "ws://127.0.0.1:49220"))
         let urlB = try #require(URL(string: "ws://127.0.0.1:49221"))
@@ -342,7 +336,8 @@ private func assertConfigLookupCannotRecreateRoute(
             #expect(activity.mainSessionKey == "primary-initial")
 
             _ = try await primary.request(method: "health", params: nil, retryTransportFailures: false)
-            #expect(await self.waitForMainSessionKey("primary-next"))
+            try await TestWait.observed("primary main session") { activity.mainSessionKey == "primary-next" }
+            #expect(activity.mainSessionKey == "primary-next")
 
             await profile.shutdown()
             await control.disconnect()
@@ -365,7 +360,10 @@ private func assertConfigLookupCannotRecreateRoute(
             let request = Task {
                 try await connection.request(method: "status", params: nil)
             }
-            try #require(await self.waitForRequest(on: session))
+            try await TestWait.state("pending status request") {
+                session.latestTask()?.snapshotSendCount() ?? 0 >= 2
+            }
+            try #require(session.latestTask()?.snapshotSendCount() ?? 0 >= 2)
 
             request.cancel()
 
@@ -428,9 +426,8 @@ private func assertConfigLookupCannotRecreateRoute(
         } operation: { connection, _ in
             let control = ControlChannel(gateway: connection, endpointRevision: { 1 })
             control.endpointDidChange(.unavailable(mode: .local, reason: "offline", routeRevision: 1))
-            let deadline = ContinuousClock.now + .seconds(2)
-            while GatewayProcessManager.shared.status == .stopped, ContinuousClock.now < deadline {
-                try? await Task.sleep(for: .milliseconds(2))
+            try await TestWait.observed("local control recovery") {
+                GatewayProcessManager.shared.status != .stopped
             }
             #expect(GatewayProcessManager.shared.status != .stopped)
             await control.disconnect()
@@ -654,10 +651,7 @@ private func assertConfigLookupCannotRecreateRoute(
 
         let socketGeneration = try #require(await connection._test_activeSocketGeneration())
         await connection._test_handleDisconnect(socketGeneration: socketGeneration)
-        let eventAfterDisconnect = try await AsyncTimeout.withTimeout(
-            seconds: 1,
-            onTimeout: { CancellationError() },
-            operation: { await nextEvent.value })
+        let eventAfterDisconnect = try await TestWait.value(of: nextEvent, "realtime disconnect")
         #expect(eventAfterDisconnect == nil)
 
         await connection.shutdown()
@@ -722,18 +716,15 @@ private func assertConfigLookupCannotRecreateRoute(
         let connection = GatewayConnection(
             testEndpointProvider: { source.snapshot() },
             sessionBox: WebSocketSessionBox(session: session))
-        let entryTask = Task {
-            var iterator = configRequestEntered.stream.makeAsyncIterator()
-            return await iterator.next()
-        }
         let staleBootstrap = Task {
             try await connection.acquireRealtimeTalkBootstrap()
         }
         do {
-            _ = try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { CancellationError() },
-                operation: { await entryTask.value })
+            var entered = configRequestEntered.stream.makeAsyncIterator()
+            guard await entered.next() != nil, !Task.isCancelled else {
+                Issue.record("Still waiting for initial talk config request")
+                throw CancellationError()
+            }
             try source.setURL(#require(URL(string: "wss://route-b.example.invalid:9443")))
             try await connection.refresh()
             releaseConfig.open()
@@ -765,17 +756,13 @@ private func assertConfigLookupCannotRecreateRoute(
             }
         } catch {
             releaseConfig.open()
-            entryTask.cancel()
             staleBootstrap.cancel()
-            _ = await entryTask.value
             _ = try? await staleBootstrap.value
             await connection.shutdown()
             throw error
         }
         releaseConfig.open()
-        entryTask.cancel()
         staleBootstrap.cancel()
-        _ = await entryTask.value
         _ = try? await staleBootstrap.value
         await connection.shutdown()
     }
@@ -843,10 +830,7 @@ private func assertConfigLookupCannotRecreateRoute(
                 return received
             }
             do {
-                let received = try await AsyncTimeout.withTimeout(
-                    seconds: 1,
-                    onTimeout: { CancellationError() },
-                    operation: { await terminalRead.value })
+                let received = try await TestWait.value(of: terminalRead, "realtime overflow termination")
                 #expect(!received.isEmpty)
                 #expect(received.count <= 2)
             } catch {
@@ -876,9 +860,10 @@ private func assertConfigLookupCannotRecreateRoute(
                 return await (first, iterator.next())
             }
             do {
-                _ = try await AsyncTimeout.withTimeout(seconds: 1, onTimeout: { CancellationError() }) {
-                    var iterator = firstRead.stream.makeAsyncIterator()
-                    return await iterator.next()
+                var firstReadIterator = firstRead.stream.makeAsyncIterator()
+                guard await firstReadIterator.next() != nil, !Task.isCancelled else {
+                    Issue.record("Still waiting for first realtime event")
+                    throw CancellationError()
                 }
                 await connection._test_handlePush(
                     .seqGap(expected: 3, received: 4), socketGeneration: socketGeneration)
@@ -888,8 +873,7 @@ private func assertConfigLookupCannotRecreateRoute(
                         payload: AnyCodable(["runId": "tool-run", "state": "final"]),
                         seq: 4, stateversion: nil)),
                     socketGeneration: socketGeneration)
-                let (first, second) = try await AsyncTimeout.withTimeout(
-                    seconds: 1, onTimeout: { CancellationError() }, operation: { await reader.value })
+                let (first, second) = try await TestWait.value(of: reader, "realtime event delivery")
                 #expect(first?.event == "talk.event")
                 #expect(first?.seq == 2)
                 #expect(second?.event == "chat")
@@ -918,8 +902,7 @@ private func assertConfigLookupCannotRecreateRoute(
                 return await iterator.next()
             }
             do {
-                let event = try await AsyncTimeout.withTimeout(
-                    seconds: 1, onTimeout: { CancellationError() }, operation: { await reader.value })
+                let event = try await TestWait.value(of: reader, "realtime event delivery")
                 #expect(event == nil)
             } catch {
                 reader.cancel()
@@ -941,13 +924,10 @@ private func assertConfigLookupCannotRecreateRoute(
             reader.cancel()
             start.open()
             do {
-                let event = try await AsyncTimeout.withTimeout(
-                    seconds: 1, onTimeout: { CancellationError() }, operation: { await reader.value })
+                let event = try await TestWait.value(of: reader, "realtime event delivery")
                 #expect(event == nil)
-                try await AsyncTimeout.withTimeout(seconds: 1, onTimeout: { CancellationError() }) {
-                    while await !(connection.realtimeTalkSubscribers.isEmpty) {
-                        try await Task.sleep(for: .milliseconds(5))
-                    }
+                try await TestWait.state("realtime subscription removal") {
+                    await connection.realtimeTalkSubscribers.isEmpty
                 }
             } catch {
                 reader.cancel()
@@ -1615,17 +1595,6 @@ extension GatewayConnectionControlTests {
             #expect(requests.snapshot().count == 2)
             #expect(session.snapshotMakeCount() >= 1)
         }
-    }
-
-    private func waitForRequest(on session: GatewayTestWebSocketSession) async -> Bool {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while ContinuousClock.now < deadline {
-            if session.latestTask()?.snapshotSendCount() ?? 0 >= 2 {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(2))
-        }
-        return false
     }
 
     private func assertDeviceTokenIsolation(

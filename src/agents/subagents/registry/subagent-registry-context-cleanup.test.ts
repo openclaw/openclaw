@@ -1,5 +1,8 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import {
@@ -10,14 +13,19 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
+import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
 vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
+vi.mock("../../internal-session-effects.js", () => ({
+  removeInternalSessionEffectsSession: vi.fn(),
+}));
 vi.mock("../../runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
 }));
@@ -27,11 +35,49 @@ const { resolveContextEngine: actualResolveContextEngine } = await vi.importActu
 >("../../../context-engine/registry.js");
 
 describe("subagent registry context cleanup", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.mocked(removeInternalSessionEffectsSession).mockReset();
     vi.mocked(getRuntimeConfig).mockReset();
     vi.mocked(resolveContextEngine).mockReset();
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     resetSubagentRegistryRuntimeLoadersForTests();
+  });
+
+  it("preserves collector attachments when ownership changes during internal-effects cleanup", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-collector-cleanup-"));
+    const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
+    const entry = createSubagentRunRecord({
+      runId: "collector-cleanup",
+      childSessionKey: "agent:main:subagent:collector-cleanup",
+      attachmentId,
+    });
+    const attachmentDir = path.join(
+      resolveSubagentSessionAttachmentRootDir({
+        agentId: "main",
+        childSessionKey: entry.childSessionKey,
+      }),
+      attachmentId,
+    );
+    await fs.mkdir(attachmentDir, { recursive: true });
+    const sentinel = path.join(attachmentDir, "owned.txt");
+    await fs.writeFile(sentinel, "successor attachment");
+    const gate = createDeferred();
+    vi.mocked(removeInternalSessionEffectsSession).mockReturnValueOnce(gate.promise);
+    let current = true;
+    const cleanup = createSubagentRegistryContextCleanup({
+      persist: vi.fn(),
+      persistAsyncOrThrow: vi.fn(async () => {}),
+      isEndedHookOwnerCurrent: () => current,
+      warn: vi.fn(),
+    });
+    const pending = cleanup.cleanupCollectorLaunchResources(entry, { isCurrent: () => current });
+    current = false;
+    gate.resolve();
+
+    await expect(pending).resolves.toBe(false);
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("successor attachment");
   });
 
   it.each([

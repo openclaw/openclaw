@@ -16,6 +16,7 @@ export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & {
 
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   storePath: string;
   archiveRemovedEntryTranscripts?: boolean;
   /** Preserve explicitly foreign plugin-owned state while retaining ownerless legacy rows. */

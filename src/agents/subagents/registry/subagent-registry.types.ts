@@ -134,6 +134,12 @@ export type RequesterSettleWakeState = {
   requesterYieldBatch?: true;
   /** Present only when an idle requester needs a new turn after yielding. */
   afterRequesterYield?: true;
+  /**
+   * A yielded batch with private results was admitted with a deliverable requester
+   * final. Absent on a dispatching private batch means an earlier build admitted it
+   * as a private turn; replay keeps that policy.
+   */
+  yieldedFinalDeliverable?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
   /** Reference to the conversation receipt for this presentation, not completion credit. */
@@ -165,8 +171,9 @@ type SubagentKillIntent = {
   suppressTaskDelivery?: boolean;
 };
 
-/** Persisted execution, completion, delivery, and attachment state for child runs. */
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
+  /** Agent captured at registration for raw child session keys. */
+  childAgentId?: string;
   /** Child identity stays fixed when recovery redirects transcript writes. */
   childSessionIdentity?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   /** Exact requester attempt for cancellation, independent of completion messaging. */

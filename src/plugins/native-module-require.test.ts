@@ -97,18 +97,6 @@ describe("tryNativeRequireJavaScriptModule", () => {
     expect(() => tryNativeRequireJavaScriptModule(modulePath)).toThrow("missing-dependency.cjs");
   });
 
-  it("does not retry an existing module after a missing dependency error", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'require("openclaw/plugin-sdk/core");\n', "utf8");
-
-    expect(() =>
-      tryNativeRequireJavaScriptModule(modulePath, {
-        fallbackOnMissingDependency: true,
-      }),
-    ).toThrow("openclaw/plugin-sdk/core");
-  });
-
   beforeAll(() => {
     const dir = tempDirs.make("openclaw-native-require-");
     const sdkPath = path.join(dir, "sdk.js");
@@ -198,6 +186,8 @@ describe("tryNativeRequireJavaScriptModule", () => {
     });
     const modulePath = path.join(dir, "space # percent% plugin.cjs");
     const probePath = path.join(dir, "probe.mjs");
+    const tsconfigPath = path.join(dir, "tsconfig.json");
+    fs.writeFileSync(tsconfigPath, "{}\n");
     fs.writeFileSync(
       probePath,
       `import assert from "node:assert/strict";
@@ -215,15 +205,26 @@ for (const target of [modulePath, pathToFileURL(modulePath).href]) {
 assert.deepEqual(load(pathToFileURL(modulePath + ".missing.cjs").href), { ok: false });
 fs.writeFileSync(modulePath + ".broken.cjs", 'require("./missing-dependency.cjs");\\n');
 assert.throws(() => load(pathToFileURL(modulePath + ".broken.cjs").href), /missing-dependency\\.cjs/);
+fs.writeFileSync(modulePath + ".missing-peer.cjs", 'require("openclaw/plugin-sdk/core");\\n');
+assert.throws(() => load(modulePath + ".missing-peer.cjs", {
+  fallbackOnMissingDependency: true,
+}), /openclaw\\/plugin-sdk\\/core/);
 console.log("native path + file URL process identity; missing target/dependency controls passed");
 `,
     );
-    const result = spawnSync(process.execPath, [probePath], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      encoding: "utf8",
-      timeout: 30_000,
-    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        ...(process.versions.bun ? ["--no-install", "--tsconfig-override", tsconfigPath] : []),
+        probePath,
+      ],
+      {
+        cwd: dir,
+        env: { ...process.env, NODE_OPTIONS: "" },
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe(

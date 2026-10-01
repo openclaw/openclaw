@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
+import type { StorageProvider } from "../storage/types.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
@@ -11,6 +12,7 @@ import type {
   PluginRecord,
   PluginTextTransformsRegistration,
 } from "./registry-types.js";
+import { validateStorageProviderContract } from "./storage-provider-registry.js";
 import type { CliBackendPlugin, ProviderPlugin, WorkerProvider } from "./types.js";
 import { validateWorkerProviderContract } from "./worker-provider-registry.js";
 
@@ -256,6 +258,27 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     );
   };
 
+  const registerStorageProvider = (record: PluginRecord, provider: StorageProvider) => {
+    const validation = validateStorageProviderContract(
+      provider,
+      record.contracts?.storageProviders ?? [],
+    );
+    if (!validation.ok) {
+      reportRegistrationError(record, validation.message);
+      return;
+    }
+    const { id } = validation;
+    const existing = registry.storageProviders.get(id);
+    if (existing) {
+      reportRegistrationError(
+        record,
+        `storage provider already registered: ${id} (${existing.pluginId})`,
+      );
+      return;
+    }
+    registry.storageProviders.set(id, createRegistration(record, { provider }));
+  };
+
   return {
     registerProvider,
     registerAgentHarness,
@@ -263,6 +286,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerTextTransforms,
     registerEmbeddingProvider,
     registerWorkerProvider,
+    registerStorageProvider,
     registerSpeechProvider: createProviderLikeRegistrar({
       kindLabel: "speech provider",
       registrations: registry.speechProviders,

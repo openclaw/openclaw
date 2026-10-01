@@ -62,9 +62,6 @@ async function findStandardChannelMember(params: {
   return result.found;
 }
 
-/**
- * Fetch a user profile from Microsoft Graph by user ID.
- */
 export async function getMemberInfoMSTeams(params: GetMemberInfoMSTeamsParams) {
   const isCurrentRequester =
     normalizeUserId(params.userId) === normalizeUserId(params.currentRequesterId);

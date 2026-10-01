@@ -9,13 +9,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
-import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
-import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
@@ -26,14 +24,17 @@ import { defaultRuntime } from "../../runtime.js";
 import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { createUpdateProgress } from "./progress.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { failUpdateCommandRun } from "./update-command-result.js";
 import {
+  registerUpdateRunReceiptTests,
+  registerUpdateRunReceiptFailureTests,
+} from "./update-command-run-progress.test-support.js";
+import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
-  createUpdateRunProgress,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -56,6 +57,7 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
   : [];
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
 it.each([
   { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 0 },
   { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 86 },
@@ -110,8 +112,8 @@ it.each([
   expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(message);
   expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(otherWarning);
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -170,88 +172,8 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
   }
 });
 
-it("presents committed steps without reopening the ledger for display", () => {
-  const env = { OPENCLAW_STATE_DIR: dirs.make("update-progress-committed-") };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-  const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  let presentation: ReturnType<typeof createUpdateProgress> | undefined;
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
-  try {
-    presentation = createUpdateProgress(true, run);
-    const progress = createUpdateRunProgress(run, presentation.progress);
-    updateRunLedger.recordUpdateRunPhase(run.runId, "validating", {}, { env });
-    const reread = vi.spyOn(updateRunLedger, "getUpdateRun").mockImplementation(() => {
-      throw new Error("step presentation must use its committed row");
-    });
-    try {
-      for (const [index, name] of ["fetch", "build", "doctor"].entries()) {
-        const step = { name, command: `run ${name}`, index, total: 3 };
-        progress.onStepStart?.(step);
-        progress.onStepComplete?.({
-          ...step,
-          durationMs: 1,
-          exitCode: name === "fetch" ? 0 : 1,
-          ...(name === "build" ? { stdoutTail: "Build type error" } : {}),
-          ...(name === "doctor"
-            ? {
-                advisory: {
-                  kind: "package-post-install-doctor" as const,
-                  message: "Skipped optional cache cleanup",
-                },
-                warnings: ["Skipped optional cache cleanup", "Skipped legacy cache cleanup"],
-              }
-            : {}),
-        });
-      }
-      expect(log).toHaveBeenCalledWith("validating — fetch...");
-      expect(log).toHaveBeenCalledWith("validating — build...");
-      expect(log.mock.calls.flat().join("\n")).toContain("Build type error");
-      expect(log.mock.calls.flat().join("\n")).toContain("Skipped optional cache cleanup");
-      expect(
-        log.mock.calls
-          .flat()
-          .filter((line) => typeof line === "string" && line.startsWith("Phase:")),
-      ).toEqual(["Phase: requested", "Phase: validating"]);
-    } finally {
-      reread.mockRestore();
-    }
-    const recorded = getUpdateRun(run.runId, { env });
-    expect(
-      recorded?.steps
-        .filter((step) => step.step === "fetch" || step.step === "build")
-        .map(({ step, status, detail }) => ({ step, status, detail })),
-    ).toEqual([
-      { step: "fetch", status: "completed", detail: undefined },
-      { step: "build", status: "failed", detail: "Exit code: 1; Build type error" },
-    ]);
-    expect(recorded?.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ step: "doctor", status: "completed" }),
-        expect.objectContaining({
-          step: "warning:doctor",
-          status: "completed",
-          detail: "Skipped optional cache cleanup",
-        }),
-        expect.objectContaining({
-          step: "warning:doctor:2",
-          status: "completed",
-          detail: "Skipped legacy cache cleanup",
-        }),
-      ]),
-    );
-  } finally {
-    try {
-      presentation?.dispose();
-    } finally {
-      if (tty) {
-        Object.defineProperty(process.stdout, "isTTY", tty);
-      } else {
-        Reflect.deleteProperty(process.stdout, "isTTY");
-      }
-    }
-  }
-});
+registerUpdateRunReceiptTests(dirs);
+
 it.each(["state", "config", "include", "environment"])(
   "revalidates changed %s input after target initialization without changing its owner",
   async (changed) => {
@@ -822,33 +744,4 @@ it.each([false, true])(
   },
 );
 
-it.each(["in_progress", "completed"] as const)(
-  "identifies a progress ledger failure at preflight worktree (%s)",
-  (status) => {
-    const cause = new GatewayStateOwnerContentionError("/synthetic/openclaw.sqlite");
-    const record = vi.spyOn(updateRunLedger, "recordUpdateRunStep").mockImplementation(() => {
-      throw cause;
-    });
-    const display = { onStepStart: vi.fn(), onStepComplete: vi.fn() };
-    const progress = createUpdateRunProgress({ runId: "synthetic-run", env: {} }, display);
-    const step = { name: "preflight worktree", command: "git worktree add", index: 1, total: 3 };
-    try {
-      const invoke = () =>
-        status === "in_progress"
-          ? progress.onStepStart?.(step)
-          : progress.onStepComplete?.({ ...step, durationMs: 1, exitCode: 0 });
-      expect(invoke).toThrow(
-        `Could not record update step "preflight worktree" (${status}): ${cause.message}`,
-      );
-      try {
-        invoke();
-      } catch (error) {
-        expect(error).toHaveProperty("cause", cause);
-      }
-      expect(display.onStepStart).not.toHaveBeenCalled();
-      expect(display.onStepComplete).not.toHaveBeenCalled();
-    } finally {
-      record.mockRestore();
-    }
-  },
-);
+registerUpdateRunReceiptFailureTests(dirs);

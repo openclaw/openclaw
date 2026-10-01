@@ -133,23 +133,23 @@ export async function swapStagedPackageInstall(
         "Preparation custody is retained by the package recovery journal; run its repair command.",
       ];
     }
-    if (activation) {
-      packageBackedUp = await activation.disarmRollback();
-    }
     const messages: string[] = [];
-    if (!native && (packageBackedUp || (!hadPackage && rollback.length > 0))) {
-      try {
+    try {
+      if (activation) {
+        packageBackedUp = await activation.disarmRollback();
+      }
+      if (!native && (packageBackedUp || (!hadPackage && rollback.length > 0))) {
         // Refuse known-bad recovery material before touching the candidate or
         // its launchers, including launchers from a package-absent baseline.
         // This observation does not exclude concurrent writers.
         await verifyNpmRecovery(backupRoot, true);
-      } catch (error) {
-        assertCurrent();
-        packageRollbackVerified = false;
-        return [
-          `${formatErrorMessage(error)}; current package unchanged; recovery evidence retained in ${targetLayout.globalRoot}`,
-        ];
       }
+    } catch (error) {
+      assertCurrent();
+      packageRollbackVerified = false;
+      return [
+        `${results.rollbackError(error)}; current package unchanged; recovery evidence retained in ${targetLayout.globalRoot}`,
+      ];
     }
     if (process.platform === "freebsd" && (packageBackedUp || rollback.length > 0)) {
       try {
@@ -218,7 +218,7 @@ export async function swapStagedPackageInstall(
       } catch (error) {
         assertCurrent();
         packageRollbackVerified = false;
-        messages.push(formatErrorMessage(error));
+        messages.push(results.rollbackError(error));
       }
     }
     if (native) {
@@ -719,7 +719,7 @@ export async function swapStagedPackageInstall(
         ? error
         : new PackageUpdateActivationError(error);
     }
-    const errors = [formatErrorMessage(baselineError ?? error)];
+    const errors = [results.rollbackError(baselineError ?? error)];
     if (!retained && !liveMutationStarted && !activation && !preparationCustody) {
       // Preparation can fail before a baseline exists. There is nothing to
       // restore; the caller independently verifies the untouched runtime.

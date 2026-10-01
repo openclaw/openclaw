@@ -11,6 +11,7 @@ import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/sr
 import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type SessionCatalogListProviderParams = {
@@ -300,31 +301,24 @@ export function createSessionCatalogAdoptionCoordinator<TResult extends { sessio
     create: () => Promise<{ sessionKey: string }>;
     complete: (continued: { sessionKey: string }) => Promise<TResult>;
   }): Promise<TResult> => {
-    const pending = operations.get(params.sourceKey);
-    if (pending) {
-      return await pending;
-    }
-    const operation = (async () => {
-      const existing = await params.findExisting();
-      // Completion preserves an existing link's marker, or supplies a baseline after removal.
-      const continued = existing
-        ? { sessionKey: existing }
-        : await params.create().catch(async (error: unknown) => {
-            const raced = await params.findExisting();
-            if (raced) {
-              return { sessionKey: raced };
-            }
-            throw error;
-          });
-      return await params.complete(continued);
-    })();
-    operations.set(params.sourceKey, operation);
-    try {
-      return await operation;
-    } finally {
-      if (operations.get(params.sourceKey) === operation) {
-        operations.delete(params.sourceKey);
-      }
-    }
+    return await getOrCreatePromise(
+      operations,
+      params.sourceKey,
+      async () => {
+        const existing = await params.findExisting();
+        // Completion preserves an existing link's marker, or supplies a baseline after removal.
+        const continued = existing
+          ? { sessionKey: existing }
+          : await params.create().catch(async (error: unknown) => {
+              const raced = await params.findExisting();
+              if (raced) {
+                return { sessionKey: raced };
+              }
+              throw error;
+            });
+        return await params.complete(continued);
+      },
+      { evictOnSettled: true },
+    );
   };
 }

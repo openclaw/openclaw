@@ -18,7 +18,7 @@ import {
   resolveSkillUploadDatabaseOptions,
   type SkillUploadMetadataRow,
 } from "./upload-store.sqlite.js";
-import type { SkillUploadWorkerOperations } from "./upload-store.worker.js";
+import type { SkillUploadWorkerOperations } from "./upload-store.worker-contract.js";
 type SkillUploadScope = Pick<SqliteWorkerStore<SkillUploadWorkerOperations>, "execute">;
 
 /** Time window in which uploaded skill archive chunks may be committed. */

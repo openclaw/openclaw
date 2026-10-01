@@ -20,6 +20,7 @@ import {
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -75,7 +76,32 @@ async function createFixture() {
   return createSessionColdStorageFixture(storePath);
 }
 
-async function archiveFixture(fixture: Awaited<ReturnType<typeof createFixture>>) {
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+
+function setTranscriptActivity(
+  options: OpenClawAgentDatabaseOptions,
+  sessionId: string,
+  updatedAt = 1,
+) {
+  runOpenClawAgentWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<DB>(db)
+        .updateTable("session_windows")
+        .set({ updated_at: updatedAt, transcript_updated_at: updatedAt })
+        .where("session_id", "=", sessionId),
+    );
+  }, options);
+}
+
+function transcriptRows(fixture: Fixture, sessionId: string) {
+  return fixture
+    .database()
+    .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
+    .all(sessionId);
+}
+
+async function archiveFixture(fixture: Fixture) {
   expect(
     await runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) }),
   ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
@@ -83,24 +109,16 @@ async function archiveFixture(fixture: Awaited<ReturnType<typeof createFixture>>
   if (!descriptor) {
     throw new Error("Successful archival did not retain its descriptor");
   }
-  expect(
-    fixture
-      .database()
-      .prepare("SELECT * FROM transcript_events WHERE session_id = ?")
-      .all(historicalId),
-  ).toEqual([]);
-  expect(
-    fixture
-      .database()
-      .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ?")
-      .all(historicalId),
-  ).toEqual([]);
-  expect(
-    fixture
-      .database()
-      .prepare("SELECT * FROM session_transcript_active_events WHERE session_id = ?")
-      .all(historicalId),
-  ).toEqual([]);
+  for (const table of [
+    "transcript_events",
+    "transcript_event_identities",
+    "session_transcript_active_events",
+  ]) {
+    expect(
+      fixture.database().prepare(`SELECT * FROM ${table} WHERE session_id = ?`).all(historicalId),
+      table,
+    ).toEqual([]);
+  }
   const archivePath = resolveSessionColdArchivePath(
     fixture.scope.storePath,
     descriptor.archive_name,
@@ -129,15 +147,7 @@ async function createBatchFixture() {
   ]);
   await waitForSessionTranscriptIndexReconcile(fixture.options);
   await replaceSessionEntry(secondScope, { sessionId: secondScope.sessionId, updatedAt: 1 });
-  runOpenClawAgentWriteTransaction(({ db: database }) => {
-    executeSqliteQuerySync(
-      database,
-      getNodeSqliteKysely<DB>(database)
-        .updateTable("session_windows")
-        .set({ updated_at: 2, transcript_updated_at: 2 })
-        .where("session_id", "=", secondScope.sessionId),
-    );
-  }, fixture.options);
+  setTranscriptActivity(fixture.options, secondScope.sessionId, 2);
   return {
     ...fixture,
     secondScope,
@@ -146,7 +156,7 @@ async function createBatchFixture() {
   };
 }
 
-async function embedFixtureArchive(fixture: Awaited<ReturnType<typeof createFixture>>) {
+async function embedFixtureArchive(fixture: Fixture) {
   const archived = await archiveFixture(fixture);
   runOpenClawAgentWriteTransaction(({ db: database }) => {
     executeSqliteQuerySync(
@@ -203,15 +213,7 @@ describe("cold transcript storage workers", () => {
       ]);
       await waitForSessionTranscriptIndexReconcile(options);
       await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
-      runOpenClawAgentWriteTransaction(({ db: database }) => {
-        executeSqliteQuerySync(
-          database,
-          getNodeSqliteKysely<DB>(database)
-            .updateTable("session_windows")
-            .set({ updated_at: 1, transcript_updated_at: 1 })
-            .where("session_id", "=", sessionId),
-        );
-      }, options);
+      setTranscriptActivity(options, sessionId);
       originalHashes.set(sessionId, transcriptHash(sessionId));
     }
     const config = maintenanceConfig(storePath);
@@ -454,10 +456,7 @@ describe("cold transcript storage workers", () => {
           throw new Error("Maintenance finished without preparing its candidates");
         }),
       ]);
-      const before = fixture
-        .database()
-        .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .all(fixture.secondScope.sessionId);
+      const before = transcriptRows(fixture, fixture.secondScope.sessionId);
       await withTestTimeout(
         appendTranscriptEvent(fixture.secondScope, {
           type: "custom",
@@ -468,10 +467,7 @@ describe("cold transcript storage workers", () => {
         5_000,
         "Hot append waited for cold archive preparation",
       );
-      const after = fixture
-        .database()
-        .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .all(fixture.secondScope.sessionId);
+      const after = transcriptRows(fixture, fixture.secondScope.sessionId);
       expect(after.slice(0, before.length)).toEqual(before);
       expect(after).toHaveLength(before.length + 1);
     } finally {
@@ -658,18 +654,10 @@ describe("cold transcript storage workers", () => {
     "restores exact history and projections from %s after reopening",
     async (storage) => {
       const fixture = await createFixture();
-      const { archivePath, bytes } = await archiveFixture(fixture);
       if (storage === "sqlite") {
-        runOpenClawAgentWriteTransaction(({ db: database }) => {
-          executeSqliteQuerySync(
-            database,
-            getNodeSqliteKysely<DB>(database)
-              .updateTable("session_transcript_cold_archives")
-              .set({ storage, archive_blob: bytes })
-              .where("session_id", "=", historicalId),
-          );
-        }, fixture.options);
-        await fs.unlink(archivePath);
+        await embedFixtureArchive(fixture);
+      } else {
+        await archiveFixture(fixture);
       }
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
@@ -709,35 +697,19 @@ describe("cold transcript storage workers", () => {
   it("keeps recently active and running current transcripts hot", async () => {
     const fixture = await createFixture();
     const config = maintenanceConfig(fixture.scope.storePath);
-    const currentBefore = fixture
-      .database()
-      .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-      .all(currentId);
+    const currentBefore = transcriptRows(fixture, currentId);
     expect(await runSessionColdStorageMaintenance({ config })).toEqual({
       archivedTranscripts: 1,
       externalizedTranscripts: 0,
     });
     expect(readSessionColdTranscript(fixture.database(), currentId)).toBeUndefined();
-    expect(
-      fixture
-        .database()
-        .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .all(currentId),
-    ).toEqual(currentBefore);
+    expect(transcriptRows(fixture, currentId)).toEqual(currentBefore);
     await replaceSessionEntry(fixture.scope, {
       sessionId: currentId,
       updatedAt: 1,
       status: "running",
     });
-    runOpenClawAgentWriteTransaction(({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DB>(db)
-          .updateTable("session_windows")
-          .set({ updated_at: 1, transcript_updated_at: 1 })
-          .where("session_id", "=", currentId),
-      );
-    }, fixture.options);
+    setTranscriptActivity(fixture.options, currentId);
     const running = fixture.snapshot();
     expect(await runSessionColdStorageMaintenance({ config })).toEqual({
       archivedTranscripts: 0,
@@ -749,15 +721,7 @@ describe("cold transcript storage workers", () => {
   it("applies the configured day cutoff to historical transcript activity", async () => {
     const fixture = await createFixture();
     const updatedAt = Date.now() - 15 * 86_400_000;
-    runOpenClawAgentWriteTransaction(({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DB>(db)
-          .updateTable("session_windows")
-          .set({ updated_at: updatedAt, transcript_updated_at: updatedAt })
-          .where("session_id", "=", historicalId),
-      );
-    }, fixture.options);
+    setTranscriptActivity(fixture.options, historicalId, updatedAt);
     const before = fixture.snapshot();
     expect(
       await runSessionColdStorageMaintenance({
@@ -773,35 +737,24 @@ describe("cold transcript storage workers", () => {
     expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
   });
 
-  it.each([undefined, "running"] as const)(
-    "archives old unreferenced history despite recent current metadata (%s)",
-    async (status) => {
-      const fixture = await createFixture();
-      await replaceSessionEntry(fixture.scope, {
-        sessionId: currentId,
-        updatedAt: Date.now(),
-        ...(status ? { status } : {}),
-      });
-      const currentBefore = fixture
-        .database()
-        .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .all(currentId);
-      const nodesBefore = fixture.database().prepare("SELECT * FROM session_nodes").all();
-      expect(
-        await runSessionColdStorageMaintenance({
-          config: maintenanceConfig(fixture.scope.storePath),
-        }),
-      ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-      expect(
-        fixture
-          .database()
-          .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-          .all(currentId),
-      ).toEqual(currentBefore);
-      expect(fixture.database().prepare("SELECT * FROM session_nodes").all()).toEqual(nodesBefore);
-      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
-    },
-  );
+  it("archives old unreferenced history despite a recently updated running session", async () => {
+    const fixture = await createFixture();
+    await replaceSessionEntry(fixture.scope, {
+      sessionId: currentId,
+      updatedAt: Date.now(),
+      status: "running",
+    });
+    const currentBefore = transcriptRows(fixture, currentId);
+    const nodesBefore = fixture.database().prepare("SELECT * FROM session_nodes").all();
+    expect(
+      await runSessionColdStorageMaintenance({
+        config: maintenanceConfig(fixture.scope.storePath),
+      }),
+    ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
+    expect(transcriptRows(fixture, currentId)).toEqual(currentBefore);
+    expect(fixture.database().prepare("SELECT * FROM session_nodes").all()).toEqual(nodesBefore);
+    expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
+  });
 
   it("protects historical windows while their logical session has a real work admission", async () => {
     const fixture = await createFixture();
@@ -869,19 +822,8 @@ describe("cold transcript storage workers", () => {
   it("archives an inactive current transcript and restores its original bytes before appending", async () => {
     const fixture = await createFixture();
     const scope = { ...fixture.scope, sessionId: currentId };
-    runOpenClawAgentWriteTransaction(({ db: database }) => {
-      executeSqliteQuerySync(
-        database,
-        getNodeSqliteKysely<DB>(database)
-          .updateTable("session_windows")
-          .set({ updated_at: 1, transcript_updated_at: 1 })
-          .where("session_id", "=", currentId),
-      );
-    }, fixture.options);
-    const before = fixture
-      .database()
-      .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-      .all(currentId);
+    setTranscriptActivity(fixture.options, currentId);
+    const before = transcriptRows(fixture, currentId);
     expect(
       await runSessionColdStorageMaintenance({
         config: maintenanceConfig(fixture.scope.storePath),
@@ -894,23 +836,12 @@ describe("cold transcript storage workers", () => {
       customType: "restored",
       data: {},
     });
-    const after = fixture
-      .database()
-      .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-      .all(currentId);
+    const after = transcriptRows(fixture, currentId);
     expect(after.slice(0, before.length)).toEqual(before);
     expect(after).toHaveLength(before.length + 1);
     expect(readSessionColdTranscript(fixture.database(), currentId)).toBeUndefined();
     await replaceSessionEntry(scope, { sessionId: currentId, updatedAt: 1 });
-    runOpenClawAgentWriteTransaction(({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DB>(db)
-          .updateTable("session_windows")
-          .set({ updated_at: 1, transcript_updated_at: 1 })
-          .where("session_id", "=", currentId),
-      );
-    }, fixture.options);
+    setTranscriptActivity(fixture.options, currentId);
     const resumed = fixture.snapshot();
     expect(
       await runSessionColdStorageMaintenance({

@@ -23,10 +23,10 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

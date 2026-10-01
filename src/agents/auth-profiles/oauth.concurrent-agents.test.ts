@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { captureEnv } from "../../test-utils/env.js";

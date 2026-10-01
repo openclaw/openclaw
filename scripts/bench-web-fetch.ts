@@ -1,10 +1,9 @@
 // Web fetch benchmark covers direct response loading, HTML extraction, and fallback cleanup.
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
 import * as cliArgs from "./lib/arg-utils.mts";
+import { writeReportArtifact } from "./lib/report-cli-helpers.mts";
 
 type BenchmarkCaseId = (typeof ALL_CASE_IDS)[number];
 
@@ -285,74 +284,72 @@ async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, Benchmar
     };
   }
 
-  return () => {
-    return {
-      "tool-create": {
-        label: "create web_fetch tool",
-        run: () => {
-          createTool();
-        },
+  return () => ({
+    "tool-create": {
+      label: "create web_fetch tool",
+      run: () => {
+        createTool();
       },
-      "tool-text": fetchCase("execute text/plain fetch", TEXT_BODY, "text/plain; charset=utf-8", {
-        url: "https://example.com/plain",
-      }),
-      "tool-markdown": fetchCase(
-        "execute text/markdown fetch",
-        MARKDOWN_BODY,
-        "text/markdown; charset=utf-8",
-        { url: "https://example.com/markdown" },
-      ),
-      "tool-html-article": fetchCase(
-        "execute article HTML fetch",
-        ARTICLE_HTML,
-        "text/html; charset=utf-8",
-        { url: "https://example.com/article" },
-      ),
-      "tool-html-article-text": fetchCase(
-        "execute article HTML fetch as text",
-        ARTICLE_HTML,
-        "text/html; charset=utf-8",
-        { url: "https://example.com/article-text", extractMode: "text" },
-      ),
-      "tool-html-shell": fetchCase(
-        "execute shell HTML fallback fetch",
-        SHELL_HTML,
-        "text/html; charset=utf-8",
-        { url: "https://example.com/shell" },
-      ),
-      "extract-readable-article": {
-        label: "extract readable article HTML",
-        run: async () => {
-          await extractReadableContent({
-            html: ARTICLE_HTML,
-            url: "https://example.com/article",
-            extractMode: "markdown",
-            config: toolConfig,
-          });
-        },
+    },
+    "tool-text": fetchCase("execute text/plain fetch", TEXT_BODY, "text/plain; charset=utf-8", {
+      url: "https://example.com/plain",
+    }),
+    "tool-markdown": fetchCase(
+      "execute text/markdown fetch",
+      MARKDOWN_BODY,
+      "text/markdown; charset=utf-8",
+      { url: "https://example.com/markdown" },
+    ),
+    "tool-html-article": fetchCase(
+      "execute article HTML fetch",
+      ARTICLE_HTML,
+      "text/html; charset=utf-8",
+      { url: "https://example.com/article" },
+    ),
+    "tool-html-article-text": fetchCase(
+      "execute article HTML fetch as text",
+      ARTICLE_HTML,
+      "text/html; charset=utf-8",
+      { url: "https://example.com/article-text", extractMode: "text" },
+    ),
+    "tool-html-shell": fetchCase(
+      "execute shell HTML fallback fetch",
+      SHELL_HTML,
+      "text/html; charset=utf-8",
+      { url: "https://example.com/shell" },
+    ),
+    "extract-readable-article": {
+      label: "extract readable article HTML",
+      run: async () => {
+        await extractReadableContent({
+          html: ARTICLE_HTML,
+          url: "https://example.com/article",
+          extractMode: "markdown",
+          config: toolConfig,
+        });
       },
-      "extract-readable-article-text": {
-        label: "extract readable article HTML as text",
-        run: async () => {
-          await extractReadableContent({
-            html: ARTICLE_HTML,
-            url: "https://example.com/article-text",
-            extractMode: "text",
-            config: toolConfig,
-          });
-        },
+    },
+    "extract-readable-article-text": {
+      label: "extract readable article HTML as text",
+      run: async () => {
+        await extractReadableContent({
+          html: ARTICLE_HTML,
+          url: "https://example.com/article-text",
+          extractMode: "text",
+          config: toolConfig,
+        });
       },
-      "extract-basic-shell": {
-        label: "extract basic shell HTML",
-        run: async () => {
-          await extractBasicHtmlContent({
-            html: SHELL_HTML,
-            extractMode: "markdown",
-          });
-        },
+    },
+    "extract-basic-shell": {
+      label: "extract basic shell HTML",
+      run: async () => {
+        await extractBasicHtmlContent({
+          html: SHELL_HTML,
+          extractMode: "markdown",
+        });
       },
-    };
-  };
+    },
+  });
 }
 
 async function measureCase(
@@ -414,10 +411,7 @@ async function main(): Promise<void> {
       rssMb: Math.round((process.memoryUsage().rss / 1024 / 1024) * 10) / 10,
     };
   });
-  if (options.output) {
-    await mkdir(path.dirname(options.output), { recursive: true });
-    await writeFile(options.output, `${JSON.stringify(report, null, 2)}\n`);
-  }
+  await writeReportArtifact(options.output ?? null, `${JSON.stringify(report, null, 2)}\n`);
   if (options.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {

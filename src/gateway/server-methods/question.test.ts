@@ -16,7 +16,8 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   abortChatRunById,
@@ -273,10 +274,14 @@ it("preserves a browser URL through request, get, and list", async () => {
   ]);
 });
 
+const credentialUrl = new URL("https://example.test/connect");
+credentialUrl.username = "fixture-user";
+credentialUrl.password = "fixture-password";
+
 it.each([
   ["script", "javascript:alert(1)"],
   ["relative", "/connect"],
-  ["credentials", "https://fixture-user:fixture-password@example.test/connect"],
+  ["credentials", credentialUrl.href],
 ])("rejects a %s browser URL before publishing", async (_name, url) => {
   expect(
     await call("question.request", {

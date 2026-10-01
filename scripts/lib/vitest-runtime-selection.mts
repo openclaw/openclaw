@@ -53,6 +53,9 @@ export function shouldPrepareVitestCoreWorkers(
     ...(includesProject(contracts)
       ? ["src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts"]
       : []),
+    ...(includesProject("test/vitest/vitest.e2e.config.ts")
+      ? ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts"]
+      : []),
   ];
   const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
   return (

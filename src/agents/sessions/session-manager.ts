@@ -36,6 +36,7 @@ import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
@@ -392,7 +393,8 @@ export class SessionManager extends SessionManagerBranching {
     options.signal?.throwIfAborted();
     const context = await withSessionContextAdmission(readTarget, admission, () =>
       // Incognito belongs to this process; capture its snapshot before the first await.
-      isIncognitoSessionKey(readTarget.sessionKey)
+      isIncognitoSessionKey(readTarget.sessionKey) ||
+      isIncognitoOpenClawAgentSqlitePath(readTarget.storePath, readTarget)
         ? readSessionTranscriptModelContext(readTarget, through, limits)
         : readSessionTranscriptModelContextAsync(
             readTarget,

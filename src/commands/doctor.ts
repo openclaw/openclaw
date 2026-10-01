@@ -84,7 +84,8 @@ export async function doctorCommand(
       ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
       ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
     };
-    const runSessionSqlite = async () => await runDoctorSessionSqlite(sessionSqliteOptions);
+    const runSessionSqlite = async (authority?: DoctorSqliteMaintenanceAuthority) =>
+      await runDoctorSessionSqlite(sessionSqliteOptions, authority);
     const reconcileHardlink = (filePath: string) =>
       reconcileDoctorSessionSqlitePublication(sessionSqliteOptions, filePath);
     // Custom-target discovery can create a missing shared WAL before maintenance admission.

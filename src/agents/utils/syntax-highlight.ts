@@ -58,12 +58,10 @@ function loadHighlightJsRuntime(): HighlightJs {
   return setHighlightJsRuntime(createRequire(import.meta.url)("highlight.js"));
 }
 
-/** Formatter applied to highlighted text segments. */
 type HighlightFormatter = (text: string) => string;
 /** Mapping from highlight.js scope names to text formatters. */
 type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
 
-/** Options used when highlighting code and rendering themed text. */
 interface HighlightOptions {
   language?: string;
   ignoreIllegals?: boolean;

@@ -21,6 +21,7 @@ import {
   renewAgentDatabaseMaintenanceAuthorityIfPresent,
 } from "../state/openclaw-agent-db-lease.js";
 import { agentDatabaseLifecycle } from "../state/openclaw-agent-db-lifecycle.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import {
   registerOpenClawAgentDatabase,
@@ -38,7 +39,6 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   clearOpenClawAgentDatabaseOpenFailure,
-  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
@@ -84,7 +84,10 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
-import { migrateCanonicalTranscriptArchives } from "./state-migrations.transcript-directives-archives.js";
+import {
+  MEDIA_ARCHIVE_VERIFICATION_KEY,
+  migrateCanonicalTranscriptArchives,
+} from "./state-migrations.transcript-directives-archives.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
@@ -106,6 +109,7 @@ async function migrateAgentDatabase(params: {
   env: NodeJS.ProcessEnv;
   pathname: string;
   maintenance: OpenClawStateLeaseContext;
+  preparedArchives?: ReadonlySet<string>;
 }) {
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
   const database = openNodeSqliteDatabase(params.pathname);
@@ -126,9 +130,7 @@ async function migrateAgentDatabase(params: {
       database,
       pathname: params.pathname,
       start: { generation: "", sessionId: "" },
-      // Imports and restores can introduce legacy media after any successful pass.
-      // Reuse archive repair without persisting the directive migration's cursor.
-      writeCursor: () => {},
+      verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
       onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
       transformContent: transformMediaArchiveContent,
     });
@@ -506,6 +508,7 @@ export async function migrateLegacyMediaPersistence(
               : undefined,
             pathname,
             maintenance,
+            preparedArchives: preparedDiscovery.preparedTranscriptArchives,
           });
           maintenance.assertOwned();
           warnings.push(...result.warnings);

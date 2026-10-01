@@ -694,34 +694,26 @@ struct OpenClawChatComposer: View {
     private var cleanComposerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             if self.style == .standard, !self.viewModel.attachments.isEmpty {
-                #if os(iOS)
                 self.attachmentsStrip
-                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-                    .padding(.top, CleanChatComposerMetrics.footerBlockInset)
-                #else
-                self.attachmentsStrip
-                #endif
+                    #if os(iOS)
+                        .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                        .padding(.top, CleanChatComposerMetrics.footerBlockInset)
+                    #endif
             }
 
-            #if os(iOS)
             self.composerContextRows
-                .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-            #else
-            self.composerContextRows
-            #endif
+                #if os(iOS)
+                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                #endif
 
             if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
-                #if os(iOS)
                 OpenClawVoiceNoteRecordingRow(
                     recorder: voiceNoteControl.recorder,
                     embedded: true)
-                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-                    .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
-                #else
-                OpenClawVoiceNoteRecordingRow(
-                    recorder: voiceNoteControl.recorder,
-                    embedded: true)
-                #endif
+                    #if os(iOS)
+                        .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                        .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
+                    #endif
             } else {
                 self.editor
             }
@@ -1521,11 +1513,8 @@ extension OpenClawChatComposer {
         _ items: [PhotosPickerItem],
         owner: OpenClawChatAttachmentCaptureOwner?)
     {
-        guard self.isAttachmentInputEnabled else {
-            self.pickerItems = []
-            return
-        }
-        guard let owner,
+        guard self.isAttachmentInputEnabled,
+              let owner,
               self.viewModel === owner.viewModel,
               owner.viewModel.isCurrentSession(owner.session)
         else {

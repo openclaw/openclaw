@@ -113,7 +113,254 @@ struct GatewayProcessManagerTests {
 
             manager.setActive(true, source: .recovery)
 
+            #expect(manager.desiredActive == desiredActive)
             #expect(manager.status == .stopped)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["request", "recovery", "failed-recovery", "paused", "quit", "generation", "operator"])
+    func `prepared runtime activation preserves intent until explicit Retry and valid custody`(
+        scenario: String) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            let priorMode = appState.connectionMode
+            appState.connectionMode = .local
+            appState.isPaused = false
+            defer {
+                appState.isPaused = priorPause
+                appState.connectionMode = priorMode
+            }
+            manager.setTestingDesiredActive(true)
+            let generation = manager.gatewayStartGeneration
+            let custody = try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false)
+            let selection = (manager.gatewayHosting, port, manager.hostsLocalGatewayWithRemotePrimary)
+            let failure = "child exhausted restart budget"
+            manager.handleChildEvent(.failed(failure), port: port)
+            switch scenario {
+            case "failed-recovery":
+                let claim = try manager.prepareHostingRecoveryActivation(generation: generation, restoring: .service)
+                manager.finishHostingRecoveryActivation(
+                    claim, generation: generation, healthy: false, failure: "previous service recovery failed")
+            case "paused": appState.isPaused = true
+            case "quit": manager.isTerminating = true
+            case "generation": manager.gatewayStartGeneration &+= 1
+            case "operator":
+                let plist = GatewayLaunchAgentManager.plistURL(
+                    homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+                try FileManager.default.createDirectory(
+                    at: plist.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try Data("operator replacement".utf8).write(to: plist)
+            default: break
+            }
+            if ["quit", "generation", "operator"].contains(scenario) {
+                await #expect(throws: (any Error).self) {
+                    try await manager.activatePreparedBundledRuntime(
+                        source: .request,
+                        generation: generation,
+                        selection: selection,
+                        expectedService: custody)
+                }
+                #expect(!manager.desiredActive)
+            } else {
+                let activation = try await manager.activatePreparedBundledRuntime(
+                    source: ["recovery", "failed-recovery"].contains(scenario) ? .recovery : .request,
+                    generation: generation, selection: selection, expectedService: custody)
+                let expected: CLIInstaller.LocalGatewayActivation? = switch scenario {
+                case "recovery": .failed(reason: failure)
+                case "failed-recovery": .failed(reason: "previous service recovery failed")
+                case "paused": .deferred
+                default: nil
+                }
+                #expect(activation == expected)
+                #expect(manager.desiredActive == (scenario == "request"))
+            }
+            #expect(manager.gatewayStartTask == nil)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["ready", "paused", "quit", "generation"])
+    func `joined runtime preparation never publishes readiness from a retired lifecycle`(
+        scenario: String) async throws
+    {
+        let entered = AsyncTestGate()
+        let finish = AsyncTestGate()
+        defer { finish.open() }
+        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = priorPause }
+            manager.setTestingDesiredActive(true)
+            let generation = manager.gatewayStartGeneration
+            manager.bundledUpdateTask = Task {
+                entered.open()
+                await finish.wait()
+                return .init(activation: .ready, generation: generation, source: .request)
+            }
+            let request = Task { try await manager.prepareBundledRuntimeAfterUpdate() }
+            await entered.wait()
+            switch scenario {
+            case "paused": appState.isPaused = true
+            case "quit": manager.isTerminating = true
+            case "generation":
+                manager.stop()
+                await manager.waitForStartupAttempt()
+            default: break
+            }
+            finish.open()
+            if ["quit", "generation"].contains(scenario) {
+                await #expect(throws: CancellationError.self) { try await request.value }
+            } else {
+                let activation = try await request.value
+                #expect(activation == (scenario == "paused" ? .deferred : .ready))
+            }
+            manager.bundledUpdateTask = nil
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+        }
+    }
+
+    @Test func `explicit runtime Retry advances beyond a joined passive giveup`() async throws {
+        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = priorPause }
+            manager.setTestingDesiredActive(true)
+            manager.handleChildEvent(.failed("passive child failure"), port: AppProfile.current.defaultGatewayPort)
+            let generation = manager.gatewayStartGeneration
+            manager.bundledUpdateTask = Task {
+                .init(activation: .failed(reason: "passive child failure"), generation: generation, source: .recovery)
+            }
+            // There is no seeded selection here. Retry must reach the current owner check,
+            // rather than returning the already-finished passive task's failure forever.
+            await #expect(throws: GatewayHostingError.self) {
+                try await manager.prepareBundledRuntimeAfterUpdate(source: .request)
+            }
+            #expect(manager.bundledUpdateTask == nil)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["hosting", "startup"], [false, true])
+    func `queued runtime Retry retains arrival generation across prior hosting and startup waits`(
+        priorWork: String, stopped: Bool) async throws
+    {
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = priorPause }
+            try #require(!manager.usesSeededGateway)
+            let generation = manager.gatewayStartGeneration
+            if priorWork == "hosting" {
+                manager.hostingChangeTask = Task {
+                    entered.open()
+                    await release.wait()
+                }
+            } else {
+                manager.beginGatewayStartTask(generation: generation) {
+                    entered.open()
+                    await release.wait()
+                }
+            }
+            let interruption = Task { @MainActor in
+                await entered.wait()
+                if stopped { manager.stop() }
+                release.open()
+                await manager.waitForPendingLaunchAgentDisable()
+            }
+            do {
+                _ = try await manager.prepareBundledRuntimeAfterUpdate(source: .request)
+                Issue.record("Fixture has no seeded runtime")
+            } catch {
+                // Without Stop, preparation must still reach its current installation owner.
+                // Stop during either prior wait must cancel before adopting that newer lifecycle.
+                if stopped {
+                    #expect(error is CancellationError)
+                } else {
+                    #expect(error is GatewayHostingError)
+                    #expect(error.localizedDescription ==
+                        "This Gateway is no longer hosted by OpenClaw.app. Update it with its installation owner.")
+                }
+            }
+            await interruption.value
+            await manager.waitForStartupAttempt()
+            manager.hostingChangeTask = nil
+            #expect(!manager.desiredActive)
+            #expect(manager.bundledUpdateTask == nil)
+            #expect(manager.gatewayStartGeneration == generation + (stopped ? 1 : 0))
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `queued explicit runtime Retry cannot cross Stop through a retired or replaced passive task`(
+        newerPassiveTask: Bool) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = priorPause }
+            manager.setTestingDesiredActive(true)
+            manager.handleChildEvent(.failed("passive child failure"), port: port)
+            let generation = manager.gatewayStartGeneration
+            manager.bundledUpdateTaskID = UUID()
+            manager.bundledUpdateTask = Task { @MainActor in
+                // This task can run only after the direct owner call below awaits its result.
+                manager.stop()
+                await manager.waitForStartupAttempt()
+                if newerPassiveTask {
+                    manager.bundledUpdateTaskID = UUID()
+                    manager.bundledUpdateTask = Task {
+                        .init(activation: .deferred, generation: manager.gatewayStartGeneration, source: .recovery)
+                    }
+                } else {
+                    manager.bundledUpdateTask = nil
+                    manager.bundledUpdateTaskID = nil
+                }
+                return .init(
+                    activation: .failed(reason: "passive child failure"),
+                    generation: generation,
+                    source: .recovery)
+            }
+            do {
+                _ = try await manager.prepareBundledRuntimeAfterUpdate(source: .request)
+                Issue.record("A queued Retry crossed newer Stop intent")
+            } catch {
+                #expect(error is CancellationError)
+            }
+            #expect(!manager.desiredActive)
+            #expect(manager.gatewayStartTask == nil)
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+            manager.bundledUpdateTask = nil
+            manager.bundledUpdateTaskID = nil
+        }
+    }
+
+    @Test func `runtime preparation refuses lost seeded ownership instead of reporting ready`() async throws {
+        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
+            let manager = GatewayProcessManager()
+            try #require(!manager.usesSeededGateway)
+            await #expect(throws: GatewayHostingError.self) {
+                try await manager.prepareBundledRuntimeAfterUpdate()
+            }
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
         }
     }
@@ -134,11 +381,16 @@ struct GatewayProcessManagerTests {
             }
             let failure = "Gateway exited five times before becoming stable."
 
+            manager.hostingChangeInProgress = true
             manager.handleChildEvent(.failed(failure), port: port)
+            #expect(!manager.desiredActive)
             manager.setActive(true, source: .recovery)
+            #expect(!manager.desiredActive)
             #expect(manager.status == .failed(failure))
 
+            manager.hostingChangeInProgress = false
             manager.setActive(true, source: .request)
+            #expect(manager.desiredActive)
             #expect(manager.status == .starting)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
         }
@@ -395,6 +647,10 @@ struct GatewayProcessManagerTests {
                 #expect(try manager.serviceCLIForResume() == nil)
                 return
             }
+            let appState = AppStateStore.shared
+            let previousMode = appState.connectionMode
+            appState.connectionMode = .local
+            defer { appState.connectionMode = previousMode }
             manager.stop()
             await manager.waitForStartupAttempt()
             #expect(defaults.string(forKey: GatewayHosting.defaultsKey) == (managed ? "service" : nil))
@@ -404,6 +660,9 @@ struct GatewayProcessManagerTests {
             #expect(manager.retainedServiceCLI == nil)
             #expect(!FileManager.default.fileExists(atPath: state.appendingPathComponent("runtime").path))
             #expect(try manager.serviceCLIForResume() == nil)
+            try #require(appState.connectionMode == .local)
+            #expect(try manager.shouldDeferLegacyServiceWhilePaused() == managed)
+            #expect(!manager.keepGatewayRunningAvailable)
             defaults.set(false, forKey: pauseDefaultsKey)
             let resumed = GatewayProcessManager()
             if managed {
@@ -787,6 +1046,417 @@ struct GatewayProcessManagerTests {
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
             #expect(calls.filter { $0.first == "install" }.count == 1)
+        }
+    }
+
+    @Test func `pause clears migration failure and resumes through the retained Node install`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            let prefix = ["/fixture/tools/node/bin/node", "/fixture/lib/node_modules/openclaw/openclaw.mjs"]
+            manager.retainedServiceCLI = .init(prefix: prefix, sqliteLibrary: nil)
+            defer { manager.retainedServiceCLI = nil }
+            manager.nodeMigrationFailure = "The core version update is offline."
+            manager.setTestingDesiredActive(true)
+            manager.stop()
+            manager.setTestingDesiredActive(true)
+            #expect(manager.nodeMigrationFailure == nil)
+            #expect(await manager._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+            let installs = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .filter { $0.contains("install") }
+            #expect(installs.count == 1)
+            #expect(installs.first?.prefix(prefix.count) == prefix[...])
+        }
+    }
+
+    @Test func `pause drains an owned child when a managed service appeared after startup`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await self.withLaunchAgentEnvironment(homeDirectory: root) {
+            let manager = self.manager
+            defer { manager.retainedServiceCLI = nil }
+            try "trap 'exit 0' TERM\nIFS= read -r value\n".write(
+                to: root.appendingPathComponent("openclaw.mjs"), atomically: true, encoding: .utf8)
+            let pid = try await manager.childSupervisor.start(configuration: .init(
+                bun: URL(fileURLWithPath: "/bin/sh"),
+                packageRoot: root,
+                environment: [:],
+                logPath: root.appendingPathComponent("gateway.log").path,
+                port: 29871,
+                allowUnconfigured: false), onEvent: { _ in })
+            do {
+                let runtime = AppProfile.current.stateDirectoryURL().appendingPathComponent("runtime/build-one")
+                let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: .current)
+                try FileManager.default.createDirectory(
+                    at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let arguments = [
+                    runtime.appendingPathComponent("bin/bun").path,
+                    runtime.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+                    "gateway", "--port", "29871",
+                ]
+                try PropertyListSerialization.data(
+                    fromPropertyList: ["ProgramArguments": arguments], format: .xml, options: 0).write(to: plist)
+                try #require(manager.gatewayHosting == .service)
+                try #require(manager.childSupervisor.isActive)
+
+                manager.stop()
+                await manager.waitForStartupAttempt()
+
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains(["uninstall"]))
+                #expect(!manager.childSupervisor.isActive)
+                #expect(kill(pid, 0) == -1 && errno == ESRCH)
+            } catch {
+                await manager.childSupervisor.stop()
+                throw error
+            }
+            await manager.childSupervisor.stop()
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `app hosting refuses settings that cannot survive relaunch before changing the service`(
+        generatedEnvironment: Bool) async throws
+    {
+        guard BundledRuntime.isBundledApp else { return }
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let appState = AppStateStore.shared
+            let previousMode = appState.connectionMode
+            appState.connectionMode = .local
+            defer { appState.connectionMode = previousMode }
+            let state = AppProfile.current.stateDirectoryURL()
+            setenv("OPENCLAW_STATE_DIR", state.path, 1)
+            let serviceEnvironment = state.appendingPathComponent("service-env")
+            try #require(!FileManager.default.fileExists(atPath: serviceEnvironment.path))
+            defer { try? FileManager.default.removeItem(at: serviceEnvironment) }
+            let runtime = BundledRuntime(root: state.appendingPathComponent("runtime/installed"))
+            let plist = GatewayLaunchAgentManager.plistURL(
+                homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            var arguments = runtime.cliCommand + ["gateway", "--port", String(port)]
+            if generatedEnvironment {
+                let artifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
+                    directory: state.appendingPathComponent("service-env"), profile: .current)
+                try FileManager.default.createDirectory(
+                    at: artifacts.wrapper.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data("#!/bin/sh\n".utf8).write(to: artifacts.wrapper)
+                try Data("export DURABLE_FIXTURE='durable'\n".utf8).write(to: artifacts.environment)
+                arguments = ["/bin/sh", artifacts.wrapper.path, artifacts.environment.path] + arguments
+            }
+            let definition = try PropertyListSerialization.data(fromPropertyList: [
+                "ProgramArguments": arguments,
+                "EnvironmentVariables": ["INLINE_FIXTURE": "must-survive-relaunch"],
+            ], format: .xml, options: 0)
+            try definition.write(to: plist)
+            let manager = GatewayProcessManager()
+            try #require(manager.keepGatewayRunningAvailable)
+            do {
+                try await manager.setKeepGatewayRunning(false)
+                Issue.record("loss-prone hosting change was accepted")
+            } catch {
+                #expect(error.localizedDescription.contains("Gateway settings exist only in its service definition"))
+                #expect(error.localizedDescription.contains("openclaw gateway install --force"))
+            }
+            #expect(manager.gatewayHosting == .service)
+            #expect(try Data(contentsOf: plist) == definition)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: state.appendingPathComponent("runtime").path))
+        }
+    }
+
+    @Test func `hosting request retired during prior work dispatches no daemon command`() async throws {
+        let requested = AsyncTestGate()
+        let finishUpdate = AsyncTestGate()
+        defer { finishUpdate.open() }
+        try await self.withLaunchAgentEnvironment {
+            let manager = GatewayProcessManager()
+            manager.bundledUpdateTask = Task {
+                await finishUpdate.wait()
+                return .init(activation: .ready, generation: manager.gatewayStartGeneration, source: .request)
+            }
+            var authorized = true
+            let request = Task {
+                try await manager.setKeepGatewayRunning(true) {
+                    requested.open()
+                    return authorized
+                }
+            }
+            await requested.wait()
+            authorized = false
+            finishUpdate.open()
+            await #expect(throws: CancellationError.self) { try await request.value }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(manager.hostingChangeTask == nil)
+            manager.bundledUpdateTask = nil
+        }
+    }
+
+    @Test func `hosting changes retain resume intent across failed service removal`() async throws {
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":false,"message":"fixture uninstall failed"}"#)
+        {
+            let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            AppDefaults.standard.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
+            defer { AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey) }
+            let manager = self.manager
+            manager.hostingChangeInProgress = true
+            defer { manager.hostingChangeInProgress = false }
+            manager.setTestingDesiredActive(false)
+            manager.setActive(true)
+            #expect(manager.desiredActive)
+            #expect(manager.status != .starting)
+
+            manager.stop(preservingActivationIntent: true)
+            await manager.waitForStartupAttempt()
+            #expect(manager.desiredActive)
+            #expect(manager.lastFailureReason == "fixture uninstall failed")
+
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true}"#)
+            manager.stop(preservingActivationIntent: true)
+            await manager.waitForStartupAttempt()
+            #expect(manager.desiredActive)
+            #expect(manager.lastFailureReason == nil)
+            manager.setActive(false)
+            await manager.waitForStartupAttempt()
+            #expect(!manager.desiredActive)
+        }
+    }
+
+    @Test func `hosting stop rechecks custody after asynchronous CLI resolution`() async throws {
+        let resolving = AsyncTestGate()
+        let finishResolution = AsyncTestGate()
+        defer { finishResolution.open() }
+        try await self.withLaunchAgentEnvironment {
+            let defaults = AppDefaults.standard
+            let previousHosting = defaults.object(forKey: GatewayHosting.defaultsKey)
+            defaults.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
+            defer {
+                if let previousHosting {
+                    defaults.set(previousHosting, forKey: GatewayHosting.defaultsKey)
+                } else {
+                    defaults.removeObject(forKey: GatewayHosting.defaultsKey)
+                }
+            }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true, resolveCLI: { _, _ in
+                resolving.open()
+                await finishResolution.wait()
+                return .executable(["openclaw"])
+            })
+            let manager = self.manager
+            manager.setTestingDesiredActive(true)
+            var current = true
+            manager.stop(preservingActivationIntent: true, mutationCheck: {
+                guard current else { throw GatewayHostingError(message: "operator changed the service") }
+            })
+            await resolving.wait()
+            current = false
+            finishResolution.open()
+            await manager.waitForPendingLaunchAgentDisable()
+            #expect(manager.lastFailureReason == "operator changed the service")
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `hosting stop rechecks custody after waiting for admitted service work`() async throws {
+        let enteredDrain = AsyncTestGate()
+        let finishDrain = AsyncTestGate()
+        defer { finishDrain.open() }
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            manager.setTestingDesiredActive(true)
+            var current = true
+            manager.launchAgentEnableTask = Task {
+                enteredDrain.open()
+                await finishDrain.wait()
+                return [:]
+            }
+            manager.stop(preservingActivationIntent: true, mutationCheck: {
+                guard current else { throw GatewayHostingError(message: "operator changed the service") }
+            })
+            await enteredDrain.wait()
+            current = false
+            finishDrain.open()
+            await manager.waitForPendingLaunchAgentDisable()
+            manager.launchAgentEnableTask = nil
+            #expect(manager.lastFailureReason == "operator changed the service")
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["healthy", "operator-replacement", "install-failure"])
+    func `terminal child failure permits captured service rollback without reviving failed recovery`(
+        outcome: String) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = self.manager
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = previousPause }
+            manager.setTestingDesiredActive(true)
+            let generation = manager.gatewayStartGeneration
+            let authority = try GatewayLaunchAgentManager.gatewayServiceAuthority()
+            manager.handleChildEvent(.failed("replacement child exhausted its restart budget"), port: port)
+            #expect(!manager.desiredActive)
+            let rearmed = try manager.prepareHostingRecoveryActivation(generation: generation, restoring: .service)
+            #expect(manager.desiredActive)
+            if outcome == "operator-replacement" {
+                try FileManager.default.createDirectory(
+                    at: authority.plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data("operator-owned replacement".utf8).write(to: authority.plist)
+            } else if outcome == "install-failure" {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":false,"message":"install failed"}"#)
+            }
+            let bun = "/fixture/runtime/previous-build/bin/bun"
+            let entrypoint = "/fixture/runtime/previous-build/lib/node_modules/openclaw/dist/index.js"
+            let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: [bun, entrypoint], sqliteLibrary: "/fixture/runtime/previous-build/lib/libsqlite3.dylib",
+                environment: ["CHANNEL_FIXTURE": "synthetic"])
+            var checked = false
+            let result = await manager.enableLaunchAgentIfNeeded(
+                port: port,
+                serviceForRestoration: cli,
+                expectedServiceAuthority: authority,
+                mutationCheck: { checked = true })
+            let recoveryFailure = result.installed ? nil : "Child failed. Previous Gateway recovery: " +
+                (result.error ?? "service unavailable")
+            manager.finishHostingRecoveryActivation(
+                rearmed, generation: generation, healthy: result.installed, failure: recoveryFailure)
+            if let recoveryFailure {
+                #expect(manager.status == .failed(recoveryFailure))
+                #expect(manager.lastFailureReason == recoveryFailure)
+            }
+            #expect(result.installed == (outcome == "healthy"))
+            #expect(manager.desiredActive == (outcome == "healthy"))
+            #expect(checked)
+            let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+            if outcome == "operator-replacement" {
+                #expect(commands.isEmpty)
+                #expect(try Data(contentsOf: authority.plist) == Data("operator-owned replacement".utf8))
+                return
+            }
+            let install = try #require(commands.first { $0.contains("install") })
+            #expect(Array(install.prefix(2)) == [bun, entrypoint])
+            let runtimeIndex = try #require(install.firstIndex(of: "--runtime"))
+            let pathIndex = try #require(install.firstIndex(of: "--runtime-path"))
+            #expect(install[runtimeIndex + 1] == "bun")
+            #expect(install[pathIndex + 1] == bun)
+        }
+    }
+
+    @Test(arguments: ["pause", "quit", "generation", "previous-child"])
+    func `terminal child recovery cannot override a newer lifecycle or rearm a failed child rollback`(
+        interruption: String) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = previousPause }
+            manager.setTestingDesiredActive(true)
+            let generation = manager.gatewayStartGeneration
+            manager.handleChildEvent(.failed("terminal fixture failure"), port: port)
+            switch interruption {
+            case "pause": appState.isPaused = true
+            case "quit": manager.isTerminating = true
+            case "generation": manager.gatewayStartGeneration &+= 1
+            default: break
+            }
+            #expect(throws: CancellationError.self) {
+                try manager.prepareHostingRecoveryActivation(
+                    generation: generation, restoring: interruption == "previous-child" ? .app : .service)
+            }
+            #expect(!manager.desiredActive)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["request", "generation", "failed-child-rollback"])
+    func `failed hosting recovery cleanup preserves later activation and child failure ownership`(
+        newerOwner: String) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = previousPause }
+            manager.setTestingDesiredActive(true)
+            let generation = manager.gatewayStartGeneration
+            manager.handleChildEvent(.failed("replacement failed"), port: port)
+            let rearmed = try manager.prepareHostingRecoveryActivation(generation: generation, restoring: .service)
+            manager.hostingChangeInProgress = true
+            if newerOwner == "request" {
+                manager.setActive(true, source: .request)
+            } else {
+                manager.gatewayStartGeneration &+= 1
+                if newerOwner == "failed-child-rollback" {
+                    manager.handleChildEvent(.failed("rollback child failed"), port: port)
+                }
+            }
+            let laterStatus = manager.status
+            manager.finishHostingRecoveryActivation(
+                rearmed, generation: generation, healthy: false, failure: "Superseded recovery failure")
+            #expect(manager.status == laterStatus)
+            #expect(manager.desiredActive == (newerOwner != "failed-child-rollback"))
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `hosting rollback rechecks custody inside the serialized install drain`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            manager.setTestingDesiredActive(true)
+            let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: ["/fixture/runtime/previous/bin/bun", "/fixture/openclaw.mjs"], sqliteLibrary: nil)
+            let result = await manager.enableLaunchAgentIfNeeded(
+                port: 29871,
+                serviceForRestoration: cli,
+                mutationCheck: { throw GatewayHostingError(message: "operator changed the runtime pin") })
+            #expect(result.error == "operator changed the runtime pin")
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `quit joins a pending service pause before completing`() async throws {
+        let uninstallStarted = AsyncTestGate()
+        let finishUninstall = AsyncTestGate()
+        let shutdownObserved = AsyncTestGate()
+        defer { finishUninstall.open() }
+        try await self.withLaunchAgentEnvironment(commandHook: { arguments in
+            if arguments.first == "uninstall" {
+                uninstallStarted.open()
+                await finishUninstall.wait()
+            }
+        }) {
+            let manager = self.manager
+            manager.setTestingDesiredActive(true)
+            manager.stop()
+            await uninstallStarted.wait()
+            #expect(manager.gatewayOperationShutdownTimeout >= GatewayLaunchAgentManager.startupMigrationTolerance)
+            var joinedPause = false
+            var finished = false
+            manager._testSetLaunchAgentDisableWaitHook {
+                joinedPause = true
+                shutdownObserved.open()
+            }
+            defer { manager._testSetLaunchAgentDisableWaitHook(nil) }
+            let shutdown = Task {
+                await manager.shutdownAppHostedGateway()
+                finished = true
+                shutdownObserved.open()
+            }
+            await shutdownObserved.wait()
+            #expect(joinedPause)
+            #expect(!finished)
+            finishUninstall.open()
+            await shutdown.value
+            #expect(finished)
         }
     }
 
@@ -1790,6 +2460,86 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test(arguments: [
+        ("UNAVAILABLE", "startup-sidecars", true, true),
+        ("UNAVAILABLE", "startup-sidecars", false, false),
+        ("UNAUTHORIZED", "auth-token-mismatch", true, false),
+        ("UNAVAILABLE", "other", true, false),
+    ])
+    func `startup handshake retries without repairing while auth rejections remain terminal`(
+        code: String,
+        reason: String,
+        retryable: Bool,
+        schedulesRetry: Bool) async throws
+    {
+        let stateDir = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        try await self.withLaunchAgentEnvironment {
+            try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                let port = GatewayEnvironment.gatewayPort()
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
+                let url = try #require(URL(string: "ws://example.invalid"))
+                let clock = ManualTestClock()
+                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
+                    GatewayTestWebSocketTask(receiveHook: { task, index in
+                        if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        return .data(Data("""
+                        {"type":"res","id":"\(id)","ok":false,"error":{
+                          "code":"\(code)","message":"fixture connect rejected","retryable":\(retryable),
+                          "details":{"reason":"\(reason)"}}}
+                        """.utf8))
+                    })
+                }
+                manager.setTestingDesiredActive(true)
+                manager.setTestingStatus(.starting)
+                manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
+                await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4242), forPort: port)
+                defer {
+                    manager.setTestingDesiredActive(false)
+                    manager._testClearLaunchAgentReadinessFailure()
+                    manager._testSetLastObservedGatewayPID(nil)
+                }
+                let retryAt = clock.now.advanced(by: .milliseconds(300))
+                let observed = AsyncTestGate()
+                var retryScheduled = false
+                let retryObserver = Task {
+                    await clock.waitForSleep(until: retryAt)
+                    guard !Task.isCancelled else { return }
+                    retryScheduled = true
+                    observed.open()
+                }
+                let readiness = Task {
+                    let ready = await manager.waitForGatewayReady(timeout: 1)
+                    observed.open()
+                    return ready
+                }
+                await observed.wait()
+                #expect(retryScheduled == schedulesRetry)
+                if schedulesRetry {
+                    #expect(manager.status == .starting)
+                } else if case .failed = manager.status {
+                    // Authentication and unrelated refusals terminate the first probe.
+                } else {
+                    Issue.record("expected a terminal handshake rejection")
+                }
+                // End this lifecycle before a second connection can enter the transport's backoff.
+                manager.setTestingDesiredActive(false)
+                retryObserver.cancel()
+                clock.advance(by: .milliseconds(300))
+                #expect(await readiness.value == false)
+                await retryObserver.value
+                #expect(session.snapshotMakeCount() == 1)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .allSatisfy { $0.first != "install" })
+
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            }
+        }
+    }
+
     @Test func `readiness waiter rechecks after current owner fails past its timeout`() async throws {
         let port = 19114
         let waiterTimeout: TimeInterval = 6
@@ -2158,9 +2908,9 @@ struct GatewayProcessManagerTests {
                     task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                 },
                 receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 100_000_000)
-                    }
+                    // Challenge late, then park the unanswered connect like a real socket; an
+                    // immediate reply on every receive spins the handshake until cancellation.
+                    try await Task.sleep(nanoseconds: receiveIndex == 0 ? 100_000_000 : 30 * 1_000_000_000)
                     return .data(GatewayWebSocketTestSupport.connectChallengeData())
                 })
         }
@@ -2195,9 +2945,9 @@ struct GatewayProcessManagerTests {
                     task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                 },
                 receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 100_000_000)
-                    }
+                    // Challenge late, then park the unanswered connect like a real socket; an
+                    // immediate reply on every receive spins the handshake until cancellation.
+                    try await Task.sleep(nanoseconds: receiveIndex == 0 ? 100_000_000 : 30 * 1_000_000_000)
                     return .data(GatewayWebSocketTestSupport.connectChallengeData())
                 })
         }

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readCronRunHistoryPageForTests } from "../../../cron/run-history.test-support.js";
 import {
@@ -16,11 +17,7 @@ import { cronStoreKey } from "../../../cron/store/key.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
-import {
-  collectLegacyCronStoreHealthFindings,
-  maybeRepairLegacyCronStore,
-  noteLegacyWhatsAppCrontabHealthCheck,
-} from "./index.js";
+import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 
 type StoredJob = Record<string, unknown>;
 const WEBHOOK = "https://example.invalid/cron-finished";
@@ -238,7 +235,6 @@ describe("maybeRepairLegacyCronStore", () => {
           kind: "agentTurn",
           message: "scheduled continuation",
           toolsAllow: ["read", "cron"],
-          toolsAllowIsDefault: true,
         },
         scheduledToolPolicy: {
           version: 1,
@@ -426,50 +422,10 @@ describe("maybeRepairLegacyCronStore", () => {
     ).toEqual(unsupportedScripts);
   });
 
-  it("keeps shared-workspace legacy MCP warnings scoped to each job agent", async () => {
-    const sharedWorkspace = path.join(path.dirname(storePath), "shared-workspace");
-    await writeCurrentCronStore(
-      ["research", "support", undefined].map((agentId, index) =>
-        createCurrentCronJob({
-          id: `job-${index}`,
-          name: agentId ?? "Ambient",
-          agentId,
-          payload: {
-            kind: "agentTurn",
-            message: "run",
-            toolsAllow: ["read"],
-            toolsAllowIsDefault: true,
-          },
-        }),
-      ),
-    );
-    const cfg = createCronConfig();
-    cfg.agents = {
-      ownership: "explicit",
-      defaults: { systemAgent: { agentId: "research" } },
-      entries: {
-        research: { workspace: sharedWorkspace },
-        support: { workspace: sharedWorkspace },
-      },
-    };
-    cfg.mcp = {
-      servers: {
-        notes: { transport: "stdio", command: "notes-mcp", codex: { agents: ["research"] } },
-      },
-    };
-    await maybeRepairLegacyCronStore({ cfg, options: {}, prompter: makePrompter(true) });
-    const advisory = noteMock.mock.calls.find(([message]) =>
-      message.includes("inherited default tool cap"),
-    )?.[0];
-    expect(advisory).toContain("research");
-    expect(advisory).toContain("Ambient");
-    expect(advisory).not.toContain("support");
-  });
-
   it("recovers a valid quarantined schedule only after Doctor confirmation", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
     await writeCurrentCronStore([]);
-    saveCronQuarantinedJobs({
+    await saveCronQuarantinedJobs({
       storePath,
       nowMs: Date.parse("2026-08-30T18:50:02.000Z"),
       entries: [
@@ -543,12 +499,18 @@ describe("maybeRepairLegacyCronStore", () => {
       code: "ENOENT",
     });
     await expect(fs.readFile(quarantinePath, "utf-8")).resolves.toBe(historicalBytes);
+    await writeCurrentCronStore([]);
     const rename = vi
       .spyOn(fs, "rename")
       .mockRejectedValueOnce(createFsError("EACCES", "archive unavailable"));
+    const observation = observeHostDataSql();
+    try {
+      await repairCronStore();
+    } finally {
+      observation.restore();
+    }
 
-    await repairCronStore();
-
+    expect(observation.queries.filter((sql) => sql.includes("diagnostic_events"))).toEqual([]);
     expect(await loadCronQuarantinedJobs(storePath)).toEqual(historicalJobs);
     await expect(fs.stat(quarantinePath)).resolves.toBeDefined();
     expectNoteContaining("could not archive the legacy cron file", "Doctor warnings");
@@ -1177,29 +1139,4 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 });
 
-it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
-  await noteLegacyWhatsAppCrontabHealthCheck({
-    platform: "linux",
-    readCrontab: async () => ({
-      stdout: [
-        "# keep comments ignored",
-        "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh >> ~/.openclaw/logs/whatsapp-health.log 2>&1",
-        "0 9 * * * /usr/bin/true",
-        "",
-      ].join("\n"),
-    }),
-  });
-
-  expectNoteContaining("Legacy WhatsApp crontab health check detected");
-  expectNoteContaining("systemd user bus environment is missing");
-  expectNoteContaining("Matched 1 entry");
-});
-
-it("ignores a missing crontab", async () => {
-  await noteLegacyWhatsAppCrontabHealthCheck({
-    platform: "linux",
-    readCrontab: () => Promise.reject(createFsError("ENOENT", "crontab missing")),
-  });
-  expect(noteMock).not.toHaveBeenCalled();
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

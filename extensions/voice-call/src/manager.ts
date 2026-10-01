@@ -220,7 +220,6 @@ export class CallManager {
         const elapsed = Date.now() - maxDurationAnchor;
         const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
         if (elapsed >= maxDurationMs) {
-          // Already expired — remove instead of keeping
           verified.delete(callId);
           skippedAlreadyElapsedTimers += 1;
           continue;

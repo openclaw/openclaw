@@ -19,7 +19,6 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node screen recording commands. */
 export function registerNodesScreenCommands(nodes: Command) {
   const screen = nodes
     .command("screen")

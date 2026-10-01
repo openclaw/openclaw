@@ -115,6 +115,17 @@ describe("mobile-release-ref", () => {
     ).toThrow("Invalid Android versionCode");
   });
 
+  it("preserves flag ordering and fails before treating a missing value as help", () => {
+    expect(
+      parseArgs(["resolve", "--platform", "android", "--", "--platform", "ios"]),
+    ).toMatchObject({ platform: "ios", sha: "HEAD" });
+    expect(() => parseArgs(["resolve", "--root", "-h"])).toThrow("Missing value for --root.");
+    expect(() => parseArgs(["resolve", "--platform=ios"])).toThrow(
+      "Unknown argument: --platform=ios",
+    );
+    expect(() => parseArgs(["resolve", "--help", "--unknown"])).toThrow("Usage:");
+  });
+
   it("records immutable platform refs and resolves the recorded SHA through the CLI", () => {
     const fixture = createFixtureRepo();
     const iosOptions = {

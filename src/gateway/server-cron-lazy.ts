@@ -275,6 +275,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     quiesceJobs: bindCron(({ state }) => state.cron.quiesceJobs.bind(state.cron)),
     run: bindCron(({ state }) => state.cron.run.bind(state.cron)),
     enqueueRun: bindCron(({ state }) => state.cron.enqueueRun.bind(state.cron)),
+    waitForManualRun: bindCron(({ state }) => state.cron.waitForManualRun.bind(state.cron)),
     getJob(id) {
       return loaded?.state.cron.getJob(id);
     },

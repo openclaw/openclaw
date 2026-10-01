@@ -428,7 +428,7 @@ describe("service definition backup receipts", () => {
           return job === "unknown"
             ? { ...ok, code: 13, stderr: "Access denied" }
             : cached
-              ? { ...ok, stdout: "state = waiting\n" }
+              ? { ...ok, stdout: `${args[1]} = {\n\tstate = waiting\n}` }
               : missing;
         }
         if (args[0] === "bootout") {

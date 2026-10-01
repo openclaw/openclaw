@@ -12,27 +12,28 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
+import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import {
   resolveCronDeliveryPreview,
   resolveCronDeliveryPreviews,
 } from "../../cron/delivery-preview.js";
-import { cronJobReadView } from "../../cron/job-read-view.js";
+import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
+import { cronAddResultReadView, cronJobReadView } from "../../cron/job-read-view.js";
 import { resolveCronJobBoundSessionKeys } from "../../cron/job-session-bindings.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronUpdateOptions } from "../../cron/service/state.js";
-import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
+import {
+  isInvalidCronSessionTargetIdError,
+  resolveCronSessionTargetSessionKey,
+} from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
-import type {
-  CronDeliveryPreview,
-  CronJob,
-  CronJobCreate,
-  CronJobPatch,
-} from "../../cron/types.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isSubagentSessionKey, normalizeAgentId } from "../../routing/session-key.js";
@@ -42,6 +43,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { isRecord } from "../../utils.js";
 import {
   getCronManagementAuthority,
   withCronManagementGrant,
@@ -103,25 +105,6 @@ class CronJobConfigRevisionConflictError extends Error {
   ) {
     super("cron job definition no longer matches the loaded version");
   }
-}
-
-function cronAddPayloadWithDeliveryPreview(params: {
-  result: CronJob | { created: boolean; updated?: boolean; job: CronJob };
-  deliveryPreview: CronDeliveryPreview;
-}) {
-  const job = "job" in params.result ? params.result.job : params.result;
-  if ("job" in params.result) {
-    return {
-      created: params.result.created,
-      ...(params.result.updated === undefined ? {} : { updated: params.result.updated }),
-      job: cronJobReadView(job),
-      deliveryPreview: params.deliveryPreview,
-    };
-  }
-  return {
-    ...cronJobReadView(job),
-    deliveryPreview: params.deliveryPreview,
-  };
 }
 
 function requiresExplicitAgentRuntimeToolsAllow(params: {
@@ -291,6 +274,7 @@ export const cronHandlers: GatewayRequestHandlers = {
             job,
             callerScope: currentScope,
             defaultAgentId: currentDefault,
+            legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
             allowCurrentJob: true,
           }) &&
           (!p.sessionKey ||
@@ -315,7 +299,13 @@ export const cronHandlers: GatewayRequestHandlers = {
         });
         assertCronReadCurrent(options);
         await visibilityRead.prepare(
-          loadedJobs.map((job) => cronJobVisibilityTarget(job, context.cron.getDefaultAgentId())),
+          loadedJobs.map((job) =>
+            cronJobVisibilityTarget(
+              job,
+              context.cron.getDefaultAgentId(),
+              tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
+            ),
+          ),
         );
       }
       assertCronReadCurrent(options);
@@ -330,7 +320,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       const selectedJobIds = new Set<string>();
       const matchesCurrentJob = (job: CronJob) =>
         matchesRequestScope(job) &&
-        cronJobIsVisible(job, visibilityRead.resolve(), context.cron.getDefaultAgentId());
+        cronJobIsVisible(
+          job,
+          visibilityRead.resolve(),
+          context.cron.getDefaultAgentId(),
+          tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
+        );
       const assertPageCurrent = () => {
         assertCronReadCurrent(options);
         const currentScope = readCronCallerScope(client);
@@ -376,7 +371,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       diagnostics?.mark("projection");
       const jobs = page.jobs.map((job) => ({
         ...(p.compact === true ? compactCronListJob(job) : cronJobReadView(job)),
-        effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
+        effectiveAgentId:
+          tryResolveCronJobEffectiveAgentId(
+            job,
+            defaultAgentId,
+            tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
+          ) ?? null,
       }));
       if (p.compact === true || p.includeDeliveryPreviews === false) {
         // Full job rows are the default because editors need their payloads. Delivery
@@ -538,6 +538,7 @@ export const cronHandlers: GatewayRequestHandlers = {
             input: jobCreate,
             callerScope,
             defaultAgentId: context.cron.getDefaultAgentId(),
+            legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
           }),
         ...(cronJobUsesToolRuntime(jobCreate)
           ? {
@@ -570,7 +571,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     });
     respond(
       true,
-      cronAddPayloadWithDeliveryPreview({
+      cronAddResultReadView({
         result,
         deliveryPreview,
       }),
@@ -640,6 +641,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         job: currentJob,
         callerScope,
         defaultAgentId: context.cron.getDefaultAgentId(),
+        legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
       })
     ) {
       respondCronJobNotFound(respond, jobId);
@@ -659,6 +661,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         tryResolveCronJobEffectiveAgentId(
           { ...currentJob, ...patch },
           context.cron.getDefaultAgentId(),
+          tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
         ),
         respond,
       )
@@ -728,6 +731,7 @@ export const cronHandlers: GatewayRequestHandlers = {
               job: lockedJob,
               callerScope,
               defaultAgentId: context.cron.getDefaultAgentId(),
+              legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
             })
           ) {
             throw new Error(`unknown cron job id: ${jobId}`);
@@ -795,6 +799,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         job,
         callerScope,
         defaultAgentId,
+        legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
       });
       const expectedConfigRevision = usesCurrentJobCapability
         ? resolveCronJobConfigRevision(job)
@@ -833,7 +838,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           ? await context.cron.remove(jobId, { commitGuard })
           : await context.cron.remove(jobId);
       } catch (error) {
-        if (error instanceof TypeError) {
+        if (error instanceof TypeError || isCronInvalidRequestError(error)) {
           respondInvalidCronParams(respond, "cron.remove", formatErrorMessage(error));
           return;
         }
@@ -851,11 +856,15 @@ export const cronHandlers: GatewayRequestHandlers = {
   "cron.run": scopedCronJobHandler(
     "cron.run",
     validateCronRunParams,
-    async (
-      { params, respond, context, client, sessionMutationCommitGuard, hasCurrentClientAuthority },
-      { jobId, callerScope },
-    ) => {
-      const p = params;
+    async (options, { jobId, callerScope, job }) => {
+      const {
+        params: p,
+        respond,
+        context,
+        client,
+        sessionMutationCommitGuard,
+        hasCurrentClientAuthority,
+      } = options;
       if (
         p.expectedProcessInstanceId &&
         p.expectedProcessInstanceId !== getGatewayProcessInstanceId()
@@ -889,7 +898,66 @@ export const cronHandlers: GatewayRequestHandlers = {
         }
         throw error;
       }
-      respond(true, { ...result, processInstanceId: getGatewayProcessInstanceId() }, undefined);
+      const ack = { ...result, processInstanceId: getGatewayProcessInstanceId() };
+      const callerSessionKey = client?.internal?.agentRuntimeIdentity?.sessionKey;
+      // An agent turn holds the main lane and its own session lane until it ends, so an
+      // agent-turn run that executes there, or announces a current-session result into it,
+      // cannot finish while this request waits. Command and script payloads run as processes.
+      const dependentSessionKey =
+        job.payload.kind !== "agentTurn"
+          ? undefined
+          : job.sessionTarget === "current"
+            ? resolveCronDeliveryPlan(job).requested
+              ? job.sessionKey
+              : undefined
+            : resolveCronSessionTargetSessionKey(job.sessionTarget);
+      const cfg = context.getRuntimeConfig();
+      const runQueuesBehindCaller =
+        callerSessionKey !== undefined &&
+        (job.sessionTarget === "main" ||
+          (dependentSessionKey !== undefined &&
+            resolveCronAgentSessionKey({
+              sessionKey: dependentSessionKey,
+              agentId: normalizeAgentId(job.agentId ?? context.cron.getDefaultAgentId()),
+              mainKey: cfg.session?.mainKey,
+              cfg,
+            }) === callerSessionKey));
+      let run: unknown;
+      let finished = false;
+      // cron.run stays an enqueue (#40192); waiting is opt-in and bounded by the caller.
+      // The outcome is read through cron.runs so it honors the same history visibility.
+      if (p.waitTimeoutMs !== undefined && "enqueued" in result && !runQueuesBehindCaller) {
+        finished = await context.cron.waitForManualRun(
+          result.runId,
+          p.waitTimeoutMs,
+          options.signal,
+        );
+      }
+      if (finished && "enqueued" in result) {
+        try {
+          await cronRunsHandler({
+            ...options,
+            params: { id: jobId, runId: result.runId, limit: 1 },
+            respond: (ok, page) => {
+              run =
+                ok && isRecord(page) && Array.isArray(page.entries) ? page.entries[0] : undefined;
+            },
+          });
+          // The mutation response skips the read-response guard, so recheck read authority
+          // with no await between the check and releasing the outcome.
+          assertCronReadCurrent(options);
+          const identity = client?.internal?.agentRuntimeIdentity;
+          if (identity) {
+            getCronManagementAuthority(identity)?.();
+          }
+        } catch {
+          // Authority can lapse during a long wait (grant expiry, revocation). The run is
+          // already accepted, so return only its ack and release nothing about the outcome.
+          run = undefined;
+          finished = false;
+        }
+      }
+      respond(true, run ? { ...ack, run } : finished ? { ...ack, finished } : ack, undefined);
     },
   ),
   "cron.history": cronHistoryHandler,

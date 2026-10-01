@@ -24,11 +24,18 @@ export async function resolveCanonicalCachedGitHubIdentity(
 }
 
 export async function listProfiles(options: ProfileReadOptions = {}) {
+  return (await readUserProfileSnapshot(undefined, options)).profiles;
+}
+
+export async function readUserProfileSnapshot(
+  githubAccountIds?: readonly number[],
+  options: ProfileReadOptions = {},
+) {
   const context = captureOpenClawStateWorkerContext(options);
   const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
   return await executeOpenClawStateWorker(context, {
     type: "userProfiles.list",
-    input: undefined,
+    input: githubAccountIds ? { githubAccountIds } : undefined,
   });
 }
 

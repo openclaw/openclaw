@@ -22,7 +22,7 @@ import {
 } from "./exec-approvals-sqlite.js";
 import { loadExecApprovals } from "./exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
-import { resolveExecApprovals } from "./exec-approvals.js";
+import { resolveExecApprovalsLocked } from "./exec-approvals.js";
 import { requestExecHostViaSocket } from "./exec-host.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -270,7 +270,7 @@ describe("legacy exec approvals migration", () => {
         });
         setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
         expect((await migrate({ env, stateDir })).warnings).toEqual([]);
-        const resolved = resolveExecApprovals(undefined, { requireSocket: true });
+        const resolved = await resolveExecApprovalsLocked(undefined, { requireSocket: true });
         await expect(
           requestExecHostViaSocket({
             socketPath: resolved.socketPath,

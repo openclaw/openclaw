@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat boot optional requests" });
@@ -12,8 +13,10 @@ suite.define(() => {
       async ({ page }) => {
         const requested: string[] = [];
         page.on("request", (request) => requested.push(new URL(request.url()).pathname));
-        const loginRequests = () =>
-          requested.filter((path) => /\/login-(gate|runtime)[.-]/u.test(path));
+        const loginModuleRequest = controlUiE2eBuiltModuleRequest(
+          "ui/src/components/login-gate.ts",
+        );
+        const loginRequests = () => requested.filter((path) => loginModuleRequest.test(path));
         const iconRequests = () =>
           requested.filter((path) => path.endsWith("/apple-touch-icon.png"));
         const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";

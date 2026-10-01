@@ -157,6 +157,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         ? [routeSystemEventSessionKey, sessionKey]
         : [sessionKey];
     for (const systemEventSessionKey of systemEventSessionKeys) {
+      if (systemEventSessionKey === undefined) {
+        continue;
+      }
       const isCurrentSession = systemEventSessionKey === sessionKey;
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
@@ -358,7 +361,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     ? null
     : await traceRunPhase("reply.load_embedded_agent_runtime", () => loadEmbeddedAgentRuntime());
   const resolveActiveEmbeddedSessionId = (sessionFile = preparedSessionState.sessionFile) =>
-    embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
+    (sessionKey !== undefined
+      ? embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey)
+      : undefined) ??
     embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionIdBySessionFile?.(sessionFile);
   const queueKey = sessionKey ?? sessionIdFinal;
   const sessionLaneKey = embeddedAgentRuntime
@@ -437,7 +442,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       clearAutoFallbackPrimaryProbeSelection(authSessionEntry);
     }
     const authSessionStore =
-      shouldUseEphemeralSession && authSessionEntry
+      shouldUseEphemeralSession && authSessionEntry && authSessionKey !== undefined
         ? { [authSessionKey]: authSessionEntry }
         : sessionStore;
     const selection = await resolveSessionAuthSelection({

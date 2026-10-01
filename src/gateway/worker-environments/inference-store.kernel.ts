@@ -13,6 +13,11 @@ import type {
   DB as StateDatabase,
   WorkerInferenceTurns,
 } from "../../state/openclaw-state-db.generated.js";
+import type {
+  WorkerInferenceTurnInput,
+  WorkerInferenceTurnBeginResult,
+  WorkerInferenceRetentionPolicy,
+} from "./inference-store.types.js";
 
 type InferenceDb = Pick<StateDatabase, "worker_inference_turns"> & {
   pragma_encoding: { encoding: string };
@@ -21,31 +26,11 @@ type TurnRow = Selectable<WorkerInferenceTurns>;
 type TurnIdentityRow = Pick<TurnRow, "session_id" | "run_epoch" | "run_id" | "turn_id">;
 type TurnInsert = Insertable<WorkerInferenceTurns>;
 
-export type WorkerInferenceTurnInput = {
-  environmentId: string;
-  sessionId: string;
-  runEpoch: number;
-  runId: string;
-  turnId: string;
-  requestHash: string;
-};
-
-type WorkerInferenceTurnBeginResult =
-  | { kind: "claimed" }
-  | { kind: "recover" }
-  | { kind: "replay"; outcome: WorkerInferenceTerminalOutcome }
-  | { kind: "rejected"; reason: "conflict" };
-
 type NormalizedTurnInput = WorkerInferenceTurnInput & { nowMs: number };
 type WorkerInferenceTurnIdentity = Pick<
   WorkerInferenceTurnInput,
   "sessionId" | "runEpoch" | "runId" | "turnId"
 >;
-export type WorkerInferenceRetentionPolicy = {
-  maxAgeMs: number;
-  maxRows: number;
-  maxBytes: number;
-};
 type ExistingTurnResult = Extract<
   WorkerInferenceTurnBeginResult,
   { kind: "recover" | "replay" | "rejected" }

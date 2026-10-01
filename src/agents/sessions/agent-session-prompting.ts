@@ -148,7 +148,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     // Messages queued by agent_end handlers arrive after the loop's final queue drain.
-    return this.agent.hasQueuedMessages() ? "continue" : "settled";
+    // A failed request stays unanswered for the run owner to retry, so queued input
+    // must not continue past it; a steer's caller re-queues it when this run settles.
+    return msg.stopReason !== "error" && this.agent.hasQueuedMessages() ? "continue" : "settled";
   }
 
   private createUserMessage(

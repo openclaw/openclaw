@@ -98,6 +98,14 @@ its agent, run state, observer headline when available, pull requests, and recen
 activity. The agent filter narrows the displayed sessions without changing the
 saved board scope.
 
+**People filter:** Choose **Everyone** (the default), **Involving me**, or a person
+beside the agent filter. Involving me shows sessions you own or previously prompted;
+a person selects their profile associations. The choice is remembered per viewer,
+device, Gateway, and board. It does not change the shared board, classification, or
+the Board agent. API clients can pass `view: { involvingMe?: boolean,
+involvingProfileId?: string, includePeople?: boolean }` to
+`workboard.sessionsBoard.read`; `includePeople` returns the people facet for the picker.
+
 Classification is shared across the Gateway and uses the configured utility
 model. Reads follow the current caller's session visibility; the board and its
 classification cache follow the Gateway's trusted-operator model.

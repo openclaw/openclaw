@@ -171,6 +171,48 @@ describe("control UI assets helpers", () => {
     expect(inspectControlUiRootAssets(root).kind).not.toBe("ready");
   });
 
+  it("bounds each served route without adding inactive preload variants together", () => {
+    const root = abs("fixtures/route-reference-limit");
+    const indexPath = path.join(root, "index.html");
+    const reference = '<link rel="modulepreload" href="./assets/startup.js">';
+    const route = (name: string, count: number) =>
+      '<template data-openclaw-route-preloads="' +
+      name +
+      '">' +
+      reference.repeat(count) +
+      "</template>";
+    setFile(path.join(root, "assets", "startup.js"));
+    setFile(indexPath, reference + route("chat", 90) + route("new", 90));
+    expect(inspectControlUiRootAssets(root).kind).toBe("ready");
+
+    setFile(indexPath, reference + route("chat", 90) + route("new", 128));
+    expect(inspectControlUiRootAssets(root)).toMatchObject({
+      kind: "incomplete",
+      missingAsset: "too many startup assets",
+    });
+  });
+
+  it("still validates assets and traversal inside every selectable preload route", () => {
+    const root = abs("fixtures/route-reference-integrity");
+    const indexPath = path.join(root, "index.html");
+    setFile(path.join(root, "assets", "startup.js"));
+    for (const route of ["chat", "new"]) {
+      const prefix = '<template data-openclaw-route-preloads="' + route + '">';
+      setFile(
+        indexPath,
+        '<script src="./assets/startup.js"></script>' +
+          prefix +
+          '<link href="./assets/missing.js"></template>',
+      );
+      expect(inspectControlUiRootAssets(root)).toMatchObject({
+        kind: "incomplete",
+        missingAsset: "assets/missing.js",
+      });
+      setFile(indexPath, prefix + '<link href="../assets/startup.js"></template>');
+      expect(inspectControlUiRootAssets(root).kind).toBe("incomplete");
+    }
+  });
+
   it("keeps a truncated build failure diagnostic within its UTF-16 limit", async () => {
     const root = abs("fixtures/build-failure");
     const argv1 = path.join(root, "src", "index.ts");

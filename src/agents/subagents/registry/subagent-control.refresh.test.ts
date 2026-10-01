@@ -246,7 +246,7 @@ it.each([
         };
       });
     const grandchildCancelled = createDeferred();
-    const stopObserving = subscribeSubagentRunChanges((runIds) => {
+    const stopObserving = subscribeSubagentRunChanges("projection", ({ runIds }) => {
       if (
         runIds?.includes("g") &&
         resolveSubagentSessionStatus(subagentRuns.get("g")) === "killed"

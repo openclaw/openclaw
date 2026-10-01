@@ -49,6 +49,7 @@ export function runCiManifestFixture(options: {
   targetSelector?: boolean;
   changedPlannerDependencies?: string[];
   dockerSeedPlannerSource?: string;
+  publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
@@ -87,6 +88,7 @@ export function runCiManifestFixture(options: {
   missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
   uiReleaseTier?: boolean;
+  uiE2eSelectorSource?: string;
   uiRealGatewayShards?: boolean;
   remoteTagRefs?: Record<string, string>;
   scopeEnv?: Record<string, string>;
@@ -254,9 +256,12 @@ export function runCiManifestFixture(options: {
         path.join(scriptsDir, "ci-node-test-plan.mts"),
         `\nexport const createUiTestShardGroups = (options) => ({
           ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", includePatterns: ${JSON.stringify(uiTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
-          e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", includePatterns: ${JSON.stringify(e2eTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
+          e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", includePatterns: options.uiE2eFiles ? [...options.uiE2eFiles, ...${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}] : ${JSON.stringify(e2eTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
         });\n`,
       );
+      if (options.uiE2eSelectorSource) {
+        appendFileSync(path.join(scriptsDir, "ci-node-test-plan.mts"), options.uiE2eSelectorSource);
+      }
       if (options.uiRealGatewayShards !== false) {
         appendFileSync(
           path.join(scriptsDir, "ci-node-test-plan.mts"),
@@ -390,6 +395,7 @@ export function runCiManifestFixture(options: {
             : {}),
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
+          "check:test-timeout-race-ratchet": "true",
         }
       : {};
     writeFileSync(
@@ -516,6 +522,10 @@ export function runCiManifestFixture(options: {
         options.dockerSeedPlannerSource ??
           `export { resolveDockerSeedLanes, resolveChangedDockerSeedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-docker-seed-plan.mts")).href)};\n`,
       );
+      copyFileSync(
+        "scripts/lib/ci-published-driver-update-plan.mts",
+        path.join(scriptsDir, "ci-published-driver-update-plan.mts"),
+      );
       const sqliteLifecycleProof = path.join(
         root,
         "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
@@ -585,6 +595,9 @@ export function runCiManifestFixture(options: {
           ? ["openclawkit-tests-contract-v1"]
           : []),
         ...(options.bundledPlanner ? ["docker-seed-e2e-contract-v1"] : []),
+        ...((options.publishedDriverUpdateCapability ?? options.bundledPlanner)
+          ? ["published-driver-update-contract-v1"]
+          : []),
         ...((options.targetHostedRunnerProfileContract ?? options.bundledPlanner)
           ? ["hosted-runner-profile-contract-v1"]
           : []),
@@ -614,7 +627,7 @@ export function runCiManifestFixture(options: {
     );
     const trustedReleasePolicy = path.join(root, ".ci-harness/scripts/lib");
     mkdirSync(trustedReleasePolicy, { recursive: true });
-    for (const name of ["release-context.mjs", "release-version.mjs"]) {
+    for (const name of ["release-context.mjs", "release-version.mjs", "ci-ios-smoke-plan.mjs"]) {
       writeFileSync(path.join(trustedReleasePolicy, name), readFileSync(`scripts/lib/${name}`));
     }
     copyFileSync(

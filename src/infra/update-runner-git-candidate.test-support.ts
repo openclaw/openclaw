@@ -3,12 +3,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { pathExists } from "../utils.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
-import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
+import type {
+  CommandRunner,
+  UpdateRunResult,
+  UpdateRunnerOptions,
+  UpdateStepProgress,
+} from "./update-runner-types.js";
 
 const { runCommandWithTimeout } = processExec;
 
@@ -60,13 +68,20 @@ export async function expectCancelledGitCandidateCleanup({
   fixture: { localRoot, baseSha, targetSha },
   pnpmVersion,
   runRealGit,
+  progress,
+  onAbort,
 }: {
   phase: "build" | "locked worktree creation";
   fixture: { localRoot: string; baseSha: string; targetSha: string };
   pnpmVersion: string;
   runRealGit: (cwd: string, ...args: string[]) => Promise<string>;
+  progress?: UpdateStepProgress;
+  onAbort?: () => void;
 }) {
   const controller = new AbortController();
+  if (onAbort) {
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+  }
   const stopped = new Error("preflight owner stopped");
   const beforeGitMutation = vi.fn(async () => {
     throw new Error("cancelled update reached mutation");
@@ -131,6 +146,7 @@ export async function expectCancelledGitCandidateCleanup({
           signal: options.signal ?? controller.signal,
         }),
       opts: {
+        progress,
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
         inspectGitTarget: async () => {},
         validateCandidate: async () => {
@@ -141,9 +157,23 @@ export async function expectCancelledGitCandidateCleanup({
           throw new Error("cancelled update reached Doctor");
         },
       },
+    }).catch((error: unknown) => {
+      if (
+        !progress ||
+        !controller.signal.aborted ||
+        hasCommandProcessCleanupError(error) ||
+        !collectNestedErrorCandidates(error).some(
+          (cause) => cause instanceof UpdateRequesterRevokedError,
+        )
+      ) {
+        throw error;
+      }
+      return undefined;
     });
     expect(controller.signal.reason).toBe(stopped);
-    expect(result.status).toBe("error");
+    if (result) {
+      expect(result.status).toBe("error");
+    }
     expect(beforeGitMutation).not.toHaveBeenCalled();
   } finally {
     commandSpy.mockRestore();

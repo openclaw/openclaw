@@ -127,7 +127,6 @@ export function formatAgentModelStartupLogLine(params: {
   };
 }
 
-/** Format model thinking and fast-mode details for the Gateway startup banner. */
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -245,7 +244,6 @@ function formatConfiguredChannelMissingOwnerStartupWarning(entry: {
   );
 }
 
-/** Format plugin count/list and optional startup duration for the ready log line. */
 function formatReadyDetails(
   loadedPluginIds: readonly string[],
   startupDurationLabel: string | null,

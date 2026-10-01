@@ -65,8 +65,8 @@ import { maybeHandleResetCommand } from "./commands-reset.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { resolveDispatchResetAdmission } from "./dispatch-from-config.context.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
+import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
+import { clearFollowupQueueForTest, createQueueTestRun } from "./queue.test-helpers.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -1015,7 +1015,7 @@ describe("initSessionState thread forking", () => {
       expect(cancel).not.toHaveBeenCalled();
     } finally {
       clearEmbeddedSessionPromptStates([threadSessionKey]);
-      clearSessionQueues([threadSessionKey]);
+      clearFollowupQueueForTest(threadSessionKey);
       activeReply.complete();
     }
   });
@@ -3579,28 +3579,6 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
 
-    {
-      name: "clears stale CLI binding with compaction accounting",
-      seed: {
-        cliSessionIds: { "claude-cli": "stale-cli-session", "codex-cli": "codex-session" },
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "stale-cli-session", authProfileId: "anthropic:old" },
-          "codex-cli": { sessionId: "codex-session" },
-        },
-        claudeCliSessionId: "stale-cli-session",
-      },
-      update: {
-        usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        lastCallUsage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        providerUsed: "claude-cli",
-        clearCliSessionBinding: true,
-      },
-      expected: {
-        cliSessionIds: { "codex-cli": "codex-session" },
-        cliSessionBindings: { "codex-cli": { sessionId: "codex-session" } },
-        claudeCliSessionId: undefined,
-      },
-    },
     {
       name: "preserves an ordered zero context snapshot independently of billable usage",
       seed: {

@@ -5,6 +5,7 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
@@ -137,10 +138,10 @@ export function extractTextContentParts(content: unknown): string[] {
       parts.push(item);
       continue;
     }
-    if (!item || typeof item !== "object") {
+    const typed = asOptionalObjectRecord(item);
+    if (!typed) {
       continue;
     }
-    const typed = item as { type?: unknown; text?: unknown; content?: unknown };
     if (typeof typed.text === "string") {
       parts.push(typed.text);
       continue;
@@ -200,10 +201,10 @@ function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): st
 export function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   const turns: ActiveRecallRecentTurn[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object") {
+    const typed = asOptionalObjectRecord(message);
+    if (!typed) {
       continue;
     }
-    const typed = message as { role?: unknown; content?: unknown };
     const role = typed.role === "user" || typed.role === "assistant" ? typed.role : undefined;
     if (!role) {
       continue;

@@ -2,15 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import * as packageFilesystem from "./package-update-filesystem.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as retry from "./retry.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const runRetry = retry.retryAsync;
+const backupPackageRoot = packageFilesystem.backupNpmPackageRoot;
+let backupPlatform: NodeJS.Platform;
 let wait: ReturnType<typeof vi.fn<(ms: number) => Promise<void>>>;
 beforeEach(() => {
+  backupPlatform = "win32";
+  // Select only the rename policy; fs-safe must retain the host's native platform.
+  vi.spyOn(packageFilesystem, "backupNpmPackageRoot").mockImplementation(
+    (source, destination, assertCurrent, warnings) =>
+      backupPackageRoot(source, destination, assertCurrent, warnings, backupPlatform),
+  );
   wait = vi.fn(async (_ms: number) => {});
   // Keep the real retry policy; only replace its waiting clock.
   vi.spyOn(retry, "retryAsync").mockImplementation((fn, options) =>
@@ -33,7 +41,7 @@ it.each(["EPERM", "EACCES", "EBUSY"])(
       }
       return rename(from, to);
     });
-    const result = await withMockedPlatform("win32", () => swapStagedPackageInstall(params));
+    const result = await swapStagedPackageInstall(params);
     expect(result).toMatchObject({ status: "committed", step: { exitCode: 0 } });
     expect(attempts).toBe(3);
     expect(result.step.warnings).toEqual([
@@ -56,6 +64,7 @@ it.each([
 ] as const)(
   "preserves the package after persistent $code on $platform (retries=$retries)",
   async ({ platform, code, retries }) => {
+    backupPlatform = platform;
     const { params, packageRoot, launcher } = await createPackageSwapFixture(
       dirs.make("openclaw-swap-locked-"),
     );
@@ -68,7 +77,7 @@ it.each([
       }
       return rename(from, to);
     });
-    const result = await withMockedPlatform(platform, () => swapStagedPackageInstall(params));
+    const result = await swapStagedPackageInstall(params);
     expect(result).toMatchObject({
       status: "failed",
       activePackageRoot: packageRoot,
@@ -121,16 +130,14 @@ it.each(["authority", "source", "destination"])(
       }
       return rename(from, to);
     });
-    const result = await withMockedPlatform("win32", () =>
-      swapStagedPackageInstall({
-        ...params,
-        assertCurrent: () => {
-          if (revoked) {
-            throw Object.assign(new Error("update owner revoked"), { code: "EPERM" });
-          }
-        },
-      }),
-    );
+    const result = await swapStagedPackageInstall({
+      ...params,
+      assertCurrent: () => {
+        if (revoked) {
+          throw Object.assign(new Error("update owner revoked"), { code: "EPERM" });
+        }
+      },
+    });
     expect(result.status).toBe("failed");
     expect(attempts).toBe(1);
     expect(result.step.stderrTail).toContain(

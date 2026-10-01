@@ -69,16 +69,20 @@ async function runDoctorConfigPreflightOperation(
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
   const skipLegacyParentConfigWrite = shouldSkipLegacyUpdateDoctorConfigWrite(process.env);
-  if (stateMigrationsRequested) {
-    await assertOpenClawStateWriteAllowedAtPath({
-      databasePath: resolveOpenClawStateSqlitePath(process.env),
-      env: process.env,
-      recoverOrphanedSidecars: true,
-    });
-  }
-  await noteStaleUpdateRuns({ migrateState: stateMigrationsRequested });
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
+  if (stateMigrationsRequested) {
+    await measurePreflightStep("state-write-admission", () =>
+      assertOpenClawStateWriteAllowedAtPath({
+        databasePath: resolveOpenClawStateSqlitePath(process.env),
+        env: process.env,
+        recoverOrphanedSidecars: true,
+      }),
+    );
+  }
+  await measurePreflightStep("stale-update-runs", () =>
+    noteStaleUpdateRuns({ migrateState: stateMigrationsRequested }),
+  );
   let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
@@ -177,6 +181,26 @@ async function runDoctorConfigPreflightOperation(
         notices: receipt.notices,
       });
       throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
+    }
+  }
+  if (options.invocationPurpose === "doctor" || options.doctorOnlyStateMigrations === true) {
+    // Plugin and legacy-state repairs can inspect sessions during config preflight.
+    const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
+    const repair = options.doctorOnlyStateMigrations === true && stateDirMigrations !== undefined;
+    const entryState = await measurePreflightStep("session-entry-state", () =>
+      repairLegacySessionEntryStates({
+        apply: repair,
+        cfg: automaticConfigRepair?.config ?? baseConfig,
+        env: process.env,
+        deferSchemaRepair: repair,
+      }),
+    );
+    if (!repair && entryState.found > 0) {
+      const { SessionStoreMigrationRequiredError } =
+        await import("../config/sessions/migration-required.js");
+      throw new SessionStoreMigrationRequiredError(
+        `Found ${entryState.found} session rows with legacy entry state. Run openclaw doctor --fix before further session inspection; no rows were changed.`,
+      );
     }
   }
   if (automaticConfigRepair && hasPendingPluginInstallConfig(snapshot)) {
@@ -312,6 +336,12 @@ async function runDoctorConfigPreflightOperation(
         migrateLegacyMediaPersistence({ env: process.env }),
       ),
     );
+    const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
+    await repairLegacySessionEntryStates({
+      apply: true,
+      cfg: automaticConfigRepair?.config ?? baseConfig,
+      env: process.env,
+    });
   }
   // Import retired locators before removing them from the authored config.
   if (await pluginMigrations.complete()) {

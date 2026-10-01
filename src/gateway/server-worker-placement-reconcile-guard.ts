@@ -1,7 +1,7 @@
 import type { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerProvisioningDispatchPlacement } from "./worker-environments/placement-dispatch-failure.js";
-import { matchesWorkerPlacementTarget } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { matchesWorkerPlacementTarget } from "./worker-environments/placement-target.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 
 export function createWorkerPlacementInitialRecovery(params: {

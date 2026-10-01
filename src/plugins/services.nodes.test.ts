@@ -14,7 +14,8 @@ import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-run
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import * as nativeModuleRequire from "./native-module-require.js";

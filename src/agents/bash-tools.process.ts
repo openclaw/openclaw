@@ -24,6 +24,7 @@ import {
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
+  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
   EXEC_RETENTION_CAP_NOTE,
   appendExecTimeoutRetryGuidance,
   renderExecExitLabel,
@@ -105,6 +106,7 @@ function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "ag
 const MAX_POLL_WAIT_MS = 30_000;
 
 type RunningSessionRuntime = {
+  followUp?: string;
   stdinWritable: boolean;
   waitingForInput: boolean;
   idleMs: number;
@@ -279,6 +281,7 @@ export function createProcessTool(
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
     const stdinWritable = isWritableStdin(session.stdin);
     return {
+      ...(session.notifyOnExit === false ? { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP } : {}),
       stdinWritable,
       waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
       idleMs,
@@ -363,11 +366,15 @@ export function createProcessTool(
               : undefined;
           const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
           const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
+          const wakeMarker = "followUp" in s ? " [no exit wake]" : "";
           return `${s.sessionId} ${s.status.padEnd(9)} ${
             formatDurationCompact(s.runtimeMs) ?? "n/a"
-          }${timeoutMarker}${marker} :: ${label}`;
+          }${timeoutMarker}${marker}${wakeMarker} :: ${label}`;
         });
-        return textResult(lines.join("\n") || "No running or recent sessions.", {
+        const followUp = sessions.some((s) => "followUp" in s)
+          ? `\n\n${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`
+          : "";
+        return textResult((lines.join("\n") || "No running or recent sessions.") + followUp, {
           status: "completed",
           sessions,
         });
@@ -474,7 +481,8 @@ export function createProcessTool(
             aggregateOutputNote +
             retainedOutputNote +
             (output || "(no new output)") +
-            (buildInputWaitHint(runtime) || "\n\nProcess still running.");
+            (buildInputWaitHint(runtime) || "\n\nProcess still running.") +
+            (runtime.followUp ? `\n\n${runtime.followUp}` : "");
           return attachInternalToolResultAcknowledgement(
             textResult(text, {
               status: "running",
@@ -511,7 +519,9 @@ export function createProcessTool(
               ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
               : "");
           const output = runtime
-            ? text + buildInputWaitHint(runtime)
+            ? text +
+              buildInputWaitHint(runtime) +
+              (runtime.followUp ? `\n\n${runtime.followUp}` : "")
             : appendExecTimeoutRetryGuidance(text, record.exitReason);
           return textResult(output, {
             ...(runtime

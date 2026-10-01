@@ -16,7 +16,8 @@ import {
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withTempHomeConfig, writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
@@ -272,7 +273,14 @@ describe("Claw exec approvals removal", () => {
           config: {},
           mcpServers: { docs: sourceMcpServer },
         }),
-        listMcpServers: async () => ({ ok: true, path: "fixture", config: {}, mcpServers: {} }),
+        listMcpServers: async () => ({
+          ok: true,
+          path: "fixture",
+          config: {},
+          mcpServers: {},
+          runtimeConfig: {},
+          sourceConfigBeforeMigrations: {},
+        }),
       });
       config = { ...config, mcp: { servers: { docs: sourceMcpServer } } };
       await writeOpenClawConfig(home, config);
