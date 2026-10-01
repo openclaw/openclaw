@@ -345,18 +345,24 @@ it.each(["skills_read", "skills_search"])(
         source: { filePath: "/skills/guide/SKILL.md", readContent: "Private instructions" },
       },
     ];
+    const skillTools = createInstalledSkillTools(skills);
     const runtime = createAgentHarnessToolSurfaceRuntimeCore({
       config: {
         agents: { defaults: { experimental: { localModelLean: false } } },
         tools: { codeMode: true, toolSearch: false },
       },
       modelToolsEnabled: true,
-      executeTool: async ({ tool, toolCallId, input, signal, onUpdate }) =>
-        tool.execute(toolCallId, input, signal, onUpdate),
+      executeTool: async ({ toolName, toolCallId, input, signal, onUpdate }) => {
+        const tool = skillTools.find((candidate) => candidate.name === toolName);
+        if (!tool) {
+          throw new Error(`Unknown native skill tool: ${toolName}`);
+        }
+        return tool.execute(toolCallId, input, signal, onUpdate);
+      },
     });
     try {
       const surface = runtime.compactTools(
-        createInstalledSkillTools(skills).filter((tool) => tool.name !== denied),
+        skillTools.filter((tool) => tool.name !== denied),
         { prepared: { codeModeSkills: skills, preserveToolNames: [] } },
       );
       const exec = surface.tools.find((tool) => tool.name === "exec")!;
