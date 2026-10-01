@@ -52,10 +52,6 @@ export type AgentDatabaseIncognitoIdentity = Readonly<{
   incarnation: string;
 }>;
 
-export type AgentDatabaseExecutionIdentity =
-  | AgentDatabaseFileExecutionIdentity
-  | AgentDatabaseIncognitoIdentity;
-
 export type AgentDatabaseIncognitoOpen = {
   kind: "ephemeral";
   identity: AgentDatabaseIncognitoIdentity;
@@ -68,7 +64,7 @@ export type AgentDatabaseExecutionOpen =
   | AgentDatabaseFileExecutionOpen
   | AgentDatabaseIncognitoOpen;
 
-export type AgentDatabaseIncognitoMemory = {
+type AgentDatabaseIncognitoMemory = {
   agentId: string;
   /** SQLite page allocation only, excluding allocator, decoded results, and transport memory. */
   databaseBytes: number;

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../config/paths.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
@@ -82,6 +83,8 @@ function createIncognitoAgentExecutionOwner(
     environment: context.environment,
   };
   let state: IncognitoAgentExecutionOwner["state"] = "opening";
+  let published = false;
+  let pendingBorrows = 0;
   let loss: IncognitoSessionEndedError | undefined;
   let store: Store | undefined;
   let opening: Promise<Store> | undefined;
@@ -169,7 +172,6 @@ function createIncognitoAgentExecutionOwner(
       authority.assertCurrent();
       assertCurrent();
       signal?.throwIfAborted();
-      state = "live";
       return opened;
     });
     return opening;
@@ -181,18 +183,33 @@ function createIncognitoAgentExecutionOwner(
       return state;
     },
     async borrow(source, borrowSignal) {
-      source.assertCurrent();
-      borrowSignal?.throwIfAborted();
+      pendingBorrows += 1;
       let opened: Store;
       try {
+        source.assertCurrent();
+        borrowSignal?.throwIfAborted();
         opened = await open();
+        source.assertCurrent();
+        assertCurrent();
+        borrowSignal?.throwIfAborted();
       } catch (error) {
-        await owner.close();
+        pendingBorrows -= 1;
+        if (!published && pendingBorrows === 0) {
+          try {
+            await owner.close();
+          } catch (cleanupError) {
+            throw createSqliteLifecycleAggregateError(
+              [error, cleanupError],
+              "Incognito admission and cleanup failed",
+              error,
+            );
+          }
+        }
         throw error;
       }
-      source.assertCurrent();
-      assertCurrent();
-      borrowSignal?.throwIfAborted();
+      pendingBorrows -= 1;
+      published = true;
+      state = "live";
       let released = false;
       let releasing: Promise<void> | undefined;
       const borrowedWork = new Set<Promise<unknown>>();
@@ -297,11 +314,17 @@ function createIncognitoAgentExecutionOwner(
 }
 
 /** Bind ephemeral lifetime to the canonical execution owner map, without a parallel registry. */
-export function createIncognitoAgentExecutionAccess(executions: {
-  get(pathname: string): IncognitoAgentExecutionOwner | { kind: "file" } | undefined;
-  set(pathname: string, owner: IncognitoAgentExecutionOwner): void;
-  delete(pathname: string): void;
-}) {
+export function createAgentDatabaseExecutionCapture<FileExecution, FileConstraints>(
+  executions: {
+    get(pathname: string): IncognitoAgentExecutionOwner | { kind: "file" } | undefined;
+    set(pathname: string, owner: IncognitoAgentExecutionOwner): void;
+    delete(pathname: string): void;
+  },
+  captureFile: (
+    options: OpenClawAgentDatabaseOptions,
+    constraints?: FileConstraints,
+  ) => FileExecution,
+) {
   /** Inactive P1 entry point. Production incognito routing stays native until P7. */
   async function openIncognitoAgentDatabaseExecution(
     options: Omit<OpenClawAgentDatabaseOptions, "path">,
@@ -324,6 +347,9 @@ export function createIncognitoAgentExecutionAccess(executions: {
     if (owner && owner.kind !== "ephemeral") {
       throw new Error("Incognito namespace belongs to a file execution owner");
     }
+    if (existingOnly && (!owner || owner.state === "opening")) {
+      return undefined;
+    }
     if (owner && (owner.state === "lost" || owner.state === "closed") && !existingOnly) {
       await owner.close();
       authority.assertCurrent();
@@ -334,9 +360,6 @@ export function createIncognitoAgentExecutionAccess(executions: {
       });
     }
     if (!owner) {
-      if (existingOnly) {
-        return undefined;
-      }
       const created = createIncognitoAgentExecutionOwner(
         { ...capturedOptions, agentId, path: pathname },
         authority,
@@ -360,5 +383,31 @@ export function createIncognitoAgentExecutionAccess(executions: {
     return owner.borrow(authority, signal);
   }
 
-  return openIncognitoAgentDatabaseExecution;
+  type EphemeralTarget = {
+    kind: "ephemeral";
+    agentId: string;
+    env?: NodeJS.ProcessEnv;
+    authority: AgentDatabaseIncognitoAuthority;
+    existingOnly?: boolean;
+    signal?: AbortSignal;
+  };
+  function capture(target: EphemeralTarget): Promise<IncognitoAgentDatabaseExecution | undefined>;
+  function capture(
+    options: OpenClawAgentDatabaseOptions,
+    constraints?: FileConstraints,
+  ): FileExecution;
+  function capture(
+    target: (OpenClawAgentDatabaseOptions & { kind?: "file" }) | EphemeralTarget,
+    constraints?: FileConstraints,
+  ): FileExecution | Promise<IncognitoAgentDatabaseExecution | undefined> {
+    if (target.kind === "ephemeral") {
+      return openIncognitoAgentDatabaseExecution(
+        { agentId: target.agentId, env: target.env },
+        target.authority,
+        { existingOnly: target.existingOnly, signal: target.signal },
+      );
+    }
+    return captureFile(target, constraints);
+  }
+  return capture;
 }

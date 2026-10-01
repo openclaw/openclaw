@@ -28,8 +28,9 @@ writers, no session-domain routing change, and no reduction in main-thread
 database access yet.
 
 Each agent and state-root namespace has one pinned actor on a dedicated broker
-worker. Concurrent creation joins the same opening owner. Existing-only misses
-create nothing. Process-private opaque handles and incarnations bind work to
+worker. Concurrent creation joins the same opening owner. Existing-only lookups
+see published actors; missing or still-opening targets create nothing.
+Process-private opaque handles and incarnations bind work to
 that exact actor; they are locators, never permission. Reads and future writes
 share the existing agent writer queue, and caller authority is checked after
 waits and before disclosure. Explicit close seals admission, joins accepted work

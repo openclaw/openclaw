@@ -32,7 +32,7 @@ import type {
   AgentDatabaseRequestExecutionSource,
 } from "./openclaw-agent-execution-contract.js";
 import {
-  createIncognitoAgentExecutionAccess,
+  createAgentDatabaseExecutionCapture,
   type IncognitoAgentExecutionOwner,
 } from "./openclaw-agent-execution-incognito.js";
 import {
@@ -102,8 +102,11 @@ const executionState = resolveGlobalSingleton<{
 const executions = executionState.owners;
 const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
 
-/** Inactive P1 entry point; shares the canonical executor namespace owner. */
-export const openIncognitoAgentDatabaseExecution = createIncognitoAgentExecutionAccess(executions);
+/** File captures stay synchronous; explicit ephemeral targets await their pinned actor. */
+export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutionCapture(
+  executions,
+  captureFileAgentDatabaseExecution,
+);
 
 function supportsAgentDatabaseExecutionScope(options: OpenClawAgentDatabaseOptions): boolean {
   return (
@@ -124,7 +127,7 @@ export function supportsOpenClawAgentDatabaseExecution(
 }
 
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
-export function captureOpenClawAgentDatabaseExecution(
+function captureFileAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
   constraints: {
     expectedIdentity?: AgentDatabaseExecutionFileIdentity;

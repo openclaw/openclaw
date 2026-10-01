@@ -7,13 +7,14 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as workerStores from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { IncognitoSessionEndedError } from "./openclaw-agent-execution-contract.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import {
-  openIncognitoAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution.js";
 
@@ -43,8 +44,21 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+function captureIncognito(
+  options: { agentId: string; env: NodeJS.ProcessEnv },
+  source = authority,
+  request: { existingOnly?: boolean; signal?: AbortSignal } = {},
+) {
+  return captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    ...options,
+    authority: source,
+    ...request,
+  });
+}
+
 async function open(agentId = "main", source = authority, signal?: AbortSignal) {
-  const reference = await openIncognitoAgentDatabaseExecution({ agentId, env }, source, { signal });
+  const reference = await captureIncognito({ agentId, env }, source, { signal });
   assert(reference);
   references.add(reference);
   return reference;
@@ -56,14 +70,63 @@ function memory(reference: IncognitoAgentDatabaseExecution) {
   );
 }
 
+it.each([false, true])(
+  "settles cancellation at final publication (another creator: %s)",
+  async (anotherCreator) => {
+    const controller = new AbortController();
+    let nativeReady = false;
+    let cancellationQueued = false;
+    let nativeStore: object | undefined;
+    const openNative = workerStores.openEphemeralAgentDatabaseSqliteWorkerStore;
+    vi.spyOn(workerStores, "openEphemeralAgentDatabaseSqliteWorkerStore").mockImplementation(
+      async (...args) => {
+        const store = await openNative(...args);
+        nativeStore = store;
+        nativeReady = true;
+        return store;
+      },
+    );
+    const creatorAuthority = {
+      assertCurrent() {
+        controller.signal.throwIfAborted();
+        if (nativeReady && !cancellationQueued) {
+          cancellationQueued = true;
+          queueMicrotask(() => controller.abort(new Error("cancelled before publication")));
+        }
+      },
+    };
+    const rejected = expect(open("main", creatorAuthority, controller.signal)).rejects.toThrow(
+      "cancelled before publication",
+    );
+    const follower = anotherCreator ? open() : undefined;
+    void follower?.catch(() => undefined);
+    await rejected;
+    const accepted = await follower;
+    const existing = await captureIncognito({ agentId: "main", env }, authority, {
+      existingOnly: true,
+    });
+    if (existing) {
+      references.add(existing);
+    }
+    assert(nativeStore);
+    if (accepted) {
+      expect(existing?.identity).toEqual(accepted.identity);
+      expect((await memory(accepted)).databaseBytes).toBeGreaterThan(0);
+    } else {
+      expect(existing).toBeUndefined();
+      expect(workerStores.isSqliteWorkerStoreAvailable(nativeStore)).toBe(false);
+    }
+  },
+);
+
 it("converges creating opens, pins released stores, reads only existing targets, and creates no artifacts", async () => {
   const options = { agentId: "main", env };
   const sentinel = resolveIncognitoOpenClawAgentSqlitePath(options);
-  expect(
-    await openIncognitoAgentDatabaseExecution(options, authority, { existingOnly: true }),
-  ).toBeUndefined();
+  expect(await captureIncognito(options, authority, { existingOnly: true })).toBeUndefined();
   expect(fs.readdirSync(stateRoot)).toEqual([]);
-  const [first, second] = await Promise.all([open(), open()]);
+  const creating = [open(), open()];
+  expect(await captureIncognito(options, authority, { existingOnly: true })).toBeUndefined();
+  const [first, second] = await Promise.all(creating);
   expect(first.identity).toEqual(second.identity);
   expect(getOpenClawAgentDatabaseIfOpen({ ...options, path: sentinel })).toBeUndefined();
   expect(supportsOpenClawAgentDatabaseExecution({ ...options, path: sentinel })).toBe(false);
@@ -74,7 +137,7 @@ it("converges creating opens, pins released stores, reads only existing targets,
   expect(gauge.databaseBytes).toBe(gauge.pageCount * gauge.pageSize);
   await Promise.all([first.release(), second.release()]);
   const sibling = await open("sibling");
-  const existing = await openIncognitoAgentDatabaseExecution(options, authority, {
+  const existing = await captureIncognito(options, authority, {
     existingOnly: true,
   });
   assert(existing);
@@ -86,7 +149,7 @@ it("converges creating opens, pins released stores, reads only existing targets,
   expect(fs.readdirSync(stateRoot, { recursive: true })).toEqual([]);
   expect(fs.readdirSync(tempRoot, { recursive: true })).toEqual([]);
   expect(
-    await openIncognitoAgentDatabaseExecution(
+    await captureIncognito(
       { agentId: "main", env: { OPENCLAW_STATE_DIR: path.join(stateRoot, "other") } },
       authority,
       { existingOnly: true },
@@ -183,7 +246,7 @@ it("ends only the lost actor's sessions and refuses old handles after replacemen
   expect(() => memory(lost)).toThrow(IncognitoSessionEndedError);
   expect((await memory(sibling)).databaseBytes).toBeGreaterThan(0);
   await expect(
-    openIncognitoAgentDatabaseExecution({ agentId: "main", env }, authority, {
+    captureIncognito({ agentId: "main", env }, authority, {
       existingOnly: true,
     }),
   ).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" });
@@ -200,16 +263,14 @@ it("refuses sentinel collisions and cancelled creation without publishing or tou
   fs.writeFileSync(sentinel, "operator-owned collision");
   await expect(open()).rejects.toThrow("sentinel path already exists");
   expect(fs.readFileSync(sentinel, "utf8")).toBe("operator-owned collision");
-  expect(
-    await openIncognitoAgentDatabaseExecution(options, authority, { existingOnly: true }),
-  ).toBeUndefined();
+  expect(await captureIncognito(options, authority, { existingOnly: true })).toBeUndefined();
   const controller = new AbortController();
   controller.abort(new Error("cancelled creation"));
   await expect(open("cancelled", authority, controller.signal)).rejects.toThrow(
     "cancelled creation",
   );
   expect(
-    await openIncognitoAgentDatabaseExecution({ agentId: "cancelled", env }, authority, {
+    await captureIncognito({ agentId: "cancelled", env }, authority, {
       existingOnly: true,
     }),
   ).toBeUndefined();
@@ -228,7 +289,7 @@ it("refuses sentinel collisions and cancelled creation without publishing or tou
     "cancelled dispatched creation",
   );
   expect(
-    await openIncognitoAgentDatabaseExecution({ agentId: "dispatched", env }, authority, {
+    await captureIncognito({ agentId: "dispatched", env }, authority, {
       existingOnly: true,
     }),
   ).toBeUndefined();
