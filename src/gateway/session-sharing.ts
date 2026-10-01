@@ -21,6 +21,7 @@ import {
   gatewayClientSessionCreator,
   isGatewayClientProfilePending,
 } from "./server-methods/gateway-client-identity.js";
+import { isSyntheticGatewayCaller } from "./server-methods/gateway-personal-caller.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -164,12 +165,33 @@ export function resolveSessionMutationAuthorization(params: {
         ? params.requestParams
         : undefined;
   const requiresArchiveOwnership = isRecord(patch) && typeof patch.archived === "boolean";
+  const requiresCommunicationAuthority =
+    (isRecord(patch) && Object.hasOwn(patch, "communication")) ||
+    (params.method === "sessions.create" &&
+      isRecord(params.requestParams) &&
+      Object.hasOwn(params.requestParams, "communication"));
+  if (
+    requiresCommunicationAuthority &&
+    (!params.client || isSyntheticGatewayCaller(params.client))
+  ) {
+    return {
+      error: errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Session communication settings require a direct human request.",
+      ),
+    };
+  }
   // Progress belongs to the current conversation, not merely its stable session ID.
   // Capture this boundary for admins too so delayed writes cannot revive a reset card.
   const bindsProgressLifecycle =
     params.method === "progressCard.put" || params.method === "progressCard.refresh";
   const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
-  if (adminBypass && !bindsProgressLifecycle && !params.expectedTarget) {
+  if (
+    adminBypass &&
+    !bindsProgressLifecycle &&
+    !requiresCommunicationAuthority &&
+    !params.expectedTarget
+  ) {
     return { error: null };
   }
   if (
@@ -234,7 +256,8 @@ export function resolveSessionMutationAuthorization(params: {
           cfg,
           client: params.client,
           target,
-          requireOwner: requiresArchiveOwnership,
+          requireOwner: requiresArchiveOwnership || requiresCommunicationAuthority,
+          ownerAction: requiresCommunicationAuthority ? "change communication settings" : undefined,
           isMember: projection
             ? Boolean(
                 identity &&

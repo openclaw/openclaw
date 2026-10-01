@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionCommunicationInput } from "../../gateway/in-process-session-communication.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -48,6 +49,7 @@ import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steer
 export async function notifySessionsSendSession(params: {
   message: string;
   inputProvenance: InputProvenance;
+  assertCommunicationCurrent?: () => void;
   sessionKey: string;
   targetAgentId: string;
   idempotencyKey: string;
@@ -57,6 +59,7 @@ export async function notifySessionsSendSession(params: {
   const selection = resolveGatewayToolOperatorSelection();
   const enqueue = () => {
     selection.assertCurrent();
+    params.assertCommunicationCurrent?.();
     return enqueueSystemEventEntry(
       annotateInterSessionPromptText(params.message, params.inputProvenance),
       withSystemEventOwner(
@@ -136,7 +139,13 @@ type SessionsSendDeliveryParams = {
   expectedSessionId?: string;
   retainAcceptance?: boolean;
   assertDispatchCurrent?: () => void;
+  assertCommunicationCurrent?: () => void;
+  retainCommunicationInput?: () => SessionCommunicationInput;
   sourceOrigin?: DeliveryContext;
+  /** Only the delivery owner can select its existing Cron parent fallback. */
+  prepareFallback?: (
+    sessionKey: string,
+  ) => Promise<{ callGateway: AgentToolGatewayRequestCaller; close: () => void }>;
   mode?: "steer" | "followup";
 };
 
@@ -188,18 +197,40 @@ export async function trySessionsSendActiveRunDelivery(
           "onQueueAccepted" | "onQueueSettled"
         > = {},
       ) => {
+        const communicationInput = params.retainCommunicationInput?.();
+        let communicationCommitted = false;
+        const assertDeliveryCurrent = () => {
+          assertCurrent();
+          if (!communicationCommitted) {
+            if (communicationInput) {
+              communicationInput.assertCurrent();
+            } else {
+              params.assertCommunicationCurrent?.();
+            }
+          }
+        };
         const queueOptions: EmbeddedAgentQueueMessageOptions = {
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: params.deliveryTimeoutMs,
-          ...lifecycle,
+          onQueueAccepted: (accepted) => {
+            lifecycle.onQueueAccepted?.(accepted);
+          },
+          onQueueSettled: () => {
+            communicationInput?.release();
+            lifecycle.onQueueSettled?.();
+          },
           // Waiting for a busy run's transcript would withdraw accepted guidance at the deadline.
           ...(params.mode === "steer" || ownChild
             ? { waitForTranscriptCommit: false }
             : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
           // The receiving runtime owns transcript writes to this exact incarnation.
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-            assertOriginalInputCommit: assertCurrent,
+            assertOriginalInputCommit: assertDeliveryCurrent,
+            onOriginalInputCommitted: () => {
+              communicationCommitted = true;
+              communicationInput?.release();
+            },
             input: {
               text: messageText,
               provenance: inputProvenance,
@@ -224,7 +255,7 @@ export async function trySessionsSendActiveRunDelivery(
                 messageText,
                 options,
                 () => {
-                  assertCurrent();
+                  assertDeliveryCurrent();
                   if (!selection.operatorAuthority) {
                     assertCaller?.("agent");
                   }
@@ -232,14 +263,22 @@ export async function trySessionsSendActiveRunDelivery(
                 },
               )
             : queueEmbeddedAgentMessageWithOutcomeAsync(activeRunSessionId, messageText, options);
-        assertCurrent();
-        let outcome = await dispatchQueue(queueOptions);
-        if (!outcome.queued && outcome.reason === "transcript_commit_wait_unsupported") {
-          const bestEffortQueueOptions = { ...queueOptions };
-          delete bestEffortQueueOptions.waitForTranscriptCommit;
-          outcome = await dispatchQueue(bestEffortQueueOptions);
+        try {
+          assertDeliveryCurrent();
+          let outcome = await dispatchQueue(queueOptions);
+          if (!outcome.queued && outcome.reason === "transcript_commit_wait_unsupported") {
+            const bestEffortQueueOptions = { ...queueOptions };
+            delete bestEffortQueueOptions.waitForTranscriptCommit;
+            outcome = await dispatchQueue(bestEffortQueueOptions);
+          }
+          if (!outcome.queued) {
+            communicationInput?.release();
+          }
+          return outcome;
+        } catch (error) {
+          communicationInput?.release();
+          throw error;
         }
-        return outcome;
       };
       const queueOutcome = selection.operatorAuthority
         ? await queueSessionsSendSteeringWithCustody(
@@ -279,7 +318,13 @@ export async function startSessionsSendAgentRun(
   params: SessionsSendDeliveryParams & { fallbackSessionKey?: string },
 ): Promise<SessionsSendStart> {
   const { fallbackSessionKey } = params;
+  let fallbackAdmission:
+    | Awaited<ReturnType<NonNullable<SessionsSendDeliveryParams["prepareFallback"]>>>
+    | undefined;
   try {
+    if (fallbackSessionKey && params.prepareFallback) {
+      fallbackAdmission = await params.prepareFallback(fallbackSessionKey);
+    }
     // Self-sends retain the captured conversation; a distinct Cron parent uses its own route.
     const sourceOrigin = fallbackSessionKey ? undefined : params.sourceOrigin;
     const sendParams = sourceOrigin
@@ -294,7 +339,10 @@ export async function startSessionsSendAgentRun(
     const accepted = params.retainAcceptance
       ? createDeferredCore<{ runId: string; admissionPending?: boolean }>()
       : undefined;
-    const responsePromise = params.callGateway<{ runId: string; admissionPending?: boolean }>({
+    const responsePromise = (fallbackAdmission?.callGateway ?? params.callGateway)<{
+      runId: string;
+      admissionPending?: boolean;
+    }>({
       method: "agent",
       params: fallbackSessionKey
         ? {
@@ -347,6 +395,8 @@ export async function startSessionsSendAgentRun(
     };
   } catch (err) {
     return deliveryFailure(params, err);
+  } finally {
+    fallbackAdmission?.close();
   }
 }
 
@@ -402,6 +452,7 @@ export async function createConfiguredAgentMainSession(params: {
   sessionKey: string;
   requesterSessionKey?: string;
   useTrustedInProcessCreation: boolean;
+  assertCommunicationCurrent?: () => void;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const createParams = {
@@ -415,14 +466,20 @@ export async function createConfiguredAgentMainSession(params: {
     ) {
       // sessions.create serializes keyed creation and adopts an existing row,
       // so concurrent first sends can safely race after the missing resolution.
-      await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
-        via: "internal",
-        actor: { type: "agent", id: params.requesterSessionKey },
-      });
+      await callInProcessGatewayToolWithCreation(
+        "sessions.create",
+        createParams,
+        {
+          via: "internal",
+          actor: { type: "agent", id: params.requesterSessionKey },
+        },
+        { sessionMutationCommitGuard: params.assertCommunicationCurrent },
+      );
     } else {
       await params.callGateway({
         method: "sessions.create",
         params: createParams,
+        sessionMutationCommitGuard: params.assertCommunicationCurrent,
         timeoutMs: 10_000,
       });
     }
@@ -430,4 +487,18 @@ export async function createConfiguredAgentMainSession(params: {
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }
+}
+
+export function sessionsSendFailure(
+  status: "error" | "forbidden",
+  error: string,
+  sessionKey?: string,
+  runId: string = crypto.randomUUID(),
+) {
+  return jsonResult({
+    runId,
+    status,
+    error,
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
+  });
 }

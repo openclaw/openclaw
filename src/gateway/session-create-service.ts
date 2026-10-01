@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -38,7 +37,6 @@ import type { SessionEntryCreationOperation } from "../config/sessions/session-a
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
-import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import {
   createInternalHookEvent,
   hasInternalHookListeners,
@@ -75,11 +73,15 @@ import {
   prepareSessionPatchRuntimeSelection,
   refreshSessionPatchQueuedSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
-import { existingSessionSelectionWouldChange } from "./session-create-existing-selection.js";
+import {
+  existingSessionSelectionWouldChange,
+  sessionCreatePolicyAdoptionError,
+} from "./session-create-existing-selection.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
   prepareSessionCreateParent,
   resolveSessionCreateInheritance,
+  resolveSessionCreateInheritedSelection,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
@@ -175,6 +177,7 @@ export async function createGatewaySession(
   const projectId = normalizeOptionalString(params.projectId);
   const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
   const requestedToolOverrides = params.toolOverrides !== undefined;
+  const requestedCommunication = params.communication !== undefined;
   const selectedAgent = resolveRequestedSessionAgentId(
     params.cfg,
     requestedKey ?? (params.agentId === undefined ? "main" : undefined),
@@ -827,6 +830,7 @@ export async function createGatewaySession(
             ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
             ...(requestedFastMode !== undefined ? { fastMode: requestedFastMode } : {}),
             ...(requestedToolOverrides ? { toolOverrides: params.toolOverrides } : {}),
+            ...(requestedCommunication ? { communication: params.communication } : {}),
             ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           },
           loadGatewayModelCatalogSnapshot: loadModelCatalog
@@ -848,13 +852,9 @@ export async function createGatewaySession(
           params.creation?.spawnModelAutoSelection?.model === requestedModel
             ? params.creation?.spawnModelAutoSelection
             : undefined;
-        if (
-          requestedToolOverrides &&
-          existingEntry !== undefined &&
-          stableStringify(existingEntry.toolOverrides) !==
-            stableStringify(patched.entry.toolOverrides)
-        ) {
-          return invalidSessionRequest("sessions.create toolOverrides requires a new session");
+        const policyError = sessionCreatePolicyAdoptionError(existingEntry, patched.entry, params);
+        if (policyError) {
+          return invalidSessionRequest(policyError);
         }
         const execNode = normalizeOptionalString(params.execNode);
         const execCwd = normalizeOptionalString(params.execCwd);
@@ -974,21 +974,13 @@ export async function createGatewaySession(
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
         const storedParentSessionKey = explicitParentSessionKey ?? dashboardParentSessionKey;
-        const inheritedSelection =
-          !canonicalParentSessionKey || catalogModel || normalizeOptionalString(params.model)
-            ? {}
-            : inheritSessionSelection(currentParentSessionEntry);
-        if (requestedToolOverrides) {
-          delete inheritedSelection.toolOverrides;
-        }
-        if (requestedFastMode !== undefined) {
-          // The create-time choice belongs to the new session; parent inheritance must not
-          // replace it after the canonical patch has validated and stored it.
-          delete inheritedSelection.fastMode;
-        }
         const entry: SessionEntry = {
           ...initializedEntry,
-          ...inheritedSelection,
+          ...resolveSessionCreateInheritedSelection({
+            params,
+            parent: canonicalParentSessionKey ? currentParentSessionEntry : undefined,
+            catalogModel,
+          }),
           // Main groups dashboard roots; it must not supply their reply-time model.
           ...(createdNewEntry &&
           dashboardParentSessionKey &&

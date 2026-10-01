@@ -6,6 +6,7 @@ import {
   errorShape,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { SESSION_COMMUNICATION_MODES } from "../../packages/gateway-protocol/src/session-communication.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
@@ -431,6 +432,28 @@ function* projectSessionPatchSteps(
       } else {
         delete next.toolOverrides;
       }
+    }
+  }
+
+  if (patch.communication === null) {
+    delete next.communication;
+  } else if (patch.communication !== undefined) {
+    const communication = { ...next.communication };
+    for (const direction of ["send", "receive"] as const) {
+      const mode = patch.communication[direction];
+      if (mode === null) {
+        delete communication[direction];
+      } else if (mode !== undefined) {
+        if (!SESSION_COMMUNICATION_MODES.some((allowed) => allowed === mode)) {
+          return invalid(`invalid communication.${direction} (use always|ask|never)`);
+        }
+        communication[direction] = mode;
+      }
+    }
+    if (Object.keys(communication).length) {
+      next.communication = communication;
+    } else {
+      delete next.communication;
     }
   }
 

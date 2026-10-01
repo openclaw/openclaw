@@ -34,6 +34,10 @@ import {
   type ChatImageContent,
   type OffloadedRef,
 } from "../chat-attachments.js";
+import {
+  claimSessionCommunicationInput,
+  type SessionCommunicationInput,
+} from "../in-process-session-communication.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
@@ -50,6 +54,7 @@ import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.
 
 export type PreparedAgentRunUserTurn = {
   privateCompletion?: true;
+  communicationInput?: SessionCommunicationInput;
   bashElevated?: ExecElevatedDefaults;
   claimedExecApprovalFollowupHandoffId?: string;
   execApprovalFollowupHandoffClaimId: string;
@@ -160,6 +165,11 @@ export async function prepareAgentRunUserTurn(params: {
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
 }): Promise<PreparedAgentRunUserTurn> {
+  const communicationInput = claimSessionCommunicationInput(params.request);
+  const assertInputCurrent = () => {
+    params.assertCurrent();
+    communicationInput?.assertCurrent();
+  };
   const execApprovalFollowupHandoffClaimId = randomUUID();
   let claimedExecApprovalFollowupHandoffId: string | undefined;
   let durableMediaIds: string[] = [];
@@ -259,7 +269,7 @@ export async function prepareAgentRunUserTurn(params: {
         assertCurrent: params.assertCurrent,
       });
       durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
-      params.assertCurrent();
+      assertInputCurrent();
       const media = persistedMedia.entries.map((entry) => entry.fact);
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
@@ -289,7 +299,7 @@ export async function prepareAgentRunUserTurn(params: {
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: () => {
-          params.assertCurrent();
+          assertInputCurrent();
           const loaded = loadSessionEntry(params.resolvedSessionKey!, {
             agentId: params.activeSessionAgentId,
             clone: false,
@@ -317,7 +327,7 @@ export async function prepareAgentRunUserTurn(params: {
         errorContext: "gateway agent user turn transcript",
         beforeMessageWrite: (writeContext) => {
           const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
-          params.assertCurrent();
+          assertInputCurrent();
           return preparedMessage;
         },
         onPersistenceError: (error) => {
@@ -330,10 +340,10 @@ export async function prepareAgentRunUserTurn(params: {
         !(await recorder.stageApproved!({
           runId: params.runId,
           assertCurrent: () => {
-            params.assertCurrent();
+            assertInputCurrent();
             settleWakeReplay?.assertCurrent();
           },
-          assertAdmittedCurrent: params.assertCurrent,
+          assertAdmittedCurrent: assertInputCurrent,
           assertCompletionCurrent: params.assertCompletionCurrent,
         })) &&
         !recorder.getProcessingCompletion?.()
@@ -382,6 +392,7 @@ export async function prepareAgentRunUserTurn(params: {
       }
     }
     return {
+      ...(communicationInput ? { communicationInput } : {}),
       ...(params.privateCompletion ? { privateCompletion: true as const } : {}),
       ...(releaseProcessingAbortObserver ? { releaseProcessingAbortObserver } : {}),
       ...(execApprovalFollowupRuntimeHandoff?.bashElevated
@@ -400,6 +411,7 @@ export async function prepareAgentRunUserTurn(params: {
       suppressPromptPersistence,
     };
   } catch (error) {
+    communicationInput?.release();
     releaseExecApprovalFollowupRuntimeHandoff({
       handoffId: claimedExecApprovalFollowupHandoffId,
       claimId: execApprovalFollowupHandoffClaimId,
@@ -410,6 +422,7 @@ export async function prepareAgentRunUserTurn(params: {
 }
 
 export function finalizePreparedAgentRunUserTurn(prepared: PreparedAgentRunUserTurn): void {
+  prepared.communicationInput?.assertCurrent();
   const handoffId = prepared.claimedExecApprovalFollowupHandoffId;
   if (!handoffId) {
     return;
@@ -432,10 +445,14 @@ export function releasePreparedAgentRunUserTurn(
     prepared.releaseProcessingAbortObserver?.();
     prepared.recorder?.finishPendingInput?.(disposition);
   } finally {
-    releaseExecApprovalFollowupRuntimeHandoff({
-      handoffId: prepared.claimedExecApprovalFollowupHandoffId,
-      claimId: prepared.execApprovalFollowupHandoffClaimId,
-    });
+    try {
+      releaseExecApprovalFollowupRuntimeHandoff({
+        handoffId: prepared.claimedExecApprovalFollowupHandoffId,
+        claimId: prepared.execApprovalFollowupHandoffClaimId,
+      });
+    } finally {
+      prepared.communicationInput?.release();
+    }
   }
 }
 

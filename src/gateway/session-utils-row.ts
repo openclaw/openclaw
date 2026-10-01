@@ -35,6 +35,7 @@ import {
   type ProjectedAgentRunIndex,
 } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
+import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
@@ -441,6 +442,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
     projectId: entry?.projectId,
     permissionMode: entry?.permissionMode,
+    communication: entry?.communication,
+    effectiveCommunication: resolveSessionCommunicationPolicy({ config: input.cfg, entry }),
     sandboxMode: entry?.sandboxMode,
     nativeRuntimeConsent: entry?.nativeRuntimeConsent,
     permissionModePending: input.permissionModePending,

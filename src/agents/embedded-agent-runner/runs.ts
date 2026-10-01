@@ -86,6 +86,7 @@ import {
   isEmbeddedRunHandleAbortable,
   isEmbeddedRunHandleSupersedable,
 } from "./runs.probes.js";
+import { queueEmbeddedAgentMessageWithCustody } from "./runs.queue-custody.js";
 
 export type {
   EmbeddedAgentQueueHandle,
@@ -531,7 +532,12 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   text: string,
   options?: ReplyMessageInjectionOptions,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
-  return queueEmbeddedAgentMessageAsync(sessionId, text, options);
+  return queueEmbeddedAgentMessageWithCustody(
+    sessionId,
+    text,
+    options,
+    queueEmbeddedAgentMessageAsync,
+  );
 }
 
 /** TUI preflight requires V2 ownership; failure leaves ordinary input to local queue policy. */
@@ -577,56 +583,13 @@ export async function queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
   options: ReplyMessageInjectionOptions | undefined,
   canInject: () => boolean,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  const onQueueSettled = options?.onQueueSettled;
-  if (!handle || !onQueueSettled) {
-    return queueEmbeddedAgentMessageAsync(sessionId, text, options, canInject);
-  }
-  // Bind custody before dispatch: a backend can accept synchronously, then end
-  // without reporting per-input settlement. Never follow a same-session successor.
-  const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set<EmbeddedRunWaiter>();
-  const operation = resolveActiveReplyOperationForSessionId(sessionId);
-  const abortSignal =
-    operation && getAttachedBackend(operation) === handle ? operation.abortSignal : undefined;
-  let settled = false;
-  const close = (notify: boolean) => {
-    if (settled) {
-      return;
-    }
-    settled = true;
-    waiters.delete(waiter);
-    if (waiters.size === 0 && EMBEDDED_RUN_WAITERS.get(sessionId) === waiters) {
-      EMBEDDED_RUN_WAITERS.delete(sessionId);
-    }
-    abortSignal?.removeEventListener("abort", settle);
-    if (notify) {
-      onQueueSettled();
-    }
-  };
-  const settle = () => close(true);
-  const waiter: EmbeddedRunWaiter = { handle, resolve: settle, settleOnAbort: true };
-  waiters.add(waiter);
-  EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
-  abortSignal?.addEventListener("abort", settle, { once: true });
-  if (abortSignal?.aborted || handle.isAborted?.()) {
-    settle();
-  }
-  try {
-    const outcome = await queueEmbeddedAgentMessageAsync(
-      sessionId,
-      text,
-      { ...options, onQueueSettled: settle },
-      canInject,
-    );
-    if (!outcome.queued) {
-      // Admission can retry without transcript waiting; rejection never owns custody.
-      close(false);
-    }
-    return outcome;
-  } catch (error) {
-    close(false);
-    throw error;
-  }
+  return queueEmbeddedAgentMessageWithCustody(
+    sessionId,
+    text,
+    options,
+    queueEmbeddedAgentMessageAsync,
+    canInject,
+  );
 }
 
 async function queueEmbeddedAgentMessageAsync(

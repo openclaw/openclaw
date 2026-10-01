@@ -185,6 +185,10 @@ export async function runSessionToolActionWithConflictReceipt<T>(params: {
   }
 }
 
+export type SessionToolAccessDecision =
+  | (Extract<SessionVisibilityDecision, { allowed: true }> & { basis?: "scoped-grant" })
+  | SessionToolAccessDenied;
+
 /** Check one prepared target without re-listing the requester's spawned sessions. */
 export async function resolveSessionToolAccess(params: {
   action: Exclude<SessionAccessAction, "list">;
@@ -200,7 +204,7 @@ export async function resolveSessionToolAccess(params: {
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionVisibilityDecision> {
+}): Promise<SessionToolAccessDecision> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
@@ -242,7 +246,7 @@ export async function resolveSessionToolAccess(params: {
     targetSessionKey: authorizationTargetSessionKey,
   });
   if (scoped) {
-    return { allowed: true, expectedSessionId: scoped.expectedSessionId };
+    return { allowed: true, expectedSessionId: scoped.expectedSessionId, basis: "scoped-grant" };
   }
   const decisionChecker = createSessionVisibilityDecisionChecker({
     action: params.action,

@@ -1,12 +1,17 @@
 import { ContextConsumer } from "@lit/context";
 import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
 import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { applicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
+import {
+  SessionMenuCommunication,
+  type SessionCommunicationMenuAction,
+} from "./session-communication-options.ts";
 import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
 import {
   renderCompactSessionMenuFrame,
@@ -14,7 +19,8 @@ import {
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
 import {
-  renderSessionEditorOptions,
+  renderSessionCopyOptions,
+  renderSessionOpenOptions,
   renderSessionGroupOptions,
   sessionArchiveShortcut,
 } from "./session-menu-options.ts";
@@ -33,6 +39,8 @@ export type SessionMenuData = {
   archived: boolean;
   snoozedUntil: number | null;
   hiddenFromInvolvingMe?: boolean;
+  communication?: GatewaySessionRow["communication"];
+  effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];
   archiving?: boolean;
   category: string | null;
   icon: string | null;
@@ -65,6 +73,7 @@ export type SessionManagementAction =
       [Kind in (typeof SIMPLE_SESSION_ACTIONS)[number]]: { kind: Kind };
     }[(typeof SIMPLE_SESSION_ACTIONS)[number]]
   | { kind: "open-in"; editor: EditorId; path: string }
+  | SessionCommunicationMenuAction
   | { kind: "set-icon"; icon: string | null }
   | { kind: "set-color"; color: string | null }
   | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
@@ -116,6 +125,13 @@ export class SessionMenuActions {
   private readonly ownerMenu: SessionOwnerMenu;
   private iconPickerMode: "grid" | "custom" = "grid";
   private customIconValue = "";
+  private readonly communicationMenu = new SessionMenuCommunication({
+    readState: () => this.readState(),
+    disabled: () => this.actionDisabled("set-communication"),
+    disabledReason: () => this.readState().actionDisabledReasons["set-communication"],
+    renderSubmenu: (...args) => this.renderSubmenu(...args),
+    runAction: (action) => this.runAction(action),
+  });
   private readonly snoozeMenu = new SessionMenuSnooze({
     readWakeTime: () => this.readState().session.snoozedUntil,
     eligible: () => !this.actionExtraDisabled("snooze"),
@@ -190,6 +206,8 @@ export class SessionMenuActions {
           session.hiddenFromInvolvingMe === undefined ||
           !session.sessionId
         );
+      case "set-communication":
+        return batch || !session.effectiveCommunication;
       case "rename":
       case "set-icon":
       case "set-color":
@@ -227,6 +245,9 @@ export class SessionMenuActions {
   }
 
   handleSelect(value: string): boolean {
+    if (this.communicationMenu.handleSelect(value)) {
+      return true;
+    }
     if (value === "reload-owners") {
       this.ownerMenu.load();
       return true;
@@ -353,6 +374,7 @@ export class SessionMenuActions {
     icon: TemplateResult,
     disabled = false,
     title?: string,
+    details?: TemplateResult,
   ) {
     if (this.readState().compact) {
       return renderCompactSessionMenuNavigationItem({
@@ -361,6 +383,7 @@ export class SessionMenuActions {
         icon,
         disabled,
         title,
+        details,
       });
     }
     const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
@@ -374,6 +397,7 @@ export class SessionMenuActions {
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
       <span class="session-menu__text">${label}</span>
+      ${details ? html`<span slot="details" class="session-menu__communication-value">${details}</span>` : nothing}
       ${shortcut ? menuShortcutHint(shortcut) : nothing} ${this.renderSubmenuBody(view)}
     </wa-dropdown-item>`;
   }
@@ -516,6 +540,8 @@ export class SessionMenuActions {
     );
   }
 
+  readonly renderCommunicationActions = () => this.communicationMenu.renderActions();
+
   renderDeleteAction() {
     const state = this.readState();
     const label =
@@ -534,12 +560,30 @@ export class SessionMenuActions {
   private renderSubmenuBody(view: Exclude<CompactSessionMenuView, "root">, inline = false) {
     const state = this.readState();
     switch (view) {
+      case "communication-send":
+      case "communication-receive":
+        return this.communicationMenu.renderSubmenu(
+          view === "communication-send" ? "send" : "receive",
+          inline,
+        );
       case "snooze":
         return this.snoozeMenu.renderSubmenu(inline);
       case "copy":
-        return this.renderCopySubmenu(inline);
+        return renderSessionCopyOptions({
+          inline,
+          navigationAllowed: state.navigationAllowed,
+          renderItem: (...args) => this.renderItem(...args),
+        });
       case "open-in":
-        return this.renderOpenSubmenu(inline);
+        return renderSessionOpenOptions({
+          inline,
+          navigationAllowed: state.navigationAllowed,
+          splitAllowed: state.splitAllowed,
+          renderOpenInExtra: state.renderOpenInExtra,
+          worktreePath: state.worktreePath,
+          editorDisabled: this.actionDisabled("open-in"),
+          renderItem: (...args) => this.renderItem(...args),
+        });
       case "icon":
         return this.renderAppearancePicker(inline);
       case "group":
@@ -556,63 +600,6 @@ export class SessionMenuActions {
       default:
         return view satisfies never;
     }
-  }
-
-  private renderCopySubmenu(inline = false) {
-    const state = this.readState();
-    return html`
-      ${
-        state.navigationAllowed
-          ? (
-              [
-                ["copy-session-link", "sessionsView.copySessionLink"],
-                ["copy-session-preview-link", "sessionsView.copySessionPreviewLink"],
-              ] as const
-            ).map(([kind, label]) => this.renderItem(kind, t(label), icons.link, { inline }))
-          : nothing
-      }
-      ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
-        inline,
-      })}
-      ${this.renderItem("copy-session-id", t("sessionsView.copySessionId"), icons.copy, { inline })}
-    `;
-  }
-
-  private renderOpenSubmenu(inline = false) {
-    const state = this.readState();
-    return html`
-      ${
-        state.navigationAllowed
-          ? (
-              [
-                ["open-new-tab", "sessionsView.openNewTab", icons.externalLink],
-                ["open-new-window", "sessionsView.openNewWindow", icons.monitor],
-              ] as const
-            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
-          : nothing
-      }
-      ${
-        state.splitAllowed
-          ? (
-              [
-                ["split-right", "chat.splitView.splitRight", icons.columns2],
-                ["split-below", "sessionsView.splitBelow", icons.panelBottomOpen],
-              ] as const
-            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
-          : nothing
-      }
-      ${state.renderOpenInExtra?.(inline) ?? nothing}
-      ${
-        state.worktreePath
-          ? html`
-              <div slot=${inline ? nothing : "submenu"} class="session-menu__info">
-                ${t("sessionsView.workspaceEditors")}
-              </div>
-              ${renderSessionEditorOptions({ inline, disabled: this.actionDisabled("open-in") })}
-            `
-          : nothing
-      }
-    `;
   }
 
   private renderGroupSubmenu(inline = false) {

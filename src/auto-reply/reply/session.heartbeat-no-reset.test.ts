@@ -21,6 +21,7 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main:user123";
   const staleTime = Date.now() - 25 * 60 * 60 * 1000;
+  const communication = { send: "never", receive: "ask" } as const;
   await replaceSessionEntry(
     { storePath, sessionKey },
     {
@@ -29,6 +30,7 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
       systemSent: true,
       sessionStartedAt: staleTime,
       lastInteractionAt: staleTime,
+      communication,
     },
   );
   const cfg = {
@@ -63,6 +65,8 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
     ctx: finalizeInboundContext({ ...ctx, Body: "real user message" }),
   });
   expect(user).toMatchObject({ isNewSession: true, sessionId: "daily-session-id" });
+  expect(user.sessionEntry.communication).toEqual(communication);
+  expect(loadSessionEntry({ storePath, sessionKey })?.communication).toEqual(communication);
 });
 
 it.each([false, true])(

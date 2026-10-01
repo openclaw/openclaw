@@ -114,6 +114,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       snoozedUntil: row.snoozedUntil ?? null,
       unread: row.unread === true,
       hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
+      communication: row.communication,
+      effectiveCommunication: row.effectiveCommunication,
       archived: row.archived === true,
       archiving: this.context.sessions.archiveVisibility(row.key) === "pending",
       category: normalizeOptionalString(row.category) ?? null,
@@ -260,6 +262,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "toggle-unread":
         case "set-icon":
         case "set-color":
+        case "set-communication":
         case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
@@ -272,7 +275,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
                     ? { icon: action.icon }
                     : action.kind === "set-color"
                       ? { color: action.color }
-                      : { icon: null, color: null };
+                      : action.kind === "set-communication"
+                        ? { communication: action.communication }
+                        : { icon: null, color: null };
             await operations.patchSession(
               host,
               currentSession,

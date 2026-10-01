@@ -145,6 +145,7 @@ export type CreateGatewaySessionParams = {
   defaultSessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionToolOverrides;
+  communication?: SessionEntry["communication"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;

@@ -26,6 +26,7 @@ import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.j
 // Shared Gateway session response contracts. Server methods, UI adapters, and
 // tests import these types so list/patch/preview payloads evolve together.
 export type GatewaySessionsDefaults = {
+  communication?: Required<NonNullable<SessionEntry["communication"]>>;
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;

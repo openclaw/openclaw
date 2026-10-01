@@ -13,12 +13,13 @@ export function projectSessionEntryLifecycleCarry({
   now: number;
 }): Pick<
   SessionEntry,
-  "lastInteractionAt" | "agentStatus" | "pinnedAt" | "snoozedUntil" | "snoozedAt"
+  "lastInteractionAt" | "agentStatus" | "pinnedAt" | "snoozedUntil" | "snoozedAt" | "communication"
 > {
   return {
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
     agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     pinnedAt: entry?.pinnedAt,
+    communication: entry?.communication,
     snoozedUntil: isSystemEvent ? entry?.snoozedUntil : undefined,
     snoozedAt: isSystemEvent ? entry?.snoozedAt : undefined,
   };

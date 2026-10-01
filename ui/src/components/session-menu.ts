@@ -224,6 +224,7 @@ class SessionMenu extends OpenClawLightDomElement {
                 ${this.managementActions.renderPrimaryActions()}
                 <div class="session-menu__separator" role="separator"></div>
                 ${this.managementActions.renderOrganizationActions()}
+                ${this.managementActions.renderCommunicationActions()}
                 ${
                   !batch
                     ? this.pluginActions.map(

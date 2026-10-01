@@ -87,13 +87,14 @@ export function readSessionMethodScopeAccess(
         ? request.params
         : undefined;
   // The Gateway's sharing role records creator authority, including solo ownership.
-  // A broad write grant permits collaboration, but cannot archive another creator's session.
-  const archiveNeedsOwner =
+  // A broad write grant permits collaboration, but cannot archive or change
+  // communication policy for another creator's session.
+  const patchNeedsOwner =
     isRecord(patch) &&
-    typeof patch.archived === "boolean" &&
+    (typeof patch.archived === "boolean" || Object.hasOwn(patch, "communication")) &&
     !roleScopesAllow({ role, requestedScopes: ["operator.admin"], allowedScopes: scopes });
   if (
-    (archiveNeedsOwner ||
+    (patchNeedsOwner ||
       (requiredScope === "operator.sessions.write" &&
         !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
         // Creation assigns its owner on the Gateway before a canonical row exists.

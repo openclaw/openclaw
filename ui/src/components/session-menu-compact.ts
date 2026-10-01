@@ -10,10 +10,14 @@ export type CompactSessionMenuView =
   | "assign-owner"
   | "icon"
   | "group"
-  | "snooze";
+  | "snooze"
+  | "communication-send"
+  | "communication-receive";
 
 const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView> = {
   "compact:back": "root",
+  "compact:open-communication-send": "communication-send",
+  "compact:open-communication-receive": "communication-receive",
   "compact:open-copy": "copy",
   "compact:open-snooze": "snooze",
   "compact:open-assign-owner": "assign-owner",

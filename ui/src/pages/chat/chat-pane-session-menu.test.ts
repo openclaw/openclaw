@@ -257,6 +257,7 @@ describe("chat pane session menu boundary", () => {
     ["pin", { kind: "toggle-pin" } as const],
     ["unread", { kind: "toggle-unread" } as const],
     ["icon", { kind: "set-icon", icon: "🦞" } as const],
+    ["communication", { kind: "set-communication", communication: { send: "never" } } as const],
   ])("skips a no-ID header %s action after its row was removed", async (_name, action) => {
     const patch = vi.fn(async () => ({}));
     const session = {
@@ -366,6 +367,11 @@ describe("chat pane session menu boundary", () => {
     { action: { kind: "set-icon", icon: "🦞" }, patch: { icon: "🦞" } },
     { action: { kind: "set-color", color: "red" }, patch: { color: "red" } },
     { action: { kind: "reset-appearance" }, patch: { icon: null, color: null } },
+    {
+      action: { kind: "set-communication", communication: { send: "never" } },
+      patch: { communication: { send: "never" } },
+    },
+    { action: { kind: "set-communication", communication: null }, patch: { communication: null } },
     { action: { kind: "move-to-group", category: "Projects" }, patch: { category: "Projects" } },
   ] as const)(
     "keeps the original header identity for $action.kind after replacement",

@@ -11,6 +11,7 @@ import {
   inheritSpawnSessionOwner,
   type SessionOwnerAssignment,
 } from "../config/sessions/session-entry-provenance.js";
+import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
@@ -24,6 +25,34 @@ import {
 
 type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
   Pick<SessionEntry, "inheritedGitContributorProfileIds">;
+
+/** Explicit create choices win; communication inheritance does not depend on model selection. */
+export function resolveSessionCreateInheritedSelection(input: {
+  params: Pick<
+    CreateGatewaySessionParams,
+    "model" | "fastMode" | "toolOverrides" | "communication"
+  >;
+  parent?: SessionEntry;
+  catalogModel?: string;
+}): Partial<SessionEntry> {
+  if (!input.parent) {
+    return {};
+  }
+  const inherited =
+    input.catalogModel || normalizeOptionalString(input.params.model)
+      ? {}
+      : inheritSessionSelection(input.parent);
+  if (input.params.toolOverrides !== undefined) {
+    delete inherited.toolOverrides;
+  }
+  if (input.params.fastMode !== undefined) {
+    delete inherited.fastMode;
+  }
+  if (input.params.communication === undefined && input.parent.communication) {
+    inherited.communication = { ...input.parent.communication };
+  }
+  return inherited;
+}
 
 /** Prepare the parent before lifecycle custody, while accepted input can still settle. */
 export async function prepareSessionCreateParent(input: {

@@ -389,7 +389,13 @@ describe("embedded-agent active-run steering", () => {
       expect(options.onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
       expect(options.onQueueSettled).toHaveBeenCalledOnce();
     }
-    expect(claim).toHaveBeenCalledExactlyOnceWith("2", options);
+    expect(claim).toHaveBeenCalledExactlyOnceWith("2", {
+      ...options,
+      onQueueSettled: expect.any(Function),
+    });
+    // The custody wrapper must not settle the caller twice when its run later retires.
+    clearActiveEmbeddedRun(sessionId, handle);
+    expect(options.onQueueSettled).toHaveBeenCalledTimes(unconfirmed ? 0 : 1);
     expect(handle.queueMessage).not.toHaveBeenCalled();
   });
 
@@ -428,6 +434,18 @@ describe("embedded-agent active-run steering", () => {
       expect(cancel).toHaveBeenCalledWith("image-reply");
     },
   );
+
+  it("settles V1 input custody when its exact receiver retires", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const handle = start({ messageInjection: { isAvailable: () => true, queueMessage } });
+    const onQueueSettled = vi.fn();
+    await expect(queueAsync(sessionId, "legacy input", { onQueueSettled })).resolves.toMatchObject({
+      queued: true,
+    });
+    expect(onQueueSettled).not.toHaveBeenCalled();
+    clearActiveEmbeddedRun(sessionId, handle);
+    expect(onQueueSettled).toHaveBeenCalledOnce();
+  });
 
   it("preserves unconfirmed steering receipts", async () => {
     const queueMessage = vi.fn(

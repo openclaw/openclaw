@@ -15,6 +15,8 @@ export type SessionRowFacts =
       sessionId: string;
       category: string | null;
       clearMembers: boolean;
+      /** Exact peer-policy/lifecycle projection; absent publications require a fresh read. */
+      communicationBinding?: string;
     }
   | { kind: "member"; sessionId: string; identityId: string; present: boolean }
   | {

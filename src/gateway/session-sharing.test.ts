@@ -60,6 +60,51 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
 }
 
 describe("session sharing policy", () => {
+  it("reserves communication changes for the direct human creator or administrator", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const creator = roleClient("write", "communication-creator");
+      const peer = roleClient("write", "communication-peer");
+      const creatorId = creator.authenticatedUserProfile?.profileId;
+      if (!creatorId) {
+        throw new Error("expected verified creator");
+      }
+      const scope = { agentId: "main", sessionKey: "agent:main:communication" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "communication-session",
+        updatedAt: 1,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: creatorId },
+      });
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const authorize = (requestClient: GatewayClient, many = false) =>
+        resolveSessionMutationAuthorization({
+          client: requestClient,
+          method: many ? "sessions.patchMany" : "sessions.patch",
+          requestParams: many
+            ? { targets: [{ key: scope.sessionKey }], patch: { communication: null } }
+            : { key: scope.sessionKey, communication: { receive: "never" } },
+          context,
+        });
+      for (const many of [false, true]) {
+        expect(authorize(peer, many).error).toMatchObject({ code: "FORBIDDEN" });
+        expect(authorize(creator, many).error).toBeNull();
+      }
+      const admin = roleClient("write", "communication-admin");
+      admin.connect.scopes = ["operator.admin"];
+      expect(authorize(admin).error).toBeNull();
+      expect(authorize({ ...admin, internal: { syntheticClient: true } }).error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "Session communication settings require a direct human request.",
+      });
+      const admitted = authorize(creator);
+      creator.authenticatedUserProfile = peer.authenticatedUserProfile;
+      expect(() => admitted.authorization?.assertCurrent()).toThrow(
+        SessionMutationAuthorizationChangedError,
+      );
+    });
+  });
+
   it("keeps shared VIEW while limiting narrow writes to the caller's own rows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();

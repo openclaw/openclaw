@@ -440,6 +440,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     if (canInject && !canInject()) {
       throw new Error("active session is finalizing");
     }
+    // Input policy also fences legacy run-owned injection after preparation yields.
+    userTurnTranscriptRecorder?.assertOriginalInputCommit?.();
     await this.queueSteer(
       steeringPrompt,
       images,

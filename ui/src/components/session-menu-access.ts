@@ -42,6 +42,7 @@ export function sessionMenuReasons(params: {
   const pinReason = patchReason({ pinned: true }, true);
   const iconReason = patchReason({ icon: null });
   const colorReason = patchReason({ color: null });
+  const communicationReason = patchReason({ communication: null });
   const batchSession = batchRows ? sessionAccessRowForBatch(batchRows) : session;
   const batchPatchReason = (patch: Record<string, unknown>, sessionScope = false) => {
     if (!batchRows) {
@@ -92,6 +93,7 @@ export function sessionMenuReasons(params: {
     ...(renameReason ? { rename: renameReason } : {}),
     ...(iconReason ? { "set-icon": iconReason } : {}),
     ...(colorReason ? { "set-color": colorReason } : {}),
+    ...(communicationReason ? { "set-communication": communicationReason } : {}),
     ...(session.pinnable === false ? { "toggle-pin": t("sessionsView.pinRootSessionsOnly") } : {}),
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
     ...(involvementReason ? { "toggle-involving-me": involvementReason } : {}),

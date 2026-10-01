@@ -619,8 +619,15 @@ test("preserves complete base rows across time and caller presentation fixtures"
       expect(materialized.row.snapshotAt).toBeUndefined();
       rows.forEach((row, index) => {
         expect(row.snapshotAt).toBe(TIMES[index]);
-        // Sampling metadata is additive; retain golden coverage of every existing wire field.
-        const { snapshotAt: _snapshotAt, ...previousWireFields } = row;
+        // Assert new metadata separately while preserving the prior wire-field golden.
+        expect(row.communication).toBeUndefined();
+        expect(row.effectiveCommunication).toEqual({ send: "always", receive: "always" });
+        const {
+          snapshotAt: _snapshotAt,
+          communication: _communication,
+          effectiveCommunication: _effectiveCommunication,
+          ...previousWireFields
+        } = row;
         const json = JSON.stringify(previousWireFields);
         const actualHash = createHash("sha256").update(json).digest("hex");
         const expectedHash = GOLDEN_HASHES[fixture.name]?.[index];

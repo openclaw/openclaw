@@ -969,6 +969,21 @@ export const en: TranslationMap & {
     actionUnavailable: "This Gateway does not support this session action.",
     actionRequiresScope: "This action requires {scope} access.",
     actionRequiresOwnership: "Only the session creator or an admin can make this change.",
+    communication: {
+      title: "Other sessions",
+      send: "Send messages",
+      receive: "Receive messages",
+      always: "Always",
+      ask: "Ask",
+      never: "Never",
+      default: "default",
+      helper: "Replies and subagents still work",
+      sendDescription:
+        "Allow this session to initiate messages to other sessions. Ask requires human approval; Never blocks them.",
+      receiveDescription:
+        "Allow other sessions to initiate messages to this session. Ask requires human approval; Never blocks them.",
+      resetDescription: "Use the configured defaults for sending and receiving messages.",
+    },
     deletePreservedReasons: {
       "owner-mismatch": "owned elsewhere",
       busy: "live run or cleanup active",

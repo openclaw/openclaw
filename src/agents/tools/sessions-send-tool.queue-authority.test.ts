@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   replaceSessionEntry,
+  upsertSessionEntryCore,
   resolveSessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,7 +38,7 @@ import { createSessionsSendTool } from "./sessions-send-tool.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("sessions_send direct queue source authority", () => {
-  it.each(["live", "revoked", "unscoped"] as const)(
+  it.each(["live", "revoked", "unscoped", "unscoped-policy-revoked"] as const)(
     "checks the %s source at the real final enqueue and preserves accepted input",
     async (source) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -99,7 +100,7 @@ describe("sessions_send direct queue source authority", () => {
           sourceReplyDeliveryMode: "message_tool_only",
           // Exercise the delivery owner's retry without transcript-commit waiting.
           supportsTranscriptCommitWait: false,
-          ...(source === "unscoped"
+          ...(source.startsWith("unscoped")
             ? { messageInjection: { isAvailable: () => true, queueMessage } }
             : {
                 messageInjectionV2: {
@@ -130,31 +131,38 @@ describe("sessions_send direct queue source authority", () => {
             expectedTargetStorePath: target.storePath,
             callGateway,
           }).execute("source-send", { sessionKey, message, timeoutSeconds: 0 });
-        const pending =
-          source === "unscoped"
-            ? send()
-            : withGatewayToolCallerIdentity(
-                {
-                  agentId: "main",
-                  sessionKey: requesterSessionKey,
-                  operationalRunInstance: instance,
-                  approvalAuthority: authority,
-                  receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-                },
-                send,
-              );
+        const pending = source.startsWith("unscoped")
+          ? send()
+          : withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: requesterSessionKey,
+                operationalRunInstance: instance,
+                approvalAuthority: authority,
+                receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+              },
+              send,
+            );
         try {
           await Promise.race([preparation.promise, pending]);
           expect(queued).not.toHaveBeenCalled();
           if (source === "revoked") {
             releaseAgentRunDelegatedAuthority(authority);
           }
+          if (source === "unscoped-policy-revoked") {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              { sessionId, updatedAt: 2, communication: { receive: "never" } },
+            );
+          }
           resumePreparation.resolve();
           const result = await pending;
-          if (source === "revoked") {
+          if (source === "revoked" || source === "unscoped-policy-revoked") {
             expect(result.details).toMatchObject({ status: "error" });
             expect(JSON.stringify(result)).toContain(
-              "Message injection authority is no longer current",
+              source === "revoked"
+                ? "Message injection authority is no longer current"
+                : "communication state changed",
             );
             expect(queued).not.toHaveBeenCalled();
           } else {
@@ -177,7 +185,9 @@ describe("sessions_send direct queue source authority", () => {
             .messages.filter(
               (entry) => entry.role === "user" && JSON.stringify(entry).includes(message),
             );
-          expect(delivered).toHaveLength(source === "revoked" ? 0 : 1);
+          expect(delivered).toHaveLength(
+            source === "revoked" || source === "unscoped-policy-revoked" ? 0 : 1,
+          );
           expect(
             callGateway.mock.calls.every(([request]) => request.method === "sessions.resolve"),
           ).toBe(true);

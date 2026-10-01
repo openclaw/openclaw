@@ -10,6 +10,7 @@ import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const agentWaitMock = vi.hoisted(() => vi.fn());
+const communicationGate = vi.hoisted(() => vi.fn());
 const requesterDeliveryGeneration = {
   agentId: "main",
   storePath: "/test/agents/main/sessions/sessions.json",
@@ -17,6 +18,24 @@ const requesterDeliveryGeneration = {
   sessionId: "session-source",
   lifecycleRevision: null,
 };
+
+vi.mock("../../gateway/session-utils-store-worker.js", () => ({
+  resolveGatewaySessionStoreTargetInWorker: async ({
+    key,
+    agentId,
+  }: {
+    key: string;
+    agentId?: string;
+  }) => ({
+    agentId: agentId ?? "main",
+    canonicalKey: key,
+    storePath: "/test/sessions",
+    store: { [key]: { sessionId: key, updatedAt: 1 } },
+  }),
+}));
+vi.mock("./sessions-send-communication.js", () => ({
+  prepareSessionsSendCommunication: (...args: unknown[]) => communicationGate(...args),
+}));
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
@@ -78,6 +97,12 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     };
     callGatewayMock.mockImplementation(callGateway);
     vi.clearAllMocks();
+    communicationGate
+      .mockReset()
+      .mockImplementation(async ({ callGateway: admittedGateway }) => ({
+        callGateway: admittedGateway,
+        close: vi.fn(),
+      }));
     vi.mocked(runAgentStep).mockResolvedValue("Test announce reply");
     agentWaitMock.mockReset().mockResolvedValue({
       status: "ok",
@@ -728,4 +753,25 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
     },
   );
+  it("returns an owed result but gates any new peer followup", async () => {
+    communicationGate.mockRejectedValueOnce(new Error("receive never"));
+    await runSessionsSendA2AFlow({
+      targetAgentId: "main",
+      targetSessionKey: "agent:main:target",
+      displayKey: "agent:main:target",
+      requesterAgentId: "main",
+      requesterSessionKey: "agent:main:requester",
+      requesterChannel: "discord",
+      message: "original request",
+      roundOneReply: "requested result",
+      announceTimeoutMs: 100,
+      maxPingPongTurns: 2,
+    });
+    expect(runAgentStep).toHaveBeenCalledOnce();
+    expect(firstMockArg(vi.mocked(runAgentStep), "owned reply")).toMatchObject({
+      message: "requested result",
+      sessionKey: "agent:main:requester",
+    });
+    expect(communicationGate).toHaveBeenCalledOnce();
+  });
 });

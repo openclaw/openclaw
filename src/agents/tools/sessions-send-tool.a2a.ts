@@ -1,11 +1,14 @@
 import crypto from "node:crypto";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -16,11 +19,13 @@ import {
 } from "../run-wait.js";
 import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../subagents/completion/subagent-completion-instructions.js";
 import { runAgentStep, type AgentStepSession } from "./agent-step.js";
+import { resolveGatewayToolOperatorSelection } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
+import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import {
   type AnnounceTarget,
   buildAgentToAgentAnnounceContext,
@@ -106,6 +111,7 @@ export async function runSessionsSendA2AFlow(params: {
   maxPingPongTurns: number;
   replyMode?: "peer" | "one-way";
   requesterSessionKey?: string;
+  requesterSandboxed?: boolean;
   requesterAgentId?: string;
   requesterSession?: AgentStepSession;
   requesterDeliveryGeneration?: SessionDeliveryGeneration;
@@ -309,24 +315,82 @@ export async function runSessionsSendA2AFlow(params: {
           turn,
           maxTurns: params.maxPingPongTurns,
         });
-        const replyText = await runAgentStep({
-          agentId: current.agentId,
-          sessionKey: current.sessionKey,
-          ...(current.role === "requester"
-            ? {
-                deliveryContext: params.requesterOrigin,
-                expectedSession: params.requesterSession,
-              }
-            : {}),
-          message: latestReply,
-          extraSystemPrompt: replyPrompt,
-          timeoutMs: params.announceTimeoutMs,
-          sourceAgentId: source.agentId,
-          sourceSessionKey: source.sessionKey,
-          sourceChannel: source.channel,
-          sourceTool: "sessions_send",
-          callGateway: gatewayCall,
-        });
+        const turnMessage = latestReply;
+        if (!turnMessage) {
+          break;
+        }
+        const step = (
+          callGateway: AgentToolGatewayRequestCaller,
+          agentId = current.agentId,
+          sessionKey = current.sessionKey,
+        ): Promise<string | undefined> =>
+          runAgentStep({
+            agentId,
+            sessionKey,
+            ...(current.role === "requester"
+              ? {
+                  deliveryContext: params.requesterOrigin,
+                  expectedSession: params.requesterSession,
+                }
+              : {}),
+            message: turnMessage,
+            extraSystemPrompt: replyPrompt,
+            timeoutMs: params.announceTimeoutMs,
+            sourceAgentId: source.agentId,
+            sourceSessionKey: source.sessionKey,
+            sourceChannel: source.channel,
+            sourceTool: "sessions_send",
+            callGateway,
+          });
+        // Turn one fulfills the exact host-owned result obligation. Further peer
+        // negotiation is new communication, not a sourceTool-based exemption.
+        const replyText =
+          turn === 1
+            ? await step(gatewayCall)
+            : await (async () => {
+                const config = getRuntimeConfig();
+                const selection = resolveGatewayToolOperatorSelection();
+                const [from, to] = await Promise.all(
+                  [source, current].map(async (peer) => {
+                    const loaded = await resolveGatewaySessionStoreTargetInWorker({
+                      cfg: config,
+                      key: peer.sessionKey,
+                      agentId: peer.agentId,
+                      assertActive: selection.assertCurrent,
+                    });
+                    return {
+                      agentId: loaded.agentId,
+                      sessionKey: loaded.canonicalKey,
+                      storePath: loaded.readSource?.path ?? loaded.storePath,
+                      entry: loaded.store[loaded.canonicalKey],
+                    };
+                  }),
+                );
+                const inputProvenance = {
+                  kind: "inter_session" as const,
+                  sourceSessionKey: source.sessionKey,
+                  sourceChannel: source.channel,
+                  sourceTool: "sessions_send",
+                };
+                const gate = await prepareSessionsSendCommunication({
+                  config,
+                  source: from!,
+                  target: to!,
+                  message: turnMessage,
+                  dispatchMessage: annotateInterSessionPromptText(turnMessage, inputProvenance),
+                  inputProvenance,
+                  access: {
+                    sandboxed: source.role === "requester" ? params.requesterSandboxed : undefined,
+                  },
+                  assertSourceCurrent: selection.assertCurrent,
+                  callGateway: gatewayCall,
+                });
+                try {
+                  return await step(gate.callGateway, to!.agentId, to!.sessionKey);
+                } finally {
+                  gate.close();
+                }
+              })();
         if (!replyText || isNonDeliverableSessionsReply(replyText)) {
           break;
         }

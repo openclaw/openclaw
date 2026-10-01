@@ -432,3 +432,18 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
     width: calc(100dvw - var(--space-6));
   }
 }
+
+wa-dropdown-item.session-menu__communication-option::part(checkmark) {
+  display: none;
+}
+
+.session-menu__communication-value {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-menu__communication-default {
+  margin-inline-start: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}

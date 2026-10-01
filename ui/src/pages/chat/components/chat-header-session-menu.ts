@@ -299,7 +299,9 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.compactView === "copy" ||
       this.compactView === "assign-owner" ||
       this.compactView === "icon" ||
-      this.compactView === "group"
+      this.compactView === "group" ||
+      this.compactView === "communication-send" ||
+      this.compactView === "communication-receive"
     ) {
       return this.managementActions.renderCompactView(this.compactView);
     }
@@ -380,6 +382,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       ${this.managementActions.renderPrimaryActions()}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderOrganizationActions()}
+      ${this.managementActions.renderCommunicationActions()}
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderTransferActions()}
       <div class="session-menu__separator" role="separator"></div>

@@ -226,6 +226,10 @@ export function registerSessionsSendLateReplyTests({
     }) => {
       const calls: Array<{ method?: string; params?: unknown }> = [];
       const requesterKey = cronRequester ? "agent:main:cron:job:run:once" : "agent:main:main";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: requesterKey },
+        { sessionId: "late-reply-requester", updatedAt: 1 },
+      );
       if (spawned) {
         await upsertSessionEntryCore(
           { agentId: "director1", sessionKey: targetKey },

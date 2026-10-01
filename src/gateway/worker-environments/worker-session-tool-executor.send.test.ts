@@ -118,6 +118,7 @@ describe("worker session tool send delivery", () => {
         options: expect.objectContaining({
           agentChannel: "telegram",
           expectedTargetSessionId: TARGET.sessionId,
+          completionOwner: "caller",
           expectedTargetStorePath: "/physical/session-owner.sqlite",
           idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
         }),

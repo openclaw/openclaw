@@ -171,6 +171,12 @@ public enum RequiredNodeCommandState: String, Codable, Sendable {
     case unauthorized = "unauthorized"
 }
 
+public enum SessionCommunicationMode: String, Codable, Sendable {
+    case always = "always"
+    case ask = "ask"
+    case never = "never"
+}
+
 public enum SessionDiffFileStatus: String, Codable, Sendable {
     case added = "added"
     case modified = "modified"
@@ -6703,6 +6709,19 @@ public struct DeviceTokenRotateResult: Codable, Sendable {
         case scopes
         case rotatedatms = "rotatedAtMs"
         case tokendelivery = "tokenDelivery"
+    }
+}
+
+public struct EffectiveSessionCommunicationPolicy: Codable, Sendable {
+    public let send: SessionCommunicationMode
+    public let receive: SessionCommunicationMode
+
+    public init(
+        send: SessionCommunicationMode,
+        receive: SessionCommunicationMode)
+    {
+        self.send = send
+        self.receive = receive
     }
 }
 
@@ -14281,6 +14300,32 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
     }
 }
 
+public struct SessionCommunicationPatch: Codable, Sendable {
+    public let send: AnyCodable?
+    public let receive: AnyCodable?
+
+    public init(
+        send: AnyCodable? = nil,
+        receive: AnyCodable? = nil)
+    {
+        self.send = send
+        self.receive = receive
+    }
+}
+
+public struct SessionCommunicationPolicy: Codable, Sendable {
+    public let send: SessionCommunicationMode?
+    public let receive: SessionCommunicationMode?
+
+    public init(
+        send: SessionCommunicationMode? = nil,
+        receive: SessionCommunicationMode? = nil)
+    {
+        self.send = send
+        self.receive = receive
+    }
+}
+
 public struct SessionCompanionExchange: Codable, Sendable {
     public let question: String
     public let answer: String
@@ -15806,6 +15851,8 @@ public struct SessionRow: Codable, Sendable {
     public let projectid: String?
     public let workspacedir: String?
     public let permissionmode: SessionPermissionMode?
+    public let communication: SessionCommunicationPolicy?
+    public let effectivecommunication: EffectiveSessionCommunicationPolicy?
     public let sandboxmode: String?
     public let nativeruntimeconsent: String?
     public let permissionmodepending: Bool?
@@ -15903,6 +15950,8 @@ public struct SessionRow: Codable, Sendable {
         projectid: String? = nil,
         workspacedir: String? = nil,
         permissionmode: SessionPermissionMode? = nil,
+        communication: SessionCommunicationPolicy? = nil,
+        effectivecommunication: EffectiveSessionCommunicationPolicy? = nil,
         sandboxmode: String? = nil,
         nativeruntimeconsent: String? = nil,
         permissionmodepending: Bool? = nil,
@@ -15999,6 +16048,8 @@ public struct SessionRow: Codable, Sendable {
         self.projectid = projectid
         self.workspacedir = workspacedir
         self.permissionmode = permissionmode
+        self.communication = communication
+        self.effectivecommunication = effectivecommunication
         self.sandboxmode = sandboxmode
         self.nativeruntimeconsent = nativeruntimeconsent
         self.permissionmodepending = permissionmodepending
@@ -16097,6 +16148,8 @@ public struct SessionRow: Codable, Sendable {
         case projectid = "projectId"
         case workspacedir = "workspaceDir"
         case permissionmode = "permissionMode"
+        case communication
+        case effectivecommunication = "effectiveCommunication"
         case sandboxmode = "sandboxMode"
         case nativeruntimeconsent = "nativeRuntimeConsent"
         case permissionmodepending = "permissionModePending"
@@ -17136,6 +17189,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let thinkinglevel: String?
     public let fastmode: AnyCodable?
     public let permissionmode: SessionPermissionMode?
+    public let communication: SessionCommunicationPolicy?
     public let tooloverrides: [String: AnyCodable]?
     public let incognito: Bool?
     public let visibility: SessionVisibility?
@@ -17175,6 +17229,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         thinkinglevel: String? = nil,
         fastmode: AnyCodable? = nil,
         permissionmode: SessionPermissionMode? = nil,
+        communication: SessionCommunicationPolicy? = nil,
         tooloverrides: [String: AnyCodable]? = nil,
         incognito: Bool? = nil,
         visibility: SessionVisibility? = nil,
@@ -17213,6 +17268,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.permissionmode = permissionmode
+        self.communication = communication
         self.tooloverrides = tooloverrides
         self.incognito = incognito
         self.visibility = visibility
@@ -17253,6 +17309,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case permissionmode = "permissionMode"
+        case communication
         case tooloverrides = "toolOverrides"
         case incognito
         case visibility
@@ -18254,6 +18311,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let execask: AnyCodable?
     public let execnode: AnyCodable?
     public let permissionmode: AnyCodable?
+    public let communication: AnyCodable?
     public let sandboxmode: AnyCodable?
     public let nativeruntimeconsent: AnyCodable?
     public let model: AnyCodable?
@@ -18294,6 +18352,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         execask: AnyCodable? = nil,
         execnode: AnyCodable? = nil,
         permissionmode: AnyCodable? = nil,
+        communication: AnyCodable? = nil,
         sandboxmode: AnyCodable? = nil,
         nativeruntimeconsent: AnyCodable? = nil,
         model: AnyCodable? = nil,
@@ -18333,6 +18392,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.execask = execask
         self.execnode = execnode
         self.permissionmode = permissionmode
+        self.communication = communication
         self.sandboxmode = sandboxmode
         self.nativeruntimeconsent = nativeruntimeconsent
         self.model = model
@@ -18374,6 +18434,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case execask = "execAsk"
         case execnode = "execNode"
         case permissionmode = "permissionMode"
+        case communication
         case sandboxmode = "sandboxMode"
         case nativeruntimeconsent = "nativeRuntimeConsent"
         case model
@@ -18425,6 +18486,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execask: AnyCodable?
     public let execnode: AnyCodable?
     public let permissionmode: AnyCodable?
+    public let communication: AnyCodable?
     public let sandboxmode: AnyCodable?
     public let nativeruntimeconsent: AnyCodable?
     public let model: AnyCodable?
@@ -18474,6 +18536,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         execask: AnyCodable? = nil,
         execnode: AnyCodable? = nil,
         permissionmode: AnyCodable? = nil,
+        communication: AnyCodable? = nil,
         sandboxmode: AnyCodable? = nil,
         nativeruntimeconsent: AnyCodable? = nil,
         model: AnyCodable? = nil,
@@ -18522,6 +18585,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execask = execask
         self.execnode = execnode
         self.permissionmode = permissionmode
+        self.communication = communication
         self.sandboxmode = sandboxmode
         self.nativeruntimeconsent = nativeruntimeconsent
         self.model = model
@@ -18572,6 +18636,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execask = "execAsk"
         case execnode = "execNode"
         case permissionmode = "permissionMode"
+        case communication
         case sandboxmode = "sandboxMode"
         case nativeruntimeconsent = "nativeRuntimeConsent"
         case model

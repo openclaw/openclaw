@@ -171,6 +171,27 @@ In Code Mode, the conversation tools reuse their exact Gateway output contracts.
 
 ## Sending cross-session messages
 
+### Communication preferences
+
+The session menu has separate **Send messages** and **Receive messages** choices
+under **Other sessions**: **Always**, **Ask**, and **Never**. Ask presents a pending
+question to an authorized human in the Control UI before the message leaves the
+sender or reaches the receiving model.
+A refused or expired request does not start work. Requested replies and
+authorized delegated-task guidance and results retain their existing authority.
+
+The session creator or a Gateway administrator can change these preferences.
+Agents cannot change them through session tools. **Reset** clears the overrides
+and follows [`session.communication`](/gateway/config-agents/sessions#communication-defaults).
+Changing a default affects inheriting sessions, not explicit overrides.
+
+Both directions default to Always to preserve existing behavior. These preferences
+never grant access beyond tool policy, sharing, sandbox, or agent-to-agent restrictions.
+They do not hide chat history, control external channel delivery, or block human input.
+Permission is checked again after approval and before the input is dispatched.
+Changing these preferences does not interrupt a turn already running. Use Stop
+to cancel running work.
+
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. The resulting reply can still be announced through the established requester or target delivery context; that existing behavior is unchanged. For exact external delivery, use a conversation tool or `message` with an explicit channel and target.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities and normal visibility policy before admitting the target turn; target placement does not grant messaging access. Targets outside the configured visibility scope, archived targets, and replaced targets remain denied.
