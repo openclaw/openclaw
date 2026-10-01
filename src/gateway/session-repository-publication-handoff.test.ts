@@ -113,7 +113,7 @@ it.each([
       await registerClonedProjectRegistry({ path: source, name: "Handoff", originUrl: url });
       const scope = { agentId: "main", sessionKey: "agent:main:dashboard:handoff" };
       const store = getSessionRepositoryWorkspaceStore();
-      let repository = store.create({
+      let repository = await store.create({
         ...scope,
         url,
         runSetupScript: false,
@@ -121,7 +121,7 @@ it.each([
         assertCurrent: () => {},
       });
       const base = await captureWorkspaceManifest({ root: source, baseCommit });
-      repository = store.bindBase({
+      repository = await store.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
         baseCommit,
@@ -358,7 +358,8 @@ it.each([
         return;
       }
       await move();
-      expect(() => assertReceiptOwner(row)).toThrow();
+      const receiptWorkspace = await store.prepare(row.workspace_id);
+      expect(() => assertReceiptOwner(row, receiptWorkspace)).toThrow();
       expect(readRepositoryGitHubPublication(row.request_id)?.pushed_head_commit).toBe(
         publishedHead,
       );

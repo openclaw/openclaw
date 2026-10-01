@@ -44,6 +44,7 @@ type PluginRegistryLifecycleStore = {
     PluginRegistry,
     ReadonlyMap<string, Pick<PluginChannelRegistration, "pluginId" | "plugin">>
   >;
+  borrowedRecords?: WeakMap<PluginRegistry, WeakSet<PluginRecord>>;
 };
 
 /** The Gateway registry owner that admitted work in a registry generation. */
@@ -71,6 +72,7 @@ const registryLifetimes = (lifecycle.registryLifetimes ??= new WeakMap());
 // Registries from a published build carry no owner link; recovery then stays strict.
 const gatewayOwners = (lifecycle.gatewayOwners ??= new WeakMap());
 const gatewayChannels = (lifecycle.gatewayChannels ??= new WeakMap());
+const borrowedRecords = (lifecycle.borrowedRecords ??= new WeakMap());
 const loadRegistryDisposer = (lifecycle.loadRegistryDisposer ??= createLazyRuntimeNamedExport(
   () => import("./runtime.js"),
   "disposePluginRegistryInstances",
@@ -220,6 +222,23 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
 
 export type PluginRegistryLifecycleEpoch = object;
 
+/**
+ * A borrowing registry lists another live registry's record without taking custody.
+ * Publication never adopts it, and retirement of the borrower never revokes or disposes it.
+ */
+export function markPluginRecordBorrowed(registry: PluginRegistry, record: PluginRecord): void {
+  let records = borrowedRecords.get(registry);
+  if (!records) {
+    borrowedRecords.set(registry, (records = new WeakSet()));
+  }
+  records.add(record);
+}
+
+/** Projection reads the loader's borrowing fact without inferring custody from record identity. */
+export function isPluginRecordBorrowed(registry: PluginRegistry, record: PluginRecord): boolean {
+  return borrowedRecords.get(getPluginRegistryResourceOwner(registry))?.has(record) === true;
+}
+
 /** Transfer exact instances at publication without reviving a removed or failed instance. */
 export function adoptPluginRegistryRecords(registryView: PluginRegistry | null | undefined): void {
   const registry = registryView && getPluginRegistryResourceOwner(registryView);
@@ -228,7 +247,7 @@ export function adoptPluginRegistryRecords(registryView: PluginRegistry | null |
   }
   for (const record of registry.plugins) {
     const owner = resolvePluginInstanceOwner(record, registry);
-    if (!owner.revoked) {
+    if (!owner.revoked && !borrowedRecords.get(registry)?.has(record)) {
       owner.registry = registry;
     }
   }
@@ -424,6 +443,15 @@ export function capturePluginLifecycleAuthority(
   options?: { scopedRuntime?: boolean; registration?: boolean; admittedRuntime?: boolean },
 ): (() => boolean) | undefined {
   const registry = getPluginRegistryResourceOwner(registryView);
+  if (record && borrowedRecords.get(registry)?.has(record)) {
+    // A borrower mints from the lender's current custody and loses it when it retires.
+    const lent = capturePluginLifecycleAuthority(
+      getPluginRecordRegistry(registry, record),
+      record,
+      options,
+    );
+    return lent && (() => !retiredRegistries.has(registry) && lent());
+  }
   if (record) {
     const owner = resolvePluginInstanceOwner(record, registry);
     const usable = () => {

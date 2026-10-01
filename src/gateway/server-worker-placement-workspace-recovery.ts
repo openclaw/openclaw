@@ -1,6 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
@@ -15,15 +14,13 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
     agentId: string;
   }) => Promise<WorkerSessionWorkspace>;
 }): Promise<void> {
-  const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations({
-    retainFailedOwner: (recoveryError) => recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
-  });
+  const orphanedJournals = await params.placements.pruneOrphanedWorkspaceReconciliations();
   for (const owner of orphanedJournals) {
     workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
   }
-  for (const owner of params.placements.listWorkspaceReconciliationOwners()) {
+  for (const owner of await params.placements.listWorkspaceReconciliationOwners()) {
     try {
-      const placement = params.placements.getWorkspaceReconciliationPlacement(owner);
+      const placement = await params.placements.getWorkspaceReconciliationPlacement(owner);
       if (!placement) {
         throw new Error(`Cloud workspace journal has no matching owner: ${owner.sessionId}`);
       }
@@ -37,14 +34,14 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
           "Repository checkpoints cannot own a local worktree reconciliation journal",
         );
       }
-      const journal = params.placements.loadWorkspaceReconciliation(owner);
+      const journal = await params.placements.loadWorkspaceReconciliation(owner);
       if (!journal) {
         continue;
       }
       // Recover before placement/environment reconciliation can reclaim the
       // owner; otherwise a crashed partial apply loses its final repair path.
       await recoverWorkerWorkspaceReconciliation({ root: workspace.path, journal });
-      params.placements.abortWorkspaceReconciliation(owner);
+      await params.placements.abortWorkspaceReconciliation(owner);
     } catch (error) {
       // A local edit can intentionally block rollback. Leave that journal
       // retryable for this session without withholding every cloud worker.

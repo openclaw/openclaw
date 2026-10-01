@@ -1,5 +1,5 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
+import type { CodexServerNotification, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
@@ -45,22 +45,10 @@ function extractCodexNativeSubagentCompletions(
   notification: CodexServerNotification,
 ): CodexNativeSubagentNotificationCompletion[] {
   const params = isJsonObject(notification.params) ? notification.params : undefined;
-  if (!params) {
+  const item = isJsonObject(params?.item) ? params.item : undefined;
+  if (!item || notification.method !== "rawResponseItem/completed" || item.role !== "user") {
     return [];
   }
-  const item = isJsonObject(params.item) ? params.item : undefined;
-  if (!item) {
-    return [];
-  }
-  if (notification.method === "rawResponseItem/completed" && item.role === "user") {
-    return readTrustedContextualCompletions(item);
-  }
-  return [];
-}
-
-function readTrustedContextualCompletions(
-  item: JsonObject,
-): CodexNativeSubagentNotificationCompletion[] {
   const content = item.content;
   const metadata = item.internal_chat_message_metadata_passthrough;
   const kinds = isJsonObject(metadata) ? metadata.content_item_kinds : undefined;

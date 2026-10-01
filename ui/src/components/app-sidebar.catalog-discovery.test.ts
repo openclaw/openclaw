@@ -41,6 +41,7 @@ async function mountDiscovery(
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
@@ -84,6 +85,7 @@ describe("AppSidebar hidden catalog discovery", () => {
           const gateway = createGatewayHarness(createTestGatewayClient(currentRequest));
           gateway.publish({
             hello: {
+              auth: { role: "operator", scopes: ["operator.read"] },
               features: {
                 methods: ["sessions.catalog.list"],
                 events: ["sessions.catalog.changed"],

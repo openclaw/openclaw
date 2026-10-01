@@ -93,13 +93,13 @@ export async function finalizeAcpTurnOutput(params: {
       });
       if (ttsSyntheticReply.mediaUrl) {
         const finalTtsPayload = markReplyPayloadAsTtsSupplement(
-          shouldDeferVisibleTextForTts
-            ? {
-                ...ttsSyntheticReply,
-                text: accumulatedVisibleBlockText || undefined,
-                trustedLocalMedia: true,
-              }
-            : { ...ttsSyntheticReply, text: undefined, trustedLocalMedia: true },
+          {
+            ...ttsSyntheticReply,
+            text: shouldDeferVisibleTextForTts
+              ? accumulatedVisibleBlockText || undefined
+              : undefined,
+            trustedLocalMedia: true,
+          },
           accumulatedBlockTtsText,
           shouldDeferVisibleTextForTts ? undefined : { visibleTextAlreadyDelivered: true },
         );

@@ -7,7 +7,16 @@ import {
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
 import { createDiscordChannelE2eSession, type DiscordChannelE2eSession } from "./channel-e2e.js";
-import { discordQaScenarioSupport } from "./discord-live.runtime.js";
+import type { DiscordUser, DiscordObservedMessage } from "./discord-live.evidence.js";
+import {
+  buildDiscordQaConfig,
+  getCurrentDiscordUser,
+  pollChannelMessages,
+  sendChannelMessage,
+  parseDiscordQaCredentialPayload,
+  resolveDiscordQaRuntimeEnv,
+  waitForDiscordChannelRunning,
+} from "./discord-live.runtime.js";
 import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
@@ -28,22 +37,18 @@ export async function createDiscordQaTransportAdapter(
     source: options.credentialSource,
     role: options.credentialRole,
     cwd: options.repoRoot,
-    resolveEnvPayload: () => discordQaScenarioSupport.testing.resolveDiscordQaRuntimeEnv(),
-    parsePayload: discordQaScenarioSupport.testing.parseDiscordQaCredentialPayload,
+    resolveEnvPayload: () => resolveDiscordQaRuntimeEnv(),
+    parsePayload: parseDiscordQaCredentialPayload,
   });
   const heartbeat = startQaCredentialLeaseHeartbeat(lease);
   const runtimeEnv = lease.payload;
-  let driverIdentity: Awaited<
-    ReturnType<typeof discordQaScenarioSupport.testing.getCurrentDiscordUser>
-  >;
-  let sutIdentity: Awaited<
-    ReturnType<typeof discordQaScenarioSupport.testing.getCurrentDiscordUser>
-  >;
+  let driverIdentity: DiscordUser;
+  let sutIdentity: DiscordUser;
   try {
     heartbeat.throwIfFailed();
     [driverIdentity, sutIdentity] = await Promise.all([
-      discordQaScenarioSupport.testing.getCurrentDiscordUser(runtimeEnv.driverBotToken),
-      discordQaScenarioSupport.testing.getCurrentDiscordUser(runtimeEnv.sutBotToken),
+      getCurrentDiscordUser(runtimeEnv.driverBotToken),
+      getCurrentDiscordUser(runtimeEnv.sutBotToken),
     ]);
     heartbeat.throwIfFailed();
     if (driverIdentity.id === sutIdentity.id) {
@@ -72,10 +77,7 @@ export async function createDiscordQaTransportAdapter(
   };
   const waitReady: AdapterDefinition["waitReady"] = async ({ gateway }) => {
     assertActive();
-    await discordQaScenarioSupport.testing.waitForDiscordChannelRunning(
-      gateway as never,
-      accountId,
-    );
+    await waitForDiscordChannelRunning(gateway as never, accountId);
     assertActive();
   };
   let pollingError: Error | undefined;
@@ -87,10 +89,8 @@ export async function createDiscordQaTransportAdapter(
       }
       try {
         assertActive();
-        const observed: Parameters<
-          typeof discordQaScenarioSupport.testing.pollChannelMessages
-        >[0]["observedMessages"] = [];
-        const matched = await discordQaScenarioSupport.testing.pollChannelMessages({
+        const observed: DiscordObservedMessage[] = [];
+        const matched = await pollChannelMessages({
           token: runtimeEnv.driverBotToken,
           channelId: runtimeEnv.channelId,
           afterSnowflake,
@@ -152,20 +152,16 @@ export async function createDiscordQaTransportAdapter(
           mention: input.text.includes("@openclaw"),
         });
         assertActive();
-        return await context.messages.addInboundMessage({
-          ...input,
-          accountId,
-          senderId: driverIdentity.id,
-        });
+      } else {
+        const text = input.text.replaceAll("@openclaw", `<@${runtimeEnv.sutApplicationId}>`);
+        const sent = await sendChannelMessage(
+          runtimeEnv.driverBotToken,
+          runtimeEnv.channelId,
+          text,
+        );
+        assertActive();
+        afterSnowflake = sent.id;
       }
-      const text = input.text.replaceAll("@openclaw", `<@${runtimeEnv.sutApplicationId}>`);
-      const sent = await discordQaScenarioSupport.testing.sendChannelMessage(
-        runtimeEnv.driverBotToken,
-        runtimeEnv.channelId,
-        text,
-      );
-      assertActive();
-      afterSnowflake = sent.id;
       return await context.messages.addInboundMessage({
         ...input,
         accountId,
@@ -174,7 +170,7 @@ export async function createDiscordQaTransportAdapter(
     },
     resetTransport: () => undefined,
     createGatewayConfig: () =>
-      discordQaScenarioSupport.testing.buildDiscordQaConfig({} as OpenClawConfig, {
+      buildDiscordQaConfig({} as OpenClawConfig, {
         guildId: runtimeEnv.guildId,
         channelId: runtimeEnv.channelId,
         driverBotId: driverIdentity.id,

@@ -193,7 +193,7 @@ describe("configured fresh-session model defaults", () => {
       await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
       expect(control.fastMode).toBe(true);
       renderControl(control, context, "main", agent)
-        .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")!
+        .querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!
         .click();
       expect(control.fastMode).toBe(false);
       control.load(context, "main", true, { agent, preference });

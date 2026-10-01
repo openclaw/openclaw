@@ -9,7 +9,7 @@ import {
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
-import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
+import type { QaProviderMode } from "./model-selection.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
@@ -257,16 +257,20 @@ function collectQaSuiteGatewayRuntimeOptions(scenarios: QaSeedScenario[]) {
   let allowUnhealthyStartup = false;
   let forwardHostHome = false;
   let preserveDebugArtifacts = false;
+  const env: Record<string, string> = {};
   for (const scenario of scenarios) {
     allowUnhealthyStartup ||= scenario.gatewayRuntime?.allowUnhealthyStartup === true;
     forwardHostHome ||= scenario.gatewayRuntime?.forwardHostHome === true;
     preserveDebugArtifacts ||= scenario.gatewayRuntime?.preserveDebugArtifacts === true;
+    Object.assign(env, scenario.gatewayRuntime?.env);
   }
-  return allowUnhealthyStartup || forwardHostHome || preserveDebugArtifacts
+  const hasEnv = Object.keys(env).length > 0;
+  return allowUnhealthyStartup || forwardHostHome || preserveDebugArtifacts || hasEnv
     ? {
         ...(allowUnhealthyStartup ? { allowUnhealthyStartup: true } : {}),
         ...(forwardHostHome ? { forwardHostHome: true } : {}),
         ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
+        ...(hasEnv ? { env } : {}),
       }
     : undefined;
 }
@@ -489,5 +493,4 @@ export {
   selectQaFlowSuiteScenarios,
   selectQaScenarioDefinitionsForChannelResolution,
   shouldUseIsolatedQaSuiteScenarioWorkers,
-  splitModelRef,
 };

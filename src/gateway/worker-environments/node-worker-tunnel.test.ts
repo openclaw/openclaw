@@ -194,7 +194,7 @@ describe("node worker tunnel manager", () => {
     const record = environment();
     const workspaceBinding = createDeferred<undefined>();
     const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
-    const manager = await createManager(record);
+    const manager = createManager(record);
     manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
 
     const first = manager.start(startRequest());
@@ -219,7 +219,7 @@ describe("node worker tunnel manager", () => {
         closeAll: vi.fn(async () => {}),
       };
       const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         workspaceTransfer: transfer,
       });
       manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
@@ -299,7 +299,7 @@ describe("node worker tunnel manager", () => {
     transfer.close = vi.fn(async () => {
       throw new Error("workspace cleanup failed");
     });
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       workspaceTransfer: transfer,
     });
     manager.bindWorkspaceBindingResolver(async () => {
@@ -344,7 +344,7 @@ describe("node worker tunnel manager", () => {
       });
       const transfer = workspaceTransfer();
       transfer.prepareSync = prepareSync;
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
         workspaceTransfer: transfer,
       });
@@ -392,7 +392,7 @@ describe("node worker tunnel manager", () => {
     );
     const prepareSync = vi.fn(async () => ({ snapshot, token: "restore-token" }));
     const transfer = workspaceTransfer({ prepareSync });
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => {
         const nodeTransport = transport();
         return {
@@ -488,7 +488,7 @@ describe("node worker tunnel manager", () => {
     const transfer = workspaceTransfer({
       prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
     });
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       workspaceTransfer: transfer,
     });
@@ -550,7 +550,7 @@ describe("node worker tunnel manager", () => {
     const transfer = workspaceTransfer({
       prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
     });
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       workspaceTransfer: transfer,
     });
@@ -626,7 +626,7 @@ describe("node worker tunnel manager", () => {
         unchangedWorkspaceUpload(snapshot, tempDirs.make("node-worker-reconcile-error-staging-")),
       ),
     });
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       workspaceTransfer: transfer,
     });
@@ -642,7 +642,12 @@ describe("node worker tunnel manager", () => {
         source: {
           kind: "local",
           path: localPath,
-          journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+          journal: {
+            load: async () => undefined,
+            begin: vi.fn(async () => {}),
+            commit: vi.fn(async () => {}),
+            abort: vi.fn(async () => {}),
+          },
           stagedResult: { ref: workerWorkspaceResultRef("node-error"), record: () => {} },
         },
         remoteWorkspaceDir,
@@ -729,7 +734,7 @@ describe("node worker tunnel manager", () => {
         prepareUpload: vi.fn(() => "upload-token"),
         takeUpload: vi.fn(() => unchangedWorkspaceUpload(snapshot, stagingRoot)),
       });
-      const manager = await createManager(record, {
+      const manager = createManager(record, {
         getTransport: () => nodeTransport,
         workspaceTransfer: transfer,
       });
@@ -740,7 +745,12 @@ describe("node worker tunnel manager", () => {
         generation: 1,
       });
       const quiescence = { assertActive: async () => {}, resume: async () => {} };
-      const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
+      const journal = {
+        load: async () => undefined,
+        begin: vi.fn(async () => {}),
+        commit: vi.fn(async () => {}),
+        abort: vi.fn(async () => {}),
+      };
       workspaceDebug.mockClear();
 
       for (let turn = 0; turn < 2; turn += 1) {
@@ -849,7 +859,7 @@ describe("node worker tunnel manager", () => {
       getSnapshot: vi.fn(() => snapshot),
       publishSnapshot,
     });
-    const manager = await createManager(record, {
+    const manager = createManager(record, {
       getTransport: () => nodeTransport,
       workspaceTransfer: transfer,
     });
@@ -864,7 +874,12 @@ describe("node worker tunnel manager", () => {
       source: {
         kind: "local",
         path: localPath,
-        journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+        journal: {
+          load: async () => undefined,
+          begin: vi.fn(async () => {}),
+          commit: vi.fn(async () => {}),
+          abort: vi.fn(async () => {}),
+        },
         stagedResult: { ref: workerWorkspaceResultRef("node-current"), record: () => {} },
       },
       remoteWorkspaceDir,

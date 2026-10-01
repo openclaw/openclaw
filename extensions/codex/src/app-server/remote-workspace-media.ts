@@ -111,14 +111,11 @@ type CodexBoundedRemoteCommandClient = {
 };
 
 /** Reads actual remote bytes with a cap enforced by Codex before transport. */
-export async function readBoundedCodexRemoteWorkspaceFile(params: {
-  client: CodexBoundedRemoteCommandClient;
-  path: string;
-  maxBytes: number;
-  workspaceRoot?: string;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-}): Promise<CodexRemoteWorkspaceFileResponse> {
+export async function readBoundedCodexRemoteWorkspaceFile(
+  params: Parameters<CodexRemoteWorkspaceFileReader>[0] & {
+    client: CodexBoundedRemoteCommandClient;
+  },
+): Promise<CodexRemoteWorkspaceFileResponse> {
   if (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0) {
     throw new Error("Codex remote workspace upload requires a valid media byte limit.");
   }
@@ -184,28 +181,28 @@ export async function readBoundedCodexRemoteWorkspaceFile(params: {
     ) {
       throw new Error("Codex remote workspace artifact exceeded the native command output cap.");
     }
-    let payload: unknown;
+    let chunk: unknown;
     try {
-      payload = JSON.parse(response.stdout);
+      chunk = JSON.parse(response.stdout);
     } catch {
       throw new Error("Codex remote workspace artifact returned invalid chunk data.");
     }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    if (!isRecord(chunk)) {
       throw new Error("Codex remote workspace artifact returned invalid chunk data.");
     }
-    const chunk = payload as { dataBase64?: unknown; size?: unknown; revision?: unknown };
     if (
       typeof chunk.dataBase64 !== "string" ||
+      typeof chunk.size !== "number" ||
       !Number.isSafeInteger(chunk.size) ||
-      (chunk.size as number) < 0 ||
-      (chunk.size as number) > params.maxBytes ||
+      chunk.size < 0 ||
+      chunk.size > params.maxBytes ||
       typeof chunk.revision !== "string" ||
       !chunk.revision
     ) {
       throw new Error("Codex remote workspace artifact returned invalid or oversized chunk data.");
     }
     if (expectedSize === undefined) {
-      expectedSize = chunk.size as number;
+      expectedSize = chunk.size;
       expectedRevision = chunk.revision;
     }
     if (chunk.size !== expectedSize || chunk.revision !== expectedRevision) {

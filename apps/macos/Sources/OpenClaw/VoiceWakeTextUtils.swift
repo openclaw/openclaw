@@ -68,8 +68,6 @@ enum VoiceWakeTextUtils {
             guard !normalizedTokens.isEmpty else { continue }
             let rawTrigger = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation)
             let tokenCount = normalizedTokens.count
-            guard !rawTrigger.isEmpty else { continue }
-
             var searchStart = transcript.startIndex
             while searchStart < transcript.endIndex,
                   let range = transcript.range(
@@ -105,15 +103,10 @@ enum VoiceWakeTextUtils {
 
     static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
         let tokens = self.normalizedTokens(transcript)
-        guard !tokens.isEmpty else { return false }
-        for trigger in triggers {
+        return triggers.contains { trigger in
             let triggerTokens = self.normalizedTokens(trigger)
-            guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
-            if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
-                return true
-            }
+            return !triggerTokens.isEmpty && tokens.starts(with: triggerTokens)
         }
-        return false
     }
 
     static func textOnlyCommand(
@@ -151,23 +144,22 @@ enum VoiceWakeTextUtils {
 
     static func hasOnlyFillerBeforeTrigger(transcript: String, triggers: [String]) -> Bool {
         guard let match = self.bestRawTriggerMatch(transcript: transcript, triggers: triggers) else { return false }
-        let prefixTokens = transcript[..<match.range.lowerBound]
-            .split(whereSeparator: {
-                $0.isWhitespace || self.whitespaceAndPunctuation.contains($0.unicodeScalars.first!)
-            })
-            .map { self.normalizeToken(String($0)) }
-            .filter { !$0.isEmpty }
+        let prefixTokens = self.fillerTokens(transcript[..<match.range.lowerBound])
         return prefixTokens.allSatisfy { self.wakePrefixFillers.contains($0) }
     }
 
     private static func isFillerOnly(_ text: String) -> Bool {
-        let tokens = text
+        let tokens = self.fillerTokens(text)
+        return !tokens.isEmpty && tokens.allSatisfy { self.wakePrefixFillers.contains($0) }
+    }
+
+    private static func fillerTokens(_ text: some StringProtocol) -> [String] {
+        text
             .split(whereSeparator: {
                 $0.isWhitespace || self.whitespaceAndPunctuation.contains($0.unicodeScalars.first!)
             })
             .map { self.normalizeToken(String($0)) }
             .filter { !$0.isEmpty }
-        return !tokens.isEmpty && tokens.allSatisfy { self.wakePrefixFillers.contains($0) }
     }
 
     static func matchedTriggerWord(transcript: String, triggers: [String]) -> String? {
@@ -187,7 +179,7 @@ enum VoiceWakeTextUtils {
             guard !triggerTokens.isEmpty, transcriptTokens.count >= triggerTokens.count else { continue }
             for index in 0...(transcriptTokens.count - triggerTokens.count) {
                 let candidate = transcriptTokens[index..<(index + triggerTokens.count)]
-                guard zip(triggerTokens, candidate).allSatisfy({ $0 == $1 }) else { continue }
+                guard candidate.elementsEqual(triggerTokens) else { continue }
                 if index < bestStartIndex || (index == bestStartIndex && triggerTokens.count > bestTokenCount) {
                     bestStartIndex = index
                     bestTokenCount = triggerTokens.count

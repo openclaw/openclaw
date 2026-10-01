@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import * as nodeCrypto from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -19,7 +19,7 @@ describe("trajectory tool definition preparation", () => {
   });
 
   it("reuses schema projection work across rebuilt tools without sharing mutable results", () => {
-    const digest = vi.spyOn(crypto, "createHash");
+    const digest = vi.spyOn(nodeCrypto, "sha256Hex");
     const parameters = { imageData: "synthetic-trajectory-media", nested: { ordinary: "first" } };
     const project = () => toTrajectoryToolDefinitions([{ name: "sample", parameters }]);
     const first = project();

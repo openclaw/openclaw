@@ -75,7 +75,7 @@ describe("memory forget participant selectors", () => {
     expect(
       database.prepare("SELECT * FROM session_participants ORDER BY session_key").all(),
     ).toEqual(before);
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
     expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memory);
   });
 
@@ -115,6 +115,6 @@ describe("memory forget participant selectors", () => {
       expect(report.sessionIds).toEqual([]);
       expect(report.sessionResolutions).toEqual([]);
     }
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
   });
 });

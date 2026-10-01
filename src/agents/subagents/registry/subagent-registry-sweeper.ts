@@ -26,7 +26,7 @@ import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-re
 import {
   discardSuspendedPendingFinalDelivery,
   isSuspendedPendingFinalDelivery,
-  resolveSuspendedDeliveryExpiryMs,
+  SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS,
   warnSuspendedDeliveryPressure,
 } from "./subagent-registry-suspended-delivery.js";
 import {
@@ -57,6 +57,15 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
   let sweepInProgress = false;
   let rerunRequested = false;
   let lastWarnedSuspendedCount: number | undefined;
+  const pendingWork = new Set<Promise<unknown>>();
+
+  function trackWork<T>(run: () => Promise<T>): Promise<T> {
+    const pending = run();
+    pendingWork.add(pending);
+    const settled = () => pendingWork.delete(pending);
+    void pending.then(settled, settled);
+    return pending;
+  }
 
   function start() {
     if (intervalStarted) {
@@ -83,7 +92,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
     clearTimeout(scheduled?.timer);
     const timer = setTimeout(() => {
       scheduled = undefined;
-      void runTick();
+      void trackWork(runTick);
     }, delayMs);
     timer.unref?.();
     scheduled = { timer, at: nextAt };
@@ -124,8 +133,10 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
   });
 
   function runCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
-    void runWithGatewayIndependentRootWorkAdmission(run, "subagents:sweeper-cleanup").catch(
-      (error: unknown) => params.warn(`subagent sweep ${label} failed`, { runId, error }),
+    void trackWork(() =>
+      runWithGatewayIndependentRootWorkAdmission(run, "subagents:sweeper-cleanup").catch(
+        (error: unknown) => params.warn(`subagent sweep ${label} failed`, { runId, error }),
+      ),
     );
   }
 
@@ -279,7 +290,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
         }
         if (isSuspendedPendingFinalDelivery(entry)) {
           const expired =
-            now - (entry.delivery?.suspendedAt ?? now) >= resolveSuspendedDeliveryExpiryMs();
+            now - (entry.delivery?.suspendedAt ?? now) >= SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS;
           if (expired) {
             await discardSuspendedPendingFinalDelivery({
               runId,
@@ -291,11 +302,13 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
               clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,
               discardTerminalDelivery: params.discardTerminalDelivery,
               completeCleanupBookkeeping: params.completeCleanupBookkeeping,
+              isCurrent: () => params.isEndedHookOwnerCurrent(runId, entry),
+              sessionEffectsHostCurrent: params.sessionEffectsHostCurrent,
+              shouldSuppressSessionEffects: params.shouldSuppressSessionEffects,
               shouldEmitEndedHookForRun: params.shouldEmitEndedHookForRun,
               emitSubagentEndedHookForRun: params.emitSubagentEndedHookForRun,
               warn: params.warn,
             });
-            mutatedRunIds.add(runId);
           }
           continue;
         }
@@ -317,7 +330,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           continue;
         }
         if (entry.killReconciliation) {
-          const reconciled = await reconcileProvisionalSubagentKill({
+          const needsPersistence = await reconcileProvisionalSubagentKill({
             runId,
             entry,
             now,
@@ -328,7 +341,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
             getRunsForChildSession: params.getRunsForChildSession,
             warn: params.warn,
           });
-          if (reconciled) {
+          if (needsPersistence) {
             mutatedRunIds.add(runId);
           }
           continue;
@@ -678,12 +691,15 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
     start,
     stop,
     schedule,
-    sweepOnce,
-    runTick,
-    reset() {
+    sweepOnce: () => trackWork(sweepOnce),
+    runTick: () => trackWork(runTick),
+    async reset() {
       stop();
-      sweepInProgress = false;
       lastWarnedSuspendedCount = undefined;
+      // Accepted sweeps can start cleanup tails before they settle.
+      while (pendingWork.size > 0) {
+        await Promise.allSettled(pendingWork);
+      }
     },
   };
 }

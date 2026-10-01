@@ -691,19 +691,23 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
   return manifest;
 }
 
-function parseArgs(argv) {
-  const values = [...argv];
-  const command = values.shift();
-  const result = { command };
-  while (values.length > 0) {
-    const key = values.shift();
-    const value = values.shift();
+export function parseClawHubArtifactOptions(argv) {
+  const result = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
     if (!key?.startsWith("--") || value === undefined) {
       fail(`Invalid argument: ${String(key)}`);
     }
     result[key.slice(2).replaceAll("-", "_")] = value;
   }
   return result;
+}
+
+function parseArgs(argv) {
+  const values = [...argv];
+  const command = values.shift();
+  return { command, ...parseClawHubArtifactOptions(values) };
 }
 
 async function main() {

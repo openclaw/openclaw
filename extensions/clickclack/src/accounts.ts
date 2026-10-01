@@ -1,7 +1,3 @@
-/**
- * Resolves ClickClack account configuration from root channel config, named
- * account overrides, and secret-provider references.
- */
 import {
   createAccountListHelpers,
   hasConfiguredAccountValue,
@@ -227,10 +223,6 @@ function resolveClickClackToken(params: {
   return { token: resolved.value, tokenSource: "config", tokenStatus: "available" };
 }
 
-/**
- * Builds the normalized account snapshot used by gateway, outbound delivery,
- * status reporting, and channel routing.
- */
 export function resolveClickClackAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -300,10 +292,6 @@ export function resolveClickClackAccount(params: {
   };
 }
 
-/**
- * Returns all enabled accounts, including the implicit default account when
- * legacy top-level ClickClack config is present.
- */
 export function listEnabledClickClackAccounts(cfg: CoreConfig): ResolvedClickClackAccount[] {
   return listClickClackAccountIds(cfg)
     .map((accountId) => resolveClickClackAccount({ cfg, accountId }))

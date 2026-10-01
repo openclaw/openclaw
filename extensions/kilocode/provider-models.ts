@@ -6,6 +6,7 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
+  isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -48,12 +49,8 @@ const DISCOVERY_TIMEOUT_MS = 5000;
 interface GatewayModelPricing {
   prompt: string;
   completion: string;
-  image?: string;
-  request?: string;
   input_cache_read?: string;
   input_cache_write?: string;
-  web_search?: string;
-  internal_reasoning?: string;
 }
 
 interface GatewayModelEntry {
@@ -133,19 +130,14 @@ function buildStaticCatalog(): ModelDefinitionConfig[] {
 }
 
 function asGatewayModelEntry(value: unknown): GatewayModelEntry {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("Kilocode model list: malformed JSON response");
   }
   const entry = value as Partial<GatewayModelEntry>;
-  if (
-    typeof entry.id !== "string" ||
-    typeof entry.pricing !== "object" ||
-    entry.pricing === null ||
-    Array.isArray(entry.pricing)
-  ) {
+  if (typeof entry.id !== "string" || !isRecord(entry.pricing)) {
     throw new Error("Kilocode model list: malformed JSON response");
   }
-  return value as GatewayModelEntry;
+  return entry as GatewayModelEntry;
 }
 
 function readGatewayModelRows(body: unknown): readonly unknown[] {
@@ -196,7 +188,6 @@ export async function discoverKilocodeModels(
     timeoutMs: DISCOVERY_TIMEOUT_MS,
     ttlMs: 0,
     readRows: readGatewayModelRows,
-    buildRequestHeaders: () => ({ Accept: "application/json" }),
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
     auditContext: "kilocode.model_discovery",
     projectRows: projectKilocodeModels,

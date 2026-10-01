@@ -1,8 +1,3 @@
-/**
- * Subagent list builder.
- *
- * Combines live registry runs and persisted session metadata for sessions_list/subagents views.
- */
 import { realpathSync } from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -26,10 +21,6 @@ import {
   type SubagentExecutionObservation,
 } from "./subagent-execution-observation.js";
 import type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
-import {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-} from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -38,6 +29,8 @@ import {
 } from "./subagent-run-liveness.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
 import {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
   isSubagentChildStopUnconfirmed,
   resolveSubagentDisplayStatus,
 } from "./subagent-session-metrics.js";
@@ -82,37 +75,6 @@ type SubagentSharedCwdGroup = {
   runIds: string[];
 };
 
-type SubagentListItem = {
-  index: number;
-  line: string;
-  runId: string;
-  sessionKey: string;
-  taskName?: string;
-  label: string;
-  task: string;
-  status: string;
-  pendingDescendants: number;
-  runtime: string;
-  runtimeMs: number;
-  childSessions?: string[];
-  model?: string;
-  totalTokens?: number;
-  startedAt?: number;
-  endedAt?: number;
-  sharedCwdGroupId?: number;
-  execution: SubagentExecutionObservation;
-  deliveryStatus?: NonNullable<SubagentRunRecord["delivery"]>["status"];
-};
-
-type BuiltSubagentList = {
-  total: number;
-  active: SubagentListItem[];
-  recent: SubagentListItem[];
-  sharedCwdGroupTotal: number;
-  sharedCwdGroups: SubagentSharedCwdGroup[];
-  text: string;
-};
-
 export type SubagentListReadContext = {
   now: number;
   recentMinutes: number;
@@ -134,7 +96,9 @@ export function captureSubagentListReadContext(
   const pendingDescendants = new Map(
     runs.map((entry) => [
       entry.childSessionKey,
-      readIndex.countPendingDescendantRuns(entry.childSessionKey),
+      readIndex.countPendingDescendantRuns(entry.childSessionKey, {
+        excludeSuspendedDelivery: true,
+      }),
     ]),
   );
   const view = buildSubagentRunView({
@@ -199,7 +163,6 @@ export async function readSubagentListSessionEntries(
   return entries;
 }
 
-/** Build child-session indexes from the latest run associated with each child key. */
 function buildChildSessionIndex(
   readIndex: SubagentRunReadIndex<SubagentRunReadRecord>,
   now: number,
@@ -400,12 +363,11 @@ function buildListText(params: {
   return lines.join("\n");
 }
 
-/** Build structured and text views for active and recent subagent runs. */
 export function buildSubagentList(params: {
   context: SubagentListReadContext;
   sessionEntries: ReadonlyMap<string, SessionEntry>;
   taskMaxChars?: number;
-}): BuiltSubagentList {
+}) {
   const { now, view: runView, childSessionsByController } = params.context;
   // `runView.latest` is a superset of `active`/`recent` (every deduped run
   // lands here first); the session entries the caller already loaded for
@@ -443,7 +405,7 @@ export function buildSubagentList(params: {
     const sharedCwdGroupId = sharedCwdIndex.resolveGroupId(entry.runId);
     const sharedCwdSuffix = sharedCwdGroupId ? ` [shared cwd group ${sharedCwdGroupId}]` : "";
     const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}${sharedCwdSuffix}`;
-    const view: SubagentListItem = {
+    const view = {
       index,
       line,
       runId: entry.runId,

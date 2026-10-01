@@ -1,4 +1,3 @@
-// Builds base config schema metadata shared across generated config surfaces.
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";

@@ -16,7 +16,8 @@ import {
   loadExactSessionEntryReadOnly,
   openSessionEntryReadView,
 } from "./session-accessor.js";
-import type { SessionEntryReadSource, SessionEntryReadView } from "./session-accessor.types.js";
+import type { SessionEntryReadView } from "./session-accessor.types.js";
+import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,

@@ -16,18 +16,17 @@ export async function handleSubagentsListAction(
     sessionEntries: await readSubagentListSessionEntries(params.cfg, readContext.list),
     taskMaxChars: 110,
   });
-  const lines = ["active subagents:", "-----"];
-  if (list.active.length === 0) {
-    lines.push("(none)");
-  } else {
-    lines.push(list.active.map((entry) => entry.line).join("\n"));
-  }
-  lines.push("", `recent subagents (last ${RECENT_WINDOW_MINUTES}m):`, "-----");
-  if (list.recent.length === 0) {
-    lines.push("(none)");
-  } else {
-    lines.push(list.recent.map((entry) => entry.line).join("\n"));
-  }
+  const formatRows = (rows: typeof list.active) =>
+    rows.length ? rows.map((entry) => entry.line).join("\n") : "(none)";
+  const lines = [
+    "active subagents:",
+    "-----",
+    formatRows(list.active),
+    "",
+    `recent subagents (last ${RECENT_WINDOW_MINUTES}m):`,
+    "-----",
+    formatRows(list.recent),
+  ];
   if (list.sharedCwdGroupTotal > 0) {
     lines.push(
       "",
@@ -39,6 +38,5 @@ export async function handleSubagentsListAction(
       );
     }
   }
-
   return commandReply(lines.join("\n"));
 }

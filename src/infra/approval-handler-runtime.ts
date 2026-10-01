@@ -5,6 +5,7 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
@@ -417,7 +418,10 @@ export function createChannelApprovalHandler<
 
 /** Builds a shared approval handler from a plugin approval capability, or null when unsupported. */
 export async function createChannelApprovalHandlerFromCapability(params: {
-  capability?: Pick<ChannelApprovalCapability, "native" | "nativeRuntime"> | null;
+  capability?: Pick<
+    ChannelApprovalCapability,
+    "native" | "nativeRuntime" | "supportsScopedPluginApprovalApprovers"
+  > | null;
   label: string;
   clientDisplayName: string;
   channel: string;
@@ -527,6 +531,12 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       isConfigured: () => nativeRuntime.availability.isConfigured(baseContext),
       shouldHandle: (request) => {
         const approvalKind = resolveApprovalKind(request);
+        if (
+          approvalKind === "plugin" &&
+          !canChannelEnforcePluginReviewerPolicy(params.cfg, params.channel, params.capability)
+        ) {
+          return false;
+        }
         return nativeRuntime.availability.shouldHandle({
           ...baseContext,
           request,

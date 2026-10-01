@@ -13,9 +13,10 @@ import {
   getSubagentSessionListReadSnapshotIdentity,
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import {
   deleteSessionEntryLifecycle,
   persistSessionTranscriptTurn,
@@ -455,7 +456,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             ...entries[1]!,
             activitySummary: {
               version: 1,
-              formatRevision: 2,
+              formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
               text: "Stored archive summary",
               updatedAt: 1,
               sessionId: suffixScope.sessionId,
@@ -527,6 +528,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               sessionKeys: [],
             }),
             (selection) => selection.runIds,
+            { sessionKeys: [previous.childSessionKey], descendants: true },
           );
           await registryPending.promise;
           expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
@@ -726,7 +728,7 @@ it("replaces the whole accepted entry, board, and watermark snapshot after a com
       label: "committed value",
       activitySummary: {
         version: 1,
-        formatRevision: 2,
+        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
         text: "Current summary",
         updatedAt: 3,
         sessionId: entry.sessionId,

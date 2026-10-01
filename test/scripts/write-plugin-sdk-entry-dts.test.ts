@@ -6,6 +6,7 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createDeclarationFixture as createFixture,
@@ -302,7 +303,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         }),
       );
       const consumer = spawnSync(
-        process.execPath,
+        requireNodeTool("node"),
         [compiler, "-p", path.join(root, "consumer.json"), "--noEmit"],
         { cwd: root, encoding: "utf8" },
       );

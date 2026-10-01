@@ -4,12 +4,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { findExistingTranscriptPath } from "./session-transcript-archive-reader.js";
 import {
   createSessionTranscriptUsageAccumulator,
   type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-derived-readers.js";
-import { isOversizedTranscriptLine } from "./session-transcript-record-parser.js";
+import { resolveSessionTranscriptCandidates } from "./session-transcript-files.fs.js";
+import { MAX_TRANSCRIPT_PARSE_LINE_BYTES } from "./session-transcript-record-parser.js";
 
 export type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 
@@ -40,7 +40,12 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionFile?: string,
   agentId?: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  const filePath = resolveSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+  ).find((value) => fs.existsSync(value));
   if (!filePath) {
     return null;
   }
@@ -52,7 +57,7 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
     }
     const usageAccumulator = createSessionTranscriptUsageAccumulator("artifact");
     for await (const line of streamSessionTranscriptLines(filePath)) {
-      if (isOversizedTranscriptLine(line)) {
+      if (Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
         continue;
       }
       let normalizedMessage: Record<string, unknown>;

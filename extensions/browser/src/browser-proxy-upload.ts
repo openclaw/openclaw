@@ -450,14 +450,17 @@ async function withStagingLock<T>(
   });
   const tail = previous.then(() => current);
   stagingLocks.set(uploadDir, tail);
+  // A cancelled waiter must keep its predecessor visible until the entire tail settles.
+  void tail.then(() => {
+    if (stagingLocks.get(uploadDir) === tail) {
+      stagingLocks.delete(uploadDir);
+    }
+  });
   try {
     await waitForStagingLock(previous, signal);
     return await task();
   } finally {
     release();
-    if (stagingLocks.get(uploadDir) === tail) {
-      stagingLocks.delete(uploadDir);
-    }
   }
 }
 

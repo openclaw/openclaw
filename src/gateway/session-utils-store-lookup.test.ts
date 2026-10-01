@@ -441,7 +441,7 @@ describe("global session lookup ownership", () => {
     await withGlobalSessions("main", async (cfg) => {
       const latestShared = vi.fn<
         NonNullable<GatewayRequestContext["githubPublicationService"]>["latestShared"]
-      >(() => null);
+      >(async () => null);
       const context = {
         getRuntimeConfig: () => cfg,
         githubPublicationService: { latestShared },
@@ -481,6 +481,7 @@ describe("global session lookup ownership", () => {
             sessionId: agentId + "-global",
           }),
           undefined,
+          expect.any(Function),
         );
       }
     });

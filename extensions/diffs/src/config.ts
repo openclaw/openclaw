@@ -3,6 +3,8 @@ import {
   buildPluginConfigSchema,
   type OpenClawPluginConfigSchema,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { asFiniteNumber, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { clampInt, clampNumber } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
@@ -13,11 +15,7 @@ import {
   DIFF_THEMES,
   type DiffFileDefaults,
   type DiffImageQualityPreset,
-  type DiffIndicators,
-  type DiffLayout,
-  type DiffMode,
   type DiffOutputFormat,
-  type DiffTheme,
   type DiffToolDefaults,
 } from "./types.js";
 import { normalizeViewerBaseUrl } from "./url.js";
@@ -214,12 +212,16 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
     fontFamily: normalizeFontFamily(defaults.fontFamily),
     fontSize: normalizeDiffFontSize(defaults.fontSize),
     lineSpacing: normalizeDiffLineSpacing(defaults.lineSpacing),
-    layout: normalizeLayout(defaults.layout),
+    layout:
+      DIFF_LAYOUTS.find((value) => value === defaults.layout) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.layout,
     showLineNumbers: defaults.showLineNumbers !== false,
-    diffIndicators: normalizeDiffIndicators(defaults.diffIndicators),
+    diffIndicators:
+      DIFF_INDICATORS.find((value) => value === defaults.diffIndicators) ??
+      DEFAULT_DIFFS_TOOL_DEFAULTS.diffIndicators,
     wordWrap: defaults.wordWrap !== false,
     background: defaults.background !== false,
-    theme: normalizeTheme(defaults.theme),
+    theme:
+      DIFF_THEMES.find((value) => value === defaults.theme) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.theme,
     fileFormat: normalizeFileFormat(fileFormat),
     fileQuality,
     fileScale: normalizeFileScale(defaults.fileScale ?? defaults.imageScale, profile.scale),
@@ -227,32 +229,20 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
       defaults.fileMaxWidth ?? defaults.imageMaxWidth,
       profile.maxWidth,
     ),
-    mode: normalizeMode(defaults.mode),
+    mode: DIFF_MODES.find((value) => value === defaults.mode) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.mode,
     ttlSeconds: normalizeTtlSeconds(defaults.ttlSeconds),
   };
 }
 
 export function resolveDiffsPluginSecurity(config: unknown): DiffsPluginSecurityConfig {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return { ...DEFAULT_DIFFS_PLUGIN_SECURITY };
-  }
-
-  const security = (config as DiffsPluginConfig).security;
-  if (!security || typeof security !== "object" || Array.isArray(security)) {
-    return { ...DEFAULT_DIFFS_PLUGIN_SECURITY };
-  }
-
   return {
-    allowRemoteViewer: security.allowRemoteViewer === true,
+    allowRemoteViewer:
+      asOptionalRecord(asOptionalRecord(config)?.security)?.allowRemoteViewer === true,
   };
 }
 
 export function resolveDiffsPluginViewerBaseUrl(config: unknown): string | undefined {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return undefined;
-  }
-
-  const viewerBaseUrl = (config as DiffsPluginConfig).viewerBaseUrl;
+  const viewerBaseUrl = asOptionalRecord(config)?.viewerBaseUrl;
   if (typeof viewerBaseUrl !== "string") {
     return undefined;
   }
@@ -267,32 +257,11 @@ function normalizeFontFamily(fontFamily?: string): string {
 }
 
 export function normalizeDiffFontSize(fontSize?: number): number {
-  if (fontSize === undefined || !Number.isFinite(fontSize)) {
-    return DEFAULT_DIFFS_TOOL_DEFAULTS.fontSize;
-  }
-  const rounded = Math.floor(fontSize);
-  return Math.min(Math.max(rounded, 10), 24);
+  return clampInt(asFiniteNumber(fontSize) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.fontSize, 10, 24);
 }
 
 export function normalizeDiffLineSpacing(lineSpacing?: number): number {
-  if (lineSpacing === undefined || !Number.isFinite(lineSpacing)) {
-    return DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing;
-  }
-  return Math.min(Math.max(lineSpacing, 1), 3);
-}
-
-function normalizeLayout(layout?: DiffLayout): DiffLayout {
-  return layout && DIFF_LAYOUTS.includes(layout) ? layout : DEFAULT_DIFFS_TOOL_DEFAULTS.layout;
-}
-
-function normalizeDiffIndicators(diffIndicators?: DiffIndicators): DiffIndicators {
-  return diffIndicators && DIFF_INDICATORS.includes(diffIndicators)
-    ? diffIndicators
-    : DEFAULT_DIFFS_TOOL_DEFAULTS.diffIndicators;
-}
-
-function normalizeTheme(theme?: DiffTheme): DiffTheme {
-  return theme && DIFF_THEMES.includes(theme) ? theme : DEFAULT_DIFFS_TOOL_DEFAULTS.theme;
+  return clampNumber(asFiniteNumber(lineSpacing) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing, 1, 3);
 }
 
 function normalizeFileFormat(fileFormat?: DiffOutputFormat): DiffOutputFormat {
@@ -308,31 +277,17 @@ function normalizeFileQuality(fileQuality?: DiffImageQualityPreset): DiffImageQu
 }
 
 function normalizeFileScale(fileScale: number | undefined, fallback: number): number {
-  if (fileScale === undefined || !Number.isFinite(fileScale)) {
-    return fallback;
-  }
-  const rounded = Math.round(fileScale * 100) / 100;
-  return Math.min(Math.max(rounded, 1), 4);
+  const value = asFiniteNumber(fileScale);
+  return value === undefined ? fallback : clampNumber(Math.round(value * 100) / 100, 1, 4);
 }
 
 function normalizeFileMaxWidth(fileMaxWidth: number | undefined, fallback: number): number {
-  if (fileMaxWidth === undefined || !Number.isFinite(fileMaxWidth)) {
-    return fallback;
-  }
-  const rounded = Math.round(fileMaxWidth);
-  return Math.min(Math.max(rounded, 640), 2400);
-}
-
-function normalizeMode(mode?: DiffMode): DiffMode {
-  return mode && DIFF_MODES.includes(mode) ? mode : DEFAULT_DIFFS_TOOL_DEFAULTS.mode;
+  const value = asFiniteNumber(fileMaxWidth);
+  return value === undefined ? fallback : clampNumber(Math.round(value), 640, 2400);
 }
 
 function normalizeTtlSeconds(ttlSeconds?: number): number {
-  if (ttlSeconds === undefined || !Number.isFinite(ttlSeconds)) {
-    return DEFAULT_DIFFS_TOOL_DEFAULTS.ttlSeconds;
-  }
-  const rounded = Math.floor(ttlSeconds);
-  return Math.min(Math.max(rounded, 1), 21_600);
+  return clampInt(asFiniteNumber(ttlSeconds) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.ttlSeconds, 1, 21_600);
 }
 
 export function resolveDiffImageRenderOptions(params: {

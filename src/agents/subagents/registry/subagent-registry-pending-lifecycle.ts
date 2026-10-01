@@ -46,6 +46,11 @@ export function createPendingLifecycleScheduler(params: {
 
   function schedule(kind: PendingLifecycleKind, scheduleParams: PendingLifecycleParams) {
     clearKind(scheduleParams.runId);
+    const scheduledEntry = params.runs.get(scheduleParams.runId);
+    if (!scheduledEntry) {
+      return;
+    }
+    const generation = scheduledEntry.generation;
     const timer = setTimeout(() => {
       const pending = pendingByRunId.get(scheduleParams.runId);
       if (!pending || pending.timer !== timer) {
@@ -53,7 +58,7 @@ export function createPendingLifecycleScheduler(params: {
       }
       pendingByRunId.delete(scheduleParams.runId);
       const entry = params.runs.get(scheduleParams.runId);
-      if (!entry) {
+      if (entry !== scheduledEntry || entry.generation !== generation) {
         return;
       }
       if (
@@ -67,6 +72,7 @@ export function createPendingLifecycleScheduler(params: {
       params.completeInBackground(
         {
           runId: scheduleParams.runId,
+          expectedEntry: scheduledEntry,
           endedAt: pending.endedAt,
           outcome:
             kind === "timeout"

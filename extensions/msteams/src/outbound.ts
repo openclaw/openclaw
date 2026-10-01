@@ -17,17 +17,10 @@ import {
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
+import { msteamsOutboundConfig, resolveMSTeamsEffectiveTextChunkLimit } from "./outbound-config.js";
 import { createMSTeamsPollStoreState } from "./polls.js";
-import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
+import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
-
-const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
-
-function resolveMSTeamsEffectiveTextChunkLimit(configuredLimit?: number): number {
-  return typeof configuredLimit === "number" && configuredLimit > 0
-    ? Math.min(configuredLimit, MSTEAMS_TEXT_CHUNK_LIMIT)
-    : MSTEAMS_TEXT_CHUNK_LIMIT;
-}
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
@@ -126,22 +119,7 @@ async function sendMSTeamsOutbound(
 }
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
-  chunkerMode: "markdown",
-  textChunkLimit: MSTEAMS_TEXT_CHUNK_LIMIT,
-  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
-    resolveMSTeamsEffectiveTextChunkLimit(fallbackLimit),
-  pollMaxOptions: 12,
-  deliveryCapabilities: {
-    durableFinal: {
-      text: true,
-      media: true,
-      payload: true,
-      messageSendingHooks: true,
-    },
-  },
-  presentationCapabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
+  ...msteamsOutboundConfig,
   renderPresentation: ({ payload, presentation }) => {
     if (payload.mediaUrl || payload.mediaUrls?.length) {
       return null;
@@ -180,18 +158,14 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     const handoff = { assertDirectAdapterHandoff, onPlatformSendDispatch };
     const deliveryTarget = resolveMSTeamsThreadTarget(to, threadId);
     const msteamsData = asOptionalRecord(payload.channelData?.msteams);
-    const presentationCard = msteamsData?.presentationCard;
-    if (
-      presentationCard &&
-      typeof presentationCard === "object" &&
-      !Array.isArray(presentationCard)
-    ) {
+    const presentationCard = asOptionalRecord(msteamsData?.presentationCard);
+    if (presentationCard) {
       const result = await sendWithDeliveryResults(
         (report) =>
           sendAdaptiveCardMSTeams({
             cfg,
             to: deliveryTarget,
-            card: presentationCard as Record<string, unknown>,
+            card: presentationCard,
             ...handoff,
             onDeliveryResult: report,
           }),

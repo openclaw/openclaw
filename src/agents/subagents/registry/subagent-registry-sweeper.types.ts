@@ -36,6 +36,9 @@ export type SubagentRegistrySweeperOptions = {
   resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
   completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
+  isEndedHookOwnerCurrent: SubagentLifecycleController["isEndedHookOwnerCurrent"];
+  sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
+  shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
   discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
   shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
   emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];

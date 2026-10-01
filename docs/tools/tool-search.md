@@ -203,6 +203,12 @@ before execution and validates final `details` after normal tool hooks before
 returning the catalog call. MCP and client-owned schemas remain deferred to
 their owning execution boundary.
 
+If `tool_call` names a direct-only tool declared for the current turn, it returns
+guidance to call that tool directly by its declared name and parameters. It does
+not dispatch direct-only tools through the catalog or suggest searching for them.
+Tools not available in the current turn still receive the ordinary catalog-miss
+error.
+
 `tool_call` also repairs flattened target arguments from
 local models. It preserves target fields such as `id` and `name`, and rejects
 ambiguous tool selectors instead of calling the wrong tool. Nest target

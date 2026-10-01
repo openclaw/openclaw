@@ -27,7 +27,11 @@ actor TalkMLXSpeechSynthesizer {
         case timedOut
     }
 
-    static let shared = TalkMLXSpeechSynthesizer()
+    static let shared = TalkMLXSpeechSynthesizer(
+        transportFactory: {
+            try await ProcessMLXTTSTransport.launch(invocation: TalkMLXSpeechSynthesizer.helperInvocation())
+        },
+        observesMemoryPressure: true)
     static let defaultModelRepo = "mlx-community/Soprano-80M-bf16"
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.mlx")
@@ -42,15 +46,6 @@ actor TalkMLXSpeechSynthesizer {
     private var cancelEscalationTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     private var memoryPressureMonitor: MLXMemoryPressureMonitor?
-
-    private init() {
-        self.transportFactory = {
-            try await ProcessMLXTTSTransport.launch(invocation: TalkMLXSpeechSynthesizer.helperInvocation())
-        }
-        self.idleDuration = .seconds(300)
-        self.cancelGraceDuration = .seconds(1)
-        self.observesMemoryPressure = true
-    }
 
     init(
         transportFactory: @escaping MLXTTSTransportFactory,
@@ -428,10 +423,6 @@ actor TalkMLXSpeechSynthesizer {
     private func discardTransport(forRequest id: String) async {
         // A stale request may finish after shutdown admitted a replacement.
         guard self.activeID == id else { return }
-        await self.discardTransport()
-    }
-
-    private func discardTransport() async {
         let transport = self.transport
         self.transport = nil
         await transport?.close()

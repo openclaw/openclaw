@@ -6,11 +6,9 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.i18n.nativeString
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import android.widget.Toast
 
 /** App version label shared by diagnostics and gateway-facing Android metadata. */
 internal fun openClawAndroidVersionLabel(): String {
@@ -194,6 +192,5 @@ internal fun copyGatewayDiagnosticsReport(
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
   val report = buildGatewayDiagnosticsReport(screen = screen, gatewayAddress = gatewayAddress, statusText = statusText)
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostics", report))
-  Toast.makeText(context, nativeString("Copied gateway diagnostics"), Toast.LENGTH_SHORT).show()
+  clipboard.copyTextWithConfirmation(context, "OpenClaw gateway diagnostics", report, nativeString("Copied gateway diagnostics"))
 }

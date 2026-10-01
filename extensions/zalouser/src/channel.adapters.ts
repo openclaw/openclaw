@@ -33,6 +33,7 @@ import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import {
   checkZcaAuthenticated,
   listZalouserAccountIds,
@@ -173,11 +174,6 @@ const sendZalouserOutbound: NonNullable<ChannelOutboundAdapter["sendMedia"]> = a
     }),
   );
 
-const zalouserRawSendResultAdapter = {
-  sendText: sendZalouserOutbound,
-  sendMedia: sendZalouserOutbound,
-};
-
 export const zalouserMessageAdapter = defineChannelMessageAdapter({
   id: "zalouser",
   durableFinal: {
@@ -273,22 +269,16 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
     if (!result.ok) {
       throw new Error(result.error || "Failed to react on Zalo message");
     }
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text:
-            params.remove === true
-              ? `Removed reaction ${emoji} from ${ids.msgId}`
-              : `Reacted ${emoji} on ${ids.msgId}`,
-        },
-      ],
-      details: {
+    return textResult(
+      params.remove === true
+        ? `Removed reaction ${emoji} from ${ids.msgId}`
+        : `Reacted ${emoji} on ${ids.msgId}`,
+      {
         messageId: ids.msgId,
         cliMsgId: ids.cliMsgId,
         threadId: target.threadId,
       },
-    };
+    );
   },
 };
 
@@ -450,18 +440,15 @@ export const zalouserOutboundAdapter = {
   deliveryMode: "direct" as const,
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown" as const,
-  sendPayload: async (
-    ctx: { payload: object } & Parameters<
-      NonNullable<typeof zalouserRawSendResultAdapter.sendText>
-    >[0],
-  ) =>
+  sendPayload: async (ctx: { payload: object } & Parameters<typeof sendZalouserOutbound>[0]) =>
     await sendPayloadWithChunkedTextAndMedia({
       ctx,
-      sendText: zalouserRawSendResultAdapter.sendText,
-      sendMedia: zalouserRawSendResultAdapter.sendMedia,
+      sendText: sendZalouserOutbound,
+      sendMedia: sendZalouserOutbound,
       emptyResult: createEmptyChannelResult("zalouser"),
     }),
-  ...zalouserRawSendResultAdapter,
+  sendText: sendZalouserOutbound,
+  sendMedia: sendZalouserOutbound,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
 } satisfies ChannelOutboundAdapter;
 

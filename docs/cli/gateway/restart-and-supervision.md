@@ -117,7 +117,9 @@ Inline `--password` can be exposed in local process listings. Prefer `--password
 
 Service management (`install`, `start`, `stop`, `restart`, `uninstall`, Doctor service repair, and self-update service handling) belongs to the install that owns the host service. That is the canonical `.openclaw` directory under the OS account home, or the `.openclaw-<profile>` directory a named profile projects there. Named profiles use distinct native service identities.
 
-`OPENCLAW_HOME`, or an `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` that points elsewhere, is treated as isolated state and skipped. A relocated or copied state tree cannot adopt and rewrite the account's host service.
+`OPENCLAW_HOME` may explicitly select the OS account home, including a filesystem alias of that home. Both the process home (`HOME` or `USERPROFILE`) and the effective OpenClaw home must resolve to the account home. An `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, or `OPENCLAW_CONFIG_PATH` that points elsewhere is treated as isolated state and skipped. A relocated or copied state tree cannot adopt and rewrite the account's host service.
+
+Doctor also validates the environment saved in the installed service. A canonical `OPENCLAW_HOME` there does not prevent `openclaw doctor --fix` from entering maintenance and importing legacy credentials. Doctor remains the migration owner: it verifies the imported credentials and archives the original bytes before normal runtime reads resume.
 
 On macOS and Windows, native service-managed profile names must be lowercase. Runtime-only profiles may still use uppercase, but case-distinct names such as `Main` and `main` share paths on normal case-insensitive filesystems and cannot safely own separate native services. On macOS, the lowercase names `gateway` and `node` are also unavailable for native service management because their historical LaunchAgent labels collide with the default Gateway and node-host services.
 

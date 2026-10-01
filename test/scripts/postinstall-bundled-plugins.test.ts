@@ -4,7 +4,8 @@ import { readFileSync as readFileSyncOriginal } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "tsdown";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
@@ -46,6 +47,105 @@ async function expectPathMissing(filePath: string) {
 }
 
 describe("bundled plugin postinstall", () => {
+  it("compiles source without consuming an installed runtime artifact", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-postinstall-source-build-");
+    await copyPostinstallFixture(packageRoot);
+    const installedGuard = path.join(packageRoot, "dist/commands/doctor-update-schema-guard.js");
+    await fs.mkdir(path.dirname(installedGuard), { recursive: true });
+    await fs.writeFile(
+      installedGuard,
+      "export async function preflightUpdatePackageLifecycle() {}\n",
+    );
+    const { bundles } = await build({
+      config: false,
+      cwd: packageRoot,
+      root: packageRoot,
+      entry: ["scripts/postinstall-bundled-plugins.mjs"],
+      outDir: path.join(packageRoot, "compiled"),
+      unbundle: true,
+      treeshake: false,
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const inputs = bundles.flatMap(({ chunks }) =>
+        chunks.flatMap((chunk) => (chunk.type === "chunk" ? chunk.moduleIds : [])),
+      );
+      expect(inputs).toContain(path.join(packageRoot, "scripts/postinstall-bundled-plugins.mjs"));
+      expect(inputs).not.toContain(installedGuard);
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
+  it.each([
+    { name: "marked Windows update", platform: "win32", update: "1", source: false, refused: true },
+    {
+      name: "ordinary Windows install",
+      platform: "win32",
+      update: "",
+      source: false,
+      refused: false,
+    },
+    {
+      name: "other platform update",
+      platform: "darwin",
+      update: "1",
+      source: false,
+      refused: false,
+    },
+    { name: "source checkout", platform: "win32", update: "1", source: true, refused: false },
+  ])("preserves lifecycle completion policy for $name", async (scenario) => {
+    const packageRoot = await createTempDirAsync("openclaw-update-postinstall-");
+    await copyPostinstallFixture(packageRoot);
+    const guardDir = path.join(packageRoot, "dist", "commands");
+    await fs.mkdir(guardDir, { recursive: true });
+    await fs.writeFile(path.join(packageRoot, "package.json"), '{"type":"module"}\n');
+    await fs.writeFile(
+      path.join(guardDir, "doctor-update-schema-guard.js"),
+      'export async function preflightUpdatePackageLifecycle() { throw new Error("fixture: previous Gateway data must remain readable"); }\n',
+    );
+    const pending = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+    await fs.writeFile(pending, "pending\n");
+    if (scenario.source) {
+      await fs.mkdir(path.join(packageRoot, "src"));
+      await fs.mkdir(path.join(packageRoot, "extensions"));
+      await fs.writeFile(path.join(packageRoot, ".git"), "gitdir: /fixture/worktree\n");
+    }
+    const script = path.join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `Object.defineProperty(process, "platform", { value: ${JSON.stringify(scenario.platform)} });
+process.argv[1] = ${JSON.stringify(script)};
+await import(${JSON.stringify(pathToFileURL(script).href)});`,
+      ],
+      {
+        cwd: packageRoot,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          OPENCLAW_UPDATE_IN_PROGRESS: scenario.update,
+          OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(scenario.refused ? 1 : 0);
+    if (scenario.refused) {
+      expect(result.stderr).toContain("fixture: previous Gateway data must remain readable");
+      expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
+    } else {
+      expect(result.stderr).not.toContain("fixture:");
+      await expectPathMissing(pending);
+    }
+  });
+
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),

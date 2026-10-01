@@ -74,19 +74,12 @@ function resolvePluginSkillRootsInOwner(
   params: Parameters<typeof resolvePluginSkillRootsFromMetadata>[0],
 ): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
-  if (!workspaceDir) {
+  const metadataSnapshot = params.metadataSnapshot;
+  if (!workspaceDir || metadataSnapshot.manifestRegistry.plugins.length === 0) {
     publishPluginSkills([], { pluginSkillsDir: params.pluginSkillsDir });
     return [];
   }
   const config = params.config ?? {};
-  const metadataSnapshot = params.metadataSnapshot;
-  const registry = metadataSnapshot.manifestRegistry;
-  if (registry.plugins.length === 0) {
-    publishPluginSkills([], {
-      pluginSkillsDir: params.pluginSkillsDir,
-    });
-    return [];
-  }
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
   const seen = new Set<string>();
   const resolved: PluginSkillRoot[] = [];

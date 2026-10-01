@@ -30,10 +30,6 @@ const COMPLETION_REQUIRED_TASK_KINDS = new Set([
   "video_generation",
 ]);
 
-function resolveAsyncTaskPollIntervalMs(): number {
-  return isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS;
-}
-
 function createAbortError(signal: AbortSignal): Error {
   return createNamedAbortError("aborted", {
     cause: signal.reason,
@@ -87,22 +83,20 @@ function collectAsyncTaskRunIds(
   sessionKey: string | undefined,
   alreadyWaited: ReadonlySet<string>,
 ): string[] {
-  const runIds: string[] = [];
-  const seen = new Set<string>();
+  const runIds = new Set<string>();
   const addRunId = (runIdRaw: string | undefined) => {
     const runId = runIdRaw?.trim();
-    if (!runId || alreadyWaited.has(runId) || seen.has(runId)) {
+    if (!runId || alreadyWaited.has(runId)) {
       return;
     }
-    seen.add(runId);
-    runIds.push(runId);
+    runIds.add(runId);
   };
   for (const meta of toolMetas) {
     addRunId(meta.asyncStarted === true ? meta.asyncTaskRunId : undefined);
   }
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
-    return runIds;
+    return [...runIds];
   }
   // Registry lookup catches completion-required tasks started before their
   // tool metadata reached the current attempt result.
@@ -112,24 +106,7 @@ function collectAsyncTaskRunIds(
     }
     addRunId(task.runId);
   }
-  return runIds;
-}
-
-function findTerminalTasks(runIds: readonly string[]): {
-  pendingRunIds: string[];
-  terminalTasks: MediaGenerationOperation[];
-} {
-  const pendingRunIds: string[] = [];
-  const terminalTasks: MediaGenerationOperation[] = [];
-  for (const runId of runIds) {
-    const task = findMediaGenerationOperation(runId);
-    if (task && isTerminalMediaGenerationStatus(task.status)) {
-      terminalTasks.push(task);
-      continue;
-    }
-    pendingRunIds.push(runId);
-  }
-  return { pendingRunIds, terminalTasks };
+  return [...runIds];
 }
 
 export function requiresCompletionRequiredAsyncTaskWait(params: {
@@ -165,11 +142,7 @@ export function shouldWaitForCompletionRequiredAsyncTasks(params: {
     // waiting here would reuse the internal abort signal and turn the pause into AbortError.
     return false;
   }
-  return requiresCompletionRequiredAsyncTaskWait({
-    sessionKey: params.sessionKey,
-    toolMetas: params.toolMetas,
-    abortSignal: params.abortSignal,
-  });
+  return requiresCompletionRequiredAsyncTaskWait(params);
 }
 
 export async function waitForCompletionRequiredAsyncTasks(params: {
@@ -183,22 +156,19 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
 }): Promise<CompletionRequiredAsyncTaskWaitResult> {
   const now = params.now ?? Date.now;
   const sleepFn = params.sleep ?? sleep;
-  const pollIntervalMs = params.pollIntervalMs ?? resolveAsyncTaskPollIntervalMs();
+  const pollIntervalMs =
+    params.pollIntervalMs ?? (isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS);
   const waitedRunIds = new Set<string>();
   const timedOutRunIds = new Set<string>();
   const terminalTasksByRunId = new Map<string, MediaGenerationOperation>();
 
-  while (true) {
+  waitForTasks: while (true) {
     throwIfAborted(params.abortSignal);
     // Re-read metadata every outer loop; tool calls may record async run ids
     // after an earlier task wait finished.
     const runIds = collectAsyncTaskRunIds(params.getToolMetas(), params.sessionKey, waitedRunIds);
     if (runIds.length === 0) {
-      return {
-        waitedRunIds: [...waitedRunIds],
-        timedOutRunIds: [...timedOutRunIds],
-        terminalTasks: [...terminalTasksByRunId.values()],
-      };
+      break;
     }
 
     for (const runId of runIds) {
@@ -208,14 +178,17 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
     let pendingRunIds = runIds;
     while (pendingRunIds.length > 0) {
       throwIfAborted(params.abortSignal);
-      const terminalState = findTerminalTasks(pendingRunIds);
-      for (const task of terminalState.terminalTasks) {
-        const runId = task.runId?.trim();
-        if (runId) {
-          terminalTasksByRunId.set(runId, task);
+      pendingRunIds = pendingRunIds.filter((runId) => {
+        const task = findMediaGenerationOperation(runId);
+        if (!task || !isTerminalMediaGenerationStatus(task.status)) {
+          return true;
         }
-      }
-      pendingRunIds = terminalState.pendingRunIds;
+        const taskRunId = task.runId?.trim();
+        if (taskRunId) {
+          terminalTasksByRunId.set(taskRunId, task);
+        }
+        return false;
+      });
       if (pendingRunIds.length === 0) {
         break;
       }
@@ -227,13 +200,14 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
         for (const runId of pendingRunIds) {
           timedOutRunIds.add(runId);
         }
-        return {
-          waitedRunIds: [...waitedRunIds],
-          timedOutRunIds: [...timedOutRunIds],
-          terminalTasks: [...terminalTasksByRunId.values()],
-        };
+        break waitForTasks;
       }
       await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
     }
   }
+  return {
+    waitedRunIds: [...waitedRunIds],
+    timedOutRunIds: [...timedOutRunIds],
+    terminalTasks: [...terminalTasksByRunId.values()],
+  };
 }

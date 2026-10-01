@@ -64,19 +64,6 @@ export function crabboxProviderChain({
   }
 }
 
-export function selectReadyCrabboxProvider<T extends { ready: boolean }>(
-  chain: readonly string[],
-  readiness: ReadonlyMap<string, T>,
-) {
-  for (const provider of chain) {
-    const status = readiness.get(provider);
-    if (status?.ready) {
-      return { provider, readiness: status };
-    }
-  }
-  return null;
-}
-
 function available(candidates: readonly string[], advertisedProviders: ReadonlySet<string>) {
   return candidates.filter((provider) => provider && advertisedProviders.has(provider));
 }

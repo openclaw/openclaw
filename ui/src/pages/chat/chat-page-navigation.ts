@@ -42,31 +42,6 @@ export function sameChatPaneRoute(
   );
 }
 
-function ownedChatPaneCommand(
-  context: ApplicationContext,
-  params: UiCommandDetail,
-): UiCommandDetail {
-  const { command, agentId } = params;
-  if (
-    command.kind !== "navigate" &&
-    command.kind !== "split" &&
-    command.kind !== "focus" &&
-    command.kind !== "close-pane"
-  ) {
-    return params;
-  }
-  return {
-    ...params,
-    sessionKey: params.sessionKey
-      ? ownedChatPaneSessionKey(context, params.sessionKey, agentId)
-      : undefined,
-    command: {
-      ...command,
-      sessionKey: ownedChatPaneSessionKey(context, command.sessionKey, agentId),
-    },
-  };
-}
-
 export function ownedChatPaneRouteData(
   context: ApplicationContext,
   data: SessionChatRouteData,
@@ -171,24 +146,23 @@ export function handleChatPageCommand(event: Event, host: ChatPageCommandHost): 
   if (!host.presented || host.pendingCreate || !(event instanceof CustomEvent)) {
     return;
   }
-  const {
-    command,
-    sessionKey: sourceSessionKey,
-    agentId,
-  } = ownedChatPaneCommand(
-    host.context,
-    // SAFETY: UI_COMMAND_EVENT comes from the validated Gateway adapter or typed local actions.
-    event.detail as UiCommandDetail,
-  );
+  // SAFETY: UI_COMMAND_EVENT comes from the validated Gateway adapter or typed local actions.
+  const { command, sessionKey: sourceSessionKey, agentId } = event.detail as UiCommandDetail;
+  if (
+    command.kind !== "navigate" &&
+    command.kind !== "split" &&
+    command.kind !== "focus" &&
+    command.kind !== "close-pane"
+  ) {
+    return;
+  }
+  const sessionKey = ownedChatPaneSessionKey(host.context, command.sessionKey, agentId);
   if (command.kind === "navigate") {
     event.preventDefault();
     if (host.layout && host.unboundPaneIds.has(host.layout.activePaneId)) {
-      host.adoptPaneNavigation(host.layout.activePaneId, command.sessionKey, agentId);
+      host.adoptPaneNavigation(host.layout.activePaneId, sessionKey, agentId);
     }
-    host.updateRoute(command.sessionKey, false, undefined, agentId);
-    return;
-  }
-  if (command.kind !== "split" && command.kind !== "close-pane" && command.kind !== "focus") {
+    host.updateRoute(sessionKey, false, undefined, agentId);
     return;
   }
   if (command.kind === "split" && host.narrow) {
@@ -205,7 +179,7 @@ export function handleChatPageCommand(event: Event, host: ChatPageCommandHost): 
     return;
   }
   if (command.kind === "close-pane") {
-    const targetPane = panesOf(layout).find((pane) => pane.sessionKey === command.sessionKey);
+    const targetPane = panesOf(layout).find((pane) => pane.sessionKey === sessionKey);
     if (!targetPane) {
       return;
     }
@@ -213,7 +187,11 @@ export function handleChatPageCommand(event: Event, host: ChatPageCommandHost): 
     host.closeSplitPane(layout, targetPane.id);
     return;
   }
-  const next = applyUiCommandToSplitLayout(layout, command, sourceSessionKey);
+  const next = applyUiCommandToSplitLayout(
+    layout,
+    { ...command, sessionKey },
+    sourceSessionKey ? ownedChatPaneSessionKey(host.context, sourceSessionKey, agentId) : undefined,
+  );
   if (next === layout) {
     return;
   }

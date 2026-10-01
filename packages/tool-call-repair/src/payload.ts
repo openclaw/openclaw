@@ -503,24 +503,18 @@ function parsePlainTextToolCallBlockAtAnySyntax(
   return null;
 }
 
-function normalizeParseOptions(
-  options?: PlainTextToolCallParseOptions,
-): NormalizedPlainTextToolCallParseOptions | undefined {
-  return options
-    ? {
-        ...options,
-        allowedToolNames: options.allowedToolNames ? new Set(options.allowedToolNames) : undefined,
-      }
-    : undefined;
-}
-
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
   structuralLineBreaks?: StructuralLineBreakOptions,
 ): PlainTextToolCallBlock[] | null {
   const blocks: PlainTextToolCallBlock[] = [];
-  const normalizedOptions = normalizeParseOptions(options);
+  const normalizedOptions = options
+    ? {
+        ...options,
+        allowedToolNames: options.allowedToolNames ? new Set(options.allowedToolNames) : undefined,
+      }
+    : undefined;
   let cursor = skipWhitespace(text, 0);
   while (cursor < text.length) {
     const block = parsePlainTextToolCallBlockAtAnySyntax(

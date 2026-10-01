@@ -323,7 +323,7 @@ describe("TOOLS.md migration", () => {
           gid: original.gid,
           mode: original.mode,
         });
-        await expect(fs.readdir(fixture.workspace)).resolves.toEqual(["AGENTS.md", "TOOLS.md"]);
+        expect((await fs.readdir(fixture.workspace)).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
       } finally {
         openSpy.mockRestore();
       }
@@ -393,7 +393,7 @@ describe("TOOLS.md migration", () => {
           gid: original.gid,
           mode: original.mode,
         });
-        await expect(fs.readdir(fixture.workspace)).resolves.toEqual(["AGENTS.md", "TOOLS.md"]);
+        expect((await fs.readdir(fixture.workspace)).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
       } finally {
         openSpy.mockRestore();
       }

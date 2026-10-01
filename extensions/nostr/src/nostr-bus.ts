@@ -155,8 +155,6 @@ interface RelayHealthStats {
   lastFailure: number;
 }
 
-type RelayHealthTracker = ReturnType<typeof createRelayHealthTracker>;
-
 function createRelayHealthTracker() {
   const stats = new Map<string, RelayHealthStats>();
 
@@ -334,18 +332,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
 
     const replyTo = async (text: string): Promise<void> => {
-      await sendEncryptedDm(
-        pool,
-        sk,
-        event.pubkey,
-        text,
-        relays,
-        metrics,
-        circuitBreakers,
-        healthTracker,
-        onError,
-        { replyToEventId: event.id },
-      );
+      await sendEncryptedDm(event.pubkey, text, { replyToEventId: event.id });
     };
 
     if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
@@ -608,102 +595,83 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     return closePromise;
   };
 
+  async function sendEncryptedDm(
+    toPubkey: string,
+    text: string,
+    sendOptions?: NostrDmSendOptions & { replyToEventId?: string },
+  ): Promise<string> {
+    const ciphertext = encrypt(sk, toPubkey, text);
+    // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
+    const tags = [["p", toPubkey]];
+    if (sendOptions?.replyToEventId) {
+      tags.push(["e", sendOptions.replyToEventId]);
+    }
+    const reply = finalizeEvent(
+      {
+        kind: 4,
+        content: ciphertext,
+        tags,
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      sk,
+    );
+
+    const sortedRelays = healthTracker.getSortedRelays(relays);
+
+    let lastError: Error | undefined;
+    for (const relay of sortedRelays) {
+      sendOptions?.assertDirectAdapterHandoff?.();
+      const cb = circuitBreakers.get(relay);
+
+      if (cb && !cb.canAttempt()) {
+        continue;
+      }
+
+      const startTime = Date.now();
+      const recordFailure = (err: unknown) => {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const latency = Date.now() - startTime;
+        cb?.recordFailure();
+        healthTracker.recordFailure(relay);
+        metrics.emit("relay.error", 1, { relay, latency });
+        onError?.(lastError, `publish to ${relay}`);
+      };
+      // Keep connection preparation separate from the recipient-visible EVENT handoff.
+      const connection = await pool
+        .ensureRelay(relay, { connectionTimeout: pool.maxWaitForConnection })
+        .catch((err: unknown) => {
+          recordFailure(new Error(`connection failure: ${String(err)}`));
+        });
+      if (!connection) {
+        continue;
+      }
+      sendOptions?.assertDirectAdapterHandoff?.();
+      if (sendOptions?.onPlatformSendDispatch) {
+        await sendOptions.onPlatformSendDispatch();
+        sendOptions.assertDirectAdapterHandoff?.();
+      }
+      try {
+        await connection.publish(reply);
+        const latency = Date.now() - startTime;
+
+        cb?.recordSuccess();
+        healthTracker.recordSuccess(relay, latency);
+
+        return reply.id;
+      } catch (err) {
+        recordFailure(err);
+      }
+    }
+
+    throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
+  }
+
   return {
     close,
     publicKey: pk,
-    sendDm: (toPubkey, text, sendOptions) =>
-      sendEncryptedDm(
-        pool,
-        sk,
-        toPubkey,
-        text,
-        relays,
-        metrics,
-        circuitBreakers,
-        healthTracker,
-        onError,
-        sendOptions,
-      ),
+    sendDm: sendEncryptedDm,
     getMetrics: () => metrics.getSnapshot(),
     publishProfile,
     getProfileState,
   };
-}
-
-async function sendEncryptedDm(
-  pool: SimplePool,
-  sk: Uint8Array,
-  toPubkey: string,
-  text: string,
-  relays: string[],
-  metrics: NostrMetrics,
-  circuitBreakers: Map<string, CircuitBreaker>,
-  healthTracker: RelayHealthTracker,
-  onError?: (error: Error, context: string) => void,
-  options?: NostrDmSendOptions & { replyToEventId?: string },
-): Promise<string> {
-  const ciphertext = encrypt(sk, toPubkey, text);
-  // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
-  const tags = [["p", toPubkey]];
-  if (options?.replyToEventId) {
-    tags.push(["e", options.replyToEventId]);
-  }
-  const reply = finalizeEvent(
-    {
-      kind: 4,
-      content: ciphertext,
-      tags,
-      created_at: Math.floor(Date.now() / 1000),
-    },
-    sk,
-  );
-
-  const sortedRelays = healthTracker.getSortedRelays(relays);
-
-  let lastError: Error | undefined;
-  for (const relay of sortedRelays) {
-    options?.assertDirectAdapterHandoff?.();
-    const cb = circuitBreakers.get(relay);
-
-    if (cb && !cb.canAttempt()) {
-      continue;
-    }
-
-    const startTime = Date.now();
-    const recordFailure = (err: unknown) => {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      const latency = Date.now() - startTime;
-      cb?.recordFailure();
-      healthTracker.recordFailure(relay);
-      metrics.emit("relay.error", 1, { relay, latency });
-      onError?.(lastError, `publish to ${relay}`);
-    };
-    // Keep connection preparation separate from the recipient-visible EVENT handoff.
-    const connection = await pool
-      .ensureRelay(relay, { connectionTimeout: pool.maxWaitForConnection })
-      .catch((err: unknown) => {
-        recordFailure(new Error(`connection failure: ${String(err)}`));
-      });
-    if (!connection) {
-      continue;
-    }
-    options?.assertDirectAdapterHandoff?.();
-    if (options?.onPlatformSendDispatch) {
-      await options.onPlatformSendDispatch();
-      options.assertDirectAdapterHandoff?.();
-    }
-    try {
-      await connection.publish(reply);
-      const latency = Date.now() - startTime;
-
-      cb?.recordSuccess();
-      healthTracker.recordSuccess(relay, latency);
-
-      return reply.id;
-    } catch (err) {
-      recordFailure(err);
-    }
-  }
-
-  throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
 }

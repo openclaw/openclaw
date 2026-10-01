@@ -47,6 +47,7 @@ function renderResolvedAvatar(view: IdentityAvatarView): TemplateResult {
 export function renderChatAuthorAvatar(
   sender: IdentityAvatarInput | null | undefined,
   className = "chat-author-avatar",
+  agentAvatar?: { avatar?: string | null; textAvatar?: string | null },
 ): TemplateResult | typeof nothing {
   const label = formatSenderLabel(sender);
   if (!sender || !label) {
@@ -57,7 +58,8 @@ export function renderChatAuthorAvatar(
     return html`<span class=${className} role="img" aria-label=${label} title=${label}>
       ${renderAgentIdentityAvatar({
         id: sender.identity.id,
-        avatar: avatar.kind === "profile" ? avatar.url : null,
+        avatar: agentAvatar?.avatar ?? (avatar.kind === "profile" ? avatar.url : null),
+        textAvatar: agentAvatar?.textAvatar,
       })}
     </span>`;
   }

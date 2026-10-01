@@ -20,8 +20,11 @@ run_abandoned_update_survivor() {
   phase package-identities node "$helper" packages "$CANDIDATE_SPEC" "$(package_root)" "$ARTIFACT_ROOT"
   phase prepare-update-restart-probe prepare_update_restart_probe
   # The shipped ledger table is first-use-only, so let its own CLI create it.
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update --dry-run --yes --no-restart \
-    --tag "$(candidate_update_spec)" --json >"$ARTIFACT_ROOT/baseline-preview.json" 2>"$ARTIFACT_ROOT/baseline-preview.err"
+  local preview_args=(update --dry-run --yes --no-restart --tag "$(candidate_update_spec)" --json)
+  if candidate_requires_stable_channel "$candidate_version"; then
+    preview_args+=(--channel stable)
+  fi
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw "${preview_args[@]}" >"$ARTIFACT_ROOT/baseline-preview.json" 2>"$ARTIFACT_ROOT/baseline-preview.err"
   phase update-candidate update_candidate
   phase assert-candidate-build node "$helper" installed "$(package_root)" "$ARTIFACT_ROOT"
   if [ "$update_repair_required" != "0" ]; then
@@ -58,8 +61,9 @@ run_abandoned_update_survivor() {
     "$ARTIFACT_ROOT/full-repair-service-before.json"
   repair_status=0
   status_status=0
+  # Keep the full-repair outcome in the diagnostic owner's retained filenames.
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair --yes --json \
-    >"$ARTIFACT_ROOT/full-repair.json" 2>"$ARTIFACT_ROOT/full-repair.err" || repair_status=$?
+    >"$ARTIFACT_ROOT/recovery-update.json" 2>"$ARTIFACT_ROOT/recovery-update.err" || repair_status=$?
   printf '%s\n' "$repair_status" >"$ARTIFACT_ROOT/full-repair.exit"
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
     >"$ARTIFACT_ROOT/full-repair-status.json" 2>"$ARTIFACT_ROOT/full-repair-status.err" || status_status=$?

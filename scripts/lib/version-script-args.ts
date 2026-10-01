@@ -17,7 +17,7 @@ type VersionSyncCliOptions = CommonVersionCliOptions & {
   mode: VersionSyncMode;
 };
 
-function versionValueFlag<T extends Record<string, unknown>>(
+export function versionValueFlag<T extends Record<string, unknown>>(
   flag: string,
   key: string,
   transform?: (value: string) => unknown,

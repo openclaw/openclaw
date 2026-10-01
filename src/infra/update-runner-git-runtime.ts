@@ -1,7 +1,11 @@
+import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, isErrno } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { isPathInside } from "./path-guards.js";
 import type { CommandRunner } from "./update-runner-types.js";
 import {
@@ -10,6 +14,27 @@ import {
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
 import { gitRuntimeStagingPath } from "./update-runtime-staging.js";
+import type { UpdateStepResult } from "./update-step-result.js";
+
+function readRuntimeEntry(file: string): BigIntStats | undefined {
+  try {
+    return fsSync.lstatSync(file, { bigint: true });
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function sameRuntimeIdentity(expected: BigIntStats | undefined, current: BigIntStats) {
+  return (
+    expected !== undefined &&
+    expected.dev === current.dev &&
+    expected.ino === current.ino &&
+    (process.platform !== "win32" || (current.dev !== 0n && current.ino !== 0n))
+  );
+}
 
 async function collectRuntimeDirectories(
   root: string,
@@ -43,18 +68,21 @@ async function collectRuntimeDirectories(
   if (result.code !== 0) {
     throw new Error("Cannot enumerate update runtime outputs");
   }
-  return (
-    result.stdout
-      .split("\0")
-      .filter(Boolean)
-      .map((entry) => entry.replace(/\/$/u, ""))
-      // Git's --directory can collapse an excluded subtree to its ignored parent.
-      .filter(
-        (entry) =>
-          ["dist", "dist-runtime", "node_modules"].includes(path.basename(entry)) &&
-          !entry.split("/").some((part) => part.startsWith(".")),
-      )
-  );
+  // Tracked siblings make Git descend instead of collapsing an ignored output directory.
+  const directories = result.stdout
+    .split("\0")
+    .filter(Boolean)
+    .flatMap((entry) => {
+      const parts = entry.split("/");
+      const runtimeIndex = parts.findIndex((part) =>
+        ["dist", "dist-runtime", "node_modules"].includes(part),
+      );
+      const runtimeRoot = parts.slice(0, runtimeIndex + 1);
+      return runtimeRoot.length && !runtimeRoot.some((part) => part.startsWith("."))
+        ? [runtimeRoot.join("/")]
+        : [];
+    });
+  return [...new Set(directories)];
 }
 
 async function collectDisposableRuntimeCaches(
@@ -129,6 +157,7 @@ export async function prepareGitRuntimePromotion(
   runCommand: CommandRunner,
   timeoutMs: number,
   cleanupRoot: string,
+  assertDestination?: (destination: string) => void,
 ) {
   const relocation: RuntimeRelocation = {
     sourceRoot: await fs.realpath(candidateRoot),
@@ -221,20 +250,38 @@ export async function prepareGitRuntimePromotion(
     roots.map(({ sourceRoot }) => sourceRoot),
     storeRoots,
   );
-  const staged: Array<{ destination: string; temporary: string; previous: boolean }> = [];
+  for (const { destinationRoot } of roots) {
+    assertDestination?.(destinationRoot);
+  }
+  const staged: Array<{
+    destination: string;
+    temporary: string;
+    previous: boolean;
+    activated: boolean;
+    identities?: {
+      parent: BigIntStats;
+      parentPath: string;
+      staging: BigIntStats;
+      previous: BigIntStats | undefined;
+    };
+  }> = [];
   const promoted: typeof staged = [];
   let restoreStarted = false;
   const cleanup = async (assertCurrent = () => {}) => {
     // Failed restoration must retain pending originals; successfully restored
     // entries leave the promoted list before cleanup or another restore attempt.
+    const retiring = staged.filter((entry) => !restoreStarted || !promoted.includes(entry));
+    // Reject the whole retirement before parallel removal can discard any original.
+    for (const entry of retiring) {
+      assertDestination?.(entry.destination);
+    }
     const removed = await Promise.allSettled(
-      staged
-        .filter((entry) => !restoreStarted || !promoted.includes(entry))
-        .map(async (entry) => {
-          assertCurrent();
-          await fs.rm(entry.temporary, { recursive: true, force: true });
-          assertCurrent();
-        }),
+      retiring.map(async (entry) => {
+        assertCurrent();
+        assertDestination?.(entry.destination);
+        await fs.rm(entry.temporary, { recursive: true, force: true });
+        assertCurrent();
+      }),
     );
     const failures = removed.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
@@ -247,23 +294,92 @@ export async function prepareGitRuntimePromotion(
     for (const { sourceRoot, destinationRoot: destination } of roots) {
       // .artifacts may point at another volume. A sibling of each destination
       // guarantees rename-only activation, including nested workspace outputs.
+      assertDestination?.(destination);
       const temporary = gitRuntimeStagingPath(destination);
-      const entry = { destination, temporary, previous: false };
+      const entry = { destination, temporary, previous: false, activated: false };
       staged.push(entry);
       await fs.mkdir(temporary, { recursive: true });
       const candidate = path.join(temporary, "candidate");
+      assertDestination?.(destination);
       await fs.cp(sourceRoot, candidate, {
         recursive: true,
         preserveTimestamps: true,
         verbatimSymlinks: true,
-        filter: (source) => !disposableCaches.has(source),
+        // An unused filter prevents Node from using its native directory-copy path.
+        filter: disposableCaches.size > 0 ? (source) => !disposableCaches.has(source) : undefined,
       });
+      assertDestination?.(destination);
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
     }
   } catch (error) {
     await cleanup();
     throw error;
   }
+  const assertParents = (entry: (typeof staged)[number]) => {
+    const identities = entry.identities;
+    const parent = path.dirname(entry.destination);
+    const parentStat = fsSync.statSync(parent, { bigint: true });
+    const stagingStat = fsSync.lstatSync(entry.temporary, { bigint: true });
+    if (
+      !identities ||
+      !parentStat.isDirectory() ||
+      !stagingStat.isDirectory() ||
+      fsSync.realpathSync.native(parent) !== identities.parentPath ||
+      !sameRuntimeIdentity(identities.parent, parentStat) ||
+      !sameRuntimeIdentity(identities.staging, stagingStat)
+    ) {
+      throw new Error(`Git runtime parent identity changed; retained ${entry.temporary}`);
+    }
+  };
+  const assertPrevious = (entry: (typeof staged)[number]) => {
+    if (
+      entry.previous &&
+      !sameRuntimeIdentity(
+        entry.identities?.previous,
+        fsSync.lstatSync(path.join(entry.temporary, "previous"), { bigint: true }),
+      )
+    ) {
+      throw new Error(`Retained Git runtime identity changed: ${entry.temporary}`);
+    }
+  };
+  const restoreEntry = async (entry: (typeof staged)[number], assertCurrent = () => {}) => {
+    const guard = () => {
+      assertCurrent();
+      assertDestination?.(entry.destination);
+      assertParents(entry);
+      assertPrevious(entry);
+    };
+    guard();
+    if (entry.activated) {
+      await fs.rm(entry.destination, { recursive: true, force: true });
+      if (entry.previous) {
+        guard();
+      }
+    } else if (readRuntimeEntry(entry.destination)) {
+      throw new Error(
+        `Git runtime destination is occupied during partial recovery: ${entry.destination}`,
+      );
+    }
+    if (entry.previous) {
+      // The transaction reserves this name. Refuse observed replacements; this
+      // guarded rename does not provide atomic exclusion of external races.
+      await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
+    }
+    // A completed effect must leave rollback custody before a later guard can fail.
+    promoted.pop();
+    assertCurrent();
+    assertDestination?.(entry.destination);
+    assertParents(entry);
+    if (
+      entry.previous &&
+      !sameRuntimeIdentity(
+        entry.identities?.previous,
+        fsSync.lstatSync(entry.destination, { bigint: true }),
+      )
+    ) {
+      throw new Error(`Restored Git runtime identity changed: ${entry.destination}`);
+    }
+  };
   return {
     backupRoot: staged[0]?.temporary ?? root,
     // Source fences may hide only transaction-owned staging. The same exact
@@ -278,33 +394,141 @@ export async function prepareGitRuntimePromotion(
         : [];
     }),
     async activate() {
-      for (const entry of staged) {
-        try {
-          await fs.rename(entry.destination, path.join(entry.temporary, "previous"));
-          entry.previous = true;
-        } catch (error) {
-          if (!hasErrnoCode(error, "ENOENT")) {
+      try {
+        for (const entry of staged) {
+          assertDestination?.(entry.destination);
+        }
+        for (const entry of staged) {
+          assertDestination?.(entry.destination);
+          const parent = path.dirname(entry.destination);
+          entry.identities = {
+            parent: fsSync.statSync(parent, { bigint: true }),
+            parentPath: fsSync.realpathSync.native(parent),
+            staging: fsSync.lstatSync(entry.temporary, { bigint: true }),
+            previous: readRuntimeEntry(entry.destination),
+          };
+          assertParents(entry);
+          if (
+            entry.identities.previous &&
+            !sameRuntimeIdentity(entry.identities.previous, entry.identities.previous)
+          ) {
+            throw new Error(`Git runtime identity is unavailable: ${entry.destination}`);
+          }
+          try {
+            await fs.rename(entry.destination, path.join(entry.temporary, "previous"));
+            entry.previous = true;
+          } catch (error) {
+            if (!hasErrnoCode(error, "ENOENT") || entry.identities.previous) {
+              throw error;
+            }
+          }
+          promoted.push(entry);
+          try {
+            assertDestination?.(entry.destination);
+            assertParents(entry);
+            assertPrevious(entry);
+            await fs.rename(path.join(entry.temporary, "candidate"), entry.destination);
+            entry.activated = true;
+          } catch (error) {
+            restoreStarted = true;
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
+            try {
+              await restoreEntry(entry);
+            } catch (restorationError) {
+              throw new AggregateError(
+                [error, restorationError],
+                `Git runtime activation failed (${formatErrorMessage(error)}); partial restoration failed (${formatErrorMessage(restorationError)}).`,
+                { cause: restorationError },
+              );
+            }
             throw error;
           }
         }
-        promoted.push(entry);
-        await fs.rename(path.join(entry.temporary, "candidate"), entry.destination);
+      } catch (error) {
+        restoreStarted = true;
+        throw error;
       }
     },
     async restore(assertCurrent = () => {}) {
       restoreStarted = true;
+      for (const entry of promoted) {
+        assertCurrent();
+        assertDestination?.(entry.destination);
+        assertParents(entry);
+        assertPrevious(entry);
+      }
       for (const entry of promoted.toReversed()) {
-        assertCurrent();
-        await fs.rm(entry.destination, { recursive: true, force: true });
-        if (entry.previous) {
-          assertCurrent();
-          await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
-        }
-        // Completed filesystem effects must not be replayed if the post-check revokes authority.
-        promoted.pop();
-        assertCurrent();
+        await restoreEntry(entry, assertCurrent);
       }
     },
     cleanup,
+  };
+}
+
+export function createGitRuntimeTransaction({
+  root,
+  promotion,
+  assertRollbackSafe,
+  restoreRuntime,
+}: {
+  root: string;
+  promotion: Pick<Awaited<ReturnType<typeof prepareGitRuntimePromotion>>, "backupRoot"> & {
+    cleanup: (assertCurrent?: () => void) => Promise<UpdateStepResult | void>;
+  };
+  assertRollbackSafe: () => Promise<void>;
+  restoreRuntime: PackageUpdateTransaction["rollback"];
+}): PackageUpdateTransaction {
+  let restored: ReturnType<PackageUpdateTransaction["rollback"]> | undefined;
+  let completed: Promise<UpdateStepResult | void> | undefined;
+  const retention = (message: string, warning = false): UpdateStepResult => ({
+    name: "git-runtime-backup-retention",
+    command: "retain previous Git runtime",
+    cwd: root,
+    durationMs: 0,
+    exitCode: 1,
+    stderrTail: message,
+    ...(warning ? { advisory: { kind: "recoverable-maintenance" as const, message } } : {}),
+  });
+  return {
+    backupRoot: promotion.backupRoot,
+    assertRollbackSafe,
+    rollback: (assertCurrent) => {
+      assertCurrent();
+      if (completed) {
+        throw new Error("Git runtime backup retirement has already started.");
+      }
+      return (restored ??= (async () => {
+        await assertRollbackSafe();
+        assertCurrent();
+        return await restoreRuntime(assertCurrent);
+      })());
+    },
+    complete: (outcome, assertCurrent) => {
+      assertCurrent();
+      return (completed ??= (async () => {
+        if (!outcome.activationVerified && (await restored)?.exitCode !== 0) {
+          return retention(
+            `Git recovery is unverified; previous runtime retained at ${promotion.backupRoot}.`,
+          );
+        }
+        try {
+          return await promotion.cleanup(assertCurrent);
+        } catch (error) {
+          assertCurrent();
+          if (
+            hasCommandProcessCleanupError(error) ||
+            !(error instanceof AggregateError ? error.errors : [error]).every(isErrno)
+          ) {
+            throw error;
+          }
+          return retention(
+            `Git verification succeeded; backup cleanup remains pending at ${promotion.backupRoot}: ${formatErrorMessage(error)}`,
+            true,
+          );
+        }
+      })());
+    },
   };
 }

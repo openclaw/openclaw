@@ -203,7 +203,7 @@ struct DashboardBrowserSignInRecoveryTests {
                 audience: "fixture",
                 subject: subject,
                 token: "synthetic",
-                expiresAt: Date().addingTimeInterval(300))
+                expiresAt: .fixtureSessionExpiry)
         }
         let session = try makeSession(subject: "account")
         let otherAccount = try makeSession(subject: "other-account")

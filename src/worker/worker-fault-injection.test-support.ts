@@ -321,7 +321,7 @@ export class ComposedGatewayHarness {
       source = await bindWorkerFixtureTurnSource(this.placementStore, claim, this.sessionTarget);
       this.turnSources.set(claim.claimId, source);
     }
-    return {
+    const descriptor: WorkerLaunchDescriptor = {
       version: 4,
       connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
@@ -354,6 +354,8 @@ export class ComposedGatewayHarness {
         },
       },
     };
+    source.setToolAssignment(descriptor.assignment);
+    return descriptor;
   }
 
   async createClients(params: WorkerClientOptions = {}): Promise<WorkerClients> {

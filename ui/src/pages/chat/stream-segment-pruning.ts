@@ -66,6 +66,31 @@ export function discardStreamSegmentIndexes(
   );
 }
 
+// Published history arrays and messages are immutable. Keep only the latest run
+// per array, and let replaced histories be collected along with their derivation.
+const persistedAssistantRuns = new WeakMap<unknown[], { runId: string; messages: unknown[] }>();
+
+function persistedAssistantRunMessages(history: unknown[] | undefined, runId: string): unknown[] {
+  const cached = history && persistedAssistantRuns.get(history);
+  if (cached?.runId === runId) {
+    return cached.messages;
+  }
+  const messages = (history ?? []).filter((message) => {
+    const identity = readSessionMessageIdentity(message);
+    return (
+      identity?.role === "assistant" &&
+      identity.id &&
+      !identity.isImported &&
+      identity.runId === runId &&
+      !readAssistantStreamSegmentIdentity(message)
+    );
+  });
+  if (history) {
+    persistedAssistantRuns.set(history, { runId, messages });
+  }
+  return messages;
+}
+
 export function reconcilePersistedAssistantStream(state: ToolStreamReconciliationState): void {
   const runId = state.chatRunId;
   if (!runId) {
@@ -93,16 +118,7 @@ export function reconcilePersistedAssistantStream(state: ToolStreamReconciliatio
   if (!stream) {
     return;
   }
-  const messages = (state.chatMessages ?? []).filter((message) => {
-    const identity = readSessionMessageIdentity(message);
-    return (
-      identity?.role === "assistant" &&
-      identity.id &&
-      !identity.isImported &&
-      identity.runId === runId &&
-      !readAssistantStreamSegmentIdentity(message)
-    );
-  });
+  const messages = persistedAssistantRunMessages(state.chatMessages, runId);
   const tail = resolveCumulativeAssistantTail(messages, stream, runId);
   const prefix = stream.slice(0, stream.length - (tail?.length ?? 0));
   if (!prefix) {

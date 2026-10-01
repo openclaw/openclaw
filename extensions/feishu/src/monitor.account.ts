@@ -24,7 +24,7 @@ import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-
 import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
-import { botNames, botOpenIds } from "./monitor.state.js";
+import { botOpenIds } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
@@ -303,7 +303,6 @@ function registerEventHandlers(
           cfg,
           event: syntheticEvent,
           botOpenId: myBotId,
-          botName: botNames.get(accountId),
           runtime,
           channelRuntime,
           chatHistories,
@@ -323,11 +322,10 @@ function registerEventHandlers(
       isAccountActive: context.isAccountActive,
       trackTask: context.trackTask,
       handleMessage: handleFeishuMessage,
-      resolveDebounceText: ({ event, botOpenId, botName }) =>
-        parseFeishuMessageEvent(event, botOpenId, botName).content,
+      resolveDebounceText: ({ event, botOpenId }) =>
+        parseFeishuMessageEvent(event, botOpenId).content,
       hasProcessedMessage: hasProcessedFeishuMessage,
       getBotOpenId: (id) => botOpenIds.get(id),
-      getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,
       resolveIngressLifecycle: context.resolveIngressLifecycle,
       ...(context.statusSink ? { statusSink: context.statusSink } : {}),
@@ -419,7 +417,6 @@ type BotOpenIdSource =
   | {
       kind: "prefetched";
       botOpenId?: string;
-      botName?: string;
       source?: "provider" | "cache";
     }
   | { kind: "fetch" };
@@ -450,11 +447,10 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     botOpenIdSource.kind === "prefetched"
       ? {
           botOpenId: botOpenIdSource.botOpenId,
-          botName: botOpenIdSource.botName,
           source: botOpenIdSource.source,
         }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
-  const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
+  const botOpenId = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
   if ((!botOpenId || botIdentity.source === "cache") && !abortSignal?.aborted) {

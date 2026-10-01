@@ -101,7 +101,6 @@ export async function finishGatewayStartup(params: {
     authRateLimiter,
     browserAuthRateLimiter,
     nodeReapprovalCoordinator,
-    preauthHandshakeTimeoutMs,
     isGatewayStartupPending,
     attachedGatewayExtraHandlers,
     startListening,
@@ -120,7 +119,6 @@ export async function finishGatewayStartup(params: {
     prepareAttachedPluginRuntime,
     refreshAttachedGatewayDiscovery,
     wss,
-    httpBindHosts,
     startChannels,
     broadcastPluginEvent,
     controlUiBasePath,
@@ -172,9 +170,9 @@ export async function finishGatewayStartup(params: {
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       nodeReapprovalCoordinator,
-      preauthHandshakeTimeoutMs,
       isStartupPending: isGatewayStartupPending,
       isPendingWorkerNodeSetup: workerEnvironmentService?.hasPendingNodeEnrollmentSetup,
+      admitsNodeSetupCompletion: workerEnvironmentService?.admitsNodeSetupCompletion,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
       logGateway: log,
@@ -249,10 +247,7 @@ export async function finishGatewayStartup(params: {
           updateCanary: opts.updateCanary,
           cfgAtStart,
           getConfig: getRuntimeConfig,
-          bindHost,
-          bindHosts: httpBindHosts,
           port,
-          tlsEnabled: gatewayTls.enabled,
           log,
           isNixMode,
           startupStartedAt: opts.startupStartedAt,
@@ -304,24 +299,34 @@ export async function finishGatewayStartup(params: {
             startupState.pendingReason = "startup-sidecars";
           },
           onStartupPluginsLoaded: async (loaded) => {
-            const prepared = await prepareAttachedPluginRuntime(loaded);
-            if (
-              lifecycle.closePreludeStarted ||
-              !startupPluginRuntimeClaim.publish(prepared.publish)
-            ) {
-              return false;
-            }
-            startupState.pendingReason = "startup-sidecars";
-            prepared.afterCommit();
-            // Nodes can finish their handshake before deferred plugins attach.
-            const nodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(
-              getPluginNodeCapabilities(),
+            const activationCleanup: Promise<void>[] = [];
+            const prepared = await prepareAttachedPluginRuntime(loaded, (completion) =>
+              activationCleanup.push(completion),
             );
-            for (const client of clients) {
-              reconcileClientPluginNodeCapabilities(client, nodeCapabilitySurfaces);
+            try {
+              if (
+                lifecycle.closePreludeStarted ||
+                !startupPluginRuntimeClaim.publish(prepared.publish)
+              ) {
+                return false;
+              }
+              startupState.pendingReason = "startup-sidecars";
+              prepared.afterCommit();
+              // Nodes can finish their handshake before deferred plugins attach.
+              const nodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(
+                getPluginNodeCapabilities(),
+              );
+              for (const client of clients) {
+                reconcileClientPluginNodeCapabilities(client, nodeCapabilitySurfaces);
+              }
+              await refreshAttachedGatewayDiscovery(
+                loaded.pluginRegistry,
+                startupPluginRuntimeClaim,
+              );
+              return true;
+            } finally {
+              await Promise.allSettled(activationCleanup);
             }
-            await refreshAttachedGatewayDiscovery(loaded.pluginRegistry, startupPluginRuntimeClaim);
-            return true;
           },
           getCronService: kernel.getCronService,
           onChannelsStarted: () => {
@@ -509,7 +514,7 @@ export async function finishGatewayStartup(params: {
     getState: kernel.getReloadState,
     setState: (nextState) => {
       kernel.setReloadHookState(nextState);
-      kernel.swapHeartbeatRunner(nextState.heartbeatRunner);
+      kernel.setHeartbeatRunner(nextState.heartbeatRunner);
       const previousCronState = kernel.swapCronState(nextState.cronState);
       if (previousCronState !== nextState.cronState) {
         cronStartState.handled = true;

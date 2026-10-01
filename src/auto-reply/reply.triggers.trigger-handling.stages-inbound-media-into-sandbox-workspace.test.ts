@@ -158,8 +158,8 @@ describe("stageSandboxMedia", () => {
       expect(result.staged.get(0)).toBe(stagedPath);
       expect(ctx.media?.[0]?.path).toBe(stagedPath);
       expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
-      expect(ctx.media?.[0]?.url).toBe(stagedPath);
-      expect(sessionCtx.media?.[0]?.url).toBe(stagedPath);
+      expect(ctx.media?.[0]?.url).toBe(mediaUri);
+      expect(sessionCtx.media?.[0]?.url).toBe(mediaUri);
       expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
       expect(ctx.media?.[0]?.staged).toBe(true);
       expect(sessionCtx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
@@ -294,8 +294,8 @@ describe("stageSandboxMedia", () => {
         );
         expect(ctx.media?.[0]?.path).toBe(stagedPath);
         expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
-        expect(ctx.media?.[0]?.url).toBe(stagedPath);
-        expect(sessionCtx.media?.[0]?.url).toBe(stagedPath);
+        expect(ctx.media?.[0]?.url).toBe("media://inbound/photo.jpg");
+        expect(sessionCtx.media?.[0]?.url).toBe("media://inbound/photo.jpg");
         const stagedStats = await fs.stat(join(sandboxDir, stagedPath));
         expect(stagedStats.isFile()).toBe(true);
       }
@@ -515,7 +515,7 @@ describe("stageSandboxMedia", () => {
 
         const stagedPath = result.staged.get(0)!;
         expect(stagedPath).toMatch(/^media\/inbound\/openclaw-staged-[0-9a-f-]+\/input-/);
-        const expectedUrl = rewritesUrl ? stagedPath : mediaUrl;
+        const expectedUrl = rewritesUrl ? mediaUri : mediaUrl;
         expect(result.staged).toEqual(new Map([[0, stagedPath]]));
         expect(ctx.media[0]).toMatchObject({
           path: stagedPath,

@@ -135,6 +135,7 @@ describe("workboard doctor contract", () => {
       const sqlite = createWorkboardSqliteStores({ env, workerModuleUrl });
       const store = new WorkboardStore(sqlite.cards, {
         boards: sqlite.boards,
+        sessionsBoard: sqlite.sessionsBoard,
         subscriptions: sqlite.subscriptions,
         attachments: sqlite.attachments,
       });

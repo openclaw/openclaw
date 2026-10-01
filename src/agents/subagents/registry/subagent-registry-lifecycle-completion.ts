@@ -1,7 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../../infra/agent-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import {
@@ -11,6 +15,10 @@ import {
 } from "../announce/subagent-announce-output.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
+import {
+  prepareSubagentKillSession,
+  type SubagentKillSession,
+} from "./subagent-control-session.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -21,12 +29,18 @@ import {
 import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
-import { completeTerminalEffects } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import {
   freezeRunResultAtCompletion,
   refreshPendingFinalDeliveryPayload,
 } from "./subagent-registry-lifecycle-delivery.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  captureSubagentRunMutationSnapshot,
+  publishSubagentRunPostimages,
+  replaceSubagentRunRecord,
+} from "./subagent-registry-persistence.js";
+import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   resolveSubagentRunDeadlineMs,
@@ -48,9 +62,6 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserClean
 
 function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
-    typeof entry.runTimeoutSeconds !== "number" ||
-    !Number.isFinite(entry.runTimeoutSeconds) ||
-    entry.runTimeoutSeconds <= 0 ||
     entry.execution.outcome?.status !== "timeout" ||
     typeof entry.execution.endedAt !== "number" ||
     // A wait-expiry publication describes the waiter, not the run. Fencing the
@@ -80,19 +91,6 @@ function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): bo
   );
 }
 
-function resolveExpiredExplicitRunDeadlineMs(params: {
-  entry: SubagentRunRecord;
-  nextEndedAt: number;
-  observedStartedAt?: number;
-}): number | undefined {
-  const effectiveEndedAt = resolveSubagentRunEffectiveEndedAt(
-    params.entry,
-    params.nextEndedAt,
-    params.observedStartedAt,
-  );
-  return effectiveEndedAt < params.nextEndedAt ? effectiveEndedAt : undefined;
-}
-
 function isOlderEquivalentTerminalCallback(params: {
   entry: SubagentRunRecord;
   endedAt: number;
@@ -116,6 +114,21 @@ export async function completeSubagentRunAttempt(
   completeParams: SubagentCompletionRequest,
 ): Promise<void> {
   const params = context.options;
+  const stateContext = captureOpenClawStateWorkerContext();
+  const selectedEntry = params.runs.get(completeParams.runId);
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const selectedGeneration = selectedEntry?.generation;
+  const isSelectedEntryCurrent = () =>
+    isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+    params.runs.get(completeParams.runId) === selectedEntry &&
+    selectedEntry?.generation === selectedGeneration &&
+    completeParams.recoveryCurrent?.isHostCurrent() !== false;
+  const assertCurrent = () => {
+    assertSubagentRegistryWriteSourceCurrent(stateContext);
+    if (!isSelectedEntryCurrent()) {
+      throw new Error("Subagent terminal publication lost its original owner");
+    }
+  };
   const releaseCompletionLock = await context.acquireTerminalCompletionLock(completeParams.runId);
   let entry: SubagentRunRecord | undefined;
   let terminalGeneration = 0;
@@ -125,31 +138,67 @@ export async function completeSubagentRunAttempt(
   let suppressSessionEffects = completeParams.suppressSessionEffects === true;
   let provisionalKillSnapshot: SubagentRunRecord | undefined;
   let entrySnapshot: SubagentRunRecord | undefined;
+  let collectorSession: SubagentKillSession | undefined;
   try {
+    if (!isSelectedEntryCurrent()) {
+      return;
+    }
+    assertCurrent();
     entry = params.runs.get(completeParams.runId);
     if (!entry) {
       return;
     }
+    const currentEntry = entry;
+    const ownerPauseReason = currentEntry.pauseReason;
+    if (completeParams.expectedEntry && entry !== completeParams.expectedEntry) {
+      return;
+    }
+    suppressSessionEffects ||= await context.shouldSuppressSessionEffects(
+      entry,
+      completeParams.sessionEffects,
+    );
     if (
-      (completeParams.expectedEntry && entry !== completeParams.expectedEntry) ||
-      completeParams.isRecoveryCurrent?.() === false
+      (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+      !isSelectedEntryCurrent() ||
+      currentEntry.pauseReason !== ownerPauseReason
     ) {
       return;
     }
-    context.bindTerminalSessionEffects(entry, completeParams.isChildSessionEffectsCurrent);
-    suppressSessionEffects ||= context.shouldSuppressSessionEffects(entry);
-    params.clearPendingLifecycleError(completeParams.runId);
-    const currentEntry = entry;
-    const ownerGeneration = currentEntry.generation;
-    entrySnapshot = structuredClone(entry);
-    const restoreEntrySnapshot = (snapshot?: SubagentRunRecord) => {
-      if (!snapshot) {
+    assertCurrent();
+    if (entry.collect && !entry.collectorCompletion) {
+      collectorSession = await prepareSubagentKillSession(
+        params.getRuntimeConfig(),
+        entry.childSessionKey,
+        assertCurrent,
+        entry.execution.transcriptTarget,
+        entry.childAgentId,
+      );
+      if (
+        (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+        !isSelectedEntryCurrent() ||
+        currentEntry.pauseReason !== ownerPauseReason
+      ) {
         return;
       }
-      for (const key of Object.keys(currentEntry)) {
-        Reflect.deleteProperty(currentEntry, key);
-      }
-      Object.assign(currentEntry, snapshot);
+      assertCurrent();
+    }
+    context.bindTerminalSessionEffects(entry, completeParams.sessionEffects);
+    params.clearPendingLifecycleError(completeParams.runId);
+    entrySnapshot = captureSubagentRunMutationSnapshot(entry);
+    const commit = async (previous: SubagentRunRecord, onPublished?: () => void) => {
+      const result = await publishSubagentRunPostimages({
+        runs: params.runs,
+        previous: new Map([[currentEntry, previous]]),
+        context: stateContext,
+        persist: params.persistAsyncOrThrow,
+        withPublication: collectorSession?.withPublication,
+        assertCurrent: () => {
+          assertCurrent();
+          collectorSession?.assertCurrent();
+        },
+        onPublished,
+      });
+      return result.publication === "published";
     };
     const recoveryRequested = completeParams.recoverInterrupted === true;
     if (
@@ -225,15 +274,12 @@ export async function completeSubagentRunAttempt(
         entry.cleanupHandled = false;
         entry.terminalOwner = "interrupted-recovery";
         mutated = true;
-        try {
-          params.persistOrThrow(completeParams.runId);
-        } catch (error) {
-          restoreEntrySnapshot(entrySnapshot);
-          throw error;
+        if (!(await commit(entrySnapshot))) {
+          return;
         }
         // Any later delivery-payload write rolls back to this durable owner,
         // never to the pre-recovery running row.
-        entrySnapshot = structuredClone(entry);
+        entrySnapshot = captureSubagentRunMutationSnapshot(entry);
         mutated = false;
       }
     }
@@ -313,16 +359,12 @@ export async function completeSubagentRunAttempt(
     // Abort/error/timeout outcomes retain their existing deadline attribution.
     const preserveObservedResult =
       shouldDeferTerminalCleanupForUnconfirmedChild(entry) && completionOutcome.status === "ok";
-    const expiredDeadlineMs =
+    const effectiveEndedAt =
       recoveryRequested || preserveObservedResult
-        ? undefined
-        : resolveExpiredExplicitRunDeadlineMs({
-            entry,
-            nextEndedAt: endedAt,
-            observedStartedAt,
-          });
-    if (expiredDeadlineMs !== undefined) {
-      endedAt = expiredDeadlineMs;
+        ? endedAt
+        : resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
+    if (effectiveEndedAt < endedAt) {
+      endedAt = effectiveEndedAt;
       // Clamping the reported end to the deadline does not re-observe the run,
       // so the caller's disposition is the only liveness evidence there is.
       completionOutcome = {
@@ -417,7 +459,7 @@ export async function completeSubagentRunAttempt(
       entry.killReconciliation !== undefined
     ) {
       const killReconciliation = entry.killReconciliation;
-      const stableTaskCancellation = entry.killReconciliation?.taskCancellationAccepted === true;
+      const stableTaskCancellation = killReconciliation.taskCancellationAccepted === true;
       const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
       const completionPredatesCancellation =
         typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
@@ -426,7 +468,7 @@ export async function completeSubagentRunAttempt(
         // intent. Only an already-durable earlier completion may reopen it.
         return;
       }
-      provisionalKillSnapshot = structuredClone(currentEntry);
+      provisionalKillSnapshot = captureSubagentRunMutationSnapshot(currentEntry);
       // The sweeper uses marker identity to reject a concurrently replaced
       // kill generation. A completion rollback must retain the same marker.
       provisionalKillSnapshot.killReconciliation = killReconciliation;
@@ -613,18 +655,23 @@ export async function completeSubagentRunAttempt(
       }
     } else {
       const executionBeforeCapture = currentEntry.execution;
-      const didFreezeResult = await freezeRunResultAtCompletion(context, entry, executionOutcome);
+      const didFreezeResult = await freezeRunResultAtCompletion(
+        context,
+        entry,
+        executionOutcome,
+        assertCurrent,
+      );
       // Native persistence is now the sole terminal commit. Capture must not give
       // an old callback authority over a replacement row or a newer cancellation.
       if (
-        params.runs.get(completeParams.runId) !== currentEntry ||
-        currentEntry.generation !== ownerGeneration ||
+        (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+        !isSelectedEntryCurrent() ||
         currentEntry.execution !== executionBeforeCapture ||
-        currentEntry.pauseReason === "sessions_yield" ||
-        completeParams.isRecoveryCurrent?.() === false
+        currentEntry.pauseReason === "sessions_yield"
       ) {
         return;
       }
+      assertCurrent();
       sessionSuperseded = context.newerGenerationOwnsSession(entry);
       if (sessionSuperseded) {
         const completion = ensureCompletionState(entry);
@@ -637,7 +684,9 @@ export async function completeSubagentRunAttempt(
     }
     if (
       entry.collect
-        ? updateSwarmCollectorCompletion(entry, params.getRuntimeConfig())
+        ? updateSwarmCollectorCompletion(entry, params.getRuntimeConfig(), {
+            entry: collectorSession?.entry,
+          })
         : updateSubagentArchiveAtMs(entry, params.getRuntimeConfig())
     ) {
       mutated = true;
@@ -672,33 +721,23 @@ export async function completeSubagentRunAttempt(
       if (currentEntry.killReconciliation?.suppressTaskDelivery === true) {
         entry.suppressCompletionDelivery = true;
       }
-      const liveBeforeCommit = structuredClone(currentEntry);
-      restoreEntrySnapshot(entry);
+      const liveBeforeCommit = captureSubagentRunMutationSnapshot(currentEntry);
+      replaceSubagentRunRecord(currentEntry, entry);
       entry = currentEntry;
-      try {
-        params.persistOrThrow(completeParams.runId);
-      } catch (error) {
-        restoreEntrySnapshot(liveBeforeCommit);
-        throw error;
+      if (!(await commit(liveBeforeCommit, () => context.bumpCleanupGeneration(currentEntry)))) {
+        return;
       }
       // A provider result supersedes provisional cleanup only after its native
       // terminal commit. Rejected callbacks leave the kill tail live.
-      context.bumpCleanupGeneration(entry);
-    } else {
-      try {
-        if (mutated) {
-          params.persistOrThrow(completeParams.runId);
-        }
-      } catch (error) {
-        restoreEntrySnapshot(entrySnapshot);
-        throw error;
-      }
+    } else if (mutated && !(await commit(entrySnapshot))) {
+      return;
     }
     terminalGeneration = context.bumpTerminalGeneration(entry);
   } finally {
     // Only the canonical state/capture transition is serialized. Cleanup
     // remains re-entrant so a stalled browser close cannot strand a duplicate callback.
     releaseCompletionLock();
+    await collectorSession?.release();
   }
 
   if (!entry) {
@@ -712,6 +751,8 @@ export async function completeSubagentRunAttempt(
     sessionSuperseded,
     suppressSessionEffects,
     terminalGeneration,
+    stateContext,
+    assertCurrent,
     loadCleanupBrowserSessionsForLifecycleEnd:
       params.loadCleanupBrowserSessionsForLifecycleEnd ?? loadCleanupBrowserSessionsForLifecycleEnd,
   });

@@ -1981,12 +1981,10 @@ private fun MessageBubble(
           start = if (isUser) 28.dp else 12.dp,
           end = if (isUser) 12.dp else 28.dp,
         ).background(background, RoundedCornerShape(14.dp))
-        .then(
-          Modifier.border(
-            width = 1.dp,
-            color = colors.borderStrong,
-            shape = RoundedCornerShape(14.dp),
-          ),
+        .border(
+          width = 1.dp,
+          color = colors.borderStrong,
+          shape = RoundedCornerShape(14.dp),
         ).padding(horizontal = 12.dp, vertical = 9.dp),
   ) {
     Text(
@@ -2388,72 +2386,10 @@ private fun Panel(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun failureTitle(failure: WearConversationFailure?): String =
-  when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE -> {
-      stringResource(R.string.phone_unavailable)
-    }
-
-    WearConversationFailure.PHONE_NOT_READY -> {
-      stringResource(R.string.open_phone_app)
-    }
-
-    WearConversationFailure.GATEWAY_OFFLINE -> {
-      stringResource(R.string.gateway_offline)
-    }
-
-    WearConversationFailure.NOT_FOUND -> {
-      stringResource(R.string.selection_not_found)
-    }
-
-    WearConversationFailure.ACTION_REJECTED -> {
-      stringResource(R.string.message_not_sent)
-    }
-
-    WearConversationFailure.INCOMPATIBLE -> {
-      stringResource(R.string.update_required)
-    }
-
-    WearConversationFailure.INTERNAL_ERROR,
-    null,
-    -> {
-      stringResource(R.string.something_went_wrong)
-    }
-  }
+private fun failureTitle(failure: WearConversationFailure?): String = stringResource((failure ?: WearConversationFailure.INTERNAL_ERROR).title)
 
 @Composable
-private fun failureDetail(failure: WearConversationFailure?): String =
-  when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE -> {
-      stringResource(R.string.phone_unavailable_detail)
-    }
-
-    WearConversationFailure.PHONE_NOT_READY -> {
-      stringResource(R.string.phone_not_ready_detail)
-    }
-
-    WearConversationFailure.GATEWAY_OFFLINE -> {
-      stringResource(R.string.gateway_offline_detail)
-    }
-
-    WearConversationFailure.NOT_FOUND -> {
-      stringResource(R.string.refresh_and_try_again)
-    }
-
-    WearConversationFailure.ACTION_REJECTED -> {
-      stringResource(R.string.try_again)
-    }
-
-    WearConversationFailure.INCOMPATIBLE -> {
-      stringResource(R.string.update_required_detail)
-    }
-
-    WearConversationFailure.INTERNAL_ERROR,
-    null,
-    -> {
-      stringResource(R.string.try_again)
-    }
-  }
+private fun failureDetail(failure: WearConversationFailure?): String = stringResource((failure ?: WearConversationFailure.INTERNAL_ERROR).detail)
 
 private const val CHAT_FIXED_ITEM_COUNT = 2
 private const val VISIBLE_MESSAGE_COUNT = 8

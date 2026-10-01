@@ -383,11 +383,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
     }
     let executionIdentity: ExecutionIdentityAdmissionToken | undefined;
     if (raw.executionIdentity !== undefined) {
-      try {
-        executionIdentity = parseExecutionIdentityAdmissionToken(raw.executionIdentity);
-      } catch {
-        return undefined;
-      }
+      executionIdentity = parseExecutionIdentityAdmissionToken(raw.executionIdentity);
     }
     if (executionIdentity?.runId !== operationalRunId) {
       executionIdentity = undefined;
@@ -422,25 +418,12 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
   }
 }
 
-export type AgentRuntimeIdentityTokenParams = {
-  agentId: string;
-  sessionKey: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-  approvalOwnerPluginId?: string;
+export type AgentRuntimeIdentityTokenParams = Omit<
+  AgentRuntimeIdentity,
+  "kind" | "delegatedAuthority" | "executionIdentity" | "cronSelfManagementContext"
+> & {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
-  turnSourceChannel?: string;
-  turnSourceLocal?: true;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
-  gatewayUiCommandTarget?: GatewayUiCommandTarget;
-  messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
-  cronToolsAllowCapture?: "final-executable-surface";
-  cronExecToolTarget?: { host: "gateway"; ask?: "always" };
-  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
-  cronManagementGrant?: CronCreatorAuthorityGrant;
-  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
   workerTurnClaim?: WorkerSessionTurnClaim;
   approvalAuthority?: AgentRunDelegatedAuthority;

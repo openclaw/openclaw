@@ -736,11 +736,16 @@ suite.define(() => {
             requestUpdate(): void;
             updateComplete: Promise<unknown>;
           };
-          // The shell refreshes this callback whenever its lazy outbox runtime
+          // The shell refreshes this snapshot whenever its lazy outbox runtime
           // loads. Keep the warning fixture stable until geometry is measured.
-          Object.defineProperty(host, "outboxAttentionCountForSession", {
+          const storedOutboxes = {
+            total: 1,
+            attentionCountForSession: () => 1,
+            hasSessionDraft: () => false,
+          };
+          Object.defineProperty(host, "storedOutboxes", {
             configurable: true,
-            get: () => () => 1,
+            get: () => storedOutboxes,
             set: () => undefined,
           });
           host.requestUpdate();

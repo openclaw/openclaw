@@ -1,11 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withContainerEnvFile } from "../../infra/container-env-file.js";
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
-/**
- * Low-level Docker command helpers for sandbox runtimes.
- *
- * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
@@ -126,37 +121,26 @@ export function formatDockerDaemonUnavailableError(stderr: string): string {
     .join(" ");
 }
 
-async function inspectContainerImage(
-  engine: SandboxContainerEngine,
-  image: string,
-): Promise<"exists" | "missing"> {
+export async function ensureContainerImage(engine: SandboxContainerEngine, image: string) {
   const result = await execContainer(engine, ["image", "inspect", image], {
     allowFailure: true,
   });
   if (result.code === 0) {
-    return "exists";
+    return;
   }
   const stderr = result.stderr.trim();
   const imageMissing =
     engine.id === "docker"
       ? stderr.toLowerCase().includes("no such image")
       : /no such image|image not known|image .* not found/iu.test(stderr);
-  if (imageMissing) {
-    return "missing";
-  }
-  if (engine.id === "docker" && isDockerDaemonUnavailable(stderr)) {
-    throw new Error(formatDockerDaemonUnavailableError(stderr));
-  }
-  if (engine.id === "docker") {
-    throw new Error(`Failed to inspect sandbox image: ${stderr}`);
-  }
-  throw new Error(`Failed to inspect sandbox image with ${engine.displayName}: ${stderr}`);
-}
-
-export async function ensureContainerImage(engine: SandboxContainerEngine, image: string) {
-  const imageState = await inspectContainerImage(engine, image);
-  if (imageState === "exists") {
-    return;
+  if (!imageMissing) {
+    if (engine.id === "docker" && isDockerDaemonUnavailable(stderr)) {
+      throw new Error(formatDockerDaemonUnavailableError(stderr));
+    }
+    if (engine.id === "docker") {
+      throw new Error(`Failed to inspect sandbox image: ${stderr}`);
+    }
+    throw new Error(`Failed to inspect sandbox image with ${engine.displayName}: ${stderr}`);
   }
   const missingImage =
     engine.id === "docker"
@@ -342,7 +326,6 @@ async function createSandboxContainer(params: {
   workspaceDir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   agentWorkspaceDir: string;
-  skillsWorkspaceDir?: string;
   scopeKey: string;
   configHash?: string;
   mountPlan: SandboxMountPlan;
@@ -597,20 +580,20 @@ async function ensureSandboxContainerLifecycle(
       }
     }
   }
+  const readyEntry = {
+    containerName,
+    backendId: engine.id,
+    ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
+    runtimeLabel: containerName,
+    sessionKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
+    createdAtMs: now,
+    lastUsedAtMs: now,
+    image: params.cfg.docker.image,
+    configLabelKind: "Image" as const,
+    configHash: expectedHash,
+  };
   if (!hasContainer) {
-    const readyEntry = {
-      containerName,
-      backendId: engine.id,
-      ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
-      runtimeLabel: containerName,
-      sessionKey: params.scopeKey,
-      workspaceDir: params.workspaceDir,
-      createdAtMs: now,
-      lastUsedAtMs: now,
-      image: params.cfg.docker.image,
-      configLabelKind: "Image" as const,
-      configHash: expectedHash,
-    };
     // Preserve managed mount custody and unfinished one-time setup before any
     // provider allocation, including a crash or revocation before publication.
     if (params.workspaceSource === "managed-worktree" || needsSetupReservation) {
@@ -629,7 +612,6 @@ async function ensureSandboxContainerLifecycle(
         workspaceDir: params.workspaceDir,
         workspaceAccess: params.cfg.workspaceAccess,
         agentWorkspaceDir: params.agentWorkspaceDir,
-        skillsWorkspaceDir: params.skillsWorkspaceDir,
         scopeKey: params.scopeKey,
         configHash: expectedHash,
         mountPlan,
@@ -690,16 +672,7 @@ async function ensureSandboxContainerLifecycle(
     }
   }
   await updateRegistry({
-    containerName,
-    backendId: engine.id,
-    ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
-    runtimeLabel: containerName,
-    sessionKey: params.scopeKey,
-    workspaceDir: params.workspaceDir,
-    createdAtMs: now,
-    lastUsedAtMs: now,
-    image: params.cfg.docker.image,
-    configLabelKind: "Image",
+    ...readyEntry,
     configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
   });
   params.assertCurrent?.();

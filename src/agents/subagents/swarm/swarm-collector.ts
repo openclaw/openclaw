@@ -1,3 +1,4 @@
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { consumeSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
@@ -51,6 +52,7 @@ export function prepareTerminatedCollectorLaunch(
 export function updateSwarmCollectorCompletion(
   entry: SubagentRunRecord,
   cfg: OpenClawConfig,
+  prepared?: { entry: SessionEntry | undefined },
 ): boolean {
   if (!entry.collect) {
     return false;
@@ -83,7 +85,9 @@ export function updateSwarmCollectorCompletion(
     ? (captured?.schemaError ??
       (captured?.structured === undefined ? "structured_output was not called" : undefined))
     : undefined;
-  const session = loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
+  const session = prepared
+    ? prepared.entry
+    : loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
   const usage =
     typeof session?.inputTokens === "number" || typeof session?.outputTokens === "number"
       ? {

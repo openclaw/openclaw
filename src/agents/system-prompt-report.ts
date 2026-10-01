@@ -46,17 +46,12 @@ function buildToolSchemaStats(
   } catch {
     schemaJson = "";
   }
+  const properties = (parameters as Record<string, unknown>).properties;
   const stats = {
     schemaChars: schemaJson.length,
     schemaHash: sha256Hex(schemaJson),
-    propertiesCount: (() => {
-      const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })(),
+    propertiesCount:
+      properties && typeof properties === "object" ? Object.keys(properties).length : null,
   };
   // Tool parameter objects are reused across runs; cache their stable size/hash
   // so report generation stays cheap during frequent prompt rebuilds.

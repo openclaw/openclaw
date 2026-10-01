@@ -85,7 +85,7 @@ const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
 const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
 const COMPUTER_USE_LIST_APPS_TOOL = "list_apps";
 const COMPUTER_USE_UNIFIED_JS_TOOL = "js";
-const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.getState();";
+const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.listApps();";
 
 export async function runCodexComputerUseLiveTest(params: {
   request: CodexComputerUseRequest;
@@ -98,6 +98,21 @@ export async function runCodexComputerUseLiveTest(params: {
   let lastError: unknown;
   let repair: CodexComputerUseRepairStatus | undefined;
   const probe = resolveComputerUseLiveTestProbe(params.tools);
+  const liveTestStatus = (attempts: number, error?: string): CodexComputerUseLiveTestStatus => ({
+    status: error === undefined ? "passed" : "failed",
+    ok: error === undefined,
+    attempted: true,
+    attempts,
+    timeoutMs: params.config.liveTestTimeoutMs,
+    retried: attempts > 1,
+    repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
+    durationMs: Math.max(0, Date.now() - startedAt),
+    message:
+      error === undefined
+        ? "Computer Use live test passed."
+        : `Computer Use live test failed after ${attempts} attempts: ${error}`,
+    ...(error === undefined ? {} : { error }),
+  });
   for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
     let threadId: string | undefined;
     let outcome:
@@ -135,17 +150,7 @@ export async function runCodexComputerUseLiveTest(params: {
       }
       outcome = {
         ok: true,
-        liveTest: {
-          status: "passed",
-          ok: true,
-          attempted: true,
-          attempts: attempt + 1,
-          timeoutMs: params.config.liveTestTimeoutMs,
-          retried: attempt > 0,
-          repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-          durationMs: Math.max(0, Date.now() - startedAt),
-          message: "Computer Use live test passed.",
-        },
+        liveTest: liveTestStatus(attempt + 1),
       };
     } catch (error) {
       outcome = { ok: false, error };
@@ -175,20 +180,11 @@ export async function runCodexComputerUseLiveTest(params: {
       repair = await repairComputerUseMcpRuntime(params.request, params.config);
     }
   }
-  const errorMessage = describeControlFailure(lastError);
   return {
-    liveTest: {
-      status: "failed",
-      ok: false,
-      attempted: true,
-      attempts: COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1,
-      timeoutMs: params.config.liveTestTimeoutMs,
-      retried: COMPUTER_USE_LIVE_TEST_RETRY_COUNT > 0,
-      repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-      durationMs: Math.max(0, Date.now() - startedAt),
-      message: `Computer Use live test failed after ${COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1} attempts: ${errorMessage}`,
-      error: errorMessage,
-    },
+    liveTest: liveTestStatus(
+      COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1,
+      describeControlFailure(lastError),
+    ),
     ...(repair ? { repair } : {}),
   };
 }

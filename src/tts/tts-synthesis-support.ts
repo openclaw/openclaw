@@ -403,6 +403,22 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   const attemptedProviders: string[] = [];
   const attempts: TtsProviderAttempt[] = [];
   const primaryProvider = providers[0]?.provider;
+  const recordSkipped = (
+    provider: TtsProvider,
+    skipped: Extract<TtsProviderOperation<TSynthesis>, { kind: "skip" }>,
+    binding: Pick<TtsProviderAttempt, "personaBinding">,
+  ) => {
+    errors.push(skipped.message);
+    attempts.push({
+      provider,
+      outcome: "skipped",
+      reasonCode: skipped.reasonCode,
+      persona: persona?.id,
+      ...binding,
+      error: skipped.message,
+    });
+    logVerbose(`${params.logLabel}: provider ${provider} skipped (${skipped.message})`);
+  };
   logVerbose(
     `${params.logLabel}: starting with provider ${primaryProvider}, fallbacks: ${
       providers
@@ -427,35 +443,19 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         providerRegistry,
       });
       if (resolvedProvider.kind === "skip") {
-        errors.push(resolvedProvider.message);
-        attempts.push({
+        recordSkipped(
           provider,
-          outcome: "skipped",
-          reasonCode: resolvedProvider.reasonCode,
-          persona: persona?.id,
-          ...(resolvedProvider.personaBinding
+          resolvedProvider,
+          resolvedProvider.personaBinding
             ? { personaBinding: resolvedProvider.personaBinding }
-            : {}),
-          error: resolvedProvider.message,
-        });
-        logVerbose(
-          `${params.logLabel}: provider ${provider} skipped (${resolvedProvider.message})`,
+            : {},
         );
         continue;
       }
 
       const operation = params.selectOperation({ provider, resolvedProvider });
       if (operation.kind === "skip") {
-        errors.push(operation.message);
-        attempts.push({
-          provider,
-          outcome: "skipped",
-          reasonCode: operation.reasonCode,
-          persona: persona?.id,
-          personaBinding: resolvedProvider.personaBinding,
-          error: operation.message,
-        });
-        logVerbose(`${params.logLabel}: provider ${provider} skipped (${operation.message})`);
+        recordSkipped(provider, operation, { personaBinding: resolvedProvider.personaBinding });
         continue;
       }
 

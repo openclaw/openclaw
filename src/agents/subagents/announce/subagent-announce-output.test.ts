@@ -587,21 +587,6 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain(`${"&lt;".repeat(2_000)}-required-tail\n</prompt-data>`);
   });
 
-  it("keeps failed ANNOUNCE_SKIP child completions visible", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:silent",
-        task: "silent task",
-        createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
-        execution: { outcome: { status: "error", error: "boom" } },
-      },
-    ]);
-
-    expect(findings).toContain("status: error: boom");
-    expect(findings).toContain("ANNOUNCE_SKIP");
-  });
-
   it("does not recover result text from delivery metadata after completion text is cleared", () => {
     const findings = buildChildCompletionFindings([
       {
@@ -641,33 +626,43 @@ describe("buildChildCompletionFindings", () => {
 
   it.each([
     {
-      name: "visible",
+      name: "required visible",
+      required: true,
       terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
       resultText: "older captured output",
       expected: "authoritative final output",
     },
     {
-      name: "silent",
+      name: "required silent",
+      required: true,
       terminalReply: { disposition: "silent" } as const,
       resultText: "NO_REPLY",
-      expected: undefined,
+      expected: "(no output)",
     },
     {
-      name: "empty",
+      name: "required empty",
+      required: true,
       terminalReply: { disposition: "empty" } as const,
       resultText: null,
-      expected: undefined,
+      expected: "(no output)",
+    },
+    {
+      name: "optional empty",
+      required: false,
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: "(no output)",
     },
   ])(
-    "keeps producer-owned $name terminal evidence authoritative over older fallback",
-    ({ terminalReply, resultText, expected }) => {
+    "preserves $name terminal evidence as a child finding",
+    ({ required, terminalReply, resultText, expected }) => {
       const findings = buildChildCompletionFindings([
         {
           childSessionKey: "agent:main:subagent:child",
           task: "child task",
           createdAt: 1,
           completion: {
-            required: true,
+            required,
             resultText,
             fallbackResultText: "older captured fallback",
             terminalReply,
@@ -676,16 +671,13 @@ describe("buildChildCompletionFindings", () => {
         },
       ]);
 
-      if (expected === undefined) {
-        expect(findings).toBeUndefined();
-      } else {
-        expect(findings).toContain(expected);
-        expect(findings).not.toContain("older captured output");
-      }
+      expect(findings).toContain(expected);
+      expect(findings).not.toContain("older captured output");
+      expect(findings).not.toContain("older captured fallback");
     },
   );
 
-  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
+  it.each(["HEARTBEAT_OK"])(
     "does not override an intentional %s completion with fallback output",
     (resultText) => {
       const findings = buildChildCompletionFindings([
@@ -711,7 +703,7 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
+        completion: { terminalReply: { disposition: "silent" } },
         execution: { outcome: { status: "ok" } },
       },
       {

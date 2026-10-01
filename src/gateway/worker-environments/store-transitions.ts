@@ -154,10 +154,10 @@ export function createWorkerEnvironmentTransitionOps({
         ) {
           throw new Error(`Worker environment ${environmentId} owner epoch changed`);
         }
-        if (to === "attached" && current.destroyRequestedAtMs !== null) {
-          throw new Error("Cannot attach worker after destroy is requested");
-        }
         if (to === "attached") {
+          if (current.destroyRequestedAtMs !== null) {
+            throw new Error("Cannot attach worker after destroy is requested");
+          }
           if (hasWorkerEnvironmentSessionAttachment(db, environmentId)) {
             throw new Error(
               "Conversation-attached environments cannot be adopted for session placement",
@@ -337,7 +337,7 @@ export function createWorkerEnvironmentTransitionOps({
           updated_at_ms: updatedAtMs,
           state_changed_at_ms: updatedAtMs,
           idle_since_at_ms: to === "idle" ? updatedAtMs : null,
-          last_error: "lastError" in patch ? patch.lastError?.trim() || null : null,
+          last_error: patch.lastError?.trim() || null,
         });
         if (patch.sshEndpoint !== undefined) {
           replaceSshFallbackPorts(db, environmentId, sshEndpoint?.fallbackPorts ?? []);

@@ -1,4 +1,3 @@
-// Prepares parent-context fork metadata for guarded reply session initialization.
 import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {

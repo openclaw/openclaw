@@ -160,9 +160,7 @@ function pushToolElevatedPosture(
   params: ToolPostureParams,
 ): void {
   const localElevated = asNonArrayRecord(params.tools.elevated);
-  const inheritedElevated = isRecord(params.inheritedTools.elevated)
-    ? params.inheritedTools.elevated
-    : {};
+  const inheritedElevated = asNonArrayRecord(params.inheritedTools.elevated);
   const localEnabled = readBoolean(localElevated.enabled);
   const inheritedEnabled = readBoolean(inheritedElevated.enabled);
   const effectiveEnabled =
@@ -178,9 +176,7 @@ function pushToolElevatedPosture(
   });
 
   const localAllowFrom = asNonArrayRecord(localElevated.allowFrom);
-  const inheritedAllowFrom = isRecord(inheritedElevated.allowFrom)
-    ? inheritedElevated.allowFrom
-    : {};
+  const inheritedAllowFrom = asNonArrayRecord(inheritedElevated.allowFrom);
   const providers = [
     ...new Set([...Object.keys(inheritedAllowFrom), ...Object.keys(localAllowFrom)]),
   ].toSorted((a, b) => a.localeCompare(b));
@@ -276,8 +272,8 @@ function pushToolAlsoAllowPostureList(
   const inheritedValue = params.inheritedTools.alsoAllow;
   const localConfigured = Array.isArray(localValue);
   const inheritedConfigured = Array.isArray(inheritedValue);
-  const localEntries = localConfigured ? readStringArray(localValue) : [];
-  const inheritedEntries = inheritedConfigured ? readStringArray(inheritedValue) : [];
+  const localEntries = readStringArray(localValue);
+  const inheritedEntries = readStringArray(inheritedValue);
   const inherited = !localConfigured && inheritedConfigured;
   entries.push({
     id: `${params.id}-alsoAllow`,

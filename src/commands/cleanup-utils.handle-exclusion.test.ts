@@ -99,7 +99,9 @@ it.skipIf(process.platform === "win32")(
       await expect(attemptWrite()).resolves.toEqual({ committed: false, errcode: 5 });
       resumeRemoval.resolve();
       await expect(deleting).resolves.toBe(true);
-      await expect(attemptWrite()).resolves.toEqual({ committed: false, errcode: 1032 });
+      // Apple's SQLite VFS reports an unlinked vnode; bundled SQLite reports a moved database.
+      const removedFileCode = process.versions.bun && process.platform === "darwin" ? 6922 : 1032;
+      await expect(attemptWrite()).resolves.toEqual({ committed: false, errcode: removedFileCode });
       expect(fs.existsSync(stateDir)).toBe(false);
       const closed = once(child, "close", { signal: AbortSignal.timeout(10_000) });
       child.send("close");

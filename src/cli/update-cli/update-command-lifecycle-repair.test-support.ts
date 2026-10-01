@@ -131,12 +131,14 @@ export function registerRepairCustodyTests(mocks: {
         finish,
         release,
         releaseState,
+        repairSqliteNoCow: vi.fn(async () => {}),
+        cleanupRetainedRuntimes: vi.fn(async () => {}),
       });
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
       // Observe reconciliation of the selected old run without inventing a live
       // recovery record; the finalizer's own invocation still uses the real ledger.
       const ledger = await import("../../infra/update-run-ledger.js");
-      const reconcile = vi.spyOn(ledger, "reconcileAbandonedUpdateRuns").mockReturnValue([]);
+      const reconcile = vi.spyOn(ledger, "reconcileAbandonedUpdateRunsAsync").mockResolvedValue([]);
       const acknowledge = vi.spyOn(ledger, "acknowledgeAbandonedUpdateRun").mockReturnValue(true);
       if (phase === "convergence") {
         vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async () => {

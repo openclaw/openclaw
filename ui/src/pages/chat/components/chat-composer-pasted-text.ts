@@ -69,6 +69,14 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
   const removeLabel = att.fileName?.trim()
     ? t("chat.composer.removeNamedAttachment", { name: att.fileName })
     : t("chat.composer.removeAttachment");
+  const remove = () => {
+    if (!current() || props.disabled) {
+      return;
+    }
+    const next = currentAttachments(props).filter((item) => item.id !== att.id);
+    releaseChatAttachmentPayload(att.id);
+    props.onAttachmentsChange?.(next);
+  };
   const renderRestoreAction = () => html`<button
     class="chat-attachment-text-action"
     type="button"
@@ -109,13 +117,7 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
           type="button"
           aria-label=${removeLabel}
           ?disabled=${props.disabled}
-          @click=${() => {
-            if (current() && !props.disabled) {
-              const next = currentAttachments(props).filter((item) => item.id !== att.id);
-              releaseChatAttachmentPayload(att.id);
-              props.onAttachmentsChange?.(next);
-            }
-          }}
+          @click=${remove}
         >
           ${icons.trash}
         </button>`,
@@ -127,5 +129,16 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
     .scope=${att.id}
     .onOpen=${open}
     .composerAction=${renderRestoreAction()}
+    .composerRemoveAction=${html`<openclaw-tooltip .content=${removeLabel}>
+      <button
+        class="chat-attachment-remove"
+        type="button"
+        aria-label=${removeLabel}
+        ?disabled=${props.disabled}
+        @click=${remove}
+      >
+        ${icons.x}
+      </button>
+    </openclaw-tooltip>`}
   ></openclaw-chat-pasted-text>`;
 }

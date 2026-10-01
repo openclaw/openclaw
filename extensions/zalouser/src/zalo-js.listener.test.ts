@@ -141,45 +141,54 @@ describe("Zalo listener startup lifecycle", () => {
 });
 
 it("settles a real zca-js handshake timeout and reconnects the same monitor profile", async () => {
-  // Only account restoration is stubbed. zca-js, ws, TCP, listener ownership,
-  // monitor settlement and durable ingress are real; no Zalo account is contacted.
-  const require = createRequire(import.meta.url);
-  const { Listener } = require(
-    path.resolve(path.dirname(require.resolve("zca-js")), "apis/listen.cjs"),
-  ) as { Listener: new (context: unknown, urls: string[]) => API["listener"] & EventEmitter };
-  const { createContext } = require(
-    path.resolve(path.dirname(require.resolve("zca-js")), "context.cjs"),
-  ) as { createContext: () => Record<string, unknown> };
-  const server = createServer();
-  const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
-  const sockets = new Set<Socket>();
-  const trace: string[] = [];
-  const connected = createDeferred<void>();
-  let upgrades = 0;
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-  });
-  server.on("upgrade", (request, socket, head) => {
-    upgrades++;
-    trace.push(`transport:upgrade:${upgrades}`);
-    if (upgrades > 1) {
-      websocketServer.handleUpgrade(request, socket, head, () => {});
+  await withZalouserIngressTestQueue(async (ingressQueue) => {
+    await seedSession();
+    // Only account restoration is stubbed. zca-js, ws, TCP, listener ownership,
+    // monitor settlement and durable ingress are real; only deadline time is controlled.
+    const require = createRequire(import.meta.url);
+    const { Listener } = require(
+      path.resolve(path.dirname(require.resolve("zca-js")), "apis/listen.cjs"),
+    ) as { Listener: new (context: unknown, urls: string[]) => API["listener"] & EventEmitter };
+    const { createContext } = require(
+      path.resolve(path.dirname(require.resolve("zca-js")), "context.cjs"),
+    ) as { createContext: () => Record<string, unknown> };
+    const server = createServer();
+    const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+    const sockets = new Set<Socket>();
+    const trace: string[] = [];
+    const firstUpgrade = createDeferred<void>();
+    const connected = createDeferred<void>();
+    let upgrades = 0;
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+    server.on("upgrade", (request, socket, head) => {
+      upgrades++;
+      trace.push(`transport:upgrade:${upgrades}`);
+      if (upgrades === 1) {
+        firstUpgrade.resolve();
+      } else {
+        websocketServer.handleUpgrade(request, socket, head, () => {});
+      }
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected loopback address");
     }
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected loopback address");
-  }
-  const listeners: Array<API["listener"] & EventEmitter> = [];
-  const abort = new AbortController();
-  let second: ReturnType<typeof monitorZalouserProvider> | undefined;
-  try {
-    await withZalouserIngressTestQueue(async (ingressQueue) => {
-      await seedSession();
+    const listeners: Array<API["listener"] & EventEmitter> = [];
+    const closed: Promise<void>[] = [];
+    const abort = new AbortController();
+    let first: ReturnType<typeof monitorZalouserProvider> | undefined;
+    let second: ReturnType<typeof monitorZalouserProvider> | undefined;
+    try {
+      // Leave nextTick and I/O real: CONNECTING ws errors must reach the production handler.
+      vi.useFakeTimers({
+        toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      });
       createZaloMock.mockImplementation(async () => ({
         login: async () => {
           const listener = new Listener(
@@ -197,6 +206,10 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
             trace.push("transport:connected");
             connected.resolve();
           });
+          const terminal = createDeferred<void>();
+          // events.once would add an error listener and mask the unhandled-error regression.
+          listener.once("closed", () => terminal.resolve());
+          closed.push(terminal.promise);
           listeners.push(listener);
           return sessionApi(listener);
         },
@@ -213,42 +226,69 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
         abortSignal: abort.signal,
         ingressQueue,
       };
-      const started = Date.now();
-      const first = monitorZalouserProvider(options);
-      await expect(first).rejects.toThrow("Zalo listener websocket handshake timed out");
-      trace.push("monitor:rejected");
-      expect(Date.now() - started).toBeGreaterThanOrEqual(29_000);
+      let firstSettled = false;
+      first = monitorZalouserProvider(options);
+      const firstError = first.then(
+        () => {
+          firstSettled = true;
+          return null;
+        },
+        (error: unknown) => {
+          firstSettled = true;
+          return error;
+        },
+      );
+      await firstUpgrade.promise;
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(firstSettled).toBe(false);
+      expect(errors).not.toHaveBeenCalled();
       expect(upgrades).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(errors).toHaveBeenCalledOnce();
+      expect(await firstError).toEqual(new Error("Zalo listener websocket handshake timed out"));
+      trace.push("monitor:rejected");
       // Stop during CONNECTING emits ws's error on nextTick before closed.
       // There is deliberately no test error listener masking an unhandled error.
-      await vi.waitFor(() => expect(listeners[0]?.listenerCount("error")).toBe(0));
+      await closed[0];
+      expect(listeners[0]?.listenerCount("error")).toBe(0);
       expect(errors).toHaveBeenCalledOnce();
       second = monitorZalouserProvider(options);
-      await connected.promise;
+      await Promise.race([
+        connected.promise,
+        second.then(() => {
+          throw new Error("Zalouser monitor exited before the retry connected");
+        }),
+      ]);
       expect(upgrades).toBe(2);
       expect(listeners).toHaveLength(2);
       trace.push("monitor:retry-started");
       abort.abort();
       await second;
-      await vi.waitFor(() => expect(listeners[1]?.listenerCount("error")).toBe(0));
+      await closed[1];
+      expect(listeners[1]?.listenerCount("error")).toBe(0);
       expect(errors).toHaveBeenCalledOnce();
       trace.push("monitor:abort-settled");
-      console.log(JSON.stringify({ proof: "zca-js-2.1.2-real-transport", trace }));
-    });
-  } finally {
-    abort.abort();
-    await second?.catch(() => {});
-    for (const listener of listeners) {
-      listener.stop();
+      console.log(JSON.stringify({ proof: "zca-js-real-transport-controlled-clock", trace }));
+    } finally {
+      try {
+        abort.abort();
+        await first?.catch(() => {});
+        await second?.catch(() => {});
+        for (const listener of listeners) {
+          listener.stop();
+        }
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await new Promise<void>((resolve) => {
+          websocketServer.close(() => resolve());
+        });
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     }
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    await new Promise<void>((resolve) => {
-      websocketServer.close(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
+  });
 }, 60_000);

@@ -34,10 +34,11 @@ import {
   updateTransition,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-} from "./placement-session-tool-operations.js";
+} from "./placement-session-tool-operations.kernel.js";
 import {
   canTransitionWorkerSessionPlacement,
   type WorkerSessionPlacementState,
@@ -58,7 +59,7 @@ import {
   createPlacementTurnClaimOps,
   registerWorkerTurnClaimClosedHandler,
 } from "./placement-turn-claims.js";
-import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
+import { createPlacementWorkspaceJournalWorkerOps } from "./placement-workspace-journal-store.js";
 import { createPlacementWorkspaceReservationOps } from "./placement-workspace-reservation.js";
 import {
   createPlacementWorkspaceResultOps,
@@ -125,6 +126,11 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
+    ...createPlacementSessionToolOperationOps({
+      path,
+      instanceId: runtime.instanceId,
+      now: options.now,
+    }),
     ...createPlacementTurnClaimWorkerOps({
       path,
       instanceId: runtime.instanceId,
@@ -132,7 +138,7 @@ export function createWorkerSessionPlacementStore(
     }),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
-    ...createPlacementWorkspaceJournalOps(runtime),
+    ...createPlacementWorkspaceJournalWorkerOps({ path, now: options.now }),
     ...createPlacementWorkspaceResultOps(runtime),
 
     registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void {

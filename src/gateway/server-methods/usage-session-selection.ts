@@ -50,26 +50,19 @@ export function resolveSessionUsageTarget(
   const agentId =
     parsed?.agentId ?? agentIdHint ?? resolveSessionAgentId({ config, sessionKey: key });
   const sessionId = entry?.sessionId ?? parsed?.rest ?? key;
-  const sessionFile = entry
-    ? resolveExistingUsageSessionFile({
-        agentId,
-        sessionId,
-        sessionTarget: {
-          agentId,
-          sessionId,
-          sessionKey: canonicalKey,
-          storePath,
-        },
-      })
-    : resolveExistingUsageSessionFile({
-        agentId,
-        sessionId,
-        sessionFile: resolveSessionFilePathCore(
-          sessionId,
-          undefined,
-          resolveSessionFilePathOptions({ storePath, agentId }),
-        ),
-      });
+  const sessionFile = resolveExistingUsageSessionFile({
+    agentId,
+    sessionId,
+    ...(entry
+      ? { sessionTarget: { agentId, sessionId, sessionKey: canonicalKey, storePath } }
+      : {
+          sessionFile: resolveSessionFilePathCore(
+            sessionId,
+            undefined,
+            resolveSessionFilePathOptions({ storePath, agentId }),
+          ),
+        }),
+  });
   return sessionFile ? { entry, agentId, sessionId, sessionFile } : undefined;
 }
 
@@ -388,7 +381,6 @@ export async function selectUsageSessions(params: {
     }
   }
 
-  // Sort by most recent first
   mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
   // Carry physical targets through filtering; only emitted rows will hydrate context.

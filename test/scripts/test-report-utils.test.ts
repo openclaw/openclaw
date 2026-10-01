@@ -113,6 +113,13 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
         path.join(bin, process.platform === "win32" ? "node.exe" : "node"),
         "file",
       );
+      if (process.versions.bun) {
+        fs.symlinkSync(
+          process.execPath,
+          path.join(bin, process.platform === "win32" ? "bun.exe" : "bun"),
+          "file",
+        );
+      }
       const repoRoot = process.cwd();
       const config = path.join(root, "vitest.config.mjs");
       const reportPath = path.join(root, "report.json");

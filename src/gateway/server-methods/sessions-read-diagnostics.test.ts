@@ -129,12 +129,12 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
     await initializeSessionReadContext(context);
     await getSessionRowProjection(context)!.ensureMaterialized();
     const owner = getSessionRowProjection(context)!;
-    const ensure = owner.ensureMaterialized.bind(owner);
+    const ensure = owner.prepareSelection.bind(owner);
     const warn = mode === "slow-warning";
     const waitMs = warn ? 1_100 : 0;
     setDiagnosticsEnabledForProcess(warn);
     vi.mocked(sessionLog.isEnabled).mockReturnValue(warn);
-    vi.spyOn(owner, "ensureMaterialized").mockImplementation(async () => {
+    vi.spyOn(owner, "prepareSelection").mockImplementation(async () => {
       await ensure();
       clock += waitMs;
     });
@@ -266,13 +266,13 @@ test("captures a fast failed readiness wait while preserving the original error"
     setDiagnosticsEnabledForProcess(false);
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const failure = new Error("synthetic-private-projection-error");
-    vi.spyOn(getSessionRowProjection(context)!, "ensureMaterialized").mockImplementationOnce(
-      async () => {
+    const readiness = vi
+      .spyOn(getSessionRowProjection(context)!, "prepareSelection")
+      .mockImplementationOnce(async () => {
         clock += 25;
         cpu.user += 500_000;
         throw failure;
-      },
-    );
+      });
     const events: unknown[] = [];
     const diagnostics = channel("openclaw.session.list");
     const collect = (event: unknown) => events.push(event);
@@ -281,6 +281,7 @@ test("captures a fast failed readiness wait while preserving the original error"
       await expect(
         listSessions({ client, context, request: { agentId: "main", limit: 1 } }),
       ).rejects.toBe(failure);
+      expect(readiness).toHaveBeenCalledOnce();
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
         operation: "sessions.list",
@@ -380,20 +381,22 @@ test("attributes concurrent presentation and readiness waits to each request tra
     await initializeSessionReadContext(context);
     await getSessionRowProjection(context)!.ensureMaterialized();
     const projection = getSessionRowProjection(context)!;
-    const ensure = projection.ensureMaterialized.bind(projection);
+    const ensure = projection.prepareSelection.bind(projection);
     const release = createDeferredCore();
     const waiting = createDeferredCore();
     let waitingCount = 0;
-    const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementation(async () => {
-      if (++waitingCount === 2) {
-        waiting.resolve();
-      }
-      await release.promise;
-      await ensure();
-      queueMicrotask(() => {
-        cpu.user += 500_000;
+    const readiness = vi
+      .spyOn(projection, "prepareSelection")
+      .mockImplementation(async (...args) => {
+        if (++waitingCount === 2) {
+          waiting.resolve();
+        }
+        await release.promise;
+        await ensure(...args);
+        queueMicrotask(() => {
+          cpu.user += 500_000;
+        });
       });
-    });
     const presentation = controlProjectionClock();
     const traces = [createDiagnosticTraceContext(), createDiagnosticTraceContext()];
     const pending = traces.map((trace) =>
@@ -471,19 +474,22 @@ test("reports fresh visibility after a readiness yield without charging the wait
     await getSessionRowProjection(context)!.ensureMaterialized();
     const projection = getSessionRowProjection(context)!;
     controlProjectionClock();
-    const ensure = projection.ensureMaterialized.bind(projection);
-    vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-      for (const name of ["first", "second", "third"]) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:repair-${name}` },
-          { visibility: "draft" },
-        );
-      }
-      await ensure();
-      clock += 2_000;
-      cpu.user += 300_000;
-    });
+    const ensure = projection.prepareSelection.bind(projection);
+    const readiness = vi
+      .spyOn(projection, "prepareSelection")
+      .mockImplementationOnce(async (...args) => {
+        for (const name of ["first", "second", "third"]) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:repair-${name}` },
+            { visibility: "draft" },
+          );
+        }
+        await ensure(...args);
+        clock += 2_000;
+        cpu.user += 300_000;
+      });
     const result = await listSessions({ client, context, request: { agentId: "main", limit: 1 } });
+    expect(readiness).toHaveBeenCalled();
     expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:repair-fourth"]);
     expect(records).toHaveLength(1);
     expect(records[0]?.fields).toMatchObject({
@@ -536,19 +542,22 @@ test.each([
         throw new Error("synthetic sink failure");
       });
     }
-    const ensure = projection.ensureMaterialized.bind(projection);
-    vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-      await ensure();
-      clock += 1_100;
-      if (mode === "disabled-during-request") {
-        setDiagnosticsEnabledForProcess(false);
-      }
-    });
+    const ensure = projection.prepareSelection.bind(projection);
+    const readiness = vi
+      .spyOn(projection, "prepareSelection")
+      .mockImplementationOnce(async (...args) => {
+        await ensure(...args);
+        clock += 1_100;
+        if (mode === "disabled-during-request") {
+          setDiagnosticsEnabledForProcess(false);
+        }
+      });
     const result = await listSessions({
       client,
       context,
       request: { agentId: "main", limit: 1 },
     });
+    expect(readiness).toHaveBeenCalled();
     expect(result.sessions).toHaveLength(1);
     if (mode === "sink-throws" || cpuThrows) {
       expect(sessionLog.warn).toHaveBeenCalledOnce();

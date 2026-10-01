@@ -55,14 +55,12 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
   addCandidate(trimmed);
   const structuredSeeds = [trimmed];
 
-  const xmlFragmentOffset = ['"', "'", "<"]
-    .map((separator) => trimmed.indexOf(separator))
-    .filter((offset) => offset > 0)
-    .reduce<number | undefined>(
-      (earliest, offset) => (earliest === undefined || offset < earliest ? offset : earliest),
-      undefined,
-    );
-  if (xmlFragmentOffset !== undefined) {
+  const xmlFragmentOffset = Math.min(
+    ...['"', "'", "<"]
+      .map((separator) => trimmed.indexOf(separator))
+      .filter((offset) => offset > 0),
+  );
+  if (Number.isFinite(xmlFragmentOffset)) {
     const prefix = trimmed.slice(0, xmlFragmentOffset);
     addCandidate(prefix);
     structuredSeeds.push(prefix);
@@ -73,10 +71,8 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
     addCandidate(normalizedDelimiter);
 
     const segments = normalizeStringEntries(normalizedDelimiter.split("."));
-    if (segments.length > 1) {
-      for (let index = 1; index < segments.length; index += 1) {
-        addCandidate(segments.slice(index).join("."));
-      }
+    for (let index = 1; index < segments.length; index += 1) {
+      addCandidate(segments.slice(index).join("."));
     }
   }
 

@@ -1,14 +1,14 @@
-import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
+import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
-import { syncPopoverLabel } from "../../../components/web-awesome-popover.ts";
+import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import {
+  personalGitHubPublicationSelection,
   selectedGitHubPublisher,
   type GitHubPublicationView,
 } from "../../../lib/sessions/github-publication-controller.ts";
-import { generateUUID } from "../../../lib/uuid.ts";
 
 function sourceLabel(source: string): string {
   return t(
@@ -44,52 +44,71 @@ export function renderGitHubPublicationAction(publication: GitHubPublicationView
           : nothing
       }`;
   }
-  if (publication.result || publication.locked) {
+  const personal = personalGitHubPublicationSelection(publication.options);
+  const shared = publication.options?.shared;
+  if (publication.result || publication.locked || !publication.onSelect || !shared || !personal) {
     return renderPublicationButton(publication);
   }
+  const choices = [
+    { source: "shared" as const, account: shared, label: sourceLabel(shared.source) },
+    { source: "personal" as const, account: personal.account, label: sourceLabel("personal") },
+  ];
   return html`
     ${renderPublicationButton(publication)}
-    <button
-      class="btn btn--ghost btn--icon chat-icon-btn"
-      type="button"
-      aria-label=${t("githubPublication.account")}
-      aria-haspopup="dialog"
-      aria-expanded="false"
-    >
-      ${icons.chevronDown}
-    </button>
-    <wa-popover
-      ${ref(bindPublicationPopover)}
-      style="--max-width: min(320px, calc(100vw - 16px))"
+    <wa-dropdown
+      class="chat-pr__accounts"
       placement="top-end"
-      @wa-show=${syncPublicationExpanded}
-      @wa-hide=${syncPublicationExpanded}
+      aria-label=${t("githubPublication.account")}
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        const source = event.detail.item.value;
+        if (source === "shared" || source === "personal") {
+          publication.onSelect?.(source);
+        }
+      }}
     >
-      ${renderPublicationAccounts(publication)}
-    </wa-popover>
+      <button
+        slot="trigger"
+        class="btn btn--ghost btn--icon chat-icon-btn"
+        type="button"
+        aria-label=${t("githubPublication.account")}
+        ?disabled=${publication.activity !== null}
+      >
+        ${icons.chevronDown}
+      </button>
+      ${choices.map(({ source, account, label }) => {
+        const selected = publication.selection?.source === source;
+        return html`
+          <wa-dropdown-item
+            class="session-menu__item"
+            value=${source}
+            role="menuitemradio"
+            aria-checked=${String(selected)}
+            ?disabled=${publication.activity !== null}
+            ${ref((element) => syncDropdownItemRadio(element, selected))}
+          >
+            <span class="session-menu__text"
+              >@${account.login}${shared.login === personal.account.login ? html` · ${label}` : nothing}</span
+            >
+            <span slot="details" class="session-menu__icon" aria-hidden="true">
+              ${selected ? icons.check : nothing}
+            </span>
+          </wa-dropdown-item>
+        `;
+      })}
+    </wa-dropdown>
   `;
 }
 
-function bindPublicationPopover(element: Element | undefined) {
-  const trigger = element?.previousElementSibling;
-  if (element instanceof WaPopover && trigger instanceof HTMLButtonElement) {
-    trigger.id ||= `github-publisher-${generateUUID()}`;
-    element.id ||= `${trigger.id}-popover`;
-    element.for = trigger.id;
-    trigger.setAttribute("aria-controls", element.id);
-    syncPopoverLabel(element);
-  }
-}
-
-function syncPublicationExpanded(event: Event) {
-  const popover = event.currentTarget;
-  if (popover instanceof WaPopover) {
-    popover.anchor?.setAttribute("aria-expanded", String(popover.open));
-  }
+function publicationButtonSelection(publication: GitHubPublicationView) {
+  return (
+    publication.selection ??
+    (!publication.options?.shared ? personalGitHubPublicationSelection(publication.options) : null)
+  );
 }
 
 function renderPublicationButton(publication: GitHubPublicationView) {
-  const { result, selection, activity } = publication;
+  const { result, activity } = publication;
+  const selection = publicationButtonSelection(publication);
   const busy = activity !== null;
   const pendingLabel = t(activity === "read" ? "common.loading" : "chat.pullRequests.publishing");
   let action: { click: (() => void) | undefined; label: string; disabled: boolean };
@@ -120,7 +139,9 @@ function renderPublicationButton(publication: GitHubPublicationView) {
         ? pendingLabel
         : publication.locked
           ? t("chat.pullRequests.retryPublication")
-          : t("chat.pullRequests.publishPr"),
+          : !publication.selection && selection?.source === "personal"
+            ? t("githubPublication.publishAs", { account: selection.account.login })
+            : t("chat.pullRequests.publishPr"),
     };
   }
   // Accepted shared requests retain their status button even when no replay callback is available.
@@ -147,82 +168,6 @@ function renderPublicationAccount(publication: GitHubPublicationView) {
     : nothing;
 }
 
-function renderPublicationAccounts(publication: GitHubPublicationView) {
-  const { options, selection, result, activity, locked } = publication;
-  const busy = activity !== null;
-  const personal = options?.personal;
-  const personalAccount =
-    personal?.state === "connected" && personal.generation ? personal.account : null;
-  const canChoose =
-    publication.onSelect && options && (!selection || (options.shared && personalAccount));
-  return html`<div class="stack muted">
-    ${renderPublicationAccount(publication)}
-    ${
-      canChoose
-        ? html`<label>
-            <span class="sr-only">${t("githubPublication.account")}</span>
-            <select
-              class="settings-select"
-              aria-label=${t("githubPublication.account")}
-              .value=${selection?.source ?? ""}
-              ?disabled=${busy || locked}
-              @change=${(event: Event) => {
-                if (!(event.currentTarget instanceof HTMLSelectElement)) {
-                  return;
-                }
-                const source = event.currentTarget.value;
-                if (source === "shared" || source === "personal") {
-                  publication.onSelect?.(source);
-                }
-              }}
-            >
-              ${
-                !selection
-                  ? html`<option value="" disabled>${t("githubPublication.choose")}</option>`
-                  : nothing
-              }
-              ${
-                options.shared
-                  ? html`<option value="shared">
-                      ${sourceLabel(options.shared.source)} · @${options.shared.login}
-                    </option>`
-                  : nothing
-              }
-              ${
-                personalAccount
-                  ? html`<option value="personal">
-                      ${t("githubPublication.personal")} · @${personalAccount.login}
-                    </option>`
-                  : nothing
-              }
-            </select>
-          </label>`
-        : nothing
-    }
-    ${
-      !publication.personalReady
-        ? html`<span>${t("githubPublication.personalWorkspace")}</span>`
-        : nothing
-    }
-    ${
-      !result && options
-        ? html`<span>${t("githubPublication.scopeHelp")}</span> ${
-              !personalAccount
-                ? html`<span
-                    >${t(
-                      personal === null
-                        ? "githubPublication.unidentified"
-                        : "githubPublication.connectHelp",
-                    )}</span
-                  >`
-                : nothing
-            }`
-        : nothing
-    }
-    ${!options && !busy ? renderPublicationRefresh(publication) : nothing}
-  </div>`;
-}
-
 function renderPublicationRefresh(publication: GitHubPublicationView) {
   return html`<button class="btn btn--sm" type="button" @click=${publication.onRefresh}>
     ${t("githubPublication.refresh")}
@@ -230,17 +175,28 @@ function renderPublicationRefresh(publication: GitHubPublicationView) {
 }
 
 export function renderGitHubPublicationDetails(publication: GitHubPublicationView) {
-  const { selection, result, confirmation, activity, locked, error } = publication;
+  const { result, confirmation, activity, locked, error, options } = publication;
+  const selection = publicationButtonSelection(publication);
   if (result?.status === "published" && !error) {
     return nothing;
   }
   const busy = activity !== null;
   const personalUnavailable = selection?.source === "personal" && !publication.personalReady;
-  if (!result && !confirmation && !error && !locked && !personalUnavailable) {
+  const noAccount =
+    options &&
+    !options.shared &&
+    !personalGitHubPublicationSelection(options) &&
+    !selection &&
+    !result &&
+    !locked &&
+    !busy &&
+    publication.canWrite;
+  if (!result && !confirmation && !error && !locked && !personalUnavailable && !noAccount) {
     return nothing;
   }
   return html`<div class="chat-pr__publication-outcome" data-state=${result?.status ?? "selection"}>
-    ${renderPublicationAccount(publication)}
+    ${result || locked || error ? renderPublicationAccount(publication) : nothing}
+    ${noAccount ? html`<span>${t(options.personal === null ? "githubPublication.unidentified" : "githubPublication.connectHelp")}</span>` : nothing}
     ${
       result && result.status !== "published"
         ? html`<span role="status">${result.message}</span>`

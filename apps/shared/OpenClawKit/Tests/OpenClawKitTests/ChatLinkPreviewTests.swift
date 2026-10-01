@@ -536,3 +536,154 @@ private func makeChatLinkPreviewPNG(width: Int, height: Int) throws -> Data {
     #expect(CGImageDestinationFinalize(destination))
     return data as Data
 }
+
+@MainActor
+struct ChatLinkPreviewIdentityTests {
+    @Test(arguments: [false, true])
+    func `replacement URL retires metadata and image independently of expansion`(collapsed: Bool) async throws {
+        let first = try #require(URL(string: "https://preview.test/first"))
+        let second = try #require(URL(string: "https://preview.test/second"))
+        let attempts = ChatLinkPreviewFetchCounter()
+        let model = ChatLinkPreviewModel(
+            metadataFetch: { url in
+                await attempts.increment()
+                return .loaded(ChatLinkPreviewMetadata(
+                    url: url,
+                    title: url.lastPathComponent,
+                    description: nil,
+                    imageURL: url.appendingPathComponent("cover.png")))
+            },
+            imageFetch: { _ in .failed })
+        model.expanded = true
+        await model.loadMetadata(first)
+        await model.loadImage()
+        #expect(model.imageResult != nil)
+
+        model.expanded = !collapsed
+        await model.loadMetadata(second)
+
+        #expect(model.expanded == !collapsed)
+        #expect(await attempts.value == (collapsed ? 1 : 2))
+        if collapsed {
+            #expect(model.result == nil)
+            #expect(model.imageURL == nil)
+        } else {
+            #expect(model.result?.metadata?.url == second)
+        }
+        #expect(model.imageResult == nil)
+        model.expanded = true
+        await model.loadMetadata(second)
+        #expect(model.result?.metadata?.url == second)
+        #expect(model.result?.metadata?.title == "second")
+        #expect(await attempts.value == 2)
+        await model.loadImage()
+        #expect(model.imageResult != nil)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `superseded metadata cannot publish after a URL change`(
+        revisitsFirst: Bool,
+        collapsed: Bool) async throws
+    {
+        let first = try #require(URL(string: "https://preview.test/first"))
+        let second = try #require(URL(string: "https://preview.test/second"))
+        let (entered, continuation) = AsyncStream<Void>.makeStream()
+        defer { continuation.finish() }
+        let gate = ChatLinkPreviewFirstLoadGate(entered: continuation)
+        let model = ChatLinkPreviewModel(metadataFetch: { url in
+            let attempt = await gate.waitForFirstLoad()
+            return .loaded(ChatLinkPreviewMetadata(
+                url: url,
+                title: "Attempt \(attempt)",
+                description: nil,
+                imageURL: nil))
+        }, imageFetch: { _ in .failed })
+        model.expanded = true
+        let pending = Task { await model.loadMetadata(first) }
+        var iterator = entered.makeAsyncIterator()
+        _ = await iterator.next()
+        model.expanded = !collapsed
+        await model.loadMetadata(second)
+        if revisitsFirst { await model.loadMetadata(first) }
+        await gate.release()
+        await pending.value
+
+        if collapsed {
+            #expect(model.result == nil)
+            model.expanded = true
+            await model.loadMetadata(revisitsFirst ? first : second)
+        }
+        #expect(model.result?.metadata?.url == (revisitsFirst ? first : second))
+        #expect(model.result?.metadata?.title == (revisitsFirst && !collapsed ? "Attempt 3" : "Attempt 2"))
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `superseded image cannot publish after a URL change`(
+        revisitsFirst: Bool,
+        collapsed: Bool) async throws
+    {
+        let first = try #require(URL(string: "https://preview.test/first"))
+        let second = try #require(URL(string: "https://preview.test/second"))
+        let (entered, continuation) = AsyncStream<Void>.makeStream()
+        defer { continuation.finish() }
+        let gate = ChatLinkPreviewFirstLoadGate(entered: continuation)
+        let model = ChatLinkPreviewModel(metadataFetch: { url in
+            .loaded(ChatLinkPreviewMetadata(
+                url: url,
+                title: nil,
+                description: nil,
+                imageURL: url.appendingPathComponent("cover.png")))
+        }, imageFetch: { _ in
+            _ = await gate.waitForFirstLoad()
+            return .failed
+        })
+        model.expanded = true
+        await model.loadMetadata(first)
+        let pending = Task { await model.loadImage() }
+        var iterator = entered.makeAsyncIterator()
+        _ = await iterator.next()
+        model.expanded = !collapsed
+        await model.loadMetadata(second)
+        if revisitsFirst { await model.loadMetadata(first) }
+        await gate.release()
+        await pending.value
+
+        if collapsed {
+            #expect(model.result == nil)
+            #expect(model.imageURL == nil)
+            model.expanded = true
+            await model.loadMetadata(revisitsFirst ? first : second)
+        }
+        #expect(model.result?.metadata?.url == (revisitsFirst ? first : second))
+        #expect(model.imageResult == nil)
+        await model.loadImage()
+        #expect(model.imageResult != nil)
+    }
+}
+
+private actor ChatLinkPreviewFirstLoadGate {
+    let entered: AsyncStream<Void>.Continuation
+    private var attempts = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(entered: AsyncStream<Void>.Continuation) {
+        self.entered = entered
+    }
+
+    func waitForFirstLoad() async -> Int {
+        self.attempts += 1
+        let attempt = self.attempts
+        if attempt == 1 {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                self.entered.yield(())
+            }
+        }
+        return attempt
+    }
+
+    func release() {
+        self.continuation?.resume()
+        self.continuation = nil
+    }
+}

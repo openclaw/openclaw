@@ -75,7 +75,7 @@ function readBoundedRetentionRanges(
     (id) => !sequences.has(id),
   );
   if (missing.length > 0) {
-    const lastSelectedSeq = Math.max(...rows.map((row) => row.seq));
+    const lastSelectedSeq = rows.reduce((maximum, row) => Math.max(maximum, row.seq), -Infinity);
     const db = getActiveTranscriptKysely(projection.database);
     const anchors = executeSqliteQuerySync(
       projection.database.db,
@@ -100,7 +100,7 @@ function readBoundedRetentionRanges(
     const unresolved = new Set(cuts.map((cut) => cut.firstKeptEntryId));
     for (const row of iterateUnindexedActiveTranscriptNavigation(projection, {
       eventIds: [...unresolved],
-      maxRawSeq: Math.max(...cuts.map((cut) => cut.seq)) - 1,
+      maxRawSeq: cuts.reduce((maximum, cut) => Math.max(maximum, cut.seq), -Infinity) - 1,
       first: true,
     })) {
       const id = typeof row.event.id === "string" ? row.event.id : undefined;

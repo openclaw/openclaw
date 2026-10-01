@@ -1,4 +1,3 @@
-// Local media root helpers normalize and match allowed local media roots.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -27,7 +26,6 @@ function resolveCachedPreferredTmpDir(): string {
   return cachedPreferredTmpDir;
 }
 
-/** Builds the baseline local media root allowlist from state/config directories. */
 function buildMediaLocalRoots(stateDir: string, configDir: string): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   const resolvedConfigDir = path.resolve(configDir);
@@ -71,22 +69,20 @@ function filterSharedMediaLocalRoots(
   const sessionWorkspaceDir = context.sessionWorkspaceDir
     ? resolveCanonicalRoot(context.sessionWorkspaceDir)
     : undefined;
-  const isInsideOrEqual = (parent: string, child: string): boolean =>
-    child === parent || isPathInside(parent, child);
   // The shared sandboxes parent itself (or any ancestor of it) is never a valid session workspace:
   // passing it must not re-admit the shared sandbox tree.
   const validSessionWorkspaceDir =
-    sessionWorkspaceDir !== undefined && !isInsideOrEqual(sessionWorkspaceDir, sandboxesDir)
+    sessionWorkspaceDir !== undefined && !isPathInside(sessionWorkspaceDir, sandboxesDir)
       ? sessionWorkspaceDir
       : undefined;
   const overlaps = (sharedDir: string, root: string): boolean =>
-    isInsideOrEqual(sharedDir, root) || isInsideOrEqual(root, sharedDir);
+    isPathInside(sharedDir, root) || isPathInside(root, sharedDir);
   const filtered: string[] = [];
   for (const root of roots) {
     const resolvedRoot = resolveCanonicalRoot(root);
     const withinSessionWorkspace =
       validSessionWorkspaceDir !== undefined &&
-      isInsideOrEqual(validSessionWorkspaceDir, resolvedRoot);
+      isPathInside(validSessionWorkspaceDir, resolvedRoot);
     if (overlaps(sandboxesDir, resolvedRoot) && !withinSessionWorkspace) {
       continue;
     }

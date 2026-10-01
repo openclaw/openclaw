@@ -154,21 +154,6 @@ describe("RealtimeTalkSession", () => {
     },
   );
 
-  it("defaults legacy session results without an explicit transport to WebRTC", async () => {
-    const request = vi.fn(async () => ({
-      provider: "openai",
-      voiceSessionId: "voice-1",
-      clientSecret: "auth_tokens/session",
-    }));
-    const session = new RealtimeTalkSession({ request } as never, "main");
-
-    await session.start();
-
-    expect(webRtcInstances).toHaveLength(1);
-    expect(webRtcStart).toHaveBeenCalledTimes(1);
-    expect(googleInstances).toHaveLength(0);
-  });
-
   it.each(["webrtc", "provider-websocket"] as const)(
     "closes a failed %s voice owner after draining transcripts without hiding the error",
     async (transport) => {
@@ -223,45 +208,6 @@ describe("RealtimeTalkSession", () => {
       void session.stop();
     },
   );
-
-  it("accepts legacy WebRTC transport names", async () => {
-    const request = vi.fn(async () => ({
-      provider: "openai",
-      voiceSessionId: "voice-1",
-      transport: "webrtc-sdp",
-      clientSecret: "secret",
-    }));
-    const client = { request } as never;
-    const session = new RealtimeTalkSession(client, "main");
-
-    await session.start();
-
-    expect(webRtcInstances).toHaveLength(1);
-    expect(googleInstances).toHaveLength(0);
-  });
-
-  it("accepts legacy provider WebSocket transport names", async () => {
-    const request = vi.fn(async () => ({
-      provider: "example",
-      voiceSessionId: "voice-1",
-      transport: "json-pcm-websocket",
-      clientSecret: "secret",
-      protocol: "google-live-bidi",
-      websocketUrl: "wss://example.test/live",
-      audio: {
-        inputEncoding: "pcm16",
-        inputSampleRateHz: 16000,
-        outputEncoding: "pcm16",
-        outputSampleRateHz: 24000,
-      },
-    }));
-    const session = new RealtimeTalkSession({ request } as never, "main");
-
-    await session.start();
-
-    expect(webRtcInstances).toHaveLength(0);
-    expect(googleInstances).toHaveLength(1);
-  });
 
   it("closes a Gateway relay allocated after the session stops", async () => {
     const create = createDeferred<{

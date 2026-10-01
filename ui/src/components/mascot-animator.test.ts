@@ -46,8 +46,6 @@ function expectPoseInBounds(pose: MascotPose): void {
   expect(pose.mouthOpen).toBeLessThanOrEqual(1);
   expect(pose.mouthRound).toBeGreaterThanOrEqual(0);
   expect(pose.mouthRound).toBeLessThanOrEqual(1);
-  expect(pose.blush).toBeGreaterThanOrEqual(0);
-  expect(pose.blush).toBeLessThanOrEqual(1);
   expect(pose.hardHat).toBeGreaterThanOrEqual(0);
   expect(pose.hardHat).toBeLessThanOrEqual(1);
   expect(pose.bodyTilt).toBeGreaterThanOrEqual(-8);
@@ -138,23 +136,6 @@ describe("MascotAnimator", () => {
     const cleared = animator.poseAt(0.1);
     expect(cleared.mouthRound).toBe(0);
     expect(cleared.gaze).not.toEqual({ x: 0, y: 0.6 });
-  });
-
-  it("plays one bounded catch beat and clears it after 0.8 seconds", () => {
-    const animator = new MascotAnimator(23);
-    animator.setMood("idle", 0);
-    animator.poseAt(0);
-    animator.playCatch(0.1);
-
-    let peakHappyEyes = 0;
-    for (let frame = 0; frame <= 24; frame += 1) {
-      const pose = animator.poseAt(0.1 + frame / 30);
-      expectPoseInBounds(pose);
-      peakHappyEyes = Math.max(peakHappyEyes, pose.happyEyes);
-    }
-    expect(peakHappyEyes).toBeGreaterThan(0.8);
-    expect(animator.poseAt(0.91).happyEyes).toBe(0);
-    expect(animator.poseAt(1.2).happyEyes).toBe(0);
   });
 });
 

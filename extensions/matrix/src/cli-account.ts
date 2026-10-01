@@ -7,7 +7,9 @@ import { listMatrixOwnDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
+import type { MatrixProfileSyncResult } from "./matrix/profile.js";
 import { getMatrixRuntime } from "./runtime.js";
+import type { maybeBootstrapNewEncryptedMatrixAccount } from "./setup-bootstrap.js";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
@@ -22,19 +24,9 @@ type MatrixCliAccountAddResult = {
     staleOpenClawDeviceIds: string[];
     error?: string;
   };
-  verificationBootstrap: {
+  verificationBootstrap: Awaited<ReturnType<typeof maybeBootstrapNewEncryptedMatrixAccount>>;
+  profile: Omit<MatrixProfileSyncResult, "skipped" | "uploadedAvatarSource"> & {
     attempted: boolean;
-    success: boolean;
-    recoveryKeyCreatedAt: string | null;
-    backupVersion: string | null;
-    error?: string;
-  };
-  profile: {
-    attempted: boolean;
-    displayNameUpdated: boolean;
-    avatarUpdated: boolean;
-    resolvedAvatarUrl: string | null;
-    convertedAvatarFromHttp: boolean;
     error?: string;
   };
 };

@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveSafeInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
@@ -606,9 +609,7 @@ function createSessionEventWakeRuntime() {
           targetKey(normalized) !== GLOBAL_TARGET &&
           wake.source === "interval" &&
           wake.intent === "scheduled" &&
-          typeof wake.scheduledEveryMs === "number" &&
-          Number.isSafeInteger(wake.scheduledEveryMs) &&
-          wake.scheduledEveryMs > 0 &&
+          asPositiveSafeInteger(wake.scheduledEveryMs) !== undefined &&
           !wake.tasks?.length,
       };
       const key = enqueue(pendingWake);

@@ -401,14 +401,10 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
 
 /** True when every path-bearing canonical fact has explicit staging proof. */
 export function hasStagedMediaFacts(media: readonly MediaFactInput[] | null | undefined): boolean {
-  const stageable = normalizeMediaFacts(media).filter((fact) =>
-    Boolean(normalizeOptionalString(fact.path)),
-  );
+  const stageable = normalizeMediaFacts(media).filter((fact) => Boolean(fact.path));
   return (
     stageable.length > 0 &&
-    stageable.every(
-      (fact) => Boolean(normalizeOptionalString(fact.workspaceDir)) || fact.staged === true,
-    )
+    stageable.every((fact) => Boolean(fact.workspaceDir) || fact.staged === true)
   );
 }
 
@@ -460,6 +456,7 @@ function resolveMediaFactsWithPrecedence(
       normalizeOptionalString(types[index]) ?? (index === 0 ? source.MediaType : undefined);
     return normalizeMediaFact(
       {
+        ...fact,
         path: legacyProjectionWins
           ? (normalizeOptionalString(legacyPath) ?? fact?.path)
           : (fact?.path ?? legacyPath),
@@ -469,28 +466,17 @@ function resolveMediaFactsWithPrecedence(
         contentType: legacyProjectionWins
           ? (legacyContentType ?? fact?.contentType)
           : (fact?.contentType ?? legacyContentType),
-        kind: fact?.kind,
-        fileName: fact?.fileName,
-        origin: fact?.origin,
-        sizeBytes: fact?.sizeBytes,
-        durationMs: fact?.durationMs,
-        width: fact?.width,
-        height: fact?.height,
         transcribed: legacyProjectionWins
           ? fact
             ? fact.transcribed === true
             : transcribed.has(index)
           : fact?.transcribed === true || transcribed.has(index),
-        messageId: fact?.messageId,
-        workspaceDir:
-          normalizeOptionalString(fact?.workspaceDir) ??
-          normalizeOptionalString(source.MediaWorkspaceDir),
+        workspaceDir: fact?.workspaceDir ?? normalizeOptionalString(source.MediaWorkspaceDir),
         staged:
           fact?.staged === true ||
           (legacyProjectionWins &&
             source.MediaStaged === true &&
             (!legacyHasPath || Boolean(normalizeOptionalString(legacyPath)))),
-        hydrationSuppressed: fact?.hydrationSuppressed,
       },
       index,
     );

@@ -7,19 +7,12 @@ import {
   resolveProviderModelMaterializationAuthMode,
   type ProviderModelRouteMaterializationAuthMode,
 } from "../provider-model-route-auth.js";
-import { materializePreparedRuntimeModel } from "./materialize-model.js";
+import { materializePreparedRuntimeModel, type RuntimeRouteModel } from "./materialize-model.js";
 import {
   agentRuntimeAuthPlanMatchesTarget,
   type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
-
-type RuntimeRouteModel = {
-  provider?: string;
-  id?: string;
-  api?: string | null;
-  baseUrl?: string;
-};
 
 type RuntimeModelAuthSelection =
   | { authProfileId: string }

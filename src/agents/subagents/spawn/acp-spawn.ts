@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-/** Implements ACP subagent/session spawning, binding, limits, and parent-stream setup. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types.js";
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
@@ -562,7 +561,7 @@ export async function spawnAcpDirect(
         agentId: targetAgentId,
       });
       const startParentRelay = (runId: string) =>
-        effectiveStreamToParent && parentSessionKey
+        effectiveStreamToParent && parentSessionKey && parentEventRouting
           ? startAcpSpawnParentStreamRelay({
               runId,
               parentSessionKey,
@@ -571,11 +570,8 @@ export async function spawnAcpDirect(
               childSessionId: state.initializedSession.sessionId,
               agentId: targetAgentId,
               env: parentRelayStateEnv,
-              mainKey: cfg.session?.mainKey,
-              sessionScope: cfg.session?.scope,
               eventRouting: parentEventRouting,
               deliveryContext: parentDeliveryCtx,
-              emitStartNotice: false,
               cfg,
             })
           : undefined;
@@ -657,6 +653,7 @@ export async function spawnAcpDirect(
         requesterTurnRunId: ctx.requesterTurnRunId,
         childSessionKey: sessionKey,
         controllerSessionKey,
+        sessionEntry: state.initializedSession.sessionEntry,
         requesterSessionKey: ownership.completionRequesterSessionKey,
         completionRequesterSessionId,
         completionRequesterLifecycleRevision,

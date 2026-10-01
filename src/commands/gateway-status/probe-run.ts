@@ -1,4 +1,3 @@
-/** Runs gateway discovery, optional SSH tunneling, and per-target probes. */
 import {
   normalizeOptionalString,
   readStringValue,
@@ -21,7 +20,6 @@ import {
   type GatewayStatusTarget,
 } from "./helpers.js";
 
-/** Single gateway status target plus probe details and derived display metadata. */
 export type GatewayStatusProbedTarget = {
   target: GatewayStatusTarget;
   probe: Awaited<ReturnType<typeof probeGateway>>;
@@ -30,7 +28,6 @@ export type GatewayStatusProbedTarget = {
   authDiagnostics: string[];
 };
 
-/** Probes configured, explicit, and optionally SSH-discovered gateway targets. */
 export async function runGatewayStatusProbePass(params: {
   cfg: OpenClawConfig;
   opts: {

@@ -4,6 +4,59 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayTransportTests {
+    @Test func `mutation receipt binds canonical fields to the captured owner and session incarnation`() async throws {
+        let recorder = RequestRecorder()
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: { .init(sessionKey: $0, agentID: "research") },
+            unreadAckContract: true,
+            receivesPatchReceipts: true,
+            request: { request in
+                await recorder.append(request)
+                return Data(#"""
+                {"ok":true,"key":"global","entry":{"sessionId":"session-a","label":"Canonical name",
+                  "updatedAt":20,"lastReadAt":20,"lastActivityAt":10}}
+                """#.utf8)
+            })
+        let receipt = try #require(await lease.patchSession(
+            key: "global", expectedSessionID: "session-a", expectedMarkedUnreadAt: .some(5),
+            label: nil, category: nil, pinned: nil, archived: nil, unread: false))
+        let row = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
+        {"key":"global","agentId":"research","sessionId":"session-a","updatedAt":10,"unread":true}
+        """#.utf8))
+        #expect(receipt.matches(row))
+        #expect(receipt.entry.label == "Canonical name")
+        var different = row
+        different.agentId = "other"
+        #expect(!receipt.matches(different))
+        different = row
+        different.sessionId = "session-b"
+        #expect(!receipt.matches(different))
+        let requests = await recorder.requests
+        #expect(requests.count == 1)
+        #expect(requests.first?.params["agentId"]?.value as? String == "research")
+        #expect(requests.first?.params["expectedSessionId"]?.value as? String == "session-a")
+        #expect(requests.first?.params["expectedMarkedUnreadAt"]?.value as? Double == 5)
+    }
+
+    @Test(arguments: [false, true])
+    func `mutation receipt decoding is opt in and rejects an incomplete acknowledgement`(enabled: Bool) async throws {
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: { .init(sessionKey: $0, agentID: "research") },
+            unreadAckContract: true,
+            receivesPatchReceipts: enabled,
+            request: { _ in Data(#"{"ok":true}"#.utf8) })
+        if enabled {
+            await #expect(throws: DecodingError.self) {
+                try await lease.patchSession(
+                    key: "global", label: nil, category: nil, pinned: nil, archived: nil, unread: false)
+            }
+        } else {
+            let receipt = try await lease.patchSession(
+                key: "global", label: nil, category: nil, pinned: nil, archived: nil, unread: false)
+            #expect(receipt == nil)
+        }
+    }
+
     @Test(arguments: [OpenClawChatSessionTargetPolicy.preserveBareKeys, .scopeBareKeysToSelectedAgent])
     func `shared operations preserve platform targeting through the transport protocol`(
         policy: OpenClawChatSessionTargetPolicy) async throws

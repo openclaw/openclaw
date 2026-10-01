@@ -1,4 +1,8 @@
-import type { FlexBox, FlexBubble, FlexComponent } from "./types.js";
+import type { FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
+
+export function createCardTitle(text: string): FlexText {
+  return { type: "text", text, weight: "bold", size: "xl", color: "#111111", wrap: true };
+}
 
 export function createCardBubble(
   bodyContents: FlexComponent[],

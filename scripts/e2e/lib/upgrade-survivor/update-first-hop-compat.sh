@@ -384,6 +384,8 @@ run_missing_path_admission() {
     2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/missing-load-path/doctor-lint.err" || lint_exit=$?
   [ "$lint_exit" -eq 1 ]
   node scripts/e2e/lib/upgrade-survivor/missing-load-path.mjs missing-load-path post-doctor
+  # Standalone Doctor can restart an offline service; join it before hashing profile artifacts.
+  systemctl --user stop openclaw-gateway.service
   node scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs \
     "$(package_root)" "$ARTIFACT_DIR/$lane-entry-probe.json"
   record_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"

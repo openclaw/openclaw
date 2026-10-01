@@ -64,7 +64,7 @@ function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boole
     if (protocol !== "ws:") {
       return false;
     }
-    if (isGatewayLoopbackHost(url.hostname) || isTrustedPlaintextWebSocketHost(url.hostname)) {
+    if (isTrustedPlaintextWebSocketHost(url.hostname)) {
       return true;
     }
     if (options?.allowPrivateWs === true) {
@@ -72,9 +72,7 @@ function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boole
         url.hostname.startsWith("[") && url.hostname.endsWith("]")
           ? url.hostname.slice(1, -1)
           : url.hostname;
-      return (
-        isPrivateOrLoopbackHost(url.hostname) || parseGatewayIpAddress(hostForIpCheck) === undefined
-      );
+      return parseGatewayIpAddress(hostForIpCheck) === undefined;
     }
     return false;
   } catch {

@@ -160,23 +160,14 @@ function normalizeInstallOptions(
     return { id, kind: spec.kind, label, bins };
   };
 
-  const allDownloads = filtered.every((spec) => spec.kind === "download");
-  if (allDownloads) {
-    const options: SkillInstallOption[] = [];
-    for (const [index, spec] of install.entries()) {
-      if (supportsPlatform(spec)) {
-        options.push(toOption(spec, index));
-      }
-    }
-    return options;
+  if (filtered.every((spec) => spec.kind === "download")) {
+    return install.flatMap((spec, index) =>
+      supportsPlatform(spec) ? [toOption(spec, index)] : [],
+    );
   }
-
   const preferred = selectPreferredInstallSpec(filtered, prefs, hasLocalBin);
-  if (!preferred) {
-    return [];
-  }
   // installSkill resolves implicit IDs in the original metadata list, before OS filtering.
-  return [toOption(preferred, install.indexOf(preferred))];
+  return preferred ? [toOption(preferred, install.indexOf(preferred))] : [];
 }
 
 type SkillRequirementsContext = {
