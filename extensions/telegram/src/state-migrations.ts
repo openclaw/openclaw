@@ -18,7 +18,10 @@ const EMPTY_THREAD_BINDINGS_PATTERNS = [
 ];
 
 function retiredStateWarning(source: string): string {
-  return `Preserved retired Telegram JSON state at ${source}. Run openclaw doctor --fix on 2026.9.5 before upgrading to latest: https://docs.openclaw.ai/install/updating#upgrading-very-old-versions`;
+  const state = /^thread-bindings-.+\.json$/.test(path.basename(source))
+    ? "Telegram thread bindings"
+    : "Telegram state";
+  return `${state} may contain unmigrated data. Run openclaw doctor --fix on 2026.9.5 with a pre-update backup. Preserved retired Telegram JSON state at ${source}. See https://docs.openclaw.ai/install/updating#upgrading-very-old-versions`;
 }
 
 async function isVerifiedEmptyThreadBindingsSource(source: string): Promise<boolean> {
@@ -92,6 +95,7 @@ export const telegramRetiredStateMigration: PluginDoctorStateMigration = {
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
+    const archiveWarnings: string[] = [];
     for (const source of await collectRetiredStateSources(params)) {
       if (
         /^thread-bindings-.+\.json$/.test(path.basename(source)) &&
@@ -101,12 +105,18 @@ export const telegramRetiredStateMigration: PluginDoctorStateMigration = {
           filePath: source,
           label: "empty Telegram thread bindings",
           changes,
-          warnings,
+          warnings: archiveWarnings,
         });
       } else {
         warnings.push(retiredStateWarning(source));
       }
     }
-    return { changes, warnings };
+    return {
+      changes,
+      warnings: [...warnings, ...archiveWarnings],
+      ...(warnings.length === 0 && archiveWarnings.length > 0
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
+    };
   },
 };

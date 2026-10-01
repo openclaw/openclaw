@@ -59,9 +59,12 @@ describe("retired Telegram state", () => {
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(paths.length);
     expect(result.warningDisposition).toBeUndefined();
+    expect(
+      result.warnings.every((warning) => warning.includes("Run openclaw doctor --fix on 2026.9.5")),
+    ).toBe(true);
     for (const source of paths) {
       expect(result.warnings).toContainEqual(
-        expect.stringContaining(`${source}. Run openclaw doctor --fix on 2026.9.5`),
+        expect.stringContaining(`Preserved retired Telegram JSON state at ${source}.`),
       );
       expect(await fs.readFile(source, "utf8")).toBe("unparsed legacy bytes\n");
     }
