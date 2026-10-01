@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -75,7 +76,7 @@ export class ClickClackDiscussionService {
     run: async (sessionKey) => await this.reconcile(sessionKey),
     warn: (message) => this.#logger().warn(message),
   });
-  #channelMutationLock: Promise<unknown> = Promise.resolve();
+  readonly #withChannelMutationLock = createAsyncLock();
   #timer: ReturnType<typeof setInterval> | undefined;
   #reconcileAllPromise: Promise<void> | undefined;
   #unsubscribeSessionsChanged: (() => void) | undefined;
@@ -643,11 +644,5 @@ export class ClickClackDiscussionService {
       () => this.#operations.delete(operation),
     );
     return operation;
-  }
-
-  async #withChannelMutationLock<T>(run: () => Promise<T>): Promise<T> {
-    const current = this.#channelMutationLock.catch(() => undefined).then(run);
-    this.#channelMutationLock = current;
-    return await current;
   }
 }

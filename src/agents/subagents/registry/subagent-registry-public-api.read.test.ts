@@ -11,7 +11,7 @@ import {
   clearSubagentRunsReadCacheForTest,
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -76,7 +76,7 @@ describe("subagent registry known-run reads", () => {
       for (const entry of [target, ...unrelated]) {
         subagentRuns.set(entry.runId, entry);
       }
-      registryState.persistSubagentRunsToDiskOrThrow(subagentRuns);
+      registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
       const api = createReadApi(subagentRuns);
       const warm = await api.prepareSubagentRunsByRunIds(["collector"]);
       expect(warm.consume((runs) => runs.get("collector"))).toEqual({ ready: true, value: target });

@@ -335,7 +335,7 @@ export class CodexAssistantProjection {
     if (recoveredAudible.length > 0) {
       return recoveredAudible.slice(-1);
     }
-    const recovered = this.resolveFinalAssistantTextItem()?.text;
+    const recovered = this.resolveFinalAssistantText();
     return recovered ? [recovered] : [];
   }
 
@@ -453,17 +453,12 @@ export class CodexAssistantProjection {
   }
 
   hasAssistantItemTextForSynthesis(): boolean {
-    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
-      const itemId = this.assistantItemOrder[i];
-      if (!itemId || this.isNonTerminalAssistantItem(itemId)) {
-        continue;
-      }
-      const text = this.assistantTextByItem.get(itemId);
-      if (text && text.length > 0) {
-        return true;
-      }
-    }
-    return false;
+    return this.assistantItemOrder.some(
+      (itemId) =>
+        Boolean(itemId) &&
+        !this.isNonTerminalAssistantItem(itemId) &&
+        Boolean(this.assistantTextByItem.get(itemId)),
+    );
   }
 
   createCurrentAttemptAssistantMessage(
@@ -629,7 +624,7 @@ export class CodexAssistantProjection {
     this.supersedeVisibleAnswerCandidate();
   }
 
-  private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
+  private resolveFinalAssistantText(): string | undefined {
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
       if (!itemId) {
@@ -640,7 +635,7 @@ export class CodexAssistantProjection {
         continue;
       }
       if (text && !this.isToolProgressEchoText(itemId, text)) {
-        return { itemId, text };
+        return text;
       }
     }
     return undefined;

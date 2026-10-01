@@ -30,7 +30,9 @@ import {
 import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   profileCatalogPath,
+  projectUserProfileDisplays,
   projectHasMultipleSessionSharingIdentities,
+  resolveUserProfileReferenceInCatalog,
   selectHasMultipleSessionSharingIdentities,
   selectUserProfileIdentityInDatabase,
   selectUserProfileDisplaysInDatabase,
@@ -42,7 +44,6 @@ import {
   bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
   projectCatalogUserProfileIdentity,
-  matchUserProfileReference,
   resolveCatalogProfile,
   selectResolvedUserProfile,
   userProfileDisplaySelection,
@@ -79,12 +80,11 @@ export function readUserProfileIdentity(
 }
 
 /** Existing one-hop aliases are identity facts; this read never creates profile storage. */
-export function readUserProfileAliases(
+export const readUserProfileAliases = (
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
-): ReadonlySet<string> {
-  return new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
-}
+): ReadonlySet<string> =>
+  new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
 
 /** Gateway readers already retain this catalog with their session projection. */
 export function readResidentUserProfileId(
@@ -711,20 +711,13 @@ export function getUserProfileDisplays(
   if (ids.length === 0) {
     return new Map();
   }
-  const project = (resolve: (id: string) => Omit<ProfileDisplayRow, "role"> | undefined) =>
-    new Map(
-      ids.flatMap((id) => {
-        const profile = resolve(id);
-        return profile ? [[id, projectUserProfileDisplay(profile)] as const] : [];
-      }),
-    );
   return (
     readProfileCatalog(
       options,
-      (resident) => project((id) => resolveCatalogProfile(resident, id)),
+      (resident) => projectUserProfileDisplays(ids, (id) => resolveCatalogProfile(resident, id)),
       (db) => {
         const rows = selectUserProfileDisplaysInDatabase(db, ids);
-        return project((id) => rows.get(id));
+        return projectUserProfileDisplays(ids, (id) => rows.get(id));
       },
     ) ?? new Map()
   );
@@ -743,19 +736,7 @@ export function resolveUserProfileReference(
   return (
     readProfileCatalog(
       options,
-      (resident) => {
-        const allowed = (row: ProfileDisplayRow) =>
-          !allowedProfileIds || allowedProfileIds.has(row.merged_into ?? row.id);
-        const raw = resident.get(reference);
-        return matchUserProfileReference(
-          reference,
-          raw && allowed(raw) ? resolveCatalogProfile(resident, reference)?.id : undefined,
-          (prefix) =>
-            [...resident.values()]
-              .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
-              .map((row) => row.merged_into ?? row.id),
-        );
-      },
+      (resident) => resolveUserProfileReferenceInCatalog(resident, reference, allowedProfileIds),
       (db) => selectUserProfileReferenceInDatabase(db, reference, allowedProfileIds),
     ) ?? ok(undefined)
   );

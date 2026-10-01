@@ -232,7 +232,7 @@ it
             ? {
                 code: 0,
                 termination: "exit",
-                stdout: `state = running\npid = ${gatewayPid}`,
+                stdout: `${args[1]} = {\n\tstate = running\n\tpid = ${gatewayPid}\n}`,
                 stderr: "",
               }
             : { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };

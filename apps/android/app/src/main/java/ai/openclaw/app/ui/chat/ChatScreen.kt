@@ -683,7 +683,7 @@ internal fun ChatScreen(
   val dictationPartialTranscript by dictationController.partialTranscript.collectAsState()
   val dictationActive = dictationState.isActive
 
-  fun importGalleryMedia(
+  fun importPickedMedia(
     lease: ChatComposerMediaLease,
     uris: List<android.net.Uri>,
   ) {
@@ -713,37 +713,12 @@ internal fun ChatScreen(
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(CHAT_COMPOSER_MAX_ATTACHMENTS)) { uris ->
       val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
-      importGalleryMedia(lease, uris)
+      importPickedMedia(lease, uris)
     }
   val pickMediaOrDocument =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
       val lease = filePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
-      if (uri == null) {
-        composerState.cancelMediaAcquisition(lease.authorizationId)
-        return@rememberLauncherForActivityResult
-      }
-      val importOwner =
-        if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) {
-          currentPickerOwner
-        } else {
-          lease.owner
-        }
-      viewModel.importChatComposerAttachments(
-        owner = importOwner,
-        mediaAuthorizationId = lease.authorizationId,
-        mainSessionKey = currentPickerMainSessionKey,
-        expectedCount = 1,
-      ) {
-        listOfNotNull(
-          try {
-            loadPickedMediaOrDocumentAttachment(resolver, uri)
-          } catch (err: CancellationException) {
-            throw err
-          } catch (_: Throwable) {
-            null
-          },
-        )
-      }
+      importPickedMedia(lease, listOfNotNull(uri))
     }
 
   LaunchedEffect(composerOwner) {

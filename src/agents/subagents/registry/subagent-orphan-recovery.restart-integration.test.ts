@@ -49,11 +49,9 @@ import { prepareInternalSessionEffectsSession } from "../../internal-session-eff
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
-import {
-  onSubagentRegistryPersisted,
-  persistSubagentRunsToDiskOrThrow,
-} from "./subagent-registry-state.js";
+import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -180,7 +178,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       );
       addSubagentRunForTests(entry);
     }
-    persistSubagentRunsToDiskOrThrow(subagentRuns);
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
     await fixture.settle();
     resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
@@ -273,7 +271,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         return (params.runId === runId ? await oldWait.promise : { status: "pending" }) as T;
       };
       const terminalPersisted = createDeferred();
-      const stopObservingTerminal = onSubagentRegistryPersisted(() => {
+      const stopObservingTerminal = subscribeSubagentRunChanges("persistence", () => {
         if (loadSubagentRegistryFromSqlite().get(runId)?.execution.status === "terminal") {
           terminalPersisted.resolve();
         }

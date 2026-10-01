@@ -3,7 +3,6 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
-  prepareRequesterCronAuthority,
   promoteRequesterCronAuthority,
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
@@ -227,18 +226,14 @@ export async function markRequesterTurnYieldedInRuns(params: {
   requesterTurnRunId: string;
   runs: Map<string, SubagentRunRecord>;
   transfer: RequesterInitialTransfer;
-  preparedAuthority?: PreparedRequesterCronAuthority | null;
+  preparedAuthority: PreparedRequesterCronAuthority | null;
 }): Promise<number> {
   const requesterSessionKey = params.requesterSessionKey.trim();
   const requesterTurnRunId = params.requesterTurnRunId.trim();
   if (!requesterSessionKey || !requesterTurnRunId) {
     return 0;
   }
-  const ownsPreparation = params.preparedAuthority === undefined;
-  const preparedAuthority =
-    params.preparedAuthority === undefined
-      ? prepareRequesterCronAuthority(params)
-      : params.preparedAuthority;
+  const { preparedAuthority } = params;
   let cronAuthority: Awaited<ReturnType<PreparedRequesterCronAuthority["bind"]>>;
   try {
     const entries = [...params.runs.values()].filter(
@@ -284,11 +279,6 @@ export async function markRequesterTurnYieldedInRuns(params: {
   } catch (error) {
     cronAuthority?.revoke();
     throw error;
-  } finally {
-    const release = ownsPreparation ? preparedAuthority?.release() : undefined;
-    if (release) {
-      await release;
-    }
   }
 }
 
@@ -349,8 +339,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     return false;
   }
   const requester = params.runs.get(requesterTurnRunId);
-  const requesterOwnsSession =
-    params.requesterYielded &&
+  const eligibleRequester =
     requester?.childSessionKey === requesterSessionKey &&
     !requester.killIntent &&
     !requester.killReconciliation &&
@@ -358,9 +347,13 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       (entry) =>
         entry.childSessionKey === requesterSessionKey &&
         compareSubagentRunGeneration(entry, requester) > 0,
-    );
+    )
+      ? requester
+      : undefined;
   const pauseRequester =
-    requesterOwnsSession && requester.execution.status === "running" ? requester : undefined;
+    params.requesterYielded && eligibleRequester?.execution.status === "running"
+      ? eligibleRequester
+      : undefined;
   const batchRunIds = entries.map((entry) => entry.runId).toSorted();
   const requesterAlreadyDeliveredFinal =
     params.requesterYielded &&
@@ -412,8 +405,8 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   }
   const requesterOwner =
     pauseRequester ??
-    (preparedCohort && requesterOwnsSession && requester.pauseReason === "sessions_yield"
-      ? requester
+    (preparedCohort && eligibleRequester?.pauseReason === "sessions_yield"
+      ? eligibleRequester
       : undefined);
   const retired = new Set<SubagentRunRecord>();
   await params.transfer({

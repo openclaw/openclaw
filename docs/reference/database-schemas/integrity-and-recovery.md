@@ -463,8 +463,11 @@ place. This updater-to-Doctor environment contract lets the updater account for
 physical identity changes separately from schema migration. Operator runs outside
 a managed update keep the normal explicit repair behavior.
 
-Doctor drains its database handles and awaits its inspection workers before the
-rewrite. A refusal saying `store files are open (pids: …)` names the processes
+Doctor drains its database handles, including pooled auth-profile readers for
+all agent stores under the active state directory, and awaits its inspection
+workers before the rewrite. It checks every regular file in each store directory
+with bounded `fuser` batches so large directories fit the operating system's
+argument limit. A refusal saying `store files are open (pids: …)` names the processes
 reported by `fuser`. A refusal saying `fuser could not establish that all handles
 are closed` includes the inspection error; check that `fuser` is installed and
 can inspect processes through `/proc`. Both refusals leave the original store

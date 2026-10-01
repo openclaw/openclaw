@@ -3,11 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { inspectDoctorSqliteNoCow, repairDoctorSqliteNoCow } from "./doctor-sqlite-nocow.js";
 import {
@@ -96,19 +99,41 @@ describe("Doctor btrfs NOCOW", () => {
           try {
             const paths = await maintenance!.run(async () => {
               const state = openOpenClawStateDatabase();
-              const agent = openOpenClawAgentDatabase({ agentId: "main" });
-              for (const database of [state, agent]) {
+              const agents = ["main", "secondary", "unconfigured"].map((agentId) =>
+                openOpenClawAgentDatabase({ agentId }),
+              );
+              for (const database of [state, ...agents]) {
                 database.db.exec(
                   "CREATE TABLE nocow_payload(value TEXT); INSERT INTO nocow_payload VALUES ('preserved');",
                 );
               }
-              return inspectDoctorSqliteNoCow([state.path, agent.path]).paths;
+              for (const agent of agents) {
+                loadPersistedAuthProfileStore(path.dirname(agent.path));
+              }
+              const preflight = await prepareDoctorDatabasePreflight({
+                cfg: { agents: { list: [{ id: "main" }, { id: "secondary" }] } },
+              });
+              expect(preflight.agentDatabaseMigrationDiscovery?.discovery.targets).toHaveLength(3);
+              return inspectDoctorSqliteNoCow([state.path, ...agents.map((agent) => agent.path)])
+                .paths;
             });
-            expect(paths).toHaveLength(2);
+            expect(paths).toHaveLength(4);
+            const toolRunner = vi.mocked(spawnSync).getMockImplementation()!;
+            const handleCounts: number[] = [];
+            vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+              if (command === "fuser") {
+                for (const pathname of paths) {
+                  handleCounts.push(readSqliteReaderDiagnosticsForPath(pathname).connectionCount);
+                }
+              }
+              return toolRunner(command, args, options);
+            });
             const originals = paths.map((pathname) => fs.statSync(pathname).ino);
             await maintenance!.repairSqliteNoCow(paths);
             expect(maintenance!.warnings).toEqual([]);
-            expect(fixture.exchanges).toBe(2);
+            expect(fixture.exchanges).toBe(4);
+            expect(handleCounts.length).toBeGreaterThan(0);
+            expect(handleCounts.every((count) => count === 0)).toBe(true);
             for (const [index, pathname] of paths.entries()) {
               expect(fs.statSync(pathname).ino).not.toBe(originals[index]);
               const storeDir = path.dirname(pathname);
@@ -131,7 +156,7 @@ describe("Doctor btrfs NOCOW", () => {
             }
             expect(
               log.mock.calls.filter(([line]) => line.startsWith("Rewrote SQLite")),
-            ).toHaveLength(2);
+            ).toHaveLength(4);
           } finally {
             await maintenance?.release();
           }
@@ -266,6 +291,83 @@ describe("Doctor btrfs NOCOW", () => {
       expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
       if (failure === "changed-directory-acl") {
         expect(notes.join(",")).toContain("source store changed");
+      }
+    },
+  );
+
+  it.each([
+    { name: "many sibling files", count: 2_001, suffix: "", outcome: "holders" },
+    { name: "long UTF-8 paths", count: 320, suffix: "界".repeat(60), outcome: "closed" },
+    {
+      name: "an inspection failure in a later batch",
+      count: 320,
+      suffix: "界".repeat(60),
+      outcome: "inspection-error",
+    },
+  ])(
+    "inspects every file in bounded fuser batches with $name",
+    async ({ count, suffix, outcome }) => {
+      seedDatabase();
+      const nested = path.join(directory, "workshop-skills");
+      fs.mkdirSync(nested);
+      const files = [
+        sqlitePath,
+        `${sqlitePath}-wal`,
+        `${sqlitePath}-shm`,
+        path.join(directory, "sibling.txt"),
+      ];
+      for (let index = 0; index < count; index++) {
+        const pathname = path.join(nested, `${index}-${suffix}.txt`);
+        fs.writeFileSync(pathname, "preserved sibling");
+        files.push(pathname);
+      }
+      const original = fs.statSync(sqlitePath);
+      const tool = vi.mocked(spawnSync).getMockImplementation()!;
+      const batches: string[][] = [];
+      vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+        if (command !== "fuser") {
+          return tool(command, args, options);
+        }
+        const argv = [...(args ?? [])];
+        batches.push(argv);
+        const result = { status: 1, stdout: "", stderr: "", pid: 0, output: [], signal: null };
+        if (
+          argv.length > 2_000 ||
+          argv.reduce((bytes, pathname) => bytes + Buffer.byteLength(pathname, "utf8") + 1, 0) >
+            64 * 1024
+        ) {
+          return {
+            ...result,
+            status: null,
+            error: Object.assign(new Error("spawnSync fuser E2BIG"), { code: "E2BIG" }),
+          };
+        }
+        if (outcome === "holders") {
+          return { ...result, status: 0, stdout: batches.length === 1 ? "12345 12345" : "67890" };
+        }
+        if (outcome === "inspection-error" && batches.length > 1) {
+          return { ...result, stderr: "Cannot stat file /proc/123/fd/4: Permission denied" };
+        }
+        return result;
+      });
+
+      const notes = (await repair()).join("\n");
+      expect(notes).not.toContain("E2BIG");
+      expect(batches.length).toBeGreaterThan(1);
+      expect(batches.flat().slice(0, files.length).toSorted()).toEqual(files.toSorted());
+      if (outcome === "closed") {
+        expect(notes).toContain("Rewrote SQLite store directory with NOCOW");
+        expect(fixture.exchanges).toBe(1);
+        expect(fs.readFileSync(files.at(-1)!, "utf8")).toBe("preserved sibling");
+        expect(batches.flat().filter((pathname) => pathname === sqlitePath)).toHaveLength(2);
+      } else {
+        expect(notes).toContain(
+          outcome === "holders"
+            ? "store files are open (pids: 12345, 67890)"
+            : "fuser could not establish that all handles are closed: Cannot stat file /proc/123/fd/4: Permission denied",
+        );
+        expect(fixture.exchanges).toBe(0);
+        expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
       }
     },
   );

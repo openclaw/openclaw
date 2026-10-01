@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
 import { resolveOpenPathCommand } from "./open-path.js";
-import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
+import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
   IMAGE_PREVIEW_FIXTURES,
@@ -121,7 +121,6 @@ describe("sessions.files RPC handlers", () => {
     );
 
     expect(revealPayload).toEqual({ ok: true, path: listPayload.root });
-    expect(resolveLocalSessionWorkspaceRoot({ sessionKey })).toBe(listPayload.root);
     // Compare against the resolver's own output so the assertion holds on
     // every supported platform (open / xdg-open / PowerShell Start-Process).
     expect(hoisted.execOpenPath).toHaveBeenCalledWith(
@@ -225,7 +224,6 @@ describe("sessions.files RPC handlers", () => {
 
     expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
     expect(payload.error).toContain("exec node");
-    expect(resolveLocalSessionWorkspaceRoot({ sessionKey })).toBeUndefined();
     expect(hoisted.execOpenPath).not.toHaveBeenCalled();
   });
 
@@ -800,7 +798,6 @@ describe("sessions.files preview formats", () => {
       }),
     ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
     denyLegacyChild = false;
-    expect(resolveLocalSessionWorkspaceRoot({ sessionKey })).toBeUndefined();
     const reveal = expectOkPayload(
       await invoke("sessions.files.reveal", {
         key: sessionKey,

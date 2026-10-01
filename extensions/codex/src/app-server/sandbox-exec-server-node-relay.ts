@@ -6,6 +6,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RawData, WebSocket } from "ws";
 import type { CodexNodeExecServerLease } from "./sandbox-exec-server/types.js";
+import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 const CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 const CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS = 240;
@@ -153,13 +154,7 @@ function sendCodexExecServerFrame(socket: WebSocket, frame: Buffer): Promise<voi
 }
 
 function normalizeCodexExecServerFrame(data: RawData | Uint8Array): Buffer {
-  const frame = Array.isArray(data)
-    ? Buffer.concat(data)
-    : Buffer.isBuffer(data)
-      ? data
-      : data instanceof Uint8Array
-        ? Buffer.from(data.buffer, data.byteOffset, data.byteLength)
-        : Buffer.from(data);
+  const frame = codexWebSocketDataToBuffer(data);
   if (frame.length > CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES) {
     throw new RangeError("Codex exec-server message exceeds its 64 MiB limit.");
   }
@@ -223,10 +218,8 @@ function rejectCredentialedCodexNodeHttpRequest(
 }
 
 function hasCredentialedCodexNodeHttpUrl(value: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     throw new Error("Codex http/request URL must be valid.");
   }
   if (url.username || url.password || hasSensitiveCodexNodeText(value)) {
@@ -495,13 +488,9 @@ function sanitizeCodexExecServerEnvironment(
     if (typeof value !== "string") {
       throw new Error(`Codex process/start ${key} values must be strings.`);
     }
-    try {
-      const url = new URL(value);
-      if (url.username || url.password) {
-        continue;
-      }
-    } catch {
-      // Ordinary environment values need not be URLs.
+    const url = URL.parse(value);
+    if (url?.username || url?.password) {
+      continue;
     }
     values[name] = value;
   }

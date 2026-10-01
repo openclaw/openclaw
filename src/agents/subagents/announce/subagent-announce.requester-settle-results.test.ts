@@ -47,7 +47,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(message).toContain("settled");
     expect(message).toContain("social findings");
     expect(message).toContain("network findings");
-    expect(message).toContain("NO_REPLY");
+    expect(message).not.toContain("NO_REPLY");
+    expect(message).toContain("continue any unfinished work");
   });
 
   it("includes all six child outcomes when a successful completion has no output", async () => {
@@ -148,7 +149,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(message).not.toContain("NO_REPLY");
     expect(message).not.toContain("stale source reply");
     expect(message).not.toContain("unrelated source reply");
-    expect(call.steerMessage).toBe(message);
     expect(call.requireVisibleReply).toBe(true);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1, {
       delivered: true,

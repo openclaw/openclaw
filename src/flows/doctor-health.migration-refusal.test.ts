@@ -60,6 +60,7 @@ const maintenance = vi.hoisted(() => ({
   finish: vi.fn(),
   releaseState: vi.fn(),
   repairSqliteNoCow: vi.fn(),
+  cleanupRetainedRuntimes: vi.fn(),
   release: vi.fn(),
 }));
 const resultWriter = await vi.importActual<typeof import("../infra/update-doctor-result.js")>(

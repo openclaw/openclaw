@@ -443,14 +443,14 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       lifecycleRevision: requesterEntry.lifecycleRevision,
     };
     const completionRows = currentCompletionRows(settledBatch);
-    // Delivered children remain in yield cohorts. One private result makes the
-    // aggregate private; public siblings keep their individual completion route.
+    // Delivered children remain in yield cohorts; the admitted marker owns whether
+    // the requester may deliver its final under the conversation's reply policy.
     const { privateRows, requireVisibleReply, parentOnly, privateBinding, admissionMarker } =
       resolvePrivateSettlePolicy(
         completionRows,
         requesterYieldedAfterDelivery,
         selectedState,
-        requesterEntry.sessionId,
+        requesterIdentity,
       );
     // `/new` keeps the session id but rotates the lifecycle revision, so compare the
     // whole incarnation; a deliverable retry must not post old findings into a reset session.
@@ -626,7 +626,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
                 requesterSessionKey,
                 requesterAgentId,
                 triggerMessage: wakeMessage,
-                steerMessage: wakeMessage,
                 requesterSessionOrigin,
                 directOrigin,
                 sourceSessionKey: batchSessionKeys[0],

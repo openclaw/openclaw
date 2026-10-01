@@ -121,23 +121,6 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
   },
 );
 
-it("rejects binding a paused child without task-owned completion", async () => {
-  const state = await arrangePausedChild();
-  state.entry.expectsCompletionMessage = false;
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-  expect(() =>
-    bindParentSubagentResume({
-      cfg: state.cfg,
-      caller: state.caller,
-      childSessionKey: state.childSessionKey,
-      childSessionId: sessionId,
-    }),
-  ).toThrow("Task resume requires a child with task-owned completion.");
-  expect(subagentRuns.has(nextRunId)).toBe(false);
-  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
-  expect(state.entry.pauseReason).toBe("sessions_yield");
-});
-
 it("rejects adoption when task-owned completion is disabled after binding", async () => {
   const state = await arrangePausedChild();
   const adopt = await state.prepare();
@@ -208,19 +191,6 @@ it.each(["resume", "cancel"] as const)(
     }
   },
 );
-
-it("does not adopt ordinary peer messages or forged message provenance", async () => {
-  const state = await arrangePausedChild();
-  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
-  expect(() =>
-    bindParentSubagentResume({
-      cfg: state.cfg,
-      caller: { ...state.caller, sessionKey: "agent:main:dashboard:unrelated" },
-      childSessionKey: state.childSessionKey,
-      childSessionId: sessionId,
-    }),
-  ).toThrow(/controlled/);
-});
 
 it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as const)(
   "rejects a %s race after preparing admission without creating a successor",

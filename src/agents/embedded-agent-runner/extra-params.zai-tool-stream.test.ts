@@ -3,11 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { Model, SimpleStreamOptions } from "../../llm/types.js";
+import { runExtraParamsCase, testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
-
-let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtraParamsCase;
-let extraParamsTesting: typeof import("./extra-params.test-support.js").testing;
 
 type ToolStreamCase = {
   applyProvider: string;
@@ -31,9 +29,7 @@ function runToolStreamCase(params: ToolStreamCase) {
 }
 
 describe("extra-params: provider tool_stream support", () => {
-  beforeEach(async () => {
-    ({ runExtraParamsCase, testing: extraParamsTesting } =
-      await import("./extra-params.test-support.js"));
+  beforeEach(() => {
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: (params) => {
         // Z.AI and xAI require streaming tool-call deltas unless config

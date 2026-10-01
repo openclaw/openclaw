@@ -269,13 +269,7 @@ function formatProfileKind(credential: AuthProfileCredential | undefined): strin
   if (!credential) {
     return "credential";
   }
-  if (isChatGptSubscriptionProfile(credential)) {
-    return "ChatGPT subscription";
-  }
-  if (credential.type === "api_key") {
-    return "API key";
-  }
-  return "credential";
+  return credential.type === "api_key" ? "API key" : "ChatGPT subscription";
 }
 
 function formatProfileLabel(

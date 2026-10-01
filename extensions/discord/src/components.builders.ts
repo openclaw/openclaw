@@ -81,16 +81,6 @@ export function createDiscordSelectMenu<Type extends DiscordComponentSelectType>
   return select;
 }
 
-function buildTextDisplays(text?: string, texts?: string[]): TextDisplay[] {
-  if (texts && texts.length > 0) {
-    return texts.map((entry) => new TextDisplay(entry));
-  }
-  if (text) {
-    return [new TextDisplay(text)];
-  }
-  return [];
-}
-
 function createButtonComponent(params: {
   spec: DiscordComponentButtonSpec;
   componentId?: string;
@@ -233,7 +223,9 @@ export function buildDiscordComponentMessage(params: {
       continue;
     }
     if (block.type === "section") {
-      const displays = buildTextDisplays(block.text, block.texts);
+      const displays = (block.texts?.length ? block.texts : block.text ? [block.text] : []).map(
+        (entry) => new TextDisplay(entry),
+      );
       if (displays.length > 3) {
         throw new Error("Section blocks support up to 3 text displays");
       }

@@ -202,7 +202,7 @@ async function resolvePatchTarget(
       requesterAgentId,
       targetAgentId: agentId,
       targetSessionKey: resolved.key,
-      requesterOwned: resolved.requesterOwned === true,
+      requesterOwned: resolved.requesterOwned,
       visibility: context.sessionVisibility,
       a2aPolicy: context.a2aPolicy,
       callGateway,
