@@ -635,6 +635,16 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       if (runtimeMessage && media?.length) {
         attachRuntimePromptMediaFacts(runtimeMessage, media);
       }
+      // Replay suppresses the append of a user that is already durable. Report it
+      // like an adopted append so retries and fallbacks do not append it again;
+      // after compaction that append would adopt a row outside the current turn.
+      if (
+        prepareInitialUserTurnReplay !== undefined &&
+        !attempt.suppressNextUserMessagePersistence &&
+        attempt.userTurnTranscriptRecorder?.hasPersisted() === true
+      ) {
+        attempt.onUserMessagePersisted?.(message);
+      }
     },
     onUserMessageBlocked: () => {
       attempt.userTurnTranscriptRecorder?.markBlocked();

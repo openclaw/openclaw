@@ -24,6 +24,7 @@ import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
+import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import {
   agentCommandMock,
   connectOk,
@@ -90,6 +91,7 @@ installGatewayTestHooks({
   cleanup: async () => {
     harness?.ws.close();
     await harness?.server.close();
+    await closeSkillsWatchers(true);
     harness?.envSnapshot.restore();
   },
 });

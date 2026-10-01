@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -404,7 +404,9 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     },
   );
 
-  it("keeps one installation's fence current during another installation's live write", async () => {
+  it("keeps one installation's fence current during another installation's live write", async ({
+    signal,
+  }) => {
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root);
       const existingIdentity = captureUpdateCommandExecutorAuthority(fence);
@@ -459,7 +461,18 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         child.stderr.on("data", (chunk) => {
           stderr += chunk.toString();
         });
-        expect((await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0]).toEqual({
+        expect(
+          (
+            await withinTest(
+              awaitGateBeforeSettlement(
+                once(child, "message"),
+                closed,
+                "Child fixture exited before readiness",
+              ),
+              signal,
+            )
+          )[0],
+        ).toEqual({
           ready: true,
           changes: 1,
           inTransaction: true,
@@ -471,7 +484,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         expect(store.owns(original.lease, "executor")).toBe(true);
         expect(() => fence.assertCurrent()).not.toThrow();
         child.send({ commit: true });
-        expect(await closed).toEqual([0, null]);
+        expect(await withinTest(closed, signal)).toEqual([0, null]);
         expect(stderr).toBe("");
         expect(store.read(root)).toEqual(original);
         expect(() => fence.assertCurrent()).not.toThrow();
@@ -484,12 +497,17 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
           expect(store.release(updatedOther.lease)).toBe(true);
         }
       } finally {
-        await stopChildProcess(child, 5_000);
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        await closed;
       }
     });
   });
 
-  it("excludes a real writer until public release commits after its recorded child settles", async () => {
+  it("excludes a real writer until public release commits after its recorded child settles", async ({
+    signal,
+  }) => {
     const existingIdentity = await authority();
     const store = createManagedHandoffLeaseStore({
       databasePath,
@@ -515,7 +533,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {}, detached: true },
     );
     let stderr = "";
-    const closed = once(child, "close", { signal: AbortSignal.timeout(10_000) });
+    const closed = once(child, "close");
     void closed.catch(() => undefined);
     try {
       if (!child.stderr) {
@@ -524,7 +542,18 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       child.stderr.on("data", (chunk) => {
         stderr += chunk.toString();
       });
-      expect((await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0]).toEqual({
+      expect(
+        (
+          await withinTest(
+            awaitGateBeforeSettlement(
+              once(child, "message"),
+              closed,
+              "Child fixture exited before readiness",
+            ),
+            signal,
+          )
+        )[0],
+      ).toEqual({
         ready: true,
       });
       if (child.pid === undefined) {
@@ -539,7 +568,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       expect(store.current(parent.lease)).toBe(true);
       expect(store.current(boundChild)).toBe(true);
       child.send({ exit: true });
-      expect(await closed).toEqual([0, null]);
+      expect(await withinTest(closed, signal)).toEqual([0, null]);
       expect(stderr).toBe("");
       expect(store.release(parent.lease)).toBe(false);
       expect(store.release(boundChild)).toBe(true);
@@ -590,7 +619,10 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       expect(probeWriterAdmission()).toEqual({ acquired: true });
       expect(store.read(root)).toEqual({ kind: "absent" });
     } finally {
-      await stopChildProcess(child, 5_000);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
     }
   });
 
