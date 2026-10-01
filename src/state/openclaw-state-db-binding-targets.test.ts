@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -124,7 +125,10 @@ function createVersion14Bindings() {
   }
 }
 
-async function holdGatewayLifecycle(databasePath: string): Promise<{
+async function holdGatewayLifecycle(
+  databasePath: string,
+  signal: AbortSignal,
+): Promise<{
   child: ChildProcess;
   release: () => Promise<void>;
 }> {
@@ -144,45 +148,50 @@ async function holdGatewayLifecycle(databasePath: string): Promise<{
     [...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1), "--input-type=module", "--eval", source],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
+  let ready = false;
   try {
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new Error("Gateway lifecycle holder timed out")),
-        5_000,
-      );
-      let stdout = "";
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
-        if (!stdout.includes("ready\n")) {
-          return;
-        }
-        clearTimeout(timeout);
-        resolve();
-      });
-      child.once("exit", (code, signal) => {
-        clearTimeout(timeout);
-        reject(new Error(`Gateway lifecycle holder exited early: code=${code} signal=${signal}`));
-      });
-    });
-  } catch (error) {
-    child.kill("SIGTERM");
-    throw error;
+    await withinTest(
+      new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        let stdout = "";
+        child.stdout?.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString("utf8");
+          if (!stdout.includes("ready\n")) {
+            return;
+          }
+          resolve();
+        });
+        child.once("exit", (code, exitSignal) => {
+          reject(
+            new Error(`Gateway lifecycle holder exited early: code=${code} signal=${exitSignal}`),
+          );
+        });
+      }),
+      signal,
+    );
+    ready = true;
+  } finally {
+    if (!ready) {
+      child.kill("SIGTERM");
+      await closed;
+    }
   }
   return {
     child,
     release: async () => {
       child.stdin?.end();
-      if (child.exitCode === null && child.signalCode === null) {
-        await new Promise<void>((resolve) => {
-          child.once("exit", () => resolve());
-        });
-      }
+      await closed;
     },
   };
 }
 
 describe("conversation binding target migration", () => {
-  it("admits deferred content without schema mutation while another Gateway owns the state", async () => {
+  it("admits deferred content without schema mutation while another Gateway owns the state", async ({
+    signal,
+  }) => {
     const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-deferred-reader-") } };
     const initial = openOpenClawStateDatabase(options);
     const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
@@ -197,7 +206,7 @@ describe("conversation binding target migration", () => {
       finished_at_ms = ? WHERE run_id = ?`)
       .run(Date.now() - 60_000, run.runId);
     closeOpenClawStateDatabaseForTest();
-    const holder = await holdGatewayLifecycle(initial.path);
+    const holder = await holdGatewayLifecycle(initial.path, signal);
     try {
       expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
         changes: [],
@@ -226,9 +235,11 @@ describe("conversation binding target migration", () => {
     });
   });
 
-  it("refuses runtime and doctor schema mutation while another Gateway owns the state", async () => {
+  it("refuses runtime and doctor schema mutation while another Gateway owns the state", async ({
+    signal,
+  }) => {
     const { options, databasePath } = createVersion14Bindings();
-    const holder = await holdGatewayLifecycle(databasePath);
+    const holder = await holdGatewayLifecycle(databasePath, signal);
     try {
       for (const migrate of [
         () => openOpenClawStateDatabase(options),
@@ -252,9 +263,9 @@ describe("conversation binding target migration", () => {
     }
   });
 
-  it.each(migrationPaths)(
+  it.for(migrationPaths)(
     "preserves bindings and additive data through %s and cold reopen under a Gateway",
-    async (migrationPath) => {
+    async (migrationPath, { signal }) => {
       const { options, databasePath, before } = createVersion14Bindings();
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
@@ -307,7 +318,7 @@ describe("conversation binding target migration", () => {
 
       const after = readMigrationSnapshot(migrated.db);
       closeOpenClawStateDatabaseForTest();
-      const holder = await holdGatewayLifecycle(databasePath);
+      const holder = await holdGatewayLifecycle(databasePath, signal);
       try {
         expect(readMigrationSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
       } finally {

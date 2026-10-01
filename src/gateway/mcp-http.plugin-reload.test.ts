@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
@@ -38,6 +39,15 @@ it.for(["plain", "opaque", "shared"] as const)(
     const pluginDir = path.join(bundledDir, "generation-probe");
     const workspaceDir = path.join(root, "workspace");
     const observationsPath = path.join(root, "tool-completions.jsonl");
+    const observationsEvent = `tool-completions:${root}`;
+    const observations = [createDeferred(), createDeferred()];
+    const onObservation = (sessionKey: string) => {
+      if (sessionKey === "agent:main:generation-before") {
+        observations[0]!.resolve();
+      } else if (sessionKey === "agent:main:generation-after") {
+        observations[1]!.resolve();
+      }
+    };
     const captureKey = `observer-${path.basename(root)}`;
     const captured: unknown[] = [];
     const warnings = createWarnLogCapture("mcp-observer-result-isolation");
@@ -118,6 +128,7 @@ it.for(["plain", "opaque", "shared"] as const)(
 
     await runQaGatewayFixture(
       async () => {
+        process.on(observationsEvent, onObservation);
         vi.stubEnv("OPENCLAW_HOME", root);
         vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
         vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
@@ -142,6 +153,7 @@ it.for(["plain", "opaque", "shared"] as const)(
         fs.appendFileSync(${JSON.stringify(observationsPath)}, JSON.stringify({
           toolName: event.toolName, sessionKey: ctx.sessionKey, result: event.result
         }) + "\\n");
+        process.emit(${JSON.stringify(observationsEvent)}, ctx.sessionKey);
         event.result.content[0].text = "observer mutation";
         if (event.result.details.bytes) event.result.details.bytes[0] = 255;
         throw new Error("observer failure must not change the HTTP result");
@@ -188,23 +200,22 @@ it.for(["plain", "opaque", "shared"] as const)(
           expect(await warnings.findText("after_tool_call")).toBeDefined();
           return;
         }
-        await vi.waitFor(() =>
-          expect(
-            fs
-              .readFileSync(observationsPath, "utf8")
-              .trim()
-              .split("\n")
-              .map((line) => JSON.parse(line)),
-          ).toEqual(
-            ["before", "after"].map((phase) => ({
-              toolName: "generation_probe",
-              sessionKey: `agent:main:generation-${phase}`,
-              result: {
-                content: [{ type: "text", text: "generation tool available" }],
-                details: {},
-              },
-            })),
-          ),
+        await withinTest(Promise.all(observations.map((entry) => entry.promise)), signal);
+        expect(
+          fs
+            .readFileSync(observationsPath, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        ).toEqual(
+          ["before", "after"].map((phase) => ({
+            toolName: "generation_probe",
+            sessionKey: `agent:main:generation-${phase}`,
+            result: {
+              content: [{ type: "text", text: "generation tool available" }],
+              details: {},
+            },
+          })),
         );
       },
       () => closeMcpLoopbackServer(),
@@ -215,6 +226,7 @@ it.for(["plain", "opaque", "shared"] as const)(
       () => clearRuntimeConfigSnapshot(),
       () => vi.unstubAllEnvs(),
       () => warnings.cleanup(),
+      () => process.removeListener(observationsEvent, onObservation),
     );
   },
 );

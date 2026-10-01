@@ -52,7 +52,10 @@ import {
   readDanglingSkillWorkshopReviewIndex,
 } from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
-import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
+import {
+  runHotRollbackJournalRecoveryProbe,
+  runStateDatabaseProcessProbe,
+} from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -733,43 +736,35 @@ function expectNoncanonicalAuditSchemaRejected(
   });
 }
 
-function runConcurrentSchemaProbe(params: {
+async function runConcurrentSchemaProbe(params: {
   mode: "fresh" | "upgrade";
   moduleUrl: string;
   rootDir: string;
-}): string[] {
+  signal: AbortSignal;
+}): Promise<string[]> {
   const workerSource = `
-    import fs from "node:fs";
+    import { once } from "node:events";
 
     const {
       closeOpenClawStateDatabaseForTest,
       openOpenClawStateDatabase,
     } = await import(process.env.OPENCLAW_SCHEMA_TEST_MODULE_URL);
     const databasePath = process.env.OPENCLAW_SCHEMA_TEST_DATABASE_PATH;
-    const enteringPath = process.env.OPENCLAW_SCHEMA_TEST_ENTERING_PATH;
-    const readyPath = process.env.OPENCLAW_SCHEMA_TEST_READY_PATH;
-    const startPath = process.env.OPENCLAW_SCHEMA_TEST_START_PATH;
-    const workerIndex = process.env.OPENCLAW_SCHEMA_TEST_WORKER_INDEX;
-    async function waitForMarker(markerPath, label) {
-      const deadline = Date.now() + 15_000;
-      while (!fs.existsSync(markerPath)) {
-        if (Date.now() >= deadline) {
-          throw new Error(\`timed out waiting for \${label}\`);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 2));
-      }
-    }
-    fs.writeFileSync(readyPath, "ready");
-    await waitForMarker(startPath, "concurrent schema upgrade start");
-    fs.writeFileSync(enteringPath, \`entering-\${workerIndex}\`);
+    const started = once(process, "message");
+    process.send("ready");
+    const [start] = await started;
+    if (start !== "start") throw new Error("schema probe received an invalid start");
+    process.send("entering");
     try {
       const database = openOpenClawStateDatabase({ path: databasePath });
       const integrity = database.db.prepare("PRAGMA integrity_check").get();
       if (integrity?.integrity_check !== "ok") {
         throw new Error("state database integrity check failed");
       }
-      fs.writeFileSync(readyPath + ".opened", "opened");
-      await waitForMarker(readyPath + ".retire", "schema probe retirement permission");
+      const retired = once(process, "message");
+      process.send("opened");
+      const [retire] = await retired;
+      if (retire !== "retire") throw new Error("schema probe received an invalid retirement");
     } catch (error) {
       try {
         closeOpenClawStateDatabaseForTest();
@@ -779,11 +774,11 @@ function runConcurrentSchemaProbe(params: {
       throw error;
     }
     closeOpenClawStateDatabaseForTest();
+    process.disconnect();
   `;
   const orchestratorSource = `
     import assert from "node:assert/strict";
     import { spawn } from "node:child_process";
-    import fs from "node:fs";
     import path from "node:path";
     import { DatabaseSync } from "node:sqlite";
 
@@ -795,9 +790,14 @@ function runConcurrentSchemaProbe(params: {
     const workerCount = 2;
     const roundCount = 1;
     const databasePaths = [];
-    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    function waitForChild(child) {
+    function observeChild(child) {
+      const entered = {};
+      const events = Object.fromEntries(["ready", "entering", "opened"].map((name) => [
+        name,
+        new Promise((resolve) => { entered[name] = resolve; }),
+      ]));
+      child.on("message", (name) => entered[name]?.());
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (chunk) => {
@@ -806,56 +806,26 @@ function runConcurrentSchemaProbe(params: {
       child.stderr.on("data", (chunk) => {
         stderr += chunk;
       });
-      return new Promise((resolve) => {
-        let settled = false;
-        const finish = (result) => {
-          if (!settled) {
-            settled = true;
-            resolve({ ...result, stderr, stdout });
-          }
-        };
-        child.once("error", (error) => finish({ code: null, error: String(error), signal: null }));
-        child.once("close", (code, signal) => finish({ code, signal }));
+      const outcome = new Promise((resolve) => {
+        let error;
+        child.once("error", (failure) => { error = String(failure); });
+        child.once("close", (code, signal) => resolve({ code, signal, error, stderr, stdout }));
       });
+      return { events, outcome };
     }
 
-    async function waitForMarkers(workers, markerPaths, label, round) {
-      const deadline = Date.now() + 15_000;
-      while (!markerPaths.every((markerPath) => fs.existsSync(markerPath))) {
-        const exitedIndex = workers.findIndex(
-          (worker) => worker.exitCode !== null || worker.signalCode !== null,
-        );
-        if (exitedIndex >= 0) {
-          throw new Error(\`round \${round} worker \${exitedIndex} exited before \${label}\`);
-        }
-        if (Date.now() >= deadline) {
-          throw new Error(\`round \${round} timed out waiting for \${label}\`);
-        }
-        await sleep(2);
-      }
-    }
-
-    async function waitForOutcomes(outcomes, round) {
-      let timeout;
-      try {
-        return await Promise.race([
-          Promise.all(outcomes),
-          new Promise((_, reject) => {
-            timeout = setTimeout(
-              () => reject(new Error(\`round \${round} timed out waiting for workers to exit\`)),
-              15_000,
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(timeout);
-      }
+    async function waitForEvents(observers, event, label, round) {
+      await Promise.all(observers.map(({ events, outcome }, index) => Promise.race([
+        events[event],
+        outcome.then(() => {
+          throw new Error(\`round \${round} worker \${index} exited before \${label}\`);
+        }),
+        probeStopped,
+      ])));
     }
 
     for (let round = 0; round < roundCount; round += 1) {
       const databasePath = path.join(rootDir, \`concurrent-\${mode}-\${round}.sqlite\`);
-      const barrierDir = path.join(rootDir, \`barrier-\${round}\`);
-      fs.mkdirSync(barrierDir, { recursive: true });
 
       if (mode === "upgrade") {
         const {
@@ -890,14 +860,8 @@ function runConcurrentSchemaProbe(params: {
         legacy.close();
       }
 
-      const startPath = path.join(barrierDir, "start");
-      const enteringPaths = Array.from({ length: workerCount }, (_, index) =>
-        path.join(barrierDir, \`entering-\${index}\`),
-      );
-      const readyPaths = Array.from({ length: workerCount }, (_, index) =>
-        path.join(barrierDir, \`ready-\${index}\`),
-      );
-      const workers = Array.from({ length: workerCount }, (_, index) => {
+      probeAbort.signal.throwIfAborted();
+      const workers = Array.from({ length: workerCount }, () => {
         return spawn(
           process.execPath,
           [...workerExecArgv, "--input-type=module", "-e", workerSource],
@@ -905,22 +869,31 @@ function runConcurrentSchemaProbe(params: {
             env: {
               ...process.env,
               OPENCLAW_SCHEMA_TEST_DATABASE_PATH: databasePath,
-              OPENCLAW_SCHEMA_TEST_ENTERING_PATH: enteringPaths[index],
               OPENCLAW_SCHEMA_TEST_MODULE_URL: moduleUrl,
-              OPENCLAW_SCHEMA_TEST_READY_PATH: readyPaths[index],
-              OPENCLAW_SCHEMA_TEST_START_PATH: startPath,
-              OPENCLAW_SCHEMA_TEST_WORKER_INDEX: String(index),
             },
-            stdio: ["ignore", "pipe", "pipe"],
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
           },
         );
       });
-      const outcomes = workers.map(waitForChild);
+      const observers = workers.map(observeChild);
+      const outcomes = observers.map(({ outcome }) => outcome);
       let roundError;
+      let results;
       try {
-        await waitForMarkers(workers, readyPaths, "ready markers", round);
-        fs.writeFileSync(startPath, "start");
-        await waitForMarkers(workers, enteringPaths, "entering markers", round);
+        await waitForEvents(observers, "ready", "ready markers", round);
+        workers.forEach((worker) => worker.send("start"));
+        await waitForEvents(observers, "entering", "entering markers", round);
+        await waitForEvents(observers, "opened", "successful open markers", round);
+        // Keep both real connections live through successful admission, then join each close.
+        for (const [index, worker] of workers.entries()) {
+          assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited before retirement\`);
+          assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled before retirement\`);
+          worker.send("retire");
+          const result = await Promise.race([outcomes[index], probeStopped]);
+          if (result.error || result.code !== 0) {
+            throw new Error(\`round \${round} worker \${index} retirement failed: \${JSON.stringify(result)}\`);
+          }
+        }
       } catch (error) {
         roundError = error;
       } finally {
@@ -929,33 +902,6 @@ function runConcurrentSchemaProbe(params: {
             if (worker.exitCode === null && worker.signalCode === null) {
               worker.kill();
             }
-          }
-        }
-      }
-      let results;
-      try {
-        if (!roundError) {
-          const openedPaths = readyPaths.map((readyPath) => readyPath + ".opened");
-          await waitForMarkers(workers, openedPaths, "successful open markers", round);
-          // Keep both real connections live through successful admission, then join each close.
-          for (const [index, worker] of workers.entries()) {
-            assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited before retirement\`);
-            assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled before retirement\`);
-            fs.writeFileSync(readyPaths[index] + ".retire", "retire");
-            const [result] = await waitForOutcomes([outcomes[index]], round);
-            if (result.error || result.code !== 0) {
-              throw new Error(\`round \${round} worker \${index} retirement failed: \${JSON.stringify(result)}\`);
-            }
-          }
-        }
-        results = await waitForOutcomes(outcomes, round);
-      } catch (error) {
-        roundError = roundError
-          ? new AggregateError([roundError, error], \`round \${round} probe and worker wait failed\`)
-          : error;
-        for (const worker of workers) {
-          if (worker.exitCode === null && worker.signalCode === null) {
-            worker.kill();
           }
         }
         results = await Promise.all(outcomes);
@@ -975,16 +921,11 @@ function runConcurrentSchemaProbe(params: {
 
     console.log(JSON.stringify(databasePaths));
   `;
-  const output = execFileSync(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(new URL(params.moduleUrl)).slice(0, -1),
-      "--input-type=module",
-      "-e",
-      orchestratorSource,
-    ],
-    { encoding: "utf8", timeout: 60_000 },
-  );
+  const output = await runStateDatabaseProcessProbe({
+    moduleUrl: params.moduleUrl,
+    source: orchestratorSource,
+    signal: params.signal,
+  });
   const resultLine = output.trim().split("\n").at(-1);
   if (!resultLine) {
     throw new Error(`concurrent schema ${params.mode} probe produced no result`);
@@ -4264,10 +4205,11 @@ INSERT INTO device_identities VALUES (
 
   it.skipIf(process.platform === "win32")(
     "recovers a hot rollback journal privately before writable recovery",
-    () => {
-      const result = runHotRollbackJournalRecoveryProbe({
+    async ({ signal }) => {
+      const result = await runHotRollbackJournalRecoveryProbe({
         moduleUrl: resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href,
         rootDir: createTempStateDir(),
+        signal,
       });
 
       expect(result.readOnly).toEqual({
@@ -4538,10 +4480,15 @@ INSERT INTO device_identities VALUES (
     },
   );
 
-  it("serializes concurrent additive schema upgrades across processes", () => {
+  it("serializes concurrent additive schema upgrades across processes", async ({ signal }) => {
     const rootDir = createTempStateDir();
     const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href;
-    const databasePaths = runConcurrentSchemaProbe({ mode: "upgrade", moduleUrl, rootDir });
+    const databasePaths = await runConcurrentSchemaProbe({
+      mode: "upgrade",
+      moduleUrl,
+      rootDir,
+      signal,
+    });
     const expectedShape = createInitialStateSchemaShape();
     const { DatabaseSync } = requireNodeSqlite();
 
@@ -4562,10 +4509,15 @@ INSERT INTO device_identities VALUES (
     }
   }, 60_000);
 
-  it("serializes concurrent fresh database initialization across processes", () => {
+  it("serializes concurrent fresh database initialization across processes", async ({ signal }) => {
     const rootDir = createTempStateDir();
     const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href;
-    const databasePaths = runConcurrentSchemaProbe({ mode: "fresh", moduleUrl, rootDir });
+    const databasePaths = await runConcurrentSchemaProbe({
+      mode: "fresh",
+      moduleUrl,
+      rootDir,
+      signal,
+    });
     const expectedShape = createInitialStateSchemaShape();
     const { DatabaseSync } = requireNodeSqlite();
 

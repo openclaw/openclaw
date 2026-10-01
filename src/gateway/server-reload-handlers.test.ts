@@ -6,7 +6,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
@@ -63,8 +67,6 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { buildWindowsCmdExeCommandLine } from "../process/windows-command.js";
 import { createSimpleChannelSecretContract } from "../secrets/channel-secret-basic-runtime.js";
 import { providerResolutionError } from "../secrets/resolve-errors.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
@@ -134,6 +136,7 @@ import {
   makePluginReloadResult,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
+import { createSupervisedExitWatcherFixture } from "./server-reload-handlers.process.test-support.js";
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
 import { startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl } from "./server-reload-managed.js";
@@ -1737,31 +1740,18 @@ describe("gateway hot reload model state", () => {
     },
   );
 
-  it("keeps a supervised on-exit child alive exactly once across lazy cron reload", async () => {
+  it("keeps a supervised on-exit child alive exactly once across lazy cron reload", async ({
+    signal,
+  }) => {
     const fixtureDir = autoCleanupTempDirs.make("openclaw-cron-exit-reload-");
-    const childScriptPath = path.join(fixtureDir, "watcher.cjs");
-    const markerPath = path.join(fixtureDir, "watcher-runs.txt");
-    const releasePath = path.join(fixtureDir, "release-watcher");
+    const { markerPath, releasePath, command, childStarted, spawning, spawn } =
+      await createSupervisedExitWatcherFixture(fixtureDir);
     const config = {
       // This fixture runs cron without a heartbeat wake handler.
       agents: { defaults: { heartbeat: { every: "0m" } } },
       session: { mainKey: "main", store: path.join(fixtureDir, "sessions.json") },
       cron: { enabled: true, store: path.join(fixtureDir, "jobs.json") },
     } as OpenClawConfig;
-    await writeFile(
-      childScriptPath,
-      "const fs=require('node:fs');" +
-        "fs.appendFileSync(process.argv[2],'run\\n');" +
-        "const timer=setInterval(()=>{if(fs.existsSync(process.argv[3]))clearInterval(timer)},10)",
-      "utf8",
-    );
-    const childArgs = [childScriptPath, markerPath, releasePath];
-    const command =
-      process.platform === "win32"
-        ? buildWindowsCmdExeCommandLine(process.execPath, childArgs)
-        : [process.execPath, ...childArgs].map((argument) => JSON.stringify(argument)).join(" ");
-    const supervisor = getProcessSupervisor();
-    const spawn = vi.spyOn(supervisor, "spawn");
     const previousCronFactory = hoisted.buildGatewayCronService.getMockImplementation();
     assert(previousCronFactory, "expected the default cron test factory");
     let state: ReturnType<ReloadHandlerParams["getState"]> | undefined;
@@ -1801,14 +1791,17 @@ describe("gateway hot reload model state", () => {
         payload: { kind: "systemEvent", text: "watched child finished" },
       });
       await initialCronState.reconcileExitWatchers();
-      await waitForFast(async () => expect(await readFile(markerPath, "utf8")).toBe("run\n"), {
-        timeout: 10_000,
-      });
       expect(spawn).toHaveBeenCalledOnce();
-      const watchedRun = await spawn.mock.results[0]?.value;
-      if (!watchedRun) {
-        throw new Error("expected the supervised cron exit watcher to start");
-      }
+      const watchedRun = await withinTest(spawning, signal);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          childStarted,
+          watchedRun.wait(),
+          "expected the supervised cron exit watcher to start",
+        ),
+        signal,
+      );
+      expect(await readFile(markerPath, "utf8")).toBe("run\n");
 
       const resolveGatewayContext = vi.fn(() => undefined);
       const handlers = createGatewayReloadHandlers({

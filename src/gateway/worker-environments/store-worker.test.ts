@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/kysely-sync.js";
@@ -611,7 +612,9 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
   expect(revoked).toEqual([]);
 });
 
-it("keeps the same inventory writable after a foreign maintenance owner releases state", async () => {
+it("keeps the same inventory writable after a foreign maintenance owner releases state", async ({
+  signal,
+}) => {
   const stateDir = tempDirs.make("worker-inventory-contention-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const database = openOpenClawStateDatabase();
@@ -654,16 +657,23 @@ it("keeps the same inventory writable after a foreign maintenance owner releases
     stderr += String(chunk);
   });
   const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
-    child.once("close", (code, signal) => resolve([code, signal]));
+    child.once("close", (code, exitSignal) => resolve([code, exitSignal]));
   });
   try {
-    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+    const [ready] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message", { signal }),
+        exited,
+        "foreign maintenance owner exited before acquiring its lock",
+      ),
+      signal,
+    );
     expect(ready).toEqual({ locked: true });
     expect(() => openOpenClawStateDatabase()).toThrow("offline maintenance");
     expect(child.exitCode).toBeNull();
     expect(events).toEqual(["open-error"]);
     child.send({ release: true });
-    expect(await exited, stderr).toEqual([0, null]);
+    expect(await withinTest(exited, signal), stderr).toEqual([0, null]);
     expect(openOpenClawStateDatabase().path).toBe(pathname);
     expect(store.get("before-lock")?.state).toBe("requested");
     await store.transition({ environmentId: "before-lock", from: "requested", to: "provisioning" });

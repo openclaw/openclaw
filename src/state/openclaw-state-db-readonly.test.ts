@@ -7,6 +7,7 @@ import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
@@ -270,7 +271,9 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
   });
 });
 
-it("waits for a transient database lock before a fresh read-only schema inspection", async () => {
+it("waits for a transient database lock before a fresh read-only schema inspection", async ({
+  signal,
+}) => {
   await withTempDir("openclaw-state-readonly-busy-", async (stateDir) => {
     const options = createOptions(stateDir);
     await fsp.mkdir(path.dirname(options.path), { recursive: true });
@@ -306,14 +309,21 @@ it("waits for a transient database lock before a fresh read-only schema inspecti
     let stderr = "";
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve) => {
-        child.once("close", (code, signal) => resolve({ code, signal }));
+        child.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
       },
     );
     try {
       expectDefined(child.stderr, "SQLite lock child stderr pipe").on("data", (chunk) => {
         stderr += String(chunk);
       });
-      const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+      const [ready] = await withinTest(
+        awaitGateBeforeSettlement(
+          once(child, "message", { signal }),
+          closed,
+          "SQLite lock child exited before acquiring its exclusive lock",
+        ),
+        signal,
+      );
       expect(ready).toEqual({ locked: true });
       // The child releases independently while the synchronous reader waits inside SQLite.
       child.send({ release: true });
@@ -323,7 +333,7 @@ it("waits for a transient database lock before a fresh read-only schema inspecti
         return db.prepare("SELECT value FROM held").all();
       }, options);
       expect(rows).toEqual([{ value: "committed" }]);
-      expect(await closed, stderr).toEqual({ code: 0, signal: null });
+      expect(await withinTest(closed, signal), stderr).toEqual({ code: 0, signal: null });
       expect(fs.readFileSync(options.path)).toEqual(before);
     } finally {
       await stopChildProcess(child, 5_000);

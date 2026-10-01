@@ -108,11 +108,11 @@ afterEach(async () => {
 describe("local sandbox workspace reconciliation", () => {
   it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
     "edits and runs Git in a real required Podman sandbox across turns",
-    async () => {
+    async ({ signal }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const { proveRequiredPodmanWorkspace } =
         await import("./local-workspace-podman.test-support.js");
-      await proveRequiredPodmanWorkspace(root, owner);
+      await proveRequiredPodmanWorkspace(root, owner, signal);
     },
     120000,
   );

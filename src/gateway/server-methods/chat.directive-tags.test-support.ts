@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   loadExactSessionEntryCandidates,
@@ -208,4 +209,26 @@ export function createChatDirectiveReplyBackend(params: {
           },
         }),
   };
+}
+
+export function createUnconfirmedTranscriptDelivery() {
+  const delivery = createDeferred<{
+    transcriptCommit: "unconfirmed";
+    errorMessage: string;
+  }>();
+  const persisted = createDeferred();
+  const queueMessage = vi.fn<NonNullable<ReplyBackendHandle["queueMessage"]>>(
+    async (_text, options) => {
+      options?.onQueueAccepted?.(true);
+      try {
+        await options?.userTurnTranscriptRecorder?.persistApproved();
+        persisted.resolve();
+      } catch (error) {
+        persisted.reject(error);
+        throw error;
+      }
+      return await delivery.promise;
+    },
+  );
+  return { ...delivery, persisted: persisted.promise, queueMessage };
 }

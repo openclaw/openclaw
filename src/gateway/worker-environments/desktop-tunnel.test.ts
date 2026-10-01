@@ -2,8 +2,10 @@ import { access, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import {
   deferred,
@@ -313,9 +315,23 @@ describe("worker desktop tunnels", () => {
     await manager.stopAll();
   });
 
-  it("retains SSH resources after failed stop and releases them on late exit", async () => {
+  it("retains SSH resources after failed stop and releases them on late exit", async ({
+    signal,
+  }) => {
     const fake = fakeRunner();
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    const disposed = deferred<void>();
+    const registry = createDesktopSessionRegistry();
+    const acquireSession = registry.acquire;
+    registry.acquire = (request) =>
+      acquireSession({
+        ...request,
+        dispose: () => {
+          const disposal = request.dispose?.() ?? Promise.resolve();
+          void disposal.then(disposed.resolve, disposed.reject);
+          return disposal;
+        },
+      });
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner, registry });
     const starting = acquire(manager, 1, { protocol: "rfb", port: 5900 });
     await waitForStarts(fake.starts, 1);
     const child = fake.starts[0]!.process;
@@ -335,9 +351,8 @@ describe("worker desktop tunnels", () => {
       expect(desktopInfo).not.toHaveBeenCalled();
       stop.mockRestore();
       child.exit();
-      await vi.waitFor(async () => {
-        await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      await withinTest(disposed.promise, signal);
+      await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
       expect(desktopInfo).toHaveBeenCalledExactlyOnceWith("desktop SSH tunnel exited", {
         code: 1,
         signal: null,

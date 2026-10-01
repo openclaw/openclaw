@@ -2,8 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../agents/mcp-ui-resource.js";
@@ -24,6 +30,14 @@ installGatewayTestHooks({ scope: "suite" });
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 
 describe("MCP App request shutdown", () => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts?.close();
+  });
+
   it("cancels the MCP request before joining its received handler", async ({ signal }) => {
     const callFinished = createDeferredCore();
     let gateway: GatewayHarness | undefined;
@@ -56,6 +70,7 @@ describe("MCP App request shutdown", () => {
         serverPath,
         `import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+${fixtureReceiptClientSource(receipts.endpoint)}
 const enteredPath = ${JSON.stringify(enteredPath)};
 const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
 const input = createInterface({ input: process.stdin });
@@ -77,6 +92,7 @@ input.on("line", (line) => {
   } else if (request.method === "tools/call") {
     // A real upstream operation remains pending until its transport is closed.
     writeFileSync(enteredPath, "entered");
+    sendReceipt(enteredPath, "entered");
   }
 });
 input.on("close", () => process.exit(0));
@@ -137,9 +153,17 @@ input.on("close", () => process.exit(0));
           params: { sessionKey, agentId: "main", viewId: view.viewId, toolName: "blocked_tool" },
         }),
       );
-      await vi.waitFor(async () => expect(await fs.readFile(enteredPath, "utf8")).toBe("entered"), {
-        timeout: 5_000,
-      });
+      // Receipt delivery is independent of the MCP transport. If the call settles
+      // first, its durable marker decides whether the upstream operation entered.
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(enteredPath, "entered"),
+          callFinished.promise.then(async () => {
+            expect(await fs.readFile(enteredPath, "utf8")).toBe("entered");
+          }),
+        ]),
+        signal,
+      );
       expect(callStarted).toBe(true);
       expect(callSettled).toBe(false);
 

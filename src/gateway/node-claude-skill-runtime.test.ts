@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
@@ -332,7 +333,9 @@ async function fixture(
 }
 
 describe("paired-node Claude skill invocation", () => {
-  it("serializes pinned resources, rewrites references, executes support bytes, and removes node artifacts", async () => {
+  it("serializes pinned resources, rewrites references, executes support bytes, and removes node artifacts", async ({
+    signal,
+  }) => {
     const f = await fixture(
       `
 const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process'), crypto = require('node:crypto');
@@ -345,6 +348,18 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
 });`,
       { managed: true },
     );
+    const artifactRemoval = createDeferredCore();
+    const removedPaths = new Set<string>();
+    let artifactRoot: string | undefined;
+    const remove = fs.rm.bind(fs);
+    const removalObserver = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      await remove(target, options);
+      const removedPath = String(target);
+      removedPaths.add(removedPath);
+      if (removedPath === artifactRoot) {
+        artifactRemoval.resolve();
+      }
+    });
     try {
       const selected = f.context.params.skillsSnapshot!.resolvedSkills![0]!;
       await saveSkillLibrary(f.authority, {
@@ -381,12 +396,20 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
       expect(f.requests[0]).toMatchObject({ skillRuntime: true });
       expect(JSON.stringify(f.requests)).not.toContain("files");
       expect(f.maxWireBytes()).toBeLessThan(16 * 1024);
-      await vi.waitFor(async () =>
-        expect(await fs.stat(actual.skillPath).catch(() => undefined)).toBeUndefined(),
-      );
+      // The result can precede descendant extinction and its artifact-removal continuation.
+      artifactRoot = actual.readRoot;
+      if (removedPaths.has(artifactRoot)) {
+        artifactRemoval.resolve();
+      }
+      await withinTest(artifactRemoval.promise, signal);
+      expect(await fs.stat(actual.skillPath).catch(() => undefined)).toBeUndefined();
       expect(await fs.readdir(f.workspace)).toEqual([]);
     } finally {
-      await f.close();
+      try {
+        await f.close();
+      } finally {
+        removalObserver.mockRestore();
+      }
     }
   });
 

@@ -1,10 +1,81 @@
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { withinTest } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 
-export function runHotRollbackJournalRecoveryProbe(params: {
+/** The generated owner reaps its children before the outer native close can settle. */
+export async function runStateDatabaseProcessProbe(params: {
+  moduleUrl: string;
+  source: string;
+  signal: AbortSignal;
+}): Promise<string> {
+  params.signal.throwIfAborted();
+  const source = `
+    const probeAbort = new AbortController();
+    const probeStopped = new Promise((_, reject) => {
+      const stop = () => {
+        const error = new Error("State database probe canceled");
+        probeAbort.abort(error);
+        reject(error);
+      };
+      process.once("message", stop);
+      process.once("disconnect", stop);
+    });
+    void probeStopped.catch(() => {});
+    ${params.source}
+    process.disconnect();
+  `;
+  const child = spawn(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(new URL(params.moduleUrl)).slice(0, -1),
+      "--input-type=module",
+      "-e",
+      source,
+    ],
+    { stdio: ["ignore", "pipe", "pipe", "ipc"] },
+  );
+  let stdout = "";
+  let stderr = "";
+  let launchError: Error | undefined;
+  child.once("error", (error) => {
+    launchError = error;
+  });
+  const closed = new Promise<number | null>((resolve) => {
+    child.once("close", (code) => resolve(code));
+  });
+  try {
+    const output = child.stdout;
+    const errors = child.stderr;
+    if (!output || !errors) {
+      throw new Error("State database probe requires piped stdout and stderr");
+    }
+    output.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    errors.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    const code = await withinTest(closed, params.signal);
+    if (launchError) {
+      throw launchError;
+    }
+    if (code !== 0) {
+      throw new Error(`State database probe exited with ${child.signalCode ?? code}: ${stderr}`);
+    }
+    return stdout;
+  } finally {
+    if (child.connected) {
+      child.send("stop", () => {});
+    }
+    await closed;
+  }
+}
+
+export async function runHotRollbackJournalRecoveryProbe(params: {
   moduleUrl: string;
   rootDir: string;
-}): {
+  signal: AbortSignal;
+}): Promise<{
   committedRowsAfterRecovery: number;
   immutableDirtyRowsBeforeKill: number;
   integrity: string;
@@ -18,9 +89,10 @@ export function runHotRollbackJournalRecoveryProbe(params: {
     opened: boolean;
     uncommittedRows: number | null;
   };
-} {
+}> {
   const probeSource = `
     import { spawn } from "node:child_process";
+    import { once } from "node:events";
     import { createHash } from "node:crypto";
     import fs from "node:fs";
     import path from "node:path";
@@ -29,7 +101,6 @@ export function runHotRollbackJournalRecoveryProbe(params: {
 
     const moduleUrl = ${JSON.stringify(params.moduleUrl)};
     const databasePath = path.join(${JSON.stringify(params.rootDir)}, "hot-journal.sqlite");
-    const readyPath = path.join(${JSON.stringify(params.rootDir)}, "writer-ready");
     const rowCount = 256;
     const {
       closeOpenClawStateDatabaseForTest,
@@ -59,7 +130,6 @@ export function runHotRollbackJournalRecoveryProbe(params: {
     rollbackMode.close();
 
     const writerSource = \`
-      import fs from "node:fs";
       import { DatabaseSync } from "node:sqlite";
 
       const database = new DatabaseSync(process.env.OPENCLAW_HOT_JOURNAL_DATABASE_PATH);
@@ -71,12 +141,13 @@ export function runHotRollbackJournalRecoveryProbe(params: {
         "BEGIN IMMEDIATE; " +
         "UPDATE hot_journal_probe SET value = 'uncommitted';",
       );
-      fs.writeFileSync(process.env.OPENCLAW_HOT_JOURNAL_READY_PATH, "ready");
+      process.send("ready");
       // Keep the transaction-owning connection live until the parent kills this process.
       setInterval(() => {
         void database.isOpen;
       }, 1_000);
     \`;
+    probeAbort.signal.throwIfAborted();
     const writer = spawn(
       process.execPath,
       ["--input-type=module", "-e", writerSource],
@@ -84,30 +155,29 @@ export function runHotRollbackJournalRecoveryProbe(params: {
         env: {
           ...process.env,
           OPENCLAW_HOT_JOURNAL_DATABASE_PATH: databasePath,
-          OPENCLAW_HOT_JOURNAL_READY_PATH: readyPath,
         },
-        stdio: ["ignore", "ignore", "pipe"],
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
       },
     );
+    const writerReady = once(writer, "message");
     let writerStderr = "";
     writer.stderr.on("data", (chunk) => {
       writerStderr += chunk;
     });
-    const writerClosed = new Promise((resolve, reject) => {
-      writer.once("error", reject);
+    const writerClosed = new Promise((resolve) => {
       writer.once("close", (code, signal) => resolve({ code, signal }));
     });
 
     try {
-      const deadline = Date.now() + 15_000;
-      while (!fs.existsSync(readyPath)) {
-        if (writer.exitCode !== null || writer.signalCode !== null) {
+      const [ready] = await Promise.race([
+        writerReady,
+        writerClosed.then(() => {
           throw new Error(\`writer exited before creating a hot journal: \${writerStderr}\`);
-        }
-        if (Date.now() >= deadline) {
-          throw new Error("timed out waiting for hot rollback journal writer");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 2));
+        }),
+        probeStopped,
+      ]);
+      if (ready !== "ready") {
+        throw new Error("hot rollback journal writer sent an invalid ready receipt");
       }
       const journalPath = \`\${databasePath}-journal\`;
       if (!fs.existsSync(journalPath) || fs.statSync(journalPath).size === 0) {
@@ -181,16 +251,11 @@ export function runHotRollbackJournalRecoveryProbe(params: {
       closeOpenClawStateDatabaseForTest();
     }
   `;
-  const output = execFileSync(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(new URL(params.moduleUrl)).slice(0, -1),
-      "--input-type=module",
-      "-e",
-      probeSource,
-    ],
-    { encoding: "utf8", timeout: 30_000 },
-  );
+  const output = await runStateDatabaseProcessProbe({
+    moduleUrl: params.moduleUrl,
+    source: probeSource,
+    signal: params.signal,
+  });
   const resultLine = output.trim().split("\n").at(-1);
   if (!resultLine) {
     throw new Error("hot rollback journal recovery probe produced no result");

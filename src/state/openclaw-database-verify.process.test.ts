@@ -4,6 +4,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
@@ -18,7 +19,7 @@ import { verifyOpenClawDatabases } from "./openclaw-database-verify.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function importVerifierInUnrelatedFork(): Promise<unknown[]> {
+async function importVerifierInUnrelatedFork(signal: AbortSignal): Promise<unknown[]> {
   const fixtureDir = tempDirs.make("openclaw-database-verify-process-");
   const fixturePath = path.join(fixtureDir, "unrelated-child.mjs");
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseVerify);
@@ -37,27 +38,32 @@ async function importVerifierInUnrelatedFork(): Promise<unknown[]> {
     execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
     stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
-  return await new Promise((resolve, reject) => {
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
+  const exited = new Promise<unknown[]>((resolve, reject) => {
     const messages: unknown[] = [];
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error("unrelated verifier import did not exit"));
-    }, 10_000);
     child.on("message", (message: unknown) => messages.push(message));
     child.once("error", (error) => {
-      clearTimeout(timer);
       reject(error);
     });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timer);
+    child.once("exit", (code, exitSignal) => {
       if (code === 0) {
         resolve(messages);
       } else {
-        reject(new Error(`unrelated verifier import exited with ${signal ?? code}`));
+        reject(new Error(`unrelated verifier import exited with ${exitSignal ?? code}`));
       }
     });
     child.send({ type: "unrelated" });
   });
+  try {
+    return await withinTest(exited, signal);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+    }
+    await closed;
+  }
 }
 
 describe("database verifier child process entrypoint", () => {
@@ -103,8 +109,8 @@ describe("database verifier child process entrypoint", () => {
     }
   });
 
-  it("does not consume an unrelated fork's IPC messages", async () => {
-    await expect(importVerifierInUnrelatedFork()).resolves.toEqual([
+  it("does not consume an unrelated fork's IPC messages", async ({ signal }) => {
+    await expect(importVerifierInUnrelatedFork(signal)).resolves.toEqual([
       { echo: { type: "unrelated" } },
     ]);
   });

@@ -2,8 +2,12 @@
 import fs from "node:fs/promises";
 import { Agent, request as httpRequest } from "node:http";
 import path from "node:path";
-import { afterEach, assert, describe, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { afterEach, assert, describe, expect, test, vi, type TestContext } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
@@ -170,56 +174,43 @@ async function writeHookTransformModule(moduleName: string, source: string): Pro
   await fs.writeFile(path.join(transformsDir, moduleName), source, "utf8");
 }
 
-async function createBlockedHookTransform(moduleName: string): Promise<{
-  waitUntilEntered: () => Promise<void>;
-  release: () => Promise<void>;
+async function createBlockedHookTransform(
+  moduleName: string,
+  onTestFinished: TestContext["onTestFinished"],
+): Promise<{
+  entered: Promise<void>;
+  release: () => void;
 }> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert(configPath, "expected OPENCLAW_CONFIG_PATH");
-  const markerPath = path.join(path.dirname(configPath), `${moduleName}.entered`);
-  const releasePath = path.join(path.dirname(configPath), `${moduleName}.release`);
+  const enteredEvent = `hook-transform:${configPath}:${moduleName}`;
+  const entered = createDeferred();
+  const released = createDeferred();
+  const onEntered = (complete: () => void) => {
+    entered.resolve();
+    void released.promise.then(complete);
+  };
+  process.once(enteredEvent, onEntered);
+  onTestFinished(() => {
+    process.removeListener(enteredEvent, onEntered);
+  });
   await writeHookTransformModule(
     moduleName,
-    `import fs from "node:fs/promises";
-const markerPath = ${JSON.stringify(markerPath)};
-const releasePath = ${JSON.stringify(releasePath)};
-export default async function transform() {
-  await fs.writeFile(markerPath, "entered", "utf8");
-  while (true) {
-    try {
-      await fs.access(releasePath);
-      return {};
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
+    `export default async function transform() {
+  await new Promise((resolve) => process.emit(${JSON.stringify(enteredEvent)}, resolve));
+  return {};
 }`,
   );
-  return {
-    waitUntilEntered: async () => {
-      await expect
-        .poll(
-          () =>
-            fs.access(markerPath).then(
-              () => true,
-              () => false,
-            ),
-          { timeout: 2_000, interval: 10 },
-        )
-        .toBe(true);
-    },
-    release: async () => {
-      await fs.writeFile(releasePath, "released", "utf8");
-    },
-  };
+  return { entered: entered.promise, release: released.resolve };
 }
 
 async function withRevokedHook(
   mode: "disable" | "rotate",
+  { signal, onTestFinished }: Pick<TestContext, "signal" | "onTestFinished">,
   afterRotation?: (port: number, socket: Parameters<typeof rpcReq>[0]) => Promise<void>,
 ): Promise<void> {
   const moduleName = `${mode}-reload.mjs`;
-  const transform = await createBlockedHookTransform(moduleName);
+  const transform = await createBlockedHookTransform(moduleName, onTestFinished);
   await writeReloadableHooksConfig({
     enabled: true,
     token: HOOK_TOKEN,
@@ -253,7 +244,14 @@ async function withRevokedHook(
         const revoked = postHook(port, "/hooks/revoked", { text: "after-reload" }, "revoked");
         let response: Response;
         try {
-          await transform.waitUntilEntered();
+          await withinTest(
+            awaitGateBeforeSettlement(
+              transform.entered,
+              revoked,
+              "hook request settled before its transform entered",
+            ),
+            signal,
+          );
           await patchHooksConfig(
             socket,
             mode === "disable" ? { enabled: false } : { enabled: true, token: ROTATED_HOOK_TOKEN },
@@ -276,7 +274,7 @@ async function withRevokedHook(
             expect(control.status).toBe(400);
           }
         } finally {
-          await transform.release();
+          transform.release();
           response = await revoked;
         }
         expect(response.status).toBe(409);
@@ -312,12 +310,12 @@ describe("gateway hook admission", () => {
     });
   });
 
-  test("revokes in-flight hook authority when startup-enabled hooks are disabled", async () => {
-    await withRevokedHook("disable");
+  test("revokes in-flight hook authority when startup-enabled hooks are disabled", async (context) => {
+    await withRevokedHook("disable", context);
   });
 
-  test("rotates hook credentials and preserves replay across production hot reloads", async () => {
-    await withRevokedHook("rotate", async (port, socket) => {
+  test("rotates hook credentials and preserves replay across production hot reloads", async (context) => {
+    await withRevokedHook("rotate", context, async (port, socket) => {
       const mainSessionKey = resolveMainSessionKeyFromConfig();
       const authorized = await postHook(
         port,
