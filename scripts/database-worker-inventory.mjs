@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { format } from "oxfmt";
 import * as ts from "typescript/unstable/ast";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const defaultRoot = path.resolve(import.meta.dirname, "..");
 const outputPath = "docs/reference/database-schemas/worker-access-inventory.md";
 const primitives = new Map([
   ["executeSqliteQuerySync", "Q"],
@@ -108,6 +109,13 @@ const reviewed = new Map([
     {
       priority: 99,
       evidence: "Reaction bindings use worker; other synchronous registry callers remain",
+    },
+  ],
+  [
+    "src/cron/store/quarantine.kernel.ts",
+    {
+      priority: 99,
+      evidence: "Shared by worker operations and native Doctor store-repair transactions",
     },
   ],
 ]);
@@ -217,41 +225,47 @@ function findCalls(source) {
   return calls;
 }
 
-function inventory() {
+export function inventory(root = defaultRoot, ref = "", staged = false) {
   using parser = createNativeTypeScriptParser({ cwd: root });
-  const candidates = execFileSync(
-    "rg",
-    [
-      "-l",
-      [...primitives.keys()].join("|"),
-      "src",
-      "extensions",
-      "packages",
-      "scripts",
-      "-g",
-      "*.ts",
-      "-g",
-      "*.tsx",
-      "-g",
-      "*.js",
-      "-g",
-      "*.mjs",
-      "-g",
-      "*.mts",
-      "-g",
-      "*.cts",
-      "-g",
-      "*.cjs",
-    ],
+  const roots = ["src", "extensions", "packages", "scripts"];
+  const pattern = [...primitives.keys()].join("|");
+  const snapshot = ref !== "" || staged;
+  const result = spawnSync(
+    snapshot ? "git" : "rg",
+    snapshot
+      ? [
+          "grep",
+          "-l",
+          "-z",
+          "-E",
+          ...(ref ? [] : ["--cached"]),
+          pattern,
+          ...(ref ? [ref] : []),
+          "--",
+          ...roots,
+        ]
+      : [
+          "-l",
+          "--null",
+          "-g",
+          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          pattern,
+          ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
+        ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  )
-    .trim()
-    .split("\n");
-  const files = candidates.filter((file) => !excluded.test(file));
+  );
+  if (result.error || (result.status !== 0 && result.status !== 1)) {
+    throw result.error ?? new Error(result.stderr || "SQLite inventory source scan failed");
+  }
+  const files = result.stdout
+    .split("\0")
+    .map((file) => (ref ? file.slice(ref.length + 1) : file))
+    .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file));
+  const texts = snapshot ? loadRatchetSources(root, files, ref) : null;
   const sources = parser.parseSourceFiles(
     files.map((fileName) => ({
       fileName,
-      text: fs.readFileSync(path.join(root, fileName), "utf8"),
+      text: texts ? texts.get(fileName) : fs.readFileSync(path.join(root, fileName), "utf8"),
     })),
   );
   const invalidSource = parser.getSyntacticDiagnostics()[0];
@@ -260,10 +274,9 @@ function inventory() {
       `Cannot inventory invalid syntax in ${path.relative(root, invalidSource.fileName ?? root)}`,
     );
   }
-  return sources
-    .flatMap((source, index) => {
-      const file = files[index];
-      const calls = findCalls(source);
+  return files
+    .flatMap((file, index) => {
+      const calls = findCalls(sources[index]);
       return calls.length ? [{ file, owner: ownerOf(file), calls, ...classify(file) }] : [];
     })
     .toSorted(
@@ -372,33 +385,37 @@ function render(rows) {
   return `${lines.join("\n")}\n`;
 }
 
-const args = process.argv.slice(2);
-if (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0])) {
-  console.error("Usage: node scripts/database-worker-inventory.mjs --write|--check|--json");
-  process.exitCode = 2;
-} else {
-  const rows = inventory();
-  if (args[0] === "--json") {
-    console.log(JSON.stringify({ totals: totals(rows), files: rows }, null, 2));
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  const args = process.argv.slice(2);
+  if (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0])) {
+    console.error("Usage: node scripts/database-worker-inventory.mjs --write|--check|--json");
+    process.exitCode = 2;
   } else {
-    const formatted = await format(outputPath, render(rows), { proseWrap: "preserve" });
-    if (formatted.errors.length > 0) {
-      throw new Error(`Inventory Markdown formatting failed: ${JSON.stringify(formatted.errors)}`);
-    }
-    const rendered = formatted.code;
-    const destination = path.join(root, outputPath);
-    if (args[0] === "--write") {
-      fs.writeFileSync(destination, rendered);
-      console.log(
-        `Wrote ${outputPath}: ${rows.length} files, ${totals(rows).calls} call expressions`,
-      );
-    } else if (!fs.existsSync(destination) || fs.readFileSync(destination, "utf8") !== rendered) {
-      console.error(
-        `${outputPath} is stale; run node scripts/database-worker-inventory.mjs --write`,
-      );
-      process.exitCode = 1;
+    const rows = inventory();
+    if (args[0] === "--json") {
+      console.log(JSON.stringify({ totals: totals(rows), files: rows }, null, 2));
     } else {
-      console.log(`Current: ${outputPath}`);
+      const formatted = await format(outputPath, render(rows), { proseWrap: "preserve" });
+      if (formatted.errors.length > 0) {
+        throw new Error(
+          `Inventory Markdown formatting failed: ${JSON.stringify(formatted.errors)}`,
+        );
+      }
+      const rendered = formatted.code;
+      const destination = path.join(defaultRoot, outputPath);
+      if (args[0] === "--write") {
+        fs.writeFileSync(destination, rendered);
+        console.log(
+          `Wrote ${outputPath}: ${rows.length} files, ${totals(rows).calls} call expressions`,
+        );
+      } else if (!fs.existsSync(destination) || fs.readFileSync(destination, "utf8") !== rendered) {
+        console.error(
+          `${outputPath} is stale; run node scripts/database-worker-inventory.mjs --write`,
+        );
+        process.exitCode = 1;
+      } else {
+        console.log(`Current: ${outputPath}`);
+      }
     }
   }
 }

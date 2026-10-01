@@ -434,7 +434,10 @@ recorded outcome. Reports from older updaters can still contain a `repairing` ph
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
-print progress steps.
+print progress steps or run the progress observer. Progress observes committed
+ledger rows through a reusable read-only worker connection instead of repeatedly
+copying shared state. This applies to updates launched by the fixed updater; a
+published older updater keeps its own progress reader until it is replaced.
 
 When no update is active, `openclaw update status` labels the saved outcome
 `Last recorded update` with the recorded start time, so historical results are

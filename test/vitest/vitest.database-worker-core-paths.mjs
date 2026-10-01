@@ -736,6 +736,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-runtime.reload-auth-adoption.test.ts",
   "src/agents/prepared-model-runtime.reload-auth.test.ts",
   "src/agents/prepared-model-runtime.reply-fallback.test.ts",
+  "src/agents/prepared-model-runtime.remote-publication.test.ts",
   "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
   "src/agents/prepared-model-runtime.startup-static.test.ts",
   "src/agents/prepared-model-runtime.test.ts",

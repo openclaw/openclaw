@@ -5771,9 +5771,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
     );
     expect(run).toContain("wait_checks()");
-    // Startup memory, artifact writers, and TUI retain explicit barriers;
-    // hosted runners also serialize the remaining verifiers inside run_verifier.
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(8);
+    // The built-CLI Doctor proof holds a fixed per-command budget, so it finishes
+    // before the parallel verifier wave starts.
+    const doctorProof = run.indexOf('run_verifier "doctor-plugin-index"');
+    const doctorWait = run.indexOf("\n  wait_checks\n", doctorProof);
+    expect(doctorWait).toBeGreaterThan(doctorProof);
+    expect(doctorWait).toBeLessThan(run.indexOf('run_verifier "sqlite-session-lifecycle"'));
+    // Startup memory, artifact writers, the Doctor proof, and TUI retain explicit
+    // barriers; hosted runners also serialize the remaining verifiers inside run_verifier.
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(9);
   });
 
   it.each([

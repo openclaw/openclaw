@@ -7,7 +7,6 @@
 import { parse } from "yaml";
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 
-/** Parsed frontmatter metadata plus the remaining document body. */
 type ParsedFrontmatter<T extends Record<string, unknown>> = {
   frontmatter: T;
   body: string;

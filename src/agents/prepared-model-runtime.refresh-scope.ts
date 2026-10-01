@@ -18,25 +18,8 @@ import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeRefreshOptions,
 } from "./prepared-model-runtime.types.js";
-import type { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
-
-/** Model-neutral config changes advance both prepared owners and their reply projections. */
-export function createPreparedModelRuntimeConfigAdvancer(
-  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
-  replyDispatch: Pick<PreparedReplyDispatchPublicationOwner, "advanceConfig">,
-): (config: OpenClawConfig) => void {
-  return (config) => {
-    for (const owner of owners.values()) {
-      // Read-only owners include the config hash in their key and remain bound to their lease.
-      if (!owner.input.readOnly) {
-        advancePreparedModelRuntimeOwnerConfig(owner, config);
-      }
-    }
-    replyDispatch.advanceConfig(config);
-  };
-}
 
 export function refreshCommittedProviderCatalogs(
   owners: Iterable<PreparedModelRuntimeOwner>,

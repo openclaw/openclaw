@@ -23,8 +23,6 @@ import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
 
-// ============ Actions ============
-
 type FeishuExplorerRootFolderMetaResponse = {
   code: number;
   msg?: string;
@@ -631,8 +629,6 @@ export async function deliverCommentThreadText(
     throw error;
   }
 }
-
-// ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {

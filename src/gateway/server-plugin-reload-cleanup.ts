@@ -387,6 +387,22 @@ export function createPluginReloadCleanup({
       return release;
     },
     drainInstances,
+    drainMemory: async (drain: () => Promise<{ errors: readonly unknown[] }>) => {
+      try {
+        const result = await drain();
+        for (const error of result.errors) {
+          const warning = `Memory cleanup failed: ${formatErrorMessage(error)}`;
+          log.warn(warning);
+          recordWarning(warning);
+        }
+      } catch (error) {
+        if (!(error instanceof PluginHostCleanupTimeoutError)) {
+          throw error;
+        }
+        log.warn(error.message);
+        recordWarning(error.message);
+      }
+    },
     quiesceInstances: () => {
       for (const record of previousRegistry.plugins) {
         const instance = changedPluginIds.has(record.id) && getPluginInstance(record);

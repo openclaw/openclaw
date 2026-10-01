@@ -9,10 +9,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
-import {
-  PluginHostCleanupTimeoutError,
-  withPluginHostCleanupTimeout,
-} from "../plugins/host-hook-cleanup-timeout.js";
+import { withPluginHostCleanupTimeout } from "../plugins/host-hook-cleanup-timeout.js";
 import {
   createPluginRuntimeApplication,
   getPluginRuntimeGeneration,
@@ -147,6 +144,7 @@ export async function reloadGatewayPlugins(
     reserveResourceHandoff,
     selectResourceHandoff,
     drainInstances,
+    drainMemory,
     drainRetainedWork,
     drainBeforeReplacement,
     quiesceInstances,
@@ -285,20 +283,7 @@ export async function reloadGatewayPlugins(
     for (const sidecar of sidecarReplacements) {
       await sidecar.drain();
     }
-    try {
-      const result = await memoryReplacement.drain();
-      for (const error of result.errors) {
-        const warning = `Memory cleanup failed: ${formatErrorMessage(error)}`;
-        log.warn(warning);
-        recordWarning(warning);
-      }
-    } catch (error) {
-      if (!(error instanceof PluginHostCleanupTimeoutError)) {
-        throw error;
-      }
-      log.warn(error.message);
-      recordWarning(error.message);
-    }
+    await drainMemory(memoryReplacement.drain);
     await runtimeState.discovery?.update({
       gatewayDiscoveryServices: previousRegistry.gatewayDiscoveryServices.filter(
         (entry) => !changedPluginIds.has(entry.pluginId),

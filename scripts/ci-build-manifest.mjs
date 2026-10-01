@@ -550,6 +550,15 @@ const uiOwnerScope = {
   browser: runBrowserExtensionE2e,
   realGateway: runUiRealGateway,
 };
+const forceFullUiE2e =
+  !runtimePullRequest || releaseGate || parseCiEnvFlag(process.env.OPENCLAW_CI_UI_E2E_FULL);
+const uiE2eSelection =
+  runControlUiE2e &&
+  !compatibilityTarget &&
+  (!frozenTarget || releaseGate) &&
+  typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
+    ? nodeTestPlan.resolveUiE2ePrTestSelection(changedPaths, { forceFull: forceFullUiE2e })
+    : null;
 let uiTestGroups =
   (runUiTests || runUiE2e || runUiRealGateway || selectedTestTargets) &&
   !compatibilityTarget &&
@@ -559,8 +568,12 @@ let uiTestGroups =
         // Preserve the ordinary owner-family inventory. Protected or directly
         // selected files opt into the existing release-only UI tier below.
         includeReleaseOnlyTests: includeReleaseOnlyUiTests,
+        ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
+          ? { includeReleaseOnlyE2eTests: forceFullUiE2e }
+          : {}),
         includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
         changedPaths: selectedTestTargets ?? changedPaths ?? [],
+        ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
 let uiTestShardCount = compatibilityTarget ? 1 : 3;
@@ -573,23 +586,33 @@ if (selectedTestTargets) {
     fromTarget("./test/vitest/vitest.ui-paths.mjs")
   );
   const realGatewayTargets = new Set(uiE2eRealGatewayTestFiles);
-  const narrowGroups = (groups, ownsFile, retainsOwner) =>
+  const selectedControlUiFiles = new Set(uiE2eSelection?.files);
+  const narrowGroups = (groups, ownsFile, retainsFile) =>
     groups
       .map((group) => ({
         ...group,
         includePatterns: (group.includePatterns ?? selectedTestTargets.filter(ownsFile)).filter(
-          (file) => retainsOwner(file) || selected.has(file),
+          retainsFile,
         ),
       }))
       .filter((group) => group.includePatterns.length > 0);
   uiTestGroups = {
-    ui: narrowGroups(uiTestGroups.ui, isUiTestTarget, () => uiOwnerScope.unit),
+    ui: narrowGroups(
+      uiTestGroups.ui,
+      isUiTestTarget,
+      (file) => uiOwnerScope.unit || selected.has(file),
+    ),
     e2e: narrowGroups(
       uiTestGroups.e2e,
       (file) =>
         realGatewayTargets.has(file) ||
         controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
-      (file) => (realGatewayTargets.has(file) ? uiOwnerScope.realGateway : uiOwnerScope.mocked),
+      (file) =>
+        realGatewayTargets.has(file)
+          ? uiOwnerScope.realGateway || selected.has(file)
+          : uiE2eSelection
+            ? selectedControlUiFiles.has(file)
+            : uiOwnerScope.mocked || selected.has(file),
     ),
   };
   const uiTargets = uiTestGroups.ui.flatMap((group) => group.includePatterns);
@@ -605,6 +628,12 @@ if (selectedTestTargets) {
   uiTestShardCount = Math.min(3, uiTargets.length);
   // Keep the existing worker/row cap; omit empty file partitions.
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
+}
+if (uiE2eSelection) {
+  // Selection also applies to UI-only plans without a Node target inventory.
+  runControlUiE2e = uiE2eSelection.files.length > 0;
+  runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
+  uiE2eJobCount = Math.min(uiE2eJobCount - 1, uiE2eSelection.files.length) + 1;
 }
 if (selectedTestTargets && runWindows && !windowsTestPlan) {
   throw new Error("Current PR CI requires a target-owned Windows planner");
@@ -1722,6 +1751,34 @@ if (releaseFastLane) {
   }
 }
 if (process.env.GITHUB_STEP_SUMMARY) {
+  if (uiE2eSelection) {
+    const escapeSummaryCell = (value) =>
+      String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replace(/[\\`*_{}[\]()#+.!|]/gu, "\\$&")
+        .replace(/[\r\n]/gu, " ");
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      "### Control UI E2E selection\n\n" +
+        `- Mode: ${uiE2eSelection.mode}.\n` +
+        `- Selected files: ${uiE2eSelection.files.length}.\n` +
+        (parseCiEnvFlag(process.env.OPENCLAW_CI_UI_E2E_FULL)
+          ? "- Full PR coverage requested by `OPENCLAW_CI_UI_E2E_FULL`.\n"
+          : "") +
+        "\n| File | Reasons |\n| --- | --- |\n" +
+        uiE2eSelection.files
+          .map(
+            (file) =>
+              `| ${escapeSummaryCell(file)} | ${(uiE2eSelection.reasons[file] ?? [])
+                .map(escapeSummaryCell)
+                .join("; ")} |\n`,
+          )
+          .join("") +
+        "\n",
+    );
+  }
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
     `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +

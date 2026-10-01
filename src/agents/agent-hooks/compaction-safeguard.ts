@@ -286,10 +286,6 @@ type ToolFailure = {
   meta?: string;
 };
 
-/**
- * Resolve model credentials. Returns auth details on success or a cancel reason on failure.
- * Extracted to keep the main handler readable when model/auth is conditional.
- */
 async function resolveModelAuth(
   ctx: ExtensionContext,
   model: NonNullable<ExtensionContext["model"]>,

@@ -14,7 +14,7 @@ import {
   configuredOwnersAreRequestVisible,
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
-import { refreshPreparedModelRuntimeSnapshotsNow } from "./prepared-model-runtime.configured-refresh.js";
+import * as configuredRefresh from "./prepared-model-runtime.configured-refresh.js";
 import {
   capturePreparedModelRuntimeLifetime,
   closePreparedModelRuntimeSnapshots,
@@ -60,7 +60,6 @@ import {
   refreshCommittedProviderCatalogs,
   createPreparedModelRuntimeCatalogRecovery,
   createPreparedModelRuntimePluginRecovery,
-  createPreparedModelRuntimeConfigAdvancer,
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
@@ -155,6 +154,7 @@ export function cancelPreparedModelRuntimeRefresh(): void {
 
 async function closeModelRuntime(error: Error): Promise<void> {
   refreshRequestEpoch += 1;
+  remoteCatalogPublication.cancel(error);
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
@@ -184,12 +184,6 @@ async function closeModelRuntime(error: Error): Promise<void> {
     throw new AggregateError(failures, "Prepared model work failed to close");
   }
 }
-
-/** Advances model-neutral config identity without rebuilding prepared generation artifacts. */
-export const advancePreparedModelRuntimeConfig = createPreparedModelRuntimeConfigAdvancer(
-  owners,
-  replyDispatchPublication,
-);
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
 export async function loadPreparedModelRuntimeSnapshot(
@@ -517,6 +511,19 @@ const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePlugi
     !pendingModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 );
+const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublication({
+  ...preparedModelRuntimeLeaseContext,
+  publicationQueue,
+  replyDispatchPublication,
+  getEpoch: () => refreshRequestEpoch,
+  getCancellationSignal: () => refreshCancellation.signal,
+  // Catalog adoption also waits for a degraded startup's final publication.
+  getPendingReplacement: () =>
+    (modelRuntimeDrain.pending ?? pendingModelRuntimeReplacement)?.promise,
+  onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
+});
+export const { applyRemoteModelCatalogUpdate, advancePreparedModelRuntimeConfig } =
+  remoteCatalogPublication;
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
@@ -614,7 +621,7 @@ export function refreshPreparedModelRuntimeSnapshots(
         : resolveSafeRefreshAgentIds(currentConfig, options, owners);
       retainedGatewayRunOwners.clear(owners);
       gatewayLifecycleActive ||= options.gatewayLifecycle === true;
-      await refreshPreparedModelRuntimeSnapshotsNow(
+      await configuredRefresh.refreshPreparedModelRuntimeSnapshotsNow(
         currentConfig,
         { ...options, agentIds: publicationAgentIds },
         {
