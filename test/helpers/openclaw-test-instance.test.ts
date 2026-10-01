@@ -644,17 +644,17 @@ describe("openclaw test instance", () => {
     }
   });
 
-  it.each(["held-unrelated", "late-unrelated"])(
+  it.for(["held-unrelated", "late-unrelated"])(
     "preserves the refusal when reacquiring the same port fails (%s)",
-    async (action) => {
+    async (action, { signal }) => {
       const control = await createGatewayControl();
-      const { instance } = await createFakeGateway(action, 1_000, 1_500, control);
+      const { instance } = await createFakeGateway(action, 1_000, 1_500, control, { signal });
       const exited = createDeferred();
       control.observers.onLaunch = () => {
         instance.child?.once("exit", () => exited.resolve());
       };
       const competitor = net.createServer((socket) => socket.destroy());
-      const startup = trackOperation(instance.startGateway());
+      const startup = startGatewayForPortLifecycle(instance, signal);
       const outcome = startup.catch((error: unknown) => error);
       try {
         await Promise.race([control.reached, startup]);

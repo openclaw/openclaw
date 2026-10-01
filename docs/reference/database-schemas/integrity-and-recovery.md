@@ -463,6 +463,13 @@ place. This updater-to-Doctor environment contract lets the updater account for
 physical identity changes separately from schema migration. Operator runs outside
 a managed update keep the normal explicit repair behavior.
 
+Doctor drains its database handles and awaits its inspection workers before the
+rewrite. A refusal saying `store files are open (pids: …)` names the processes
+reported by `fuser`. A refusal saying `fuser could not establish that all handles
+are closed` includes the inspection error; check that `fuser` is installed and
+can inspect processes through `/proc`. Both refusals leave the original store
+in place, including when process inspection reports permission errors.
+
 Missing tools skip repair with a note. Insufficient space, active Gateway
 ownership, or failed pre-publication verification leave the previous store in
 place. An uncertain exchange stops activation and names the retained recovery

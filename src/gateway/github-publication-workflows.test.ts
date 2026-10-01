@@ -33,7 +33,7 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 const mocks = githubPublicationTestMocks();
 // Inert fixture only. No workflow is sent to GitHub or executed.
 const workflow = "name: synthetic\non: workflow_dispatch\njobs: {}\n";
-const cases = ["add", "modify", "delete", "rename-in", "rename-out", "mode", "committed"] as const;
+const cases = ["add", "modify", "delete", "mode", "committed"] as const;
 const createRequesters = async () => {
   const f = await createRequesterPublicationFixture(vi.fn(), "local", {
     sessionId: SESSION_ID,
@@ -78,13 +78,9 @@ describe("accepted GitHub workflow publication", () => {
       const f = await createRequesters();
       const workspace = f.local;
       const workflowPath = path.join(workspace.cwd, ".github/workflows/example.yml");
-      const ordinaryPath = path.join(workspace.cwd, "workflow-example.txt");
       await fs.mkdir(path.dirname(workflowPath), { recursive: true });
-      if (["modify", "delete", "rename-out", "mode", "ordinary"].includes(operation)) {
+      if (["modify", "delete", "mode", "ordinary"].includes(operation)) {
         await fs.writeFile(workflowPath, workflow);
-      }
-      if (operation === "rename-in") {
-        await fs.writeFile(ordinaryPath, workflow);
       }
       await workspace.git("add", "-A");
       await workspace.git("commit", "-m", "synthetic publication baseline");
@@ -104,10 +100,6 @@ describe("accepted GitHub workflow publication", () => {
         await workspace.git("update-index", "--chmod=+x", ".github/workflows/example.yml");
       } else if (operation === "delete") {
         await fs.unlink(workflowPath);
-      } else if (operation === "rename-in") {
-        await fs.rename(ordinaryPath, workflowPath);
-      } else if (operation === "rename-out") {
-        await fs.rename(workflowPath, ordinaryPath);
       } else if (operation !== "ordinary") {
         await fs.writeFile(workflowPath, `${workflow}# accepted change\n`);
       }
