@@ -228,7 +228,11 @@ it.for([
         );
       }
     };
-    const acquire = SubagentLifecycleController.prototype.acquireTerminalCompletionLock;
+    const acquire = vi.spyOn(
+      SubagentLifecycleController.prototype,
+      "acquireTerminalCompletionLock",
+    );
+    acquire.mockRestore();
     vi.spyOn(
       SubagentLifecycleController.prototype,
       "acquireTerminalCompletionLock",
