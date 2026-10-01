@@ -57,8 +57,7 @@ import {
 } from "./prepared-model-runtime.published-owner.js";
 import {
   refreshCommittedProviderCatalogs,
-  createPreparedModelRuntimeCatalogRecovery,
-  createPreparedModelRuntimePluginRecovery,
+  createPreparedModelRuntimeRecovery,
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
@@ -118,6 +117,7 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
       config: {},
     }).pending,
   getPendingReplacement: () => getBlockingReplacement()?.promise,
+  ensureReady: (params) => ensureGatewayPreparedModelRuntimeReady(params),
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
 
@@ -511,19 +511,18 @@ export function rejectPendingPreparedModelRuntimeReplacement(
   notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
 
-export const recoverPreparedModelRuntimeCatalogWorker = createPreparedModelRuntimeCatalogRecovery(
+const {
+  recoverCatalog: recoverPreparedModelRuntimeCatalogWorker,
+  recoverPlugin: recoverRetiredConfiguredPluginGeneration,
+  ensureReady: ensureGatewayPreparedModelRuntimeReady,
+} = createPreparedModelRuntimeRecovery({
   owners,
-  refreshPreparedModelRuntimeSnapshots,
-);
-
-const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePluginRecovery(
-  owners,
-  () =>
-    gatewayLifecycleActive &&
-    !refreshCancellation.signal.aborted &&
-    !pendingModelRuntimeReplacement,
-  refreshPreparedModelRuntimeSnapshots,
-);
+  canRecover: () => gatewayLifecycleActive && !refreshCancellation.signal.aborted,
+  getReplacement: () => pendingModelRuntimeReplacement,
+  captureLifetime: captureModelRuntimeLifetime,
+  publish: refreshPreparedModelRuntimeSnapshots,
+});
+export { recoverPreparedModelRuntimeCatalogWorker, ensureGatewayPreparedModelRuntimeReady };
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(

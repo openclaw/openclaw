@@ -50,7 +50,7 @@ describe("model catalog refresh presentation", () => {
         ),
         container,
       );
-      expect(container.textContent).toContain("Loading models…");
+      expect(container.textContent).toContain("Checking models…");
       expect(container.querySelector(".btn__spinner")).not.toBeNull();
       expect(container.textContent).not.toContain("No models available");
     },

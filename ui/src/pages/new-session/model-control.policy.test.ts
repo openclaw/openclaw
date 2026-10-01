@@ -81,7 +81,7 @@ describe("New Session policy presentation", () => {
     async ({ event, payload, clearsChoices }) => {
       const { context, request, emitCatalogChanged } = contextWith(models);
       const ready = createDeferred();
-      const failed = createDeferred();
+      let failed = createDeferred();
       const control = new NewSessionModelControl(() => {
         const container = renderControl(control, context, "main", agent);
         if (container.querySelector('[data-chat-model-option="fixture/permitted"]')) {
@@ -105,7 +105,7 @@ describe("New Session policy presentation", () => {
         expect(Boolean(container.querySelector("[data-chat-model-option]"))).toBe(!clearsChoices);
         if (clearsChoices) {
           expect(container.textContent).not.toContain("forbidden-default");
-          expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+          expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
         }
         const published = loadModelCatalog(context.gateway.snapshot.client!, scope);
         wire.reject(new Error("Catalog unavailable"));
@@ -118,6 +118,33 @@ describe("New Session policy presentation", () => {
             ),
           ),
         ).toBe(!clearsChoices);
+        expect(control.modelSelectionBlockedReason(agent)).toBe(
+          clearsChoices ? "Models unavailable" : undefined,
+        );
+
+        failed = createDeferred();
+        const replacement = createDeferred<ModelCatalogResult>();
+        request.mockReturnValueOnce(replacement.promise);
+        emitCatalogChanged(event, payload);
+        const checking = renderControl(control, context, "main", agent);
+        expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
+        expect(checking.querySelector(".btn__spinner")).not.toBeNull();
+        if (clearsChoices) {
+          expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
+        } else {
+          expect(
+            checking.querySelector('[data-chat-model-option="fixture/permitted"]'),
+          ).not.toBeNull();
+        }
+        const rechecked = loadModelCatalog(context.gateway.snapshot.client!, scope);
+        replacement.reject(new Error("Catalog still unavailable"));
+        await expect(rechecked).rejects.toThrow("Catalog still unavailable");
+        await failed.promise;
+        expect(
+          renderControl(control, context, "main", agent).querySelector(
+            '[data-chat-model-catalog-state="error"]',
+          ),
+        ).not.toBeNull();
         expect(control.modelSelectionBlockedReason(agent)).toBe(
           clearsChoices ? "Models unavailable" : undefined,
         );
@@ -175,7 +202,7 @@ describe("New Session policy presentation", () => {
         control.load(next.context, "main", true, { agent });
         const pending = loadModelCatalog(next.context.gateway.snapshot.client!, scope);
         expect(control.modelForSubmission()).toBe("fixture/previous");
-        expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+        expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
         const waiting = renderControl(control, next.context, "main", agent);
         expect(waiting.textContent).not.toContain("previous");
         expect(waiting.textContent).not.toContain("Previous model");

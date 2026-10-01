@@ -247,6 +247,7 @@ export async function refreshChatMetadata(
     }
     // Presentation changes owners; the model cache still owns the direct transport.
     binding.catalogRequest = undefined;
+    host.chatModelCatalogError = null;
     host.chatModelsLoading = !freshCatalog && host.chatModelCatalog.length === 0;
     host.requestUpdate?.();
     const ownsRefresh = () =>
@@ -428,6 +429,7 @@ async function loadChatModelCatalog(
   const version = binding.version;
   const ownsRequest = () =>
     binding.isCurrent() && binding.catalogRequest?.controller === controller;
+  host.chatModelCatalogError = null;
   host.chatModelsLoading = host.chatModelCatalog.length === 0;
   host.requestUpdate?.();
   const promise = loadModelCatalog(binding.client, { ...binding.scope, signal: controller.signal })

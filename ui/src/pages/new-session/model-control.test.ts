@@ -91,9 +91,9 @@ describe("new-session model controls", () => {
     const loading = draw(null);
     const trigger = loading.querySelector("[data-chat-model-select]")!;
     expect(trigger.getAttribute("aria-busy")).toBe("true");
-    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Checking models…");
     expect(trigger.querySelector(".skeleton")?.getAttribute("aria-hidden")).toBe("true");
-    expect(trigger.textContent).not.toMatch(/Loading models|Default model/);
+    expect(trigger.textContent).not.toMatch(/Checking models|Default model/);
     expect(
       loading.querySelector<HTMLElement>("[data-chat-thinking-select]")?.dataset
         .chatThinkingDisabled,

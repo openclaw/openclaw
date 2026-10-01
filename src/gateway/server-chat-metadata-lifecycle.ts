@@ -227,8 +227,22 @@ export async function createGatewayChatMetadataLifecycle(params: {
         );
       }
     },
-    read: runtime.read,
-    readStartup: runtime.readStartup,
+    read: async (readParams: Parameters<typeof runtime.read>[0]) => {
+      const { ensureGatewayPreparedModelRuntimeReady } =
+        await import("../agents/prepared-model-runtime.js");
+      readParams.assertCurrent?.();
+      await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+      readParams.assertCurrent?.();
+      return await runtime.read(readParams);
+    },
+    readStartup: async (readParams: Parameters<typeof runtime.readStartup>[0]) => {
+      if (readParams.readPolicy !== "ready") {
+        const { ensureGatewayPreparedModelRuntimeReady } =
+          await import("../agents/prepared-model-runtime.js");
+        await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+      }
+      return await runtime.readStartup(readParams);
+    },
     refresh: runtime.refresh,
   };
 }
