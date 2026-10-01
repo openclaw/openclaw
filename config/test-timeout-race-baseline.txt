@@ -44,7 +44,7 @@ src/cli/gateway-cli/run-loop.forced-cron.process.test.ts	3
 src/cli/gateway-cli/run-loop.model-acquisition.process.test.ts	2
 src/cli/gateway-cli/run-loop.restart-liveness.process.test.ts	1
 src/cli/one-shot-exit.test.ts	1
-src/cli/update-cli/update-command-retained-custody.test.ts	3
+src/cli/update-cli/update-command-retained-custody.test.ts	2
 src/config/sessions/legacy-main-session-migration.race.test.ts	1
 src/config/sessions/session-accessor.sqlite-archive-session.test.ts	2
 src/config/sessions/session-accessor.sqlite-page-reclamation.binding.test.ts	1
