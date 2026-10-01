@@ -17,11 +17,7 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import {
-  hashFileDescriptorSync,
-  sameFileMutationFingerprint,
-  type FileMutationFingerprint,
-} from "./file-descriptor.js";
+import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
@@ -33,6 +29,15 @@ import {
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyCopyInProcess,
 } from "./sqlite-readonly-location.js";
+import {
+  assertOpenFileIdentitySync,
+  assertPublishedFileIdentitySync,
+  hashPublishedFileSync,
+  removePublicationStagingDirectory,
+  removePublishedTargetIfOwned,
+  sameFileStatFingerprint,
+  type SqliteFileContent,
+} from "./sqlite-snapshot-file.js";
 import {
   prepareSqliteReadOnlyLocation,
   withSqliteSnapshotSource,
@@ -59,11 +64,6 @@ type CreateVerifiedSqliteSnapshotOptions = {
   preserveRowIds?: boolean;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
-};
-
-type SqliteFileContent = {
-  sha256: string;
-  sizeBytes: number;
 };
 
 type PublishedSqliteFileGuard = {
@@ -224,54 +224,6 @@ async function hashOpenPublishedFile(
   return { sha256: digest, sizeBytes: bytes };
 }
 
-function assertPublishedFileIdentitySync(filePath: string, expectedIdentity: Stats): void {
-  const currentIdentity = fsSync.lstatSync(filePath);
-  if (
-    !currentIdentity.isFile() ||
-    !sameFileIdentity(expectedIdentity, currentIdentity) ||
-    expectedIdentity.size !== currentIdentity.size ||
-    expectedIdentity.mtimeMs !== currentIdentity.mtimeMs ||
-    expectedIdentity.ctimeMs !== currentIdentity.ctimeMs ||
-    expectedIdentity.birthtimeMs !== currentIdentity.birthtimeMs
-  ) {
-    throw new Error(`SQLite snapshot file changed: ${filePath}`);
-  }
-}
-
-function assertOpenFileIdentitySync(
-  fileDescriptor: number,
-  filePath: string,
-  expectedIdentity: Stats,
-): void {
-  const openedIdentity = fsSync.fstatSync(fileDescriptor);
-  const currentIdentity = fsSync.lstatSync(filePath);
-  if (
-    !openedIdentity.isFile() ||
-    !currentIdentity.isFile() ||
-    !sameFileIdentity(expectedIdentity, openedIdentity) ||
-    !sameFileIdentity(expectedIdentity, currentIdentity)
-  ) {
-    throw new Error(`SQLite snapshot file changed: ${filePath}`);
-  }
-}
-
-function hashPublishedFileSync(filePath: string, expectedIdentity: Stats): SqliteFileContent {
-  const fileDescriptor = fsSync.openSync(filePath, "r");
-  try {
-    assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
-    const initialStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
-    const content = hashFileDescriptorSync(fileDescriptor);
-    const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
-    if (!sameFileMutationFingerprint(initialStat, finalStat)) {
-      throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
-    }
-    assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
-    return content;
-  } finally {
-    fsSync.closeSync(fileDescriptor);
-  }
-}
-
 function assertExpectedContent(
   actual: SqliteFileContent,
   expected: SqliteFileContent,
@@ -287,60 +239,6 @@ function assertExpectedContent(
       `SQLite snapshot hash mismatch for ${filePath}: expected ${expected.sha256}, got ${actual.sha256}`,
     );
   }
-}
-
-function removePublishedTargetIfOwned(
-  filePath: string,
-  expectedIdentity: Stats | BigIntStats,
-  requireFingerprint = false,
-): boolean {
-  let currentIdentity: Stats | BigIntStats;
-  try {
-    currentIdentity = fsSync.lstatSync(filePath, {
-      bigint: typeof expectedIdentity.ino === "bigint",
-    });
-  } catch {
-    return false;
-  }
-  const fingerprintMatches =
-    !requireFingerprint ||
-    (expectedIdentity.size === currentIdentity.size &&
-      expectedIdentity.mtimeMs === currentIdentity.mtimeMs &&
-      expectedIdentity.ctimeMs === currentIdentity.ctimeMs &&
-      expectedIdentity.birthtimeMs === currentIdentity.birthtimeMs);
-  // Unknown Windows identity can admit a read, but cannot authorize deletion.
-  const unknownIdentity =
-    process.platform === "win32" &&
-    [expectedIdentity.dev, expectedIdentity.ino, currentIdentity.dev, currentIdentity.ino].some(
-      (value) => value === 0 || value === 0n,
-    );
-  if (
-    !currentIdentity.isFile() ||
-    unknownIdentity ||
-    !sameFileIdentity(expectedIdentity, currentIdentity) ||
-    !fingerprintMatches
-  ) {
-    return false;
-  }
-  // Node has no cross-platform unlink-by-inode primitive. Keep the ownership
-  // check and unlink synchronous so no in-process task can replace the path.
-  try {
-    fsSync.unlinkSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sameFileStatFingerprint(left: Stats | BigIntStats, right: Stats | BigIntStats): boolean {
-  // Creating the publication hard link changes source ctime, so compare the
-  // mutation fields that remain stable for the same bytes and pathname owner.
-  return (
-    sameFileIdentity(left, right) &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.birthtimeMs === right.birthtimeMs
-  );
 }
 
 function assertSynchronousCallbackResult(result: unknown, label: string): void {
@@ -650,31 +548,6 @@ async function publishSqliteFile(
     }
     await targetDirectoryPin.close().catch(() => undefined);
   }
-}
-
-async function removePublicationStagingDirectory(
-  stagingDir: string,
-  expectedIdentity: Stats,
-): Promise<void> {
-  const currentIdentity = await fs.lstat(stagingDir).catch(() => undefined);
-  if (!currentIdentity) {
-    return;
-  }
-  if (!currentIdentity.isDirectory() || !sameFileIdentity(expectedIdentity, currentIdentity)) {
-    throw new Error(`SQLite publication staging directory changed: ${stagingDir}`);
-  }
-  const entries = await fs.readdir(stagingDir, { withFileTypes: true });
-  if (
-    entries.length > 1 ||
-    entries.some((entry) => entry.name !== "database.sqlite" || !entry.isFile())
-  ) {
-    throw new Error(`SQLite publication staging directory has unexpected contents: ${stagingDir}`);
-  }
-  const stagedEntry = entries[0];
-  if (stagedEntry) {
-    await fs.unlink(path.join(stagingDir, stagedEntry.name));
-  }
-  await fs.rmdir(stagingDir);
 }
 
 /**

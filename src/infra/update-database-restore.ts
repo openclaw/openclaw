@@ -146,7 +146,7 @@ export async function restoreUpdateDatabaseBackup(params: {
   const displaced: string[] = [];
   let preparedCopy: ReturnType<typeof adoptPreparedLocation> | undefined;
   let retainPreparedCopy = false;
-  let restoreFailure: unknown;
+  let outcome: { value: string[] | null } | { error: unknown };
   const outputs: Array<Awaited<ReturnType<typeof prepareVerifiedSqliteFile>>> = [];
   try {
     const result = await withDatabaseExclusion(
@@ -305,33 +305,37 @@ export async function restoreUpdateDatabaseBackup(params: {
       },
     );
     retainPreparedCopy = false;
-    return result;
+    outcome = { value: result };
   } catch (error) {
-    restoreFailure = error;
+    outcome = { error };
     retainPreparedCopy ||= hasCommandProcessCleanupError(error);
-    throw error;
-  } finally {
-    if (retainPreparedCopy) {
-      if (preparedCopy) {
-        // Unfinished publication or child settlement retains its prepared bytes for recovery.
-        releaseSnapshotTempDirectory(path.dirname(preparedCopy.location));
-      }
-    } else {
-      // Join all cleanup even if one output cannot be retired.
-      const cleanup = await Promise.allSettled([
-        ...outputs.map((output) => output.cleanup()),
-        ...(preparedCopy ? [preparedCopy.cleanupAsync()] : []),
-      ]);
-      const failures = cleanup.filter((outcome) => outcome.status === "rejected");
-      if (failures.length > 0) {
-        throw new AggregateError(
-          [
-            ...(restoreFailure === undefined ? [] : [restoreFailure]),
-            ...failures.map((outcome) => outcome.reason),
-          ],
-          "Database rollback output cleanup failed",
-        );
-      }
+  }
+  if (retainPreparedCopy) {
+    if (preparedCopy) {
+      // Unfinished publication or child settlement retains its prepared bytes for recovery.
+      releaseSnapshotTempDirectory(path.dirname(preparedCopy.location));
+    }
+  } else {
+    // Join all cleanup even if one output cannot be retired.
+    const cleanup = await Promise.allSettled([
+      ...outputs.map((output) => output.cleanup()),
+      ...(preparedCopy ? [preparedCopy.cleanupAsync()] : []),
+    ]);
+    const failures = cleanup.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      const errors = [
+        ...("error" in outcome ? [outcome.error] : []),
+        ...failures.map((result) => result.reason),
+      ];
+      throw createSqliteLifecycleAggregateError(
+        errors,
+        "Database rollback output cleanup failed",
+        errors[0],
+      );
     }
   }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }

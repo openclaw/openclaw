@@ -130,7 +130,9 @@ async function unchangedFiles(fixture: RestoreFixture) {
       ["", "-wal", "-shm", "-journal"].map(async (suffix) => {
         const file = `${pathname}${suffix}`;
         const identity = await fs.lstat(file).catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
           return undefined;
         });
         return { file, identity, bytes: identity ? await fs.readFile(file) : undefined };
@@ -333,8 +335,9 @@ it.each([
       const allocation = vi
         .spyOn(sqliteCopy, "copySqliteFile")
         .mockImplementation(async (...args) => {
-          if (args[1].includes(`${path.sep}.sqlite-publish-`) && ++attempted === failureAt)
+          if (args[1].includes(`${path.sep}.sqlite-publish-`) && ++attempted === failureAt) {
             throw failure;
+          }
           return copy(...args);
         });
       try {

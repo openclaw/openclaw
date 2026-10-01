@@ -25,7 +25,9 @@ it.each([true, false])(
         admissions++;
         expect(sizeBytes).toBe(bytes.length);
         await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
-        if (!admitted) throw refusal;
+        if (!admitted) {
+          throw refusal;
+        }
       });
       if (admitted) {
         const receipt = await copy;
