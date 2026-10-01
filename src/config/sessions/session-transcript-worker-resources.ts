@@ -28,6 +28,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   sessionHistoryCleanupError,
@@ -107,6 +108,11 @@ export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
+/** Physical path for work; the caller's lexical requestedPath selects the owner for cleanup. */
+export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
+  requestedPath?: string;
+};
+
 export type HistoryDatabaseResource = {
   database: { agentId: string; path: string };
   generation: number;
@@ -118,6 +124,7 @@ export type HistoryDatabaseResource = {
   aborters: Set<() => void>;
   closing?: Promise<void>;
   unregister: () => void;
+  retainAlias: (alias: string) => void;
 };
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
@@ -305,7 +312,7 @@ async function closeDatabaseWorkerResource(
 }
 
 export function acquireHistoryDatabaseResource(
-  options: OpenClawAgentDatabaseOptions,
+  options: SessionHistoryDatabaseTarget,
 ): HistoryDatabaseResource {
   const database = {
     agentId: normalizeAgentId(options.agentId),
@@ -313,7 +320,9 @@ export function acquireHistoryDatabaseResource(
   };
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
+  let created = false;
   if (!resource || resource.revoked) {
+    const aliases = new Map<string, () => void>();
     const owned: HistoryDatabaseResource = {
       database,
       generation: ++historyGeneration,
@@ -324,6 +333,21 @@ export function acquireHistoryDatabaseResource(
       cleanups: new Set(),
       aborters: new Set(),
       unregister: () => {},
+      retainAlias(alias) {
+        if (!aliases.has(alias)) {
+          aliases.set(
+            alias,
+            runOutsideOpenClawDatabaseMaintenanceScope(() =>
+              registerOpenClawAgentDatabaseAsyncResource({
+                ...database,
+                path: alias,
+                revoke,
+                close,
+              }),
+            ),
+          );
+        }
+      },
     };
     const close = () => {
       if (!owned.closing) {
@@ -338,6 +362,9 @@ export function acquireHistoryDatabaseResource(
           for (const cleanup of owned.cleanups) {
             await cleanup.run();
           }
+          if (owned.revoked) {
+            owned.unregister();
+          }
         })().finally(() => {
           owned.closing = undefined;
           pruneHistoryDatabases();
@@ -349,19 +376,45 @@ export function acquireHistoryDatabaseResource(
       }
       return owned.closing;
     };
-    owned.unregister = registerOpenClawAgentDatabaseAsyncResource({
+    const revoke = () => {
+      owned.revoked = true;
+      for (const abort of owned.aborters) {
+        abort();
+      }
+      void close();
+    };
+    let unregister: (() => void) | undefined = registerOpenClawAgentDatabaseAsyncResource({
       ...database,
-      revoke: () => {
-        owned.revoked = true;
-        for (const abort of owned.aborters) {
-          abort();
-        }
-        void close();
-      },
+      revoke,
       close,
     });
-    historyDatabases.set(key, owned);
+    // A revoked close and a later prune can both retire this owner; release custody once.
+    owned.unregister = () => {
+      unregister?.();
+      unregister = undefined;
+      for (const release of aliases.values()) {
+        release();
+      }
+      aliases.clear();
+    };
     resource = owned;
+    created = true;
+  }
+  try {
+    if (options.requestedPath !== undefined) {
+      const alias = resolveOpenClawAgentSqlitePath({ ...options, path: options.requestedPath });
+      if (alias !== database.path) {
+        resource.retainAlias(alias);
+      }
+    }
+  } catch (error) {
+    if (created) {
+      resource.unregister();
+    }
+    throw error;
+  }
+  if (created) {
+    historyDatabases.set(key, resource);
   }
   return resource;
 }

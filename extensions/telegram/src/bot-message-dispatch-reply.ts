@@ -491,6 +491,7 @@ async function deliverReplyWithNormalization(
       segment.update.text.trimEnd() === turn.answerLane.lastPartialText.trimEnd();
     const suppressProgressAnswerBlock =
       turn.streamMode === "progress" &&
+      Boolean(turn.answerLane.stream) &&
       info.kind === "block" &&
       segment.lane === "answer" &&
       !reply.hasMedia &&

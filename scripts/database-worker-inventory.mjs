@@ -235,6 +235,12 @@ const exceptionModules = new Set([
   "src/state/openclaw-agent-db-lease.ts",
   "src/infra/gateway-boot-lifecycle.ts",
 ]);
+const cliModules = new Map([
+  [
+    "src/claws/provenance-adopted.ts",
+    "Only claws migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",
+  ],
+]);
 
 function classify(file) {
   const evidence = reviewed.get(file);
@@ -243,6 +249,10 @@ function classify(file) {
   }
   if (/\.worker\.[cm]?[jt]s$/.test(file) || workerModules.has(file)) {
     return { tier: "W", priority: 99, evidence: "Worker implementation; keep SQL in this owner" };
+  }
+  const cliEvidence = cliModules.get(file);
+  if (cliEvidence) {
+    return { tier: "T3", priority: 99, evidence: cliEvidence };
   }
   if (/^(?:scripts\/|src\/(?:cli|commands|tui)\/)/.test(file)) {
     return {

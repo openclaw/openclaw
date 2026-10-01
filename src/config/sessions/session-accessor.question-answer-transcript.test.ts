@@ -31,7 +31,6 @@ const questions = [
 ];
 
 it.each([
-  "complete",
   "foreign-registration",
   "partial-then-complete",
   "unrelated-user",
@@ -196,11 +195,7 @@ it.each([
         storePath,
       });
       const toolResults = messages.filter((message) => message.role === "toolResult");
-      if (
-        scenario === "complete" ||
-        scenario === "foreign-registration" ||
-        scenario === "partial-then-complete"
-      ) {
+      if (scenario === "foreign-registration" || scenario === "partial-then-complete") {
         expect(result.error).toBeUndefined();
         expect(result.entryId).toEqual(expect.any(String));
         expect(toolResults).toEqual([

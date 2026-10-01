@@ -22,6 +22,10 @@ import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
+import type {
+  ArchivedSessionEvictionBatch,
+  ArchivedSessionEvictionQuery,
+} from "./disk-budget.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
@@ -469,9 +473,15 @@ type SessionHistoricalEvictionCandidatesWorkerInput = {
   preserveRecentMs?: number | null;
 };
 
+type SessionArchivedEvictionCandidatesWorkerInput = Omit<
+  SessionHistoricalEvictionCandidatesWorkerInput,
+  "admissionIdentities" | "preserveRecentMs"
+> & { archived: ArchivedSessionEvictionQuery };
+
 export type SessionHistoryWorkerInput =
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
+  | SessionArchivedEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
   | SessionPendingArchivesWorkerInput
   | SessionArchivePresenceWorkerInput
@@ -521,10 +531,10 @@ export type SessionTranscriptWorkerValues = {
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
-  "historical-eviction-candidates": {
-    kind: "historical-eviction-candidates";
-    sessionIds: string[];
-  };
+  "historical-eviction-candidates": { kind: "historical-eviction-candidates" } & (
+    | { sessionIds: string[] }
+    | { batch: ArchivedSessionEvictionBatch }
+  );
   "session-archive-pruning": {
     kind: "session-archive-pruning";
     result: PublishedSessionTranscriptArchive | null;
@@ -628,6 +638,10 @@ export type SessionHistoryWorkerDatabase = {
   readHistoricalEvictionCandidates: SessionHistoryReader<
     SessionHistoricalEvictionCandidatesWorkerInput,
     string[]
+  >;
+  readArchivedEvictionCandidates: SessionHistoryReader<
+    SessionArchivedEvictionCandidatesWorkerInput,
+    ArchivedSessionEvictionBatch
   >;
   readArchivePruning: SessionHistoryReader<
     SessionArchivePruningWorkerInput,

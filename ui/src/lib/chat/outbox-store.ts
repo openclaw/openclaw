@@ -231,10 +231,7 @@ export function resolvePendingComposerSessions(
       const existingIds = new Set(destination.queue?.map((item) => item.id));
       const conflict = session.queue?.some((item) => existingIds.has(item.id));
       const sourceNewer = (session.draftRevision ?? 0) > (destination.draftRevision ?? 0);
-      if (
-        conflict ||
-        ((session.draft || session.goalMode || session.replyTarget) && !sourceNewer)
-      ) {
+      if (conflict || (hasStoredComposerDraftInput(session) && !sourceNewer)) {
         holdComposerRecovery(store, `pending:${key}`, 4, key, session);
       } else {
         const draftOwner = sourceNewer ? session : destination;
@@ -298,12 +295,7 @@ function holdComposerRecovery(
 ): void {
   const { queue, ...draft } = session;
   const groups = new Map<string | undefined, ChatQueueItem[]>();
-  if (
-    draft.draft ||
-    draft.goalMode ||
-    draft.replyTarget ||
-    (!queue?.length && draft.draftRevision !== undefined)
-  ) {
+  if (hasStoredComposerDraftInput(draft) || (!queue?.length && draft.draftRevision !== undefined)) {
     groups.set(undefined, []);
   }
   for (const item of queue ?? []) {
@@ -492,9 +484,7 @@ export function readStoredOutboxStore(
         }
       }
       if (
-        session.draft ||
-        session.goalMode ||
-        session.replyTarget ||
+        hasStoredComposerDraftInput(session) ||
         session.draftRevision !== undefined ||
         session.queue?.length
       ) {
@@ -594,9 +584,7 @@ export function writeStoredOutboxStore(
       .filter(
         ([sessionKey, session]) =>
           sessionKey !== unresolvedGlobalKey &&
-          !session.draft &&
-          !session.goalMode &&
-          !session.replyTarget &&
+          !hasStoredComposerDraftInput(session) &&
           session.draftRevision !== undefined,
       )
       .toSorted(byNewest),
@@ -607,8 +595,7 @@ export function writeStoredOutboxStore(
       ...drafts
         .filter(
           ([sessionKey, session]) =>
-            sessionKey !== unresolvedGlobalKey &&
-            Boolean(session.draft || session.goalMode || session.replyTarget),
+            sessionKey !== unresolvedGlobalKey && hasStoredComposerDraftInput(session),
         )
         .toSorted(byNewest),
     ].slice(0, MAX_STORED_SESSIONS),

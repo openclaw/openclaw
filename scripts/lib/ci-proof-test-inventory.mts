@@ -3295,7 +3295,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/infra/outbound/message-action-execution.test.ts",
   "src/infra/outbound/message-action-runner.broadcast.test.ts",
   "src/infra/outbound/message-action-runner.context.test.ts",
-  "src/infra/outbound/message-action-runner.send-validation.test.ts",
   "src/infra/outbound/message-action-send.validation.test.ts",
   "src/infra/outbound/message-action-spec.test.ts",
   "src/infra/outbound/outbound-send-service.accepted-outcomes.test.ts",
