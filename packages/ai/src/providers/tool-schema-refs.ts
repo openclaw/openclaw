@@ -60,7 +60,11 @@ function extendSchemaDefs(
 }
 
 function decodeJsonPointerSegment(segment: string): string {
-  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+  try {
+    return decodeURIComponent(segment).replaceAll("~1", "/").replaceAll("~0", "~");
+  } catch {
+    return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+  }
 }
 
 function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
@@ -90,7 +94,7 @@ function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
   if (!ref.startsWith("#/")) {
     return undefined;
   }
-  return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/"));
+  return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/").map(decodeJsonPointerSegment));
 }
 
 export const SCHEMA_MAP_KEYS = new Set([
