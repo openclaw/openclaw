@@ -224,7 +224,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
     const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};
-    const stampsExplicitOwnership = Object.keys(migratedEntries ?? {}).length > 1;
+    const stampsExplicitOwnership =
+      Object.keys(migratedEntries ?? {}).length > 1 &&
+      baseCfg.agents?.ownership !== "explicit";
     const rosterRepair = {
       config: {
         ...migrated,
