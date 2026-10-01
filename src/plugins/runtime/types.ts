@@ -149,7 +149,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       sessionKeys: readonly string[];
     }) => Promise<RuntimeSessionFactsResult>;
     withUserProfileIdentity?: <T>(
-      params: { profileId: string; emails: readonly string[] },
+      params: {
+        profileId: string;
+        emails: readonly string[];
+        githubAccountIds?: readonly number[];
+      },
       run: (assertCurrent: () => void) => Promise<T>,
     ) => Promise<T>;
   };

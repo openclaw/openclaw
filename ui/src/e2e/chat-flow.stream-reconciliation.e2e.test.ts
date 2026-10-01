@@ -182,6 +182,12 @@ suite.define(() => {
               messageSeq: 2,
               message,
             });
+          const snapshot = {
+            messages: historyMessages,
+            inFlightRun,
+            sessionInfo,
+            thinkingLevel: null,
+          };
           const startupCount = (await gateway.getRequests("chat.startup")).length;
           await gateway.deferNext("chat.startup");
           await gateway.setOnline(false);
@@ -189,13 +195,14 @@ suite.define(() => {
           await gateway.waitForRequest("chat.startup", { after: startupCount });
           if (order !== "after hydration") {
             await persist();
+            // A commit during the in-flight read retires it; the Gateway answers one fresh read.
+            await gateway.deferNext("chat.startup");
           }
-          await gateway.resolveDeferred("chat.startup", {
-            messages: historyMessages,
-            inFlightRun,
-            sessionInfo,
-            thinkingLevel: null,
-          });
+          await gateway.resolveDeferred("chat.startup", snapshot);
+          if (order !== "after hydration") {
+            await gateway.waitForRequest("chat.startup", { after: startupCount + 1 });
+            await gateway.resolveDeferred("chat.startup", snapshot);
+          }
           await page.waitForFunction(() => {
             const pane = document.querySelector<HTMLElement & { state?: { chatLoading: boolean } }>(
               "openclaw-chat-pane",

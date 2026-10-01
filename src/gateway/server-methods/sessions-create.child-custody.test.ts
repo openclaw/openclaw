@@ -43,13 +43,22 @@ import {
   writeSessionStore,
 } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
+import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
-const temporaryDirs = useAutoCleanupTempDirTracker(afterEach);
+const temporaryDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    // External store leases must retire before the per-case Gateway home.
+    for (const dir of temporaryDirs.dirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanup();
+  });
+});
 
 async function createHostedChildFixture(
   system = false,

@@ -10,6 +10,7 @@ import {
   OpenClawStateLeaseAcquisitionError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
+import { LEASE_CONTENTION_RETRY_MS } from "./openclaw-state-lease-heartbeat-shared.js";
 import { STATE_LEASE_WRITE_BACKOFF } from "./openclaw-state-lease-storage.js";
 import type { OpenClawStateLeaseAcquisition } from "./openclaw-state-lease.types.js";
 
@@ -30,6 +31,7 @@ export async function acquireOpenClawStateLease(params: {
   let preparation = params.prepare;
   let attempt = 0;
   let lastReportedHolder: string | undefined;
+  let contentionReported = false;
   const cancellation = params.signal ? new AbortController() : undefined;
   let aborted: OpenClawStateLeaseAcquisitionError | undefined;
   const abort = () => {
@@ -56,6 +58,7 @@ export async function acquireOpenClawStateLease(params: {
     while (true) {
       assertCurrent();
       let outcome: OpenClawStateLeaseAcquisition;
+      let acquiring = false;
       try {
         if (preparation) {
           const prepare = preparation;
@@ -63,6 +66,7 @@ export async function acquireOpenClawStateLease(params: {
           prepare();
           deadline = performance.now() + params.waitMs;
         }
+        acquiring = true;
         outcome = await params.acquire(assertCurrent, cancellation?.signal);
       } catch (error) {
         if (
@@ -82,6 +86,23 @@ export async function acquireOpenClawStateLease(params: {
         const failure = error instanceof OpenClawStateLeaseError ? error.cause : error;
         if (isSqliteLockError(failure)) {
           assertCurrent();
+          const remainingMs = deadline - performance.now();
+          if (acquiring && remainingMs > 0) {
+            if (!contentionReported) {
+              log.warn(`Waiting for ${params.label} after SQLite lock contention.`);
+              contentionReported = true;
+            }
+            try {
+              await sleepWithAbort(Math.min(remainingMs, LEASE_CONTENTION_RETRY_MS), params.signal);
+            } catch (sleepError) {
+              assertCurrent();
+              throw sleepError;
+            }
+            assertCurrent();
+            if (performance.now() < deadline) {
+              continue;
+            }
+          }
         }
         throw new OpenClawStateLeaseAcquisitionError(
           params.label,

@@ -103,7 +103,6 @@ src/infra/push-apns.test.ts	1
 src/infra/session-cost-usage-cache.worker.test.ts	8
 src/infra/state-migrations.workspace-setup-sandbox.test.ts	1
 src/meeting-bot/realtime-node-audio-transport.test.ts	2
-src/node-host/config.test.ts	1
 src/plugins/openai-compatible-embedding-provider.test.ts	3
 src/plugins/plugin-metadata-lifecycle.test.ts	1
 src/plugins/provider-self-hosted-discovery.test.ts	11
@@ -137,7 +136,6 @@ test/plugins/browser-session-authority.gateway.test.ts	2
 test/plugins/team-reports-http.gateway.test.ts	1
 test/scripts/ci-run-node-test-shard.test.ts	3
 test/scripts/compiler-input-snapshot.test.ts	1
-test/scripts/plugin-gateway-gauntlet.test.ts	3
 test/scripts/test-projects-build-admission.test.ts	7
 test/scripts/upstream-repository-advisories.test.ts	2
 test/slack-download-read-authority.integration.test.ts	2

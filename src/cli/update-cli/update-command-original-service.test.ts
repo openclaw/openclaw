@@ -28,6 +28,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { registerCurrentF3Controls } from "./update-command-original-service-current.test-support.js";
@@ -414,6 +415,7 @@ it.for([
       const admitted = { ...run, executorFence: fence };
       opts.run = admitted;
       execution = await executeMutableUpdate({
+        executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
         root: rootB,
         // Package transport is modeled; A must not use this separately selected B runner.
         packageUpdateNodeRunner: state.path("selected-B-node"),
@@ -724,6 +726,7 @@ it.each([
       ).rejects.toMatchObject({ reason: "original-service-unverified" });
     }
     const execution = await executeMutableUpdate({
+      executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
       root: rootB,
       installKind: "package",
       updateInstallKind: "package",

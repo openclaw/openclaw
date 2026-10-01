@@ -4,8 +4,11 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
-import { selectStoredGitHubIdentities } from "./user-profile-github-identity.js";
-import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import {
+  selectProfileAccessEntries,
+  selectStoredGitHubIdentities,
+} from "./user-profile-github-identity.js";
+import { listUserProfilesSync, readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   executeUserProfileWrite,
   linkEmail,
@@ -16,7 +19,6 @@ import {
   syncGitHubIdentity,
 } from "./user-profile-writes.worker.js";
 import {
-  selectProfileDisplayEntries,
   inspectProfileAvatarInDatabase,
   selectResolvedUserProfileById,
   toUserProfile,
@@ -138,8 +140,15 @@ export type UserProfileWriteOperations = WorkerOperations<typeof userProfileWrit
 
 export const userProfileOperations = {
   ...userProfileWriteOperations,
-  "userProfiles.list": (_input: undefined, { open, stateOptions }) =>
-    listUserProfilesSync({ ...stateOptions(), database: open() }),
+  "userProfiles.list": (
+    input: { githubAccountIds: readonly number[] } | undefined,
+    { open, stateOptions },
+  ) => {
+    const options = { ...stateOptions(), database: open() };
+    return input?.githubAccountIds === undefined
+      ? { profiles: listUserProfilesSync(options) }
+      : readUserProfileSnapshotSync(options, input.githubAccountIds);
+  },
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();
     ensureUserProfilesSchema(stateOptions(), database);
@@ -192,7 +201,7 @@ export const userProfileOperations = {
         if (profile.avatar !== null) {
           return { profile: toUserProfile(profile) };
         }
-        const before = selectProfileDisplayEntries(db, [profile.id])[0]![1];
+        const before = selectProfileAccessEntries(db, [profile.id])[0]![1];
         requestSqliteWorkerOperationAdmission({
           stage: "transaction",
           facts: { kind: "profile-avatar", before },
@@ -209,7 +218,7 @@ export const userProfileOperations = {
             })
             .where("id", "=", profile.id),
         );
-        const committed = selectProfileDisplayEntries(db, [profile.id])[0]![1];
+        const committed = selectProfileAccessEntries(db, [profile.id])[0]![1];
         return {
           profile: toUserProfile({ ...profile, avatar_mime: input.mime, updated_at: input.now }),
           committed,

@@ -11,16 +11,13 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
-import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
-import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import {
   shouldWaitForRecovery,
   verifyUpdateFailureRecovery,
 } from "./update-command-failure-recovery.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
-import { captureMutableUpdateCompensation } from "./update-command-mutable-signals.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import {
   completePostUpdateMaintenance,
@@ -29,17 +26,13 @@ import {
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import {
-  assertUpdateCommandPackageFinalization,
-  createUpdateCommandFinalizationFence,
-} from "./update-command-recovery.js";
+import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   recordServiceReconciliationWarning,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
-  resolveAutomaticUpdateTriage,
   recordUpdateResultNextAction,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
@@ -55,8 +48,11 @@ import {
 } from "./update-command-service.js";
 import {
   completeUpdateCommandResult,
+  captureUpdateFinalization,
   createPostUpdateFailureResult,
   publishSettledUpdateCommandResult,
+  bindUpdateFinalizationFailure,
+  withUpdateProgressSettlement,
 } from "./update-command-terminal-publication.js";
 import {
   captureUpdateCommandTerminalRecord,
@@ -67,57 +63,60 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
+type FinishUpdateOptions = { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void };
+
 export async function finishUpdate(
+  params: FinishUpdateParams,
+  {
+    beforeFinalization,
+    ...options
+  }: FinishUpdateOptions & {
+    beforeFinalization?: () => Promise<void>;
+  } = {},
+): Promise<UpdateRunResult> {
+  const captured = captureUpdateFinalization(params);
+  return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>
+    finishSettledUpdate(settled, options, captured, failure),
+  );
+}
+
+async function finishSettledUpdate(
   params: FinishUpdateParams,
   {
     candidateRuntime = false,
     onGatewayStartAttempted: observeGatewayStartAttempted,
-  }: { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void } = {},
+  }: FinishUpdateOptions,
+  captured: ReturnType<typeof captureUpdateFinalization>,
+  progressFailure?: { cause: unknown },
 ): Promise<UpdateRunResult> {
-  const beganSuccessfully = params.result.status === "ok";
+  const {
+    beganSuccessfully,
+    fence,
+    assertCurrent,
+    originalRun,
+    compensate,
+    recordPhase,
+    sentinelOptions,
+  } = captured;
   let gatewayStartAttempted = false;
   const onGatewayStartAttempted = () => {
     gatewayStartAttempted = true;
     observeGatewayStartAttempted?.();
   };
   const definitionRecovery: UpdateServiceDefinitionRecovery = {};
-  const fence = createUpdateCommandFinalizationFence(params);
-  const assertCurrent = params.opts.run?.requesterAuthority
-    ? createUpdateCommandAuthority({ opts: params.opts, assertCurrent: fence }).assertCurrent
-    : fence;
-  const originalRun = params.opts.run;
-  const compensate = captureMutableUpdateCompensation(params.opts);
-  const { recordPhase } = createUpdateCommandExecutionGuards(params.opts, params.root, {
-    kind: "current-core-finalization",
-    assertCurrent,
-  });
   const parkForegroundOrigin = () => parkForegroundUpdateForActivation(params, assertCurrent);
-
-  // Final publication follows restoration of the caller's environment. Retain
-  // the admitted run's state for both notice policy and its matching sentinel.
-  const sentinelOptions = {
-    meta: params.controlPlaneUpdateSentinelMeta,
-    jsonMode: Boolean(params.opts.json),
-    env: params.opts.run?.env ?? params.ownedManagedUpdateEnv,
-  };
   assertCurrent();
   await assertUpdateCommandPackageFinalization(params);
-  const shouldRestart = await preparePostUpdateService(params, assertCurrent);
+  const shouldRestart = progressFailure
+    ? false
+    : await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
   let gateway: TriageFailureContext["gateway"] = "preserve";
   let triageAllowed = true;
-  const createFailure = (
-    result: UpdateRunResult,
-    exitCode = 1,
-    detail?: string,
-    options?: ErrorOptions,
-  ) =>
-    new UpdateCommandFailure(result, exitCode, detail, {
-      ...options,
-      automaticTriage: triageAllowed
-        ? resolveAutomaticUpdateTriage(result, detail, { ...params, gateway })
-        : undefined,
-    });
+  const createFailure = bindUpdateFinalizationFailure(params, progressFailure, () => ({
+    triageAllowed,
+    gateway,
+  }));
   let rollbackAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
   // Rollback can replace the suspension owner.

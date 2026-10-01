@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { UPDATE_DEV_TARGET_REF_ENV } from "../../infra/update-dev-target.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as shared from "./shared.js";
 import { prepareUpdateCommand } from "./update-command-run.js";
@@ -33,7 +32,7 @@ it("keeps Doctor's source update on dev while preserving saved extended-stable p
   vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", undefined);
-  vi.stubEnv(UPDATE_DEV_TARGET_REF_ENV, "invalid\nref");
+  vi.stubEnv("OPENCLAW_UPDATE_DEV_TARGET_REF", "invalid\nref");
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(path.join(home, "other-install"));
   const opts = { sourceUpdate: { root }, timeout: "1200", dryRun: true };
   const prepared = await prepareUpdateCommand(opts);

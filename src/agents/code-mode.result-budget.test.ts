@@ -104,6 +104,7 @@ async function dispatch(
     contextWindowTokens,
   });
   const activeSession = {
+    isCompacting: false,
     [agentSessionQueuePromptContext]: () => () => undefined,
     agent,
     get messages() {

@@ -1,3 +1,4 @@
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -505,84 +506,87 @@ export async function enqueueRun(
   };
   let queuedRun: Promise<unknown>;
   try {
-    queuedRun = runWithGatewayIndependentRootWorkContinuation(async () => {
-      opts?.commitGuard?.();
-      const prepared = await prepareManualRun(state, id, mode, {
-        runId,
-        scheduleOwnershipAtMs,
-        terminalTracker,
-        commitGuard: opts?.commitGuard,
-      });
-      if (!prepared.ok || !prepared.ran) {
-        acceptance.resolve(prepared);
-        return prepared;
-      }
-      let dispatched = false;
-      try {
+    // The run outlives the calling agent turn, so it must not write through that turn's transcript lifecycle.
+    queuedRun = runWithoutOwnedSessionTranscriptWrites(() =>
+      runWithGatewayIndependentRootWorkContinuation(async () => {
         opts?.commitGuard?.();
-        return await enqueueCommandInLane(
-          CommandLane.Cron,
-          async (owningCronLaneTaskMarker) => {
-            acceptQueue();
-            dispatched = true;
-            const result = await executePreparedManualRun(
-              state,
-              { ...prepared, owningCronLaneTaskMarker },
-              mode,
-              activationSettled.resolve,
-            );
-            if (result.ok && "ran" in result && !result.ran) {
-              if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
-                const finishedAt = state.deps.nowMs();
-                const job = state.store?.jobs.find((entry) => entry.id === id);
-                await emitCronRunFinished(
-                  state,
-                  {
-                    jobId: id,
-                    action: "finished",
-                    job,
-                    status: "skipped",
-                    error: `queued manual run skipped before execution: ${result.reason}`,
-                    runId,
-                    runAtMs: finishedAt,
-                    durationMs: 0,
-                    nextRunAtMs: job?.state.nextRunAtMs,
-                  },
-                  terminalTracker,
+        const prepared = await prepareManualRun(state, id, mode, {
+          runId,
+          scheduleOwnershipAtMs,
+          terminalTracker,
+          commitGuard: opts?.commitGuard,
+        });
+        if (!prepared.ok || !prepared.ran) {
+          acceptance.resolve(prepared);
+          return prepared;
+        }
+        let dispatched = false;
+        try {
+          opts?.commitGuard?.();
+          return await enqueueCommandInLane(
+            CommandLane.Cron,
+            async (owningCronLaneTaskMarker) => {
+              acceptQueue();
+              dispatched = true;
+              const result = await executePreparedManualRun(
+                state,
+                { ...prepared, owningCronLaneTaskMarker },
+                mode,
+                activationSettled.resolve,
+              );
+              if (result.ok && "ran" in result && !result.ran) {
+                if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
+                  const finishedAt = state.deps.nowMs();
+                  const job = state.store?.jobs.find((entry) => entry.id === id);
+                  await emitCronRunFinished(
+                    state,
+                    {
+                      jobId: id,
+                      action: "finished",
+                      job,
+                      status: "skipped",
+                      error: `queued manual run skipped before execution: ${result.reason}`,
+                      runId,
+                      runAtMs: finishedAt,
+                      durationMs: 0,
+                      nextRunAtMs: job?.state.nextRunAtMs,
+                    },
+                    terminalTracker,
+                  );
+                }
+                state.deps.log.info(
+                  { jobId: id, runId, reason: result.reason },
+                  "cron: queued manual run skipped before execution",
                 );
               }
-              state.deps.log.info(
-                { jobId: id, runId, reason: result.reason },
-                "cron: queued manual run skipped before execution",
+              return result;
+            },
+            {
+              onQueued: acceptQueue,
+              taskIdentity: { taskKind: "cron", runId },
+              warnAfterMs: 5_000,
+              onWait: (waitMs, queuedAhead) => {
+                state.deps.log.warn(
+                  { jobId: id, runId, waitMs, queuedAhead },
+                  "cron: queued manual run waiting for an execution slot",
+                );
+              },
+            },
+          );
+        } finally {
+          if (!dispatched) {
+            try {
+              await releasePreparedManualReservationAfterReloadWithRetry(state, prepared);
+            } catch (cleanupError) {
+              state.deps.log.warn(
+                { jobId: id, err: String(cleanupError) },
+                "cron: failed to release manual reservation after queue rejection",
               );
             }
-            return result;
-          },
-          {
-            onQueued: acceptQueue,
-            taskIdentity: { taskKind: "cron", runId },
-            warnAfterMs: 5_000,
-            onWait: (waitMs, queuedAhead) => {
-              state.deps.log.warn(
-                { jobId: id, runId, waitMs, queuedAhead },
-                "cron: queued manual run waiting for an execution slot",
-              );
-            },
-          },
-        );
-      } finally {
-        if (!dispatched) {
-          try {
-            await releasePreparedManualReservationAfterReloadWithRetry(state, prepared);
-          } catch (cleanupError) {
-            state.deps.log.warn(
-              { jobId: id, err: String(cleanupError) },
-              "cron: failed to release manual reservation after queue rejection",
-            );
           }
         }
-      }
-    }, "cron:manual-run");
+      }, "cron:manual-run"),
+    );
   } catch (error) {
     activationSettled.resolve();
     releaseCallerAuthority?.();

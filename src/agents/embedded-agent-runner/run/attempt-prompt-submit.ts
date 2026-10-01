@@ -37,6 +37,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptSubmissionSession = {
   messages: AgentMessage[];
+  readonly isCompacting: boolean;
   [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
   agent: {
     state: { messages: AgentMessage[] };
@@ -77,6 +78,13 @@ export async function submitEmbeddedAttemptPrompt(input: {
   leasedSteering?: SteeringLease;
   modelPrompt: string;
   onFinalPromptText: (prompt: string) => void;
+  assertHostActive?: () => void;
+  /** Returns work only when a stale optional restriction must be withdrawn. */
+  preparePrimaryModelRequest?: () =>
+    | Promise<() => Pick<Parameters<StreamFn>[1], "tools" | "systemPrompt">>
+    | undefined;
+  /** Observes only the first admitted foreground dispatch, not preflight/compaction. */
+  onPrimaryModelRequest?: (tools: NonNullable<Parameters<StreamFn>[1]["tools"]>) => void;
   onSteeringAcknowledged: () => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
@@ -108,6 +116,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
       : undefined;
 
+  let primaryRequestObserved = false;
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
     const persistThenStream: StreamFn = async (model, context, options) => {
@@ -116,9 +125,31 @@ export async function submitEmbeddedAttemptPrompt(input: {
       await userTurnRecorder?.waitForRuntimePersistence();
       options?.signal?.throwIfAborted();
       assertSteeringCurrent();
-      const stream = await baseStreamFn(model, context, options);
+      input.assertHostActive?.();
+      let requestContext = context;
+      const foregroundRequest = captureCurrentPromptForModel && !activeSession.isCompacting;
+      const preparation = foregroundRequest ? input.preparePrimaryModelRequest?.() : undefined;
+      if (preparation) {
+        const readRestoredContext = await preparation;
+        options?.signal?.throwIfAborted();
+        assertSteeringCurrent();
+        input.assertHostActive?.();
+        // Read the live permitted surface only after all awaited preparation.
+        // Do not reuse the tools snapshot captured before the restoration.
+        const restored = readRestoredContext();
+        requestContext = {
+          ...context,
+          tools: restored.tools,
+          systemPrompt: restored.systemPrompt,
+        };
+      }
+      if (foregroundRequest && !primaryRequestObserved) {
+        primaryRequestObserved = true;
+        input.onPrimaryModelRequest?.(requestContext.tools ?? []);
+      }
+      const stream = await baseStreamFn(model, requestContext, options);
       // Pre-prompt compaction has not consumed the deferred answer.
-      if (captureCurrentPromptForModel) {
+      if (foregroundRequest) {
         pendingSteering = undefined;
       }
       return stream;

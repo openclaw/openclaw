@@ -137,13 +137,12 @@ function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStor
   } as CronStoredJob;
 }
 
-function countUnpersistableCronJobs(store: CronStoreFile): number {
-  return store.jobs.reduce((count, job) => count + (normalizeCronJobForSqlite(job) ? 0 : 1), 0);
-}
-
 /** Fails before replacing SQLite rows when any config job cannot round-trip. */
 export function assertCronStoreCanPersist(store: CronStoreFile): void {
-  const invalidJobs = countUnpersistableCronJobs(store);
+  const invalidJobs = store.jobs.reduce(
+    (count, job) => count + (normalizeCronJobForSqlite(job) ? 0 : 1),
+    0,
+  );
   if (invalidJobs > 0) {
     throw new Error(`Cannot persist cron store with ${invalidJobs} invalid job(s)`);
   }
