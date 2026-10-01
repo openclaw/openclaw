@@ -113,7 +113,7 @@ private final class DashboardWindowOwnershipTrackingWindow: NSWindow {
 }
 
 // Suite limits cap every test; the localized case bounds its child test process at 120 s.
-@Suite(.serialized, .timeLimit(.minutes(3)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardWindowOwnershipTests {
     static let primaryGateway = DashboardGatewayEntry(
@@ -594,7 +594,7 @@ struct DashboardWindowOwnershipTests {
                 }
                 let reopened = scenario == "reopened" ? Task { @MainActor in try await manager.show() } : nil
                 if reopened != nil {
-                    try await DashboardTestWait.state("reopened browser identity request") {
+                    try await TestWait.state("reopened browser identity request") {
                         await requests.numberOfRequests() >= 3
                     }
                     #expect(await requests.numberOfRequests() == 3)

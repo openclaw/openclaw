@@ -45,6 +45,7 @@ it.each(["complete", "close"] as const)(
       owner = createGatewayUpdateCheck({
         lifecycle,
         getConfig: () => ({}),
+        applyRemoteCatalogUpdate: async () => "unchanged",
         log: { info: vi.fn() },
         isNixMode: false,
       });

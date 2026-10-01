@@ -88,6 +88,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
 
   const jobPayload = options.jobPayload ?? DEFAULT_AGENT_TURN_PAYLOAD;
   const res = await runCronIsolatedAgentTurn({
+    deliveryAttemptFence: null,
     cfg: makeCfg(home, storePath, options.cfgOverrides),
     deps,
     job: {

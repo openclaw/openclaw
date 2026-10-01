@@ -153,7 +153,7 @@ module.exports = { id: "native-chat-inspection", register(api) {
               fs.writeFileSync(path.join(stateDir, "openclaw.json"), "{}");
             }
             await writeConfigFile(config);
-            const active = loadAndActivateRootPluginRegistry({
+            const active = await loadAndActivateRootPluginRegistry({
               config,
               workspaceDir: stateDir,
               cache: false,

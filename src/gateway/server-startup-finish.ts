@@ -101,7 +101,6 @@ export async function finishGatewayStartup(params: {
     authRateLimiter,
     browserAuthRateLimiter,
     nodeReapprovalCoordinator,
-    preauthHandshakeTimeoutMs,
     isGatewayStartupPending,
     attachedGatewayExtraHandlers,
     startListening,
@@ -171,7 +170,6 @@ export async function finishGatewayStartup(params: {
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       nodeReapprovalCoordinator,
-      preauthHandshakeTimeoutMs,
       isStartupPending: isGatewayStartupPending,
       isPendingWorkerNodeSetup: workerEnvironmentService?.hasPendingNodeEnrollmentSetup,
       admitsNodeSetupCompletion: workerEnvironmentService?.admitsNodeSetupCompletion,
@@ -301,24 +299,34 @@ export async function finishGatewayStartup(params: {
             startupState.pendingReason = "startup-sidecars";
           },
           onStartupPluginsLoaded: async (loaded) => {
-            const prepared = await prepareAttachedPluginRuntime(loaded);
-            if (
-              lifecycle.closePreludeStarted ||
-              !startupPluginRuntimeClaim.publish(prepared.publish)
-            ) {
-              return false;
-            }
-            startupState.pendingReason = "startup-sidecars";
-            prepared.afterCommit();
-            // Nodes can finish their handshake before deferred plugins attach.
-            const nodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(
-              getPluginNodeCapabilities(),
+            const activationCleanup: Promise<void>[] = [];
+            const prepared = await prepareAttachedPluginRuntime(loaded, (completion) =>
+              activationCleanup.push(completion),
             );
-            for (const client of clients) {
-              reconcileClientPluginNodeCapabilities(client, nodeCapabilitySurfaces);
+            try {
+              if (
+                lifecycle.closePreludeStarted ||
+                !startupPluginRuntimeClaim.publish(prepared.publish)
+              ) {
+                return false;
+              }
+              startupState.pendingReason = "startup-sidecars";
+              prepared.afterCommit();
+              // Nodes can finish their handshake before deferred plugins attach.
+              const nodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(
+                getPluginNodeCapabilities(),
+              );
+              for (const client of clients) {
+                reconcileClientPluginNodeCapabilities(client, nodeCapabilitySurfaces);
+              }
+              await refreshAttachedGatewayDiscovery(
+                loaded.pluginRegistry,
+                startupPluginRuntimeClaim,
+              );
+              return true;
+            } finally {
+              await Promise.allSettled(activationCleanup);
             }
-            await refreshAttachedGatewayDiscovery(loaded.pluginRegistry, startupPluginRuntimeClaim);
-            return true;
           },
           getCronService: kernel.getCronService,
           onChannelsStarted: () => {

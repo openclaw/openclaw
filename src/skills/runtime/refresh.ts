@@ -8,10 +8,7 @@ import {
 } from "@openclaw/fs-safe/watch";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveFsObservationMode,
-  resolveFsObservationIntervalMs,
-} from "../../infra/fs-observation-mode.js";
+import { resolveFsObservationMode } from "../../infra/fs-observation-mode.js";
 import { admitObservationRoot } from "../../infra/fs-observation-root.js";
 import { readObservationSnapshot } from "../../infra/fs-observation-snapshot.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -24,7 +21,10 @@ import {
   type WorkspaceSkillSourcePlan,
 } from "../loading/workspace-skill-sources.js";
 import { createSkillFileScheduler } from "./refresh-file-stability.js";
-import { skillsObservationScope } from "./refresh-observation-source.js";
+import {
+  skillsObservationScope,
+  skillsObservationTransport,
+} from "./refresh-observation-source.js";
 import {
   closeRemoteSkillsWatchers,
   disposeRemoteSkillsWatcher,
@@ -89,7 +89,8 @@ function createSkillsPathWatcher(
   let entryDirectoryObserved = false;
   // true means a directory/link/other entry was seen. Keep both sides of a
   // reconciliation so directory -> file and deletion cannot look supporting-only.
-  // Unioning scan passes is intentionally conservative for transient structure.
+  // Exclusion callbacks can cover only a directory slice, so omitted names do
+  // not imply deletion. Retain their kinds until observed again or detail fills.
   let entryKinds: Map<string, boolean> | undefined = new Map();
   let scannedKinds: Map<string, boolean> | undefined = new Map();
   let starting = Promise.resolve();
@@ -303,11 +304,11 @@ function createSkillsPathWatcher(
       if (!isCurrent()) {
         return;
       }
-      const mode = resolveFsObservationMode();
+      const { mode, pollIntervalMs, reportHealth } = skillsObservationTransport(target.path);
       subscription = watch(authority, {
         scopes: [scope],
         mode,
-        pollIntervalMs: resolveFsObservationIntervalMs(),
+        pollIntervalMs,
         signal: lifetime.signal,
         exclude: (entry) => {
           if (plannedScope?.kind === "entry" && entry.path === plannedScope.path) {
@@ -401,10 +402,23 @@ function createSkillsPathWatcher(
           }
         },
         onHealth: (health) => {
+          if (isCurrent()) {
+            reportHealth(health);
+          }
           if (health.state === "starting" || health.state === "reconciling") {
             scannedKinds = new Map();
           } else if (health.state === "ready") {
-            entryKinds = scannedKinds;
+            if (!scannedKinds) {
+              entryKinds = undefined;
+            } else if (entryKinds) {
+              for (const [name, kind] of scannedKinds) {
+                if (!entryKinds.has(name) && entryKinds.size >= MAX_SKILLS_WATCH_ENTRY_KINDS) {
+                  entryKinds = undefined;
+                  break;
+                }
+                entryKinds.set(name, kind);
+              }
+            }
             scannedKinds = new Map();
           }
           if (health.state === "unavailable") {

@@ -5,7 +5,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardExperienceTests {
     @Test func `switching experiences retains documents and restores the selected Gateway`() async throws {

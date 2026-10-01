@@ -35,6 +35,9 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   if (command.type === "cron.jobNames") {
     return { ...command, jobIds: [...command.jobIds] };
   }
+  if (command.type === "cron.quarantine") {
+    return { type: command.type, storeKey: command.storeKey };
+  }
   if (command.type === "githubPublication.sharedObservation") {
     return {
       type: command.type,
@@ -247,6 +250,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes + Buffer.byteLength(command.storePath ?? "", "utf8"),
     );
   }
+  if (command.type === "cron.quarantine") {
+    return bytes + Buffer.byteLength(command.storeKey, "utf8");
+  }
   if (command.type === "githubPublication.sharedObservation") {
     return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
   }
@@ -439,6 +445,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
   if (
+    command.type === "userModelAccounts.links" ||
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.channelIdentity.list" ||

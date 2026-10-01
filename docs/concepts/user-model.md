@@ -69,6 +69,11 @@ The personal file supplements, rather than replaces, the shared file, overriding
 conflicting shared user preferences, not project rules or security policy. The
 workspace-root `USER.md` remains shared regardless of the workspace directory's name.
 
+Codex connections without a managed inference relay use shared workspace
+preferences only: they omit the selected personal overlay because native thread
+instructions can be inherited by child agents. Managed relay connections retain
+parent-only personal-profile delivery. See [Codex workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files#skills-persona-and-memory-without-a-managed-relay).
+
 Files are refreshed on later turns. Reassigning the session changes personal
 context on the next new turn, not the running turn. Another participant can steer
 under the normal permission and queue rules without switching personal context.
@@ -275,7 +280,7 @@ My GitHub requires an authenticated, durable Gateway profile, including the loca
 
 The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint. Setup help appears only when no account is available, and workspace guidance appears only for personal publication.
 
-The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Pending status, retry actions, confirmation details, and errors stay inside the current row. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
+The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Publication recovery stays inside an unpublished branch row. When PR rows are visible, recovery appears separately because a session publication attempt does not necessarily belong to any listed PR. Failed attempts use a collapsed **Publication attempt failed** disclosure; expand it to inspect the original account, error, and recovery actions. When OpenClaw verifies that a failed shared attempt’s accepted changes are already published in the matching PR, it stops offering that obsolete failure as recovery—even after reloading or starting later work. The historical receipt remains unchanged and can still be read explicitly. Unpublished or unverified changes retain their failure; refreshing a receipt never retries publication. Pending status and confirmation details remain expanded. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
 
 If the Gateway rejects the selected account before accepting the first publication request, choose **Refresh publication**, review the current account, then explicitly publish again. An unknown outcome keeps the original account and request locked. For shared publication, **Refresh publication** looks up the receipt using the original invocation key; finding no receipt does not prove that the request never ran. **Retry publication** is an explicit replay of that same idempotent request, not a switch of account or a new publication.
 

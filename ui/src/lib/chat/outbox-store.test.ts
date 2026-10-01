@@ -330,7 +330,7 @@ describe("stored outbox summaries", () => {
     const changed = vi.fn();
     const unsubscribe = reader.subscribe(changed);
     const gatewayUrl = "ws://gateway.test/control";
-    const state = { settings: { gatewayUrl } };
+    const state = { settings: { gatewayUrl }, client: null, connected: false };
     const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`;
     sessionStorage.setItem(
       storageKey,
@@ -347,7 +347,7 @@ describe("stored outbox summaries", () => {
     const first = readProjectedOutboxStore(sessionStorage, target);
     expect(readProjectedOutboxStore(sessionStorage, target)).toBe(first);
     const summary = reader.read(state);
-    expect(reader.read({ settings: { gatewayUrl } })).toBe(summary);
+    expect(reader.read({ settings: { gatewayUrl }, client: null, connected: false })).toBe(summary);
 
     sessionStorage.setItem(
       storageKey,
@@ -368,7 +368,7 @@ describe("stored outbox summaries", () => {
     expect(refreshed.hasSessionDraft("agent:main:summary")).toBe(true);
     expect(
       reader
-        .read({ settings: { gatewayUrl: "ws://other.test" } })
+        .read({ settings: { gatewayUrl: "ws://other.test" }, client: null, connected: false })
         .hasSessionDraft("agent:main:summary"),
     ).toBe(false);
     expect(reader.read(state).hasSessionDraft("agent:main:summary")).toBe(true);
@@ -401,7 +401,7 @@ describe("stored outbox summaries", () => {
       }
       write(key, value);
     });
-    const state = { settings: { gatewayUrl } };
+    const state = { settings: { gatewayUrl }, client: null, connected: false };
     expect(createStoredChatOutboxReader().read(state).total).toBe(1);
 
     sessionStorage.setItem(legacyKey, stored(["first", "second"]));
@@ -467,7 +467,13 @@ describe("stored outbox summaries", () => {
           },
         }),
       );
-      expect(createStoredChatOutboxReader().read({ settings: { gatewayUrl } }).total).toBe(1);
+      expect(
+        createStoredChatOutboxReader().read({
+          settings: { gatewayUrl },
+          client: null,
+          connected: false,
+        }).total,
+      ).toBe(1);
     }
 
     sessionStorage.clear();
@@ -477,7 +483,13 @@ describe("stored outbox summaries", () => {
     unsubscribe();
 
     for (const gatewayUrl of gatewayUrls) {
-      expect(createStoredChatOutboxReader().read({ settings: { gatewayUrl } }).total).toBe(0);
+      expect(
+        createStoredChatOutboxReader().read({
+          settings: { gatewayUrl },
+          client: null,
+          connected: false,
+        }).total,
+      ).toBe(0);
     }
     expect(listener).toHaveBeenCalledOnce();
   });
@@ -691,7 +703,12 @@ describe("stored outbox summaries", () => {
         },
       }),
     );
-    const summary = createStoredChatOutboxReader().read({ ...state, settings: { gatewayUrl } });
+    const summary = createStoredChatOutboxReader().read({
+      ...state,
+      settings: { gatewayUrl },
+      client: null,
+      connected: false,
+    });
     const read = vi.spyOn(sessionStorage, "getItem");
     sessionStorage.clear();
 
@@ -757,6 +774,8 @@ describe("stored outbox summaries", () => {
     );
 
     const summary = createStoredChatOutboxReader().read({
+      client: null,
+      connected: false,
       settings: { gatewayUrl },
       assistantAgentId: "previous",
       agentsList: { defaultId: "work", mainKey: "main" },
@@ -788,6 +807,8 @@ describe("stored outbox summaries", () => {
 
     expect(
       createStoredChatOutboxReader().read({
+        client: null,
+        connected: false,
         settings: { gatewayUrl },
         agentsList: { defaultId: "work", mainKey: "workspace" },
       }).total,
@@ -860,7 +881,11 @@ describe("stored outbox summaries", () => {
       }),
     );
 
-    const summary = createStoredChatOutboxReader().read({ settings: { gatewayUrl } });
+    const summary = createStoredChatOutboxReader().read({
+      settings: { gatewayUrl },
+      client: null,
+      connected: false,
+    });
     expect(summary.total).toBe(8);
     expect(summary.attentionCountForSession("thread-a")).toBe(3);
     expect(summary.attentionCountForSession("thread-b")).toBe(1);
@@ -891,6 +916,8 @@ describe("stored outbox summaries", () => {
       }),
     );
     const state = {
+      client: null,
+      connected: false,
       settings: { gatewayUrl },
       assistantAgentId: "work",
       agentsList: { defaultId: "work", mainKey: "main" },

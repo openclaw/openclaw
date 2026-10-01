@@ -3,8 +3,9 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getOrCreateAccountThrottler } from "./account-throttler.js";
+import { getOrCreateAccountThrottler, runReplaceableTelegramRequest } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
+import { createTelegramDraftStream } from "./draft-stream.js";
 import { TelegramRequestNotStartedError } from "./network-errors.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 import {
@@ -115,6 +116,60 @@ describe("Telegram operation leases through real clients", () => {
       await Promise.allSettled([sending]);
     }
   });
+
+  it.each(["current", "retired"] as const)(
+    "queued unfinished preview retains network authority (%s writer)",
+    async (writer) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const token = fixture.cfg.channels.telegram.botToken;
+      const bot = new Bot(token, { client: { apiRoot: fixture.cfg.channels.telegram.apiRoot } });
+      bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
+      const entered = createDeferred<void>();
+      bot.api.config.use((prev, method, payload, signal) => {
+        if (method === "editMessageText") {
+          entered.resolve();
+        }
+        return prev(method, payload, signal);
+      });
+      let current = true;
+      const stream = createTelegramDraftStream({
+        api: bot.api,
+        chatId: -1001,
+        thread: { id: 2, scope: "forum" },
+      });
+      const authority = () => {
+        if (!current) {
+          throw new Error("preview writer retired");
+        }
+      };
+      stream.update("seed preview", { assertPlatformSendAuthorized: authority });
+      await stream.flush();
+      const hold = { arrived: createDeferred<void>(), release: createDeferred<void>() };
+      fixture.requestHold = hold;
+      // A replaceable blocker lets the preview queue without yielding to a final reply.
+      const blocker = runReplaceableTelegramRequest(() =>
+        bot.api.sendMessage(-1001, "queue blocker", { message_thread_id: 1 }),
+      );
+      try {
+        await hold.arrived.promise;
+        stream.update("queued preview", { assertPlatformSendAuthorized: authority });
+        const flushed = stream.flush();
+        await entered.promise;
+        current = writer === "current";
+        hold.release.resolve();
+        await blocker;
+        await flushed;
+        expect(
+          fixture.requests
+            .filter(({ method }) => method === "editMessageText")
+            .map(({ fields }) => fields.text),
+        ).toEqual(writer === "current" ? ["queued preview"] : []);
+      } finally {
+        hold.release.resolve();
+        await Promise.allSettled([blocker, stream.discard()]);
+      }
+    },
+  );
 
   it.each([
     { writer: "replaced", expectedSends: 1 },

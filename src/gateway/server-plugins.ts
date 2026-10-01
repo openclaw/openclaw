@@ -50,6 +50,7 @@ import {
   resolvePluginSubagentOverridePolicies,
   type PluginSubagentOverridePolicies,
 } from "./server-plugin-subagent-runtime.js";
+import { withTrustedPluginUserProfileIdentity } from "./server-plugin-user-profile.js";
 import {
   createGatewayHooksRuntime,
   hasInProcessGatewayContext,
@@ -65,7 +66,7 @@ export {
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
-export { readTrustedPluginSessionFacts };
+export { readTrustedPluginSessionFacts, withTrustedPluginUserProfileIdentity };
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
 
 export async function dispatchTrustedPluginGatewayMethod<T>(
@@ -220,6 +221,8 @@ function createGatewayPluginRuntimeBindings(
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
         readSessionFacts: (params) =>
           readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
+        withUserProfileIdentity: (params, run) =>
+          withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),
       },
       hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, signal),

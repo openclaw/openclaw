@@ -1273,6 +1273,8 @@ export const en: TranslationMap & {
     groupDefaultsWorktree: "New worktree",
     groupDefaultsWorktreeHint: "Runs each session in an isolated Git worktree.",
     groupDefaultsFailed: "Could not save the group defaults.",
+    groupDefaultsRequiresAdmin:
+      "This folder is outside agent workspaces. Saving defaults for it requires operator.admin. Open Inbox, select Limited access, request admin, then approve in Devices.",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     renameGroupMenu: "Rename group",
     renameGroupTitle: 'Rename group "{group}"',
@@ -2487,6 +2489,7 @@ export const en: TranslationMap & {
     publishAs: "Publish as @{account}",
     account: "Publication account",
     newAction: "Choose a new publication",
+    failedAttempt: "Publication attempt failed",
     capacity:
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
     confirm: "Confirm original publication",
@@ -3312,6 +3315,12 @@ export const en: TranslationMap & {
       unsupportedViewOnly: "This external session source is view-only.",
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
+      importToOpenClaw: "Import to OpenClaw",
+      importComplete: "Imported {count} transcript items.",
+      importUnchanged: "The imported transcript is up to date.",
+      importIncomplete:
+        "Imported {count} transcript items. Older history exceeded the import limit.",
+      openImportedSession: "Open imported session",
       openInTerminal: "Open in terminal",
       deleteSession: "Delete",
       deleteSessionConfirm:

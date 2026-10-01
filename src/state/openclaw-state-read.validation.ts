@@ -84,6 +84,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.storePath === undefined || typeof input.command.storePath === "string") &&
         Array.isArray(input.command.jobIds) &&
         input.command.jobIds.every((id) => typeof id === "string")) ||
+      (input.command.type === "cron.quarantine" && typeof input.command.storeKey === "string") ||
       (input.command.type === "cron.currentReceipt" &&
         isRecord(input.command.handle) &&
         typeof input.command.handle.receiptId === "string" &&
@@ -173,6 +174,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             typeof input.command.input.cursor.changedAtMs === "number" &&
             typeof input.command.input.cursor.environmentId === "string"))) ||
       input.command.type === "userProfiles.catalog" ||
+      (input.command.type === "userModelAccounts.links" &&
+        typeof input.command.profileId === "string") ||
       (input.command.type === "userPreferences.values" &&
         typeof input.command.key === "string" &&
         Array.isArray(input.command.profileIds) &&

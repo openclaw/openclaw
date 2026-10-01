@@ -68,16 +68,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/sidebar-update-card.ts":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
-    case "ui/src/pages/chat/components/chat-transcript-geometry.ts":
-    case "ui/src/pages/chat/components/chat-transcript-header.ts":
-    case "ui/src/pages/chat/components/chat-transcript-layout-owner.ts":
-    case "ui/src/pages/chat/components/chat-transcript-layout.ts":
-    case "ui/src/pages/chat/components/chat-transcript-offset-observer.ts":
-    case "ui/src/pages/chat/components/chat-transcript-row-refs.ts":
-    case "ui/src/pages/chat/components/chat-transcript-scroll-events.ts":
-      // Keep row layout, measurement, and their event channel together,
-      // independent of the growing shared transcript content renderers.
-      return "chat-transcript-layout";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";
@@ -171,10 +161,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // them (and therefore other routes) into its eagerly imported chunk.
                 priority: 8 - index,
                 includeDependenciesRecursively: true,
-                // Shared and chat groups both contain dense UI modules; keep their
-                // generated chunks within the existing compressed-size budget.
+                // Shared boot needs a smaller partition cap because its dense chat
+                // modules can exceed the compressed-size budget after regrouping.
                 minSize: 16 * 1024,
-                maxSize: 1408 * 1024,
+                maxSize: (route === "shared" ? 1344 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

@@ -57,7 +57,6 @@ function compareChannelRemovalChoices(
   );
 }
 
-/** Prompt for configured channel sections to remove from openclaw.json. */
 export async function removeChannelConfigWizard(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,

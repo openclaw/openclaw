@@ -267,8 +267,17 @@ ordered terminal steps, the expected shard ordinal, bounded timestamps reaching
 the deadline, successful cleanup, and no other failed or cancelled step. Preserve
 any unfinished receipt or canary coverage in its independent failure attribution.
 
-For the existing Node matrix's native fail-fast (including fork PRs whose monitor
-is skipped), use `cancellation.kind: "matrix-fail-fast"` and
+Current `openclaw/openclaw` PR reruns do not use native matrix fail-fast: every
+Node matrix leg can finish, preserving the remaining proof for inherited-red admin
+landing. This also applies to fork PRs targeting `openclaw/openclaw`; the workflow
+repository, not the head repository, owns this policy. The first-attempt monitor
+is unchanged. Native matrix fail-fast remains enabled only for PRs running in
+other repositories.
+
+Historical runs still use their tested workflow's policy, including the former
+expression that enabled native fail-fast on canonical PR reruns. For a run whose
+tested workflow and attempt/repository context enable native fail-fast, use
+`cancellation.kind: "matrix-fail-fast"` and
 `workflowJob: "checks-node-core-test-nondist-shard"` instead of monitor `jobId`/`step`.
 Its `causedBy` must name a nonempty, unique subset of independently admitted
 failed roots that actually caused this matrix cancellation. Add `members`, the

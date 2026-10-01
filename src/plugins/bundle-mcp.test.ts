@@ -262,20 +262,37 @@ describe("loadEnabledBundleMcpConfig", () => {
     expect(loaded.config.mcpServers).toStrictEqual({});
   });
 
-  it("merges inline bundle MCP servers and skips disabled bundles", async () => {
+  it("normalizes file and inline bundle transports and skips disabled bundles", async () => {
     await withBundleFixture(async ({ homeDir, workspaceDir }) => {
-      await writeClaudeBundleManifest({
+      const pluginRoot = await writeClaudeBundleManifest({
         homeDir,
         pluginId: "inline-enabled",
         manifest: {
           name: "inline-enabled",
           mcpServers: {
             enabledProbe: {
+              type: " StDiO ",
               command: "node",
               args: ["./enabled.mjs"],
             },
+            inlineHttp: { type: "http", url: "https://example.test/inline" },
+            canonical: { type: "http", transport: "sse", url: "https://example.test/canonical" },
+            unsupported: { type: " CuStOm ", url: "https://example.test/unsupported" },
+            explicitTransport: {
+              type: "custom",
+              transport: "sse",
+              url: "https://example.test/explicit",
+            },
           },
         },
+      });
+      await writeBundleTextFiles(pluginRoot, {
+        ".mcp.json": JSON.stringify({
+          mcpServers: {
+            fileHttp: { type: "http", url: "https://example.test/file" },
+            fileSse: { type: " SsE ", url: "https://example.test/sse" },
+          },
+        }),
       });
       await writeClaudeBundleManifest({
         homeDir,
@@ -312,6 +329,31 @@ describe("loadEnabledBundleMcpConfig", () => {
         throw new Error("expected inline MCP enabledProbe args to include enabled.mjs");
       }
       expect(enabledArgs[0]).toContain("enabled.mjs");
+      for (const [name, transport] of [
+        ["enabledProbe", "stdio"],
+        ["inlineHttp", "streamable-http"],
+        ["canonical", "sse"],
+        ["fileHttp", "streamable-http"],
+        ["fileSse", "sse"],
+      ] as const) {
+        expect(loaded.config.mcpServers[name]).toMatchObject({ transport });
+        expect(loaded.config.mcpServers[name]).not.toHaveProperty("type");
+      }
+      expect(loaded.config.mcpServers.unsupported).toMatchObject({
+        type: " CuStOm ",
+        transport: "custom",
+      });
+      expect(loaded.config.mcpServers.explicitTransport).toMatchObject({
+        type: "custom",
+        transport: "sse",
+      });
+      const support = inspectBundleMcpRuntimeSupport({
+        pluginId: "inline-enabled",
+        rootDir: pluginRoot,
+        bundleFormat: "claude",
+      });
+      expect(support.unsupportedServerNames).toEqual(["unsupported"]);
+      expect(support.supportedServerNames).toContain("explicitTransport");
       expect(loaded.config.mcpServers.disabledProbe).toBeUndefined();
     });
   });

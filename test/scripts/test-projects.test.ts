@@ -77,10 +77,11 @@ describe("Windows CI partitions", () => {
     assert(first && second);
     const targets = [...first.targets, ...second.targets];
     expect(new Set(targets).size).toBe(targets.length);
-    // Tooling owns the long compiler fixtures; the extension catch-all retains
+    // Tooling and infra own shared fixtures; the extension catch-all retains
     // separate plugin processes. The other projects share setup within one part.
     expect([...first.configs].filter((config) => second.configs.has(config))).toEqual([
       "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.infra.config.ts",
       "test/vitest/vitest.extensions.config.ts",
     ]);
   });
@@ -96,6 +97,7 @@ describe("test runtime prerequisites", () => {
     ],
     ["full local suite", [], "private-qa"],
     ["Windows Claude CLI process", ["src/process/exec.windows.integration.test.ts"], "runtime"],
+    ["agent command child", ["src/agents/agent-command-local.test.ts"], "runtime"],
     ["process config", ["test/vitest/vitest.process.config.ts"], "runtime"],
     ["ordinary process unit", ["src/process/exec.windows.test.ts"], undefined],
     ["TUI native provider policy", ["src/tui/tui-session-identity-pty.e2e.test.ts"], "runtime"],
@@ -1746,6 +1748,7 @@ describe("scripts/test-projects changed-target routing", () => {
     const embeddedRoot = "src/agents/embedded-agent-runner";
     const runtimeRoot = "src/agents/runtime-plan";
     const ownerExamples = [
+      ["src/agents/agent-command-local.test.ts", "cli-process"],
       [`${toolRoot}/chat-history-text.test.ts`, "unit-fast"],
       [`${toolRoot}/computer-tool.schema.test.ts`, "unit-fast-isolated"],
       [`${toolRoot}/gateway.hosted-routing.test.ts`, "infra"],
@@ -2067,6 +2070,11 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("routes the agent command child through its isolated CLI project", () => {
+    const file = "src/agents/agent-command-local.test.ts";
+    expect(buildVitestRunPlans([file])).toEqual([runPlan("cli-process", [file])]);
+  });
+
   it("adds the CLI process project for broad CLI targets", () => {
     const plans = buildVitestRunPlans(["src/cli"]);
 
@@ -2089,15 +2097,18 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual(["src/cli/update-cli/update-command-legacy-finalize.test.ts"]);
   });
 
-  it("deduplicates the verifier process selected by a state directory and exact leaf", () => {
-    const plans = buildVitestRunPlans([
-      "src/state",
-      "src/state/openclaw-database-verify.process.test.ts",
-    ]);
-    expect(
-      plans.filter((plan) => plan.config === "test/vitest/vitest.cli-process.config.ts"),
-    ).toEqual([runPlan("cli-process", ["src/state/openclaw-database-verify.process.test.ts"])]);
-  });
+  it.each([
+    { directory: "src/state", file: "src/state/openclaw-database-verify.process.test.ts" },
+    { directory: "src/agents", file: "src/agents/agent-command-local.test.ts" },
+  ])(
+    "deduplicates the process selected by $directory and its exact leaf",
+    ({ directory, file }) => {
+      const plans = buildVitestRunPlans([directory, file]);
+      expect(
+        plans.filter((plan) => plan.config === "test/vitest/vitest.cli-process.config.ts"),
+      ).toEqual([runPlan("cli-process", [file])]);
+    },
+  );
 
   it("preserves post-separator Vitest args without parsing them as targets", () => {
     for (const [arg, watchMode] of [
@@ -3321,6 +3332,14 @@ describe("scripts/test-projects full-suite sharding", () => {
       const targetedPlans = (config: string) =>
         plans.filter((plan) => plan.config === config && plan.forwardedArgs.length > 0);
       expect(targetedPlans("test/vitest/vitest.agents-core.config.ts")).toHaveLength(6);
+      expect(
+        targetedPlans("test/vitest/vitest.agents-core.config.ts").flatMap(
+          (plan) => plan.forwardedArgs,
+        ),
+      ).not.toContain("src/agents/agent-command-local.test.ts");
+      expect(
+        configs.filter((config) => config === "test/vitest/vitest.cli-process.config.ts"),
+      ).toHaveLength(1);
       const gatewayTargets = targetedPlans("test/vitest/vitest.gateway-server.config.ts").map(
         (plan) => plan.forwardedArgs,
       );

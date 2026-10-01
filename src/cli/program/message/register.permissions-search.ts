@@ -3,7 +3,6 @@ import type { Command } from "commander";
 import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
-/** Register the channel permissions inspection command. */
 export function registerMessagePermissionsCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
@@ -13,7 +12,6 @@ export function registerMessagePermissionsCommand(message: Command, helpers: Mes
     .action((opts) => helpers.runMessageAction("permissions", opts));
 }
 
-/** Register the channel message search command and repeatable filters. */
 export function registerMessageSearchCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(message.command("search").description("Search messages"))

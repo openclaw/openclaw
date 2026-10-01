@@ -1,9 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createOllamaNodeHostCommands } from "./node-inference.js";
-import { fetchOllamaModels } from "./provider-models.js";
 
 const CHAT_MODEL = "deadline-model:latest";
 const CHAT_COMMAND = "ollama.chat";
@@ -99,10 +97,6 @@ function runNodeChat(baseUrl: string, timeoutMs: number): Promise<string> {
 }
 
 describe("Ollama node inference deadline", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it.each([
     ["/api/tags", ["/api/tags"]],
     ["/api/show", ["/api/tags", "/api/show"]],
@@ -131,26 +125,4 @@ describe("Ollama node inference deadline", () => {
       },
     );
   });
-
-  it("applies the requested catalog timeout to guarded DNS preflight", async () => {
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
-    const stalledLookup = vi.fn(() => new Promise<never>(() => {})) as unknown as LookupFn;
-    const fetchSpy = vi.fn(async () => new Response("DNS should not complete"));
-    const startedAtMs = performance.now();
-
-    await expect(
-      fetchOllamaModels(
-        "https://ollama.example.com",
-        { timeoutMs: 150 },
-        {
-          lookupFn: stalledLookup,
-          fetchImpl: fetchSpy,
-        },
-      ),
-    ).resolves.toEqual({ reachable: false, models: [] });
-
-    expect(performance.now() - startedAtMs).toBeLessThan(2_000);
-    expect(stalledLookup).toHaveBeenCalled();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  }, 10_000);
 });

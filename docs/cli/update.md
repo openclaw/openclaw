@@ -194,6 +194,14 @@ the requested version or tag. The generated report includes the applicable next
 step. An already-running older updater cannot gain this diagnostic capture from
 its candidate package.
 
+On Windows, a temporarily locked live package can prevent the updater from renaming
+it into its backup location. The updater retries `EPERM`, `EBUSY`, and `EACCES`
+with bounded backoff (16 attempts and up to 57.75 seconds of waiting), recording
+each retry as a warning. If the rename still fails, the failure names both paths
+and leaves the installed package in place. Close processes holding that installation
+and check its permissions before retrying. This protection belongs to the installed
+updater; a newer candidate cannot add it to an older updater already running.
+
 ## Candidate-owned admission
 
 For package-manager updates, `openclaw update` privately stages the selected
@@ -218,6 +226,14 @@ worker-launch code; installing a corrected candidate cannot repair that first ho
 
 Source updates retain a retired workspace dependency link when only its ignored `node_modules` directory remains.
 An older installed updater that fails at `updater-runtime-retention` needs this correction in its running code before retrying; a newer candidate cannot repair that earlier step.
+
+Runtime retention excludes updater-owned package backups in the global module
+directory, including backup symlinks to source checkouts. An older installed
+updater such as `2026.9.6` can still follow a retained
+`.openclaw.package-backup-*` link and refuse an update with a host-owned plugin-link
+error. Preserve that historical link outside the global module directory, keeping
+its resolved target unchanged, before retrying. Do not delete its source checkout
+or move backups belonging to an active or unresolved update.
 
 The installed updater reads the candidate's `package.json` before running its
 pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the
@@ -371,6 +387,12 @@ Cleanup checks this budget between filesystem operations and waits for operation
 already in flight to settle, so stalled storage can extend the cleanup wait.
 Ownership and path-identity failures remain distinct from cleanup expiry.
 
+A later verified package activation also retires historical package backups
+captured before that update began. Symlink retirement removes only the link;
+source checkouts remain untouched. Failed updates and rollbacks preserve those
+historical backups, and separately retained database snapshots keep their own
+recovery lifetime.
+
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Post-core plugin
 installation and update work have no default deadline when `--timeout` is omitted;
@@ -412,7 +434,10 @@ recorded outcome. Reports from older updaters can still contain a `repairing` ph
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
-print progress steps.
+print progress steps or run the progress observer. Progress observes committed
+ledger rows through a reusable read-only worker connection instead of repeatedly
+copying shared state. This applies to updates launched by the fixed updater; a
+published older updater keeps its own progress reader until it is replaced.
 
 When no update is active, `openclaw update status` labels the saved outcome
 `Last recorded update` with the recorded start time, so historical results are

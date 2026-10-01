@@ -72,7 +72,7 @@ export function registerGeneratedMediaTaskActivity(
   }
   state.active.set(runId, {
     sessionKey,
-    agentId: requesterAgentId ?? parseAgentSessionKey(sessionKey)?.agentId,
+    agentId,
     generation,
   });
 }
