@@ -355,8 +355,7 @@ export async function startInboxMonitor(
     },
   });
   let closed = false;
-  let trackedListener: InboxMonitorListener;
-  trackedListener = {
+  const trackedListener: InboxMonitorListener = {
     ...listener,
     close: async () => {
       if (closed) {
@@ -455,7 +454,8 @@ export function installWebMonitorInboxUnitTestHooks() {
   afterEach(async () => {
     let closeFailed = false;
     let closeError: unknown;
-    for (const listener of [...activeInboxListeners]) {
+    // Each close removes only its current Set member, preserving the remaining iteration.
+    for (const listener of activeInboxListeners) {
       try {
         await listener.close();
       } catch (error) {
