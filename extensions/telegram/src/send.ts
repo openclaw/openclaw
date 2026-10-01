@@ -15,6 +15,7 @@ export {
   editForumTopicTelegram,
   renameForumTopicTelegram,
   createForumTopicTelegram,
+  deleteCreatedForumTopicTelegram,
 } from "./send-forum-topics.js";
 export { editMessageReplyMarkupTelegram, editMessageTelegram } from "./send-edit.js";
 export { sendLocationTelegram } from "./send-location.js";

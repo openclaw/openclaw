@@ -244,6 +244,24 @@ describe("Discord thread binding restoration", () => {
     await bindingManager.stop();
   });
 
+  it("replaces binding generation even when Discord rebinds in one millisecond", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T16:00:00.000Z"));
+    try {
+      const manager = await createTestManager();
+      const first = await manager.bindTarget(replacementTarget);
+      const second = await manager.bindTarget(replacementTarget);
+      expect(first?.boundAt).toBe(second?.boundAt);
+      expect(typeof first?.metadata?.["__threadBindingGeneration"]).toBe("string");
+      expect(second?.metadata?.["__threadBindingGeneration"]).not.toBe(
+        first?.metadata?.["__threadBindingGeneration"],
+      );
+      await manager.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("awaits committed touch and removal, preserves FIFO, and drains shutdown", async () => {
     stores.entries.mockResolvedValue([persistedBinding()]);
     const manager = await persistentManager();
@@ -270,6 +288,21 @@ describe("Discord thread binding restoration", () => {
     expect(manager.getByThreadId("thread-1")).toBeUndefined();
     expect(getThreadBindingManager("work")).toBeNull();
     expect(stores.delete).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a Discord binding when Back removal authority is revoked", async () => {
+    stores.entries.mockResolvedValue([persistedBinding()]);
+    const manager = await persistentManager();
+    await expect(
+      manager.unbindThread({
+        threadId: "thread-1",
+        sendFarewell: false,
+        assertCurrent: () => {
+          throw new Error("revoked");
+        },
+      }),
+    ).rejects.toThrow("revoked");
+    expect(manager.getByThreadId("thread-1")).toBeDefined();
   });
 
   it("does not turn revoked bind authority into an in-memory fallback", async () => {
@@ -434,7 +467,10 @@ describe("Discord thread binding restoration", () => {
     finish.resolve();
     await touching;
     const bound = await binding;
-    expect(bound?.metadata).toEqual({ payload: { value: "captured", items: [{ text: "first" }] } });
+    expect(bound?.metadata).toEqual({
+      payload: { value: "captured", items: [{ text: "first" }] },
+      __threadBindingGeneration: expect.any(String),
+    });
     expect(rows.get(saved.key)?.metadata).toEqual(bound?.metadata);
     await manager.stop();
   });

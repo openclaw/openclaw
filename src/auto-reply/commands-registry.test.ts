@@ -256,6 +256,12 @@ describe("commands registry", () => {
     expect(sideNativeSpec.isAlias).toBe(true);
   });
 
+  it("resolves /split as the native fork text command", () => {
+    expect(resolveTextCommand("/split Harbor")?.command.key).toBe("fork");
+    expect(resolveTextCommand("/split Harbor")?.args).toBe("Harbor");
+    expect(normalizeCommandBody("/split Harbor")).toBe("/fork Harbor");
+  });
+
   it("matches text command names case-insensitively without changing args", () => {
     expect(normalizeCommandBody("/STATUS")).toBe("/status");
     expect(normalizeCommandBody("/Model OpenAI-Codex/GPT-5.5")).toBe("/model OpenAI-Codex/GPT-5.5");

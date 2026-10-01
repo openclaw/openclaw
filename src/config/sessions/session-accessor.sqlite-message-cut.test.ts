@@ -19,6 +19,7 @@ import {
   switchSessionBranch,
   updateSessionEntry,
 } from "./session-accessor.js";
+import { forkSessionAtMessageInWorker } from "./session-accessor.sqlite-message-cut-worker.js";
 import {
   agentId,
   sessionKey,
@@ -37,6 +38,63 @@ afterEach(() => {
 });
 
 describe("SQLite session message cuts", () => {
+  it("forks the reply transcript through the canonical worker and publishes its target", async () => {
+    const { env } = await createSession();
+    const targetKey = `${sessionKey}:worker-fork`;
+    const result = await forkSessionAtMessageInWorker(
+      {
+        agentId,
+        env,
+        sessionKey,
+        entryId: "user-2",
+        targetKey,
+        creation: { via: "plugin" },
+      },
+      sourceExpectedState,
+    );
+    expect(result).toMatchObject({ status: "created", key: targetKey });
+    const target = loadSessionEntry({ agentId, env, sessionKey: targetKey });
+    expect(target).toMatchObject({
+      sessionId: result.status === "created" ? result.entry.sessionId : undefined,
+      forkSource: { sessionKey, sessionId: sourceExpectedState.sessionId, entryId: "user-2" },
+    });
+    expect(
+      await loadTranscriptEvents({
+        agentId,
+        env,
+        sessionId: result.status === "created" ? result.entry.sessionId : "",
+        sessionKey: targetKey,
+      }),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
+  });
+
+  it("refuses a worker reply fork after its source lifecycle changes", async () => {
+    const { env, scope } = await createSession();
+    await updateSessionEntry(scope, async () => ({
+      lifecycleRevision: "replaced-before-worker-cut",
+    }));
+    const targetKey = `${sessionKey}:stale-worker-fork`;
+    await expect(
+      forkSessionAtMessageInWorker(
+        { agentId, env, sessionKey, entryId: "user-2", targetKey },
+        sourceExpectedState,
+      ),
+    ).resolves.toEqual({ status: "conflict" });
+    expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).toBeUndefined();
+  });
+
+  it("refuses an incognito reply cut when its in-memory owner cannot enter the worker", async () => {
+    const { env, scope } = await createSession({ incognito: true });
+    const targetKey = `${scope.sessionKey}:fork`;
+    await expect(
+      forkSessionAtMessageInWorker(
+        { agentId, env, sessionKey: scope.sessionKey, entryId: "user-2", targetKey },
+        sourceExpectedState,
+      ),
+    ).rejects.toThrow("requires its existing native owner");
+    expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).toBeUndefined();
+  });
+
   it("returns authored text without captured context or attachments on fork", async () => {
     const { env, scope } = await createSession();
     const text = "Edit only these words";

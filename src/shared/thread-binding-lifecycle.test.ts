@@ -94,4 +94,20 @@ describe("resolveThreadBindingLifecycle", () => {
       }),
     ).toEqual({ expiresAt: 500, reason: "idle-expired" });
   });
+
+  it("keeps a persisted absolute ceiling when activity or policy timeouts extend", () => {
+    expect(
+      resolveThreadBindingLifecycle({
+        record: {
+          boundAt: 100,
+          lastActivityAt: 400,
+          idleTimeoutMs: 1_000,
+          maxAgeMs: 0,
+          expiresAt: 500,
+        },
+        defaultIdleTimeoutMs: 0,
+        defaultMaxAgeMs: 0,
+      }),
+    ).toEqual({ expiresAt: 500, reason: "max-age-expired" });
+  });
 });

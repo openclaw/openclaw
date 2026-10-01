@@ -278,19 +278,28 @@ export async function bindGenericCurrentConversation(
     typeof input.ttlMs === "number" && Number.isFinite(input.ttlMs)
       ? Math.max(0, Math.floor(input.ttlMs))
       : undefined;
+  const absoluteExpiresAt =
+    input.expiresAt === undefined ? undefined : asDateTimestampMs(input.expiresAt);
   const expiresAt =
-    ttlMs === undefined
-      ? undefined
-      : ttlMs === 0
-        ? now
-        : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
-  if (ttlMs !== undefined && expiresAt === undefined) {
+    input.expiresAt !== undefined
+      ? absoluteExpiresAt
+      : ttlMs === undefined
+        ? undefined
+        : ttlMs === 0
+          ? now
+          : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (
+    (input.expiresAt !== undefined && (expiresAt === undefined || expiresAt <= now)) ||
+    (ttlMs !== undefined && expiresAt === undefined)
+  ) {
     return null;
   }
   return updateCurrentConversationBindingRecord(conversation, (existing) => {
     assertCurrent?.();
+    const generation = crypto.randomUUID();
     return {
       bindingId: buildBindingId(conversation),
+      generation,
       targetSessionKey,
       targetKind: input.targetKind,
       conversation,
@@ -304,6 +313,7 @@ export async function bindGenericCurrentConversation(
           : undefined),
         ...input.metadata,
         lastActivityAt: now,
+        __threadBindingGeneration: generation,
       },
     };
   }).current;
@@ -368,14 +378,16 @@ export function touchGenericCurrentConversationBinding(
 function unbindCurrentConversationBindingById(
   bindingId: string,
   scope?: SessionBindingScope,
+  assertCurrent?: () => void,
 ): SessionBindingRecord[] {
   const conversation = bindingRefFromId(bindingId, scope);
   if (!conversation || !supportsGenericCurrentConversationBinding(conversation)) {
     return [];
   }
-  const { previous, current } = updateCurrentConversationBindingRecord(conversation, (latest) =>
-    latest?.bindingId === bindingId ? null : latest,
-  );
+  const { previous, current } = updateCurrentConversationBindingRecord(conversation, (latest) => {
+    assertCurrent?.();
+    return latest?.bindingId === bindingId ? null : latest;
+  });
   return previous && !current ? [previous] : [];
 }
 
@@ -385,8 +397,13 @@ export async function unbindGenericCurrentConversationBindings(
 ): Promise<SessionBindingRecord[]> {
   const normalizedBindingId = input.bindingId?.trim();
   if (normalizedBindingId?.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
-    return unbindCurrentConversationBindingById(normalizedBindingId, input.scope);
+    return unbindCurrentConversationBindingById(
+      normalizedBindingId,
+      input.scope,
+      input.assertCurrent,
+    );
   }
+  input.assertCurrent?.();
   const normalizedTargetSessionKey = input.targetSessionKey?.trim();
   return normalizedTargetSessionKey
     ? deleteCurrentConversationBindingRecordsBySession(

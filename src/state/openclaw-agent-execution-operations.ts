@@ -1,4 +1,5 @@
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import type { SessionForkAtMessageWorkerInput } from "../config/sessions/session-accessor.sqlite-message-cut-worker.types.js";
 import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
@@ -61,6 +62,22 @@ export async function loadAgentTranscriptOperations() {
         },
       );
     },
+  } satisfies Handlers;
+}
+
+export async function loadAgentForkAtMessageOperations() {
+  const kernel = await import("../config/sessions/session-accessor.sqlite-message-cut.js");
+  return {
+    "session.transcript.forkAtMessage": (
+      input: SessionForkAtMessageWorkerInput,
+      { options, writeTransaction, admit },
+    ) =>
+      kernel.executeSessionForkAtMessageWorkerOperation(
+        { agentId: options.agentId, path: options.path, sessionKey: input.sourceKey },
+        input,
+        (write) => writeTransaction("session.transcript.fork-at-message", "Session fork", write),
+        (publication) => admit("commit", publication),
+      ),
   } satisfies Handlers;
 }
 
@@ -223,6 +240,7 @@ export async function loadAgentArchivePruningOperations() {
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
   Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
+    Awaited<ReturnType<typeof loadAgentForkAtMessageOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentTrajectoryOperations>> &

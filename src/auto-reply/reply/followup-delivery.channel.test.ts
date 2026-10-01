@@ -156,6 +156,33 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it("fences a queued fork replay at the origin adapter after late revocation", async () => {
+    const assertReplay = vi.fn();
+    const turn = createTurn({ messageProvider: "discord", originatingChannel: "discord" });
+    turn.queued.assertForkReplaySourceCurrent = assertReplay;
+    let sent = false;
+    channelState.deliver.mockImplementation(
+      async (input: { assertDirectAdapterHandoff?: () => void }) => {
+        assertReplay.mockImplementation(() => {
+          throw new Error("replay route revoked");
+        });
+        input.assertDirectAdapterHandoff?.();
+        sent = true;
+        return [{ channel: "discord", messageId: "unexpected" }];
+      },
+    );
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [{ text: "fork reply" }] },
+      turn,
+      defaults: { ...createDefaults(vi.fn(async () => {})), opts: undefined },
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+    expect(channelState.deliver.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ assertDirectAdapterHandoff: assertReplay }),
+    );
+    expect(sent).toBe(false);
+  });
   it.each([
     {
       name: "optional group classified guidance",

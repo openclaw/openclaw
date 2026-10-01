@@ -111,6 +111,17 @@ type TelegramCreateForumTopicResult = {
   chatId: string;
 };
 
+/** Compensate only a topic ID returned by this operation; do not retry an ambiguous creation. */
+export async function deleteCreatedForumTopicTelegram(
+  chatId: string,
+  topicId: number,
+  opts: TelegramApiCallOpts,
+): Promise<void> {
+  await withTelegramApiContext(opts, async ({ api }) => {
+    await api.deleteForumTopic(chatId, topicId);
+  });
+}
+
 /** Requires the bot's can_manage_topics permission. */
 export async function createForumTopicTelegram(
   chatId: string,

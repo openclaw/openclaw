@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
@@ -117,18 +118,29 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     channel: params.channel,
     accountId,
   });
+  const absoluteDeadline = (metadata?: Record<string, unknown>): number | undefined => {
+    const value = metadata?.["__sessionBindingAbsoluteExpiresAt"];
+    return typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.floor(value)
+      : undefined;
+  };
   const asSessionBindingRecord = (
     record: AccountScopedConversationBindingRecord<TKind>,
     metadata?: Record<string, unknown>,
   ): SessionBindingRecord => {
+    const generation = normalizeOptionalString(metadata?.["__threadBindingGeneration"]);
     const idleExpiresAt = idleTimeoutMs > 0 ? record.lastActivityAt + idleTimeoutMs : undefined;
     const maxAgeExpiresAt = maxAgeMs > 0 ? record.boundAt + maxAgeMs : undefined;
-    const expiresAt =
+    const policyExpiresAt =
       idleExpiresAt != null && maxAgeExpiresAt != null
         ? Math.min(idleExpiresAt, maxAgeExpiresAt)
         : (idleExpiresAt ?? maxAgeExpiresAt);
+    const cap = absoluteDeadline(metadata);
+    const expiresAt =
+      cap === undefined ? policyExpiresAt : Math.min(policyExpiresAt ?? Infinity, cap);
     return {
       bindingId: `${record.accountId}:${record.conversationId}`,
+      ...(generation ? { generation } : {}),
       targetSessionKey: record.targetSessionKey,
       targetKind: params.toSessionBindingTargetKind(record.targetKind),
       conversation: {
@@ -178,6 +190,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     targetKind: BindingTargetKind;
     targetSessionKey: string;
     metadata?: Record<string, unknown>;
+    expiresAt?: number;
+    assertCurrent?: () => void;
   }): SessionBindingRecord | null => {
     const normalizedConversationId = input.conversationId.trim();
     const normalizedTargetSessionKey = input.targetSessionKey.trim();
@@ -185,9 +199,18 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       return null;
     }
     const now = Date.now();
+    const requestedDeadline =
+      input.expiresAt === undefined ? undefined : Math.floor(input.expiresAt);
+    if (
+      input.expiresAt !== undefined &&
+      (!Number.isFinite(requestedDeadline) || (requestedDeadline ?? 0) <= now)
+    ) {
+      return null;
+    }
     const { current } = updateCurrentConversationBindingRecord(
       conversationRef(normalizedConversationId),
       (existing) => {
+        input.assertCurrent?.();
         const previous =
           existing?.targetSessionKey === normalizedTargetSessionKey &&
           existing.targetKind === input.targetKind
@@ -195,7 +218,17 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
             : undefined;
         const existingLocal = previous ? asAccountBindingRecord(previous) : undefined;
         // Preserve plugin ownership on refresh without assigning its opaque target an agent.
-        const metadata = { ...previous?.metadata, ...input.metadata };
+        const priorDeadline = absoluteDeadline(previous?.metadata);
+        const deadline =
+          requestedDeadline === undefined
+            ? priorDeadline
+            : Math.min(priorDeadline ?? Infinity, requestedDeadline);
+        const metadata = {
+          ...previous?.metadata,
+          ...input.metadata,
+          __threadBindingGeneration: randomUUID(),
+          ...(deadline !== undefined ? { __sessionBindingAbsoluteExpiresAt: deadline } : {}),
+        };
         const record: AccountScopedConversationBindingRecord<TKind> = {
           accountId,
           conversationId: normalizedConversationId,
@@ -335,6 +368,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         targetKind: input.targetKind,
         targetSessionKey: input.targetSessionKey,
         metadata: input.metadata,
+        ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+        assertCurrent: input.assertCurrent,
       });
     },
     listBySession: (targetSessionKey) =>
@@ -414,7 +449,10 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       }
       const { previous } = updateCurrentConversationBindingRecord(
         conversationRef(conversationId),
-        () => null,
+        () => {
+          input.assertCurrent?.();
+          return null;
+        },
       );
       return previous ? [previous] : [];
     },

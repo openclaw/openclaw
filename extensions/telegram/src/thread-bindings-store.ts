@@ -18,6 +18,8 @@ export type TelegramThreadBindingRecord = {
   lastActivityAt: number;
   idleTimeoutMs?: number;
   maxAgeMs?: number;
+  /** Original route deadline restored by /fork --back; never extended by touch. */
+  expiresAt?: number;
   metadata?: Record<string, unknown>;
 };
 
@@ -35,6 +37,7 @@ export type TelegramThreadBindingManager = {
   ) => Promise<TelegramThreadBindingRecord | null>;
   unbindConversation: (params: {
     conversationId: string;
+    assertCurrent?: () => void;
     reason?: string;
     sendFarewell?: boolean;
     throwOnPersistError?: boolean;
@@ -112,6 +115,9 @@ export function sanitizeStoredBinding(
   }
   if (typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)) {
     record.maxAgeMs = Math.max(0, Math.floor(entry.maxAgeMs));
+  }
+  if (typeof entry?.expiresAt === "number" && Number.isFinite(entry.expiresAt)) {
+    record.expiresAt = Math.floor(entry.expiresAt);
   }
   if (typeof entry?.agentId === "string" && entry.agentId.trim()) {
     record.agentId = entry.agentId.trim();

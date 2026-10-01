@@ -64,6 +64,8 @@ type ReasoningStreamPayload = Pick<
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Host-only fork replay authority, rechecked at each physical provider call. */
+  assertForkReplaySourceCurrent?: () => void;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */

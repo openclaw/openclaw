@@ -281,6 +281,7 @@ export function createFollowupRunner(
         sourceDisposition?.kind === "deliver"
       ) {
         try {
+          admittedTurn.queued.assertForkReplaySourceCurrent?.();
           await sourceDisposition.deliver({
             kind: "queued-followup",
             runId: admittedTurn.runId,

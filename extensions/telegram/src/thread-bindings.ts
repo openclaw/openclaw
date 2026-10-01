@@ -8,10 +8,9 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
   persistBindingMutation,
@@ -38,7 +37,7 @@ import {
   type TelegramThreadBindingManager,
   type TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
-import { resolveTelegramToken } from "./token.js";
+import { createChildForumTopic } from "./thread-bindings-topic.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -184,7 +183,11 @@ async function initializeThreadBindingManager(
         return nextRecord;
       });
     },
-    unbindConversation: ({ conversationId: conversationIdRaw, throwOnPersistError }) =>
+    unbindConversation: ({
+      conversationId: conversationIdRaw,
+      throwOnPersistError,
+      assertCurrent,
+    }) =>
       mutate(async () => {
         const conversationId = normalizeOptionalString(conversationIdRaw);
         if (!conversationId) {
@@ -195,6 +198,7 @@ async function initializeThreadBindingManager(
         if (!removed) {
           return null;
         }
+        assertCurrent?.();
         mutation.prepare(null);
         const committed = await persistBindingMutation({
           accountId,
@@ -203,7 +207,10 @@ async function initializeThreadBindingManager(
           remove: true,
           reason: "unbind-conversation",
           throwOnError: throwOnPersistError,
-          assertCurrent: mutation.assertCurrent,
+          assertCurrent: () => {
+            mutation.assertCurrent();
+            assertCurrent?.();
+          },
         });
         mutation.publish(null, committed);
         return removed;
@@ -330,7 +337,7 @@ async function initializeThreadBindingManager(
         const placement = prepared.placement === "child" ? "child" : "current";
         const metadata = { ...prepared.metadata };
         let conversationId: string | undefined;
-        let nativeTopicCreated = false;
+        let createdTopic: { chatId: string; topicId: number } | undefined;
 
         if (placement === "child") {
           const rawConversationId = prepared.conversation.conversationId?.trim() ?? "";
@@ -352,26 +359,18 @@ async function initializeThreadBindingManager(
             (normalizeOptionalString(metadata.threadName) ?? "") ||
             (normalizeOptionalString(metadata.label) ?? "") ||
             `Agent: ${targetSessionKey.split(":").pop()}`;
-          try {
-            const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
-            if (!tokenResolution.token) {
-              return null;
-            }
-            const { createForumTopicTelegram } = await loadTelegramSendModule();
-            const result = await createForumTopicTelegram(chatId, threadName, {
-              cfg: params.cfg,
-              token: tokenResolution.token,
-              accountId,
-              ...(assertCurrent ? { assertPlatformSendAuthorized: assertCurrent } : {}),
-            });
-            conversationId = `${result.chatId}:topic:${result.topicId}`;
-            nativeTopicCreated = true;
-          } catch (err) {
-            logVerbose(
-              `telegram: child thread-binding failed for ${chatId}: ${formatErrorMessage(err)}`,
-            );
+          const topic = await createChildForumTopic({
+            cfg: params.cfg,
+            accountId,
+            chatId,
+            threadName,
+            assertCurrent,
+          });
+          if (!topic) {
             return null;
           }
+          createdTopic = topic;
+          conversationId = `${topic.chatId}:topic:${topic.topicId}`;
         } else {
           conversationId = normalizeOptionalString(prepared.conversation.conversationId);
         }
@@ -388,29 +387,37 @@ async function initializeThreadBindingManager(
             targetKind,
             conversationId,
             metadata,
+            ...(prepared.expiresAt !== undefined ? { expiresAt: prepared.expiresAt } : {}),
           },
         });
-        if (!nativeTopicCreated) {
-          assertCurrent?.();
-        }
+        assertCurrent?.();
         mutation.prepare(record);
         // Memory-only publication must not yield after checking command authority.
-        const committed =
-          manager.shouldPersistMutations() &&
-          (await persistBindingMutation({
-            accountId,
-            persist: true,
-            binding: record,
-            reason: "bind",
-            throwOnError: true,
-            assertCurrent: () => {
-              mutation.assertCurrent();
-              if (!nativeTopicCreated) {
+        try {
+          const committed =
+            manager.shouldPersistMutations() &&
+            (await persistBindingMutation({
+              accountId,
+              persist: true,
+              binding: record,
+              reason: "bind",
+              throwOnError: true,
+              assertCurrent: () => {
+                mutation.assertCurrent();
                 assertCurrent?.();
-              }
-            },
-          }));
-        mutation.publish(record, committed);
+              },
+            }));
+          mutation.publish(record, committed);
+        } catch (err) {
+          if (createdTopic) {
+            // A failed storage RPC may have committed. Deleting the topic here
+            // could strand a persisted route; retain its coordinates for recovery.
+            warn(
+              `telegram: child topic ${createdTopic.chatId}:topic:${createdTopic.topicId} may be unbound after binding failure; verify persisted route before manual cleanup: ${formatErrorMessage(err)}`,
+            );
+          }
+          throw err;
+        }
         logVerbose(
           `telegram: bound conversation ${conversationId} -> ${targetSessionKey} (${summarizeLifecycleForLog(
             record,
@@ -481,6 +488,7 @@ async function initializeThreadBindingManager(
         reason: input.reason,
         sendFarewell: false,
         throwOnPersistError: true,
+        assertCurrent: input.assertCurrent,
       });
       return removed ? [projectSessionBinding(removed)] : [];
     },

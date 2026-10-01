@@ -10,6 +10,7 @@ import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-err
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionBranchSummaryWorkerInput,
+  SessionForkReplySelectionWorkerInput,
   SessionEntryWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
@@ -48,6 +49,19 @@ const sessionEntries = createTranscriptReadPool<
 
 // Branch scans share background compute admission without delaying foreground history or context.
 const branchSummaries = createTranscriptReadPool<SessionBranchSummaryWorkerInput>(true);
+
+const forkReplySelections = createTranscriptReadPool<SessionForkReplySelectionWorkerInput>(true);
+
+export async function readSessionForkReplySelectionInWorker(
+  input: Omit<SessionForkReplySelectionWorkerInput, "kind">,
+) {
+  return unwrapSessionTranscriptWorkerReply<"fork-reply-selection">(
+    await forkReplySelections.run(
+      { kind: "fork-reply-selection", ...input },
+      { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000 },
+    ),
+  );
+}
 
 export async function readSessionTranscriptModelContextAsync(
   target: SessionTranscriptRuntimeTarget,

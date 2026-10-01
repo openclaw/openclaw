@@ -8,6 +8,8 @@ export type ThreadBindingLifecycleRecord = {
   idleTimeoutMs?: number;
   /** Optional max-age override in milliseconds; zero disables max-age expiry. */
   maxAgeMs?: number;
+  /** Persisted absolute ceiling that activity and timeout edits cannot extend. */
+  expiresAt?: number;
 };
 
 /** Resolves the next expiration for a channel thread binding from idle and max-age limits. */
@@ -38,7 +40,12 @@ export function resolveThreadBindingLifecycle(params: {
     idleTimeoutMs > 0
       ? Math.max(params.record.lastActivityAt, params.record.boundAt) + idleTimeoutMs
       : undefined;
-  const maxAgeExpiresAt = maxAgeMs > 0 ? params.record.boundAt + maxAgeMs : undefined;
+  const policyMaxAgeExpiresAt = maxAgeMs > 0 ? params.record.boundAt + maxAgeMs : undefined;
+  const absoluteExpiresAt = params.record.expiresAt;
+  const maxAgeExpiresAt =
+    absoluteExpiresAt !== undefined && Number.isFinite(absoluteExpiresAt)
+      ? Math.min(policyMaxAgeExpiresAt ?? Infinity, absoluteExpiresAt)
+      : policyMaxAgeExpiresAt;
 
   return resolveThreadBindingExpiry({ inactivityExpiresAt, maxAgeExpiresAt });
 }

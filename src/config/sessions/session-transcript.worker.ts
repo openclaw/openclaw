@@ -258,16 +258,15 @@ serveOwnedWorkerTasks(
           result: opened.found ? opened.value : undefined,
         };
       }
+      if (request.kind === "fork-reply-selection") {
+        const { readForkReplySelectionForWorker } =
+          await import("./session-transcript-worker-query-operations.js");
+        return readForkReplySelectionForWorker(request);
+      }
       if (request.kind === "transcript-search") {
-        const { searchSessionTranscriptsReadOnlySync } =
-          await import("./session-transcript-search.js");
-        return {
-          kind: "transcript-search" as const,
-          result: searchSessionTranscriptsReadOnlySync(request.params, {
-            ...request.database,
-            env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
-          }),
-        };
+        const { searchTranscriptsForWorker } =
+          await import("./session-transcript-worker-query-operations.js");
+        return searchTranscriptsForWorker(request);
       }
       if (request.kind === "session-store-target") {
         const { readSessionStoreTargetResult } =

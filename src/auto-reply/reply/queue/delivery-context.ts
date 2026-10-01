@@ -180,10 +180,25 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
   return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
+export function resolveOverflowSummarySourceGroup(queue: {
+  summarySources: FollowupRun[];
+}): FollowupRun[] {
+  const source = queue.summarySources[0];
+  if (!source) {
+    return [];
+  }
+  const contextKey = resolveFollowupDeliveryContextKey(source);
+  const end = queue.summarySources.findIndex(
+    (candidate) => resolveFollowupDeliveryContextKey(candidate) !== contextKey,
+  );
+  return queue.summarySources.slice(0, end < 0 ? undefined : end);
+}
+
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "sourceTurnId"
   | "operatorAuthority"
+  | "assertForkReplaySourceCurrent"
   | "personalBootstrapEligible"
   | "currentInboundEventKind"
   | "currentInboundAudio"
@@ -265,6 +280,13 @@ export function collectRuntimeMetadata(
   return {
     sourceTurnId: authoritySource?.sourceTurnId,
     operatorAuthority: authoritySource?.operatorAuthority,
+    assertForkReplaySourceCurrent: items.some((item) => item.assertForkReplaySourceCurrent)
+      ? () => {
+          for (const item of items) {
+            item.assertForkReplaySourceCurrent?.();
+          }
+        }
+      : undefined,
     ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
       ? { personalBootstrapEligible: true }
       : {}),
@@ -305,6 +327,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     sourceTurnId: source.sourceTurnId,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
+    assertForkReplaySourceCurrent: source.assertForkReplaySourceCurrent,
     personalBootstrapEligible: source.personalBootstrapEligible,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,

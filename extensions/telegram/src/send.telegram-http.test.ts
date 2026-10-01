@@ -20,6 +20,7 @@ import { telegramOutbound } from "./outbound-adapter.js";
 import { sendLogger } from "./send-context.js";
 import {
   createForumTopicTelegram,
+  deleteCreatedForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
   editMessageTelegram,
@@ -690,6 +691,16 @@ describe("Telegram physical send acceptance over HTTP", () => {
       createForumTopicTelegram("@platformbound", "Bound topic", options),
     ).rejects.toThrow("Platform request authority revoked");
     expect(requests).toEqual([{ method: "getChat", fields: { chat_id: "@platformbound" } }]);
+  });
+
+  it("deletes only the returned topic ID with a single compensating API call", async () => {
+    fixture.responseFor = (method) => (method === "deleteForumTopic" ? true : undefined);
+    await deleteCreatedForumTopicTelegram("-100123", 77, { cfg, api: bot.api });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      method: "deleteForumTopic",
+      fields: { chat_id: "-100123", message_thread_id: 77 },
+    });
   });
 
   it("validates forum names by code points rather than UTF-16 length", async () => {

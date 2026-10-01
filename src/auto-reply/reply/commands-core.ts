@@ -2,6 +2,7 @@ import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { handleForkCommand } from "./commands-fork.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
   CommandDispatchParams,
@@ -73,6 +74,11 @@ export async function handleCommands(params: CommandDispatchParams): Promise<Com
     surface: params.command.surface,
     commandSource: params.ctx.CommandSource,
   });
+
+  const forkResult = await handleForkCommand(handlerParams, allowTextCommands);
+  if (forkResult) {
+    return normalizeCommandHandlerResult(forkResult);
+  }
 
   for (const handler of HANDLERS) {
     const result = await handler(handlerParams, allowTextCommands);

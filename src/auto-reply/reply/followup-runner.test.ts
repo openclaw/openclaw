@@ -577,6 +577,34 @@ describe("createFollowupRunner", () => {
     );
   });
 
+  it("blocks final queued fork delivery after replay authority changes", async () => {
+    const turn = createTurn();
+    const revoked = new Error("fork replay route revoked");
+    let current = true;
+    turn.queued.assertForkReplaySourceCurrent = () => {
+      if (!current) {
+        throw revoked;
+      }
+    };
+    const sourceDelivery = vi.fn(async () => {});
+    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDelivery };
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockResolvedValue(createRejectedExecution());
+    state.account.mockResolvedValue(undefined);
+    state.resolveDecision.mockReturnValue({ kind: "deliver", payloads: [{ text: "fork reply" }] });
+    state.deliver.mockImplementation(async () => {
+      current = false;
+      return { kind: "completed", payloads: [{ text: "fork reply" }] };
+    });
+    await createFollowupRunner({
+      typing: createTypingController(),
+      typingMode: "never",
+      defaultModel: "claude",
+    })(turn.queued);
+    expect(sourceDelivery).not.toHaveBeenCalled();
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", revoked);
+  });
+
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {
     const order: string[] = [];
     const typing = createTypingController();

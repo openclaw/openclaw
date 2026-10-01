@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   formatThreadBindingDurationLabel,
   resolveThreadBindingEffectiveExpiresAt,
@@ -20,6 +21,10 @@ export function toSessionBindingRecord(
       accountId: record.accountId,
       conversationId: record.conversationId,
     }),
+    generation:
+      typeof record.metadata?.["__threadBindingGeneration"] === "string"
+        ? record.metadata["__threadBindingGeneration"]
+        : undefined,
     targetSessionKey: record.targetSessionKey,
     targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     conversation: {
@@ -60,6 +65,7 @@ export function fromSessionBindingInput(params: {
     targetKind: BindingTargetKind;
     conversationId: string;
     metadata?: Record<string, unknown>;
+    expiresAt?: number;
   };
 }): TelegramThreadBindingRecord {
   const now = Date.now();
@@ -86,7 +92,11 @@ export function fromSessionBindingInput(params: {
     metadata: {
       ...previous?.metadata,
       ...metadata,
+      // boundAt has millisecond resolution and bindingId is deterministic.
+      // A fresh persisted generation prevents an unbind/rebind ABA within one millisecond.
+      __threadBindingGeneration: randomUUID(),
     },
+    ...(previous?.expiresAt !== undefined ? { expiresAt: previous.expiresAt } : {}),
   };
 
   if (typeof metadata.idleTimeoutMs === "number" && Number.isFinite(metadata.idleTimeoutMs)) {
@@ -99,6 +109,13 @@ export function fromSessionBindingInput(params: {
     record.maxAgeMs = Math.max(0, Math.floor(metadata.maxAgeMs));
   } else if (typeof existing?.maxAgeMs === "number") {
     record.maxAgeMs = existing.maxAgeMs;
+  }
+  if (params.input.expiresAt !== undefined) {
+    const expiresAt = Math.floor(params.input.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+      throw new Error("saved binding deadline expired before return");
+    }
+    record.expiresAt = expiresAt;
   }
 
   return record;
