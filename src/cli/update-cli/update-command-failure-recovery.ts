@@ -107,9 +107,6 @@ export async function verifyUpdateFailureRecovery(params: {
         });
         return;
       }
-      if (params.opts.restart === false) {
-        return;
-      }
       if (params.serviceStopped) {
         try {
           result.verification = {
@@ -157,7 +154,7 @@ export async function verifyUpdateFailureRecovery(params: {
         expectedVersion: version,
         expectedBuildId: buildId ?? undefined,
         timeoutMs: params.timeoutMs,
-        waitForStartup: params.waitForStartup,
+        waitForStartup: params.opts.restart === false ? false : params.waitForStartup,
         assertCurrent: params.assertCurrent,
       });
       params.assertCurrent?.();
