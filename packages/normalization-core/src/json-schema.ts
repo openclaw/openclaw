@@ -6,6 +6,30 @@ import { isRecord } from "./record-coerce.js";
 type JsonSchemaObject = Record<string, unknown>;
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
+/** Decode a local URI fragment before recognizing or splitting its JSON Pointer. */
+export function decodeLocalSchemaRefFragment(ref: string): string | undefined {
+  if (!ref.startsWith("#")) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(ref.slice(1));
+  } catch {
+    return undefined;
+  }
+}
+
+export function decodeJsonPointerSegment(segment: string): string {
+  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+/** Encoded slashes separate tokens; ~1 remains inside a single token. */
+export function parseLocalSchemaRefPointer(ref: string): string[] | undefined {
+  const fragment = decodeLocalSchemaRefFragment(ref);
+  return fragment?.startsWith("/")
+    ? fragment.slice(1).split("/").map(decodeJsonPointerSegment)
+    : undefined;
+}
+
 /** Validation details shared by the TypeBox schema and value compilers. */
 export type TypeBoxValidationError = {
   keyword?: string;

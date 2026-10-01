@@ -103,6 +103,12 @@ without the capability marker fall back to installed checks, as do
 Admission selection is CLI-only: `--admission auto` is the default, and there is
 no environment-variable override.
 
+Windows candidates accept lease identities from the `2026.9.6` updater even
+when NTFS file IDs exceed JavaScript's exact numeric range. After validating
+the handoff, the candidate retains exact file and parent-directory identities;
+later replacement still stops the update. Lease read failures report their
+underlying cause instead of a parent-binding mismatch.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic

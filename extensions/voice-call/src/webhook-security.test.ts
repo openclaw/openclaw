@@ -255,6 +255,18 @@ describe("verifyPlivoWebhook", () => {
     ["GET", "?q=x", "Foo=y", "?q=x."],
     [
       "POST",
+      "?toString=z&__proto__=b&constructor=c&__proto__=a",
+      "",
+      "?__proto__=a&__proto__=b&constructor=c&toString=z",
+    ],
+    [
+      "POST",
+      "",
+      "toString=z&__proto__=b&constructor=c&__proto__=a",
+      "?__proto__a__proto__bconstructorctoStringz",
+    ],
+    [
+      "POST",
       "?flow=answer&callId=abc",
       "CallUUID=uuid&CallStatus=in-progress&From=%2B15550000000",
       "?callId=abc&flow=answer.CallStatusin-progressCallUUIDuuidFrom+15550000000",
@@ -294,6 +306,12 @@ describe("verifyPlivoWebhook", () => {
         verifiedRequestKey: `plivo:v3:${crypto.createHash("sha256").update(`${canonicalBase}\n${nonce}`).digest("hex")}`,
       });
       first.releaseReplay?.();
+      expect(
+        verifyPlivoWebhook(
+          { ...ctx, headers: { ...ctx.headers, "x-plivo-signature-v3": "invalid" } },
+          authToken,
+        ),
+      ).toMatchObject({ ok: false, version: "v3", reason: "Invalid Plivo V3 signature" });
     },
   );
 

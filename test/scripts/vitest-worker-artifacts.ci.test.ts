@@ -18,6 +18,7 @@ type Observation = {
   generation: string;
   pid: number;
   parent: number;
+  planner: number;
   group: string;
   inputDigest: string;
   includeFile: string;
@@ -34,6 +35,18 @@ function createCiProbe(
   const ready = path.join(directory, "ready");
   const startFirst = path.join(directory, "start-first");
   const firstReady = path.join(directory, "first-ready");
+  // Identify the group planner before either thread or fork leaves inherit its environment.
+  const plannerPreload = writeFixture(
+    directory,
+    "planner-preload.mjs",
+    `
+    import path from 'node:path';
+    import { isMainThread } from 'node:worker_threads';
+    const planner = ${JSON.stringify(path.join(root, "scripts/test-projects.mts"))};
+    if (isMainThread && [process.argv[1], process.argv[3]].some(arg => arg && path.resolve(arg) === planner)) {
+      process.env.OPENCLAW_FIXTURE_PLANNER_PID = String(process.pid);
+    }`,
+  );
   const probe = writeFixture(
     directory,
     "child.test.ts",
@@ -66,6 +79,7 @@ function createCiProbe(
       }
       fs.appendFileSync(${JSON.stringify(observationsFile)}, JSON.stringify({
         generation: generation.href, pid: process.pid, parent: process.ppid, group,
+        planner: Number(process.env.OPENCLAW_FIXTURE_PLANNER_PID),
         includeFile: process.env.OPENCLAW_VITEST_INCLUDE_FILE,
         inputDigest: createHash('sha256').update(JSON.stringify(manifest.inputs)).digest('hex'),
       })+'\\n');
@@ -98,6 +112,7 @@ function createCiProbe(
   );
   return {
     probe,
+    plannerPreload,
     observationsFile,
     release,
     ready,
@@ -168,6 +183,7 @@ it.runIf(process.platform !== "win32").for([
           );
       const env = {
         ...ciEnv(fixture.probe, parallelism, parallelism === 1),
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(fixture.plannerPreload).href}`,
         TMPDIR: temp,
         TMP: temp,
         TEMP: temp,
@@ -199,7 +215,13 @@ it.runIf(process.platform !== "win32").for([
         const borrowerCount = parallelism === 1 ? 3 : 2;
         expect(observations).toHaveLength(borrowerCount);
         expect(new Set(observations.map(({ pid }) => pid)).size).toBe(borrowerCount);
-        expect(new Set(observations.map(({ parent }) => parent)).size).toBe(2);
+        expect(new Set(observations.map(({ planner }) => planner)).size).toBe(2);
+        for (const group of ["first-group", "second-group"]) {
+          const members = observations.filter((observation) => observation.group === group);
+          expect(members).toHaveLength(group === "first-group" && parallelism === 1 ? 2 : 1);
+          expect(new Set(members.map(({ planner }) => planner)).size).toBe(1);
+          expect(members[0]!.planner).toBeGreaterThan(0);
+        }
         expect(new Set(observations.map(({ inputDigest }) => inputDigest)).size).toBe(1);
         const generations = observations.map(({ generation }) => generation);
         console.log("CI generation observations", JSON.stringify(observations));

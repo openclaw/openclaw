@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runExec } from "../exec.js";
 import { createChildAdapter } from "../supervisor/adapters/child.js";
@@ -19,7 +19,9 @@ describe.skipIf(skipBrokerTests)("brokered process lifecycle owners", () => {
     await broker.close();
   });
 
-  it("retains relay control and lineage through root exit and tree cancellation", async () => {
+  it("retains relay control and lineage through root exit and tree cancellation", async ({
+    signal,
+  }) => {
     await runWithSpawnBroker(broker, async () => {
       const { adapter, ready } = await createServiceChildRelayAdapter({
         command: process.execPath,
@@ -65,7 +67,7 @@ describe.skipIf(skipBrokerTests)("brokered process lifecycle owners", () => {
           adapter.treeOwnership === "linux-subreaper" ? anchorPid : await parentOf(anchorPid);
         expect(await parentOf(brokerChildPid)).toBe(broker.pid);
         adapter.kill("SIGTERM");
-        await withTestTimeout(extinction, 10_000, "brokered relay cleanup did not complete");
+        await withinTest(extinction, signal);
         expect(extinct).toBe(true);
       } finally {
         adapter.kill("SIGKILL");
@@ -75,7 +77,9 @@ describe.skipIf(skipBrokerTests)("brokered process lifecycle owners", () => {
     });
   });
 
-  it("forwards the ownedWorker start gate and disconnect through the broker", async () => {
+  it("forwards the ownedWorker start gate and disconnect through the broker", async ({
+    signal,
+  }) => {
     await runWithSpawnBroker(broker, async () => {
       const response = createDeferredCore<unknown>();
       const { adapter, ready } = await createChildAdapter({
@@ -98,7 +102,14 @@ describe.skipIf(skipBrokerTests)("brokered process lifecycle owners", () => {
         await ready;
         await adapter.openStartGate?.();
         await expect(
-          withTestTimeout(response.promise, 5_000, "worker did not acknowledge its start gate"),
+          withinTest(
+            awaitGateBeforeSettlement(
+              response.promise,
+              adapter.wait(),
+              "worker settled before acknowledging its start gate",
+            ),
+            signal,
+          ),
         ).resolves.toEqual({
           ppid: broker.pid,
         });

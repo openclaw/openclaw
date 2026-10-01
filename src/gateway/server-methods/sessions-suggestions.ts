@@ -29,7 +29,10 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
   canManageSessionSharing,
@@ -505,10 +508,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     while (projection.needsMembershipPreparation()) {
       await projection.prepareMembership();
     }

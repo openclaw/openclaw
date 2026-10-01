@@ -73,9 +73,10 @@ internal fun ChatMessageActionHost(
   enabled: Boolean = true,
   listenActive: Boolean = false,
   onToggleListen: (() -> Unit)? = null,
+  onAddReaction: (() -> Unit)? = null,
   content: @Composable () -> Unit,
 ) {
-  if (!enabled || (text.isBlank() && !showSessionActions)) {
+  if (!enabled || (text.isBlank() && !showSessionActions && onAddReaction == null)) {
     Box(modifier = modifier) { content() }
     return
   }
@@ -97,6 +98,12 @@ internal fun ChatMessageActionHost(
       expanded = menuExpanded,
       onDismissRequest = { menuExpanded = false },
     ) {
+      onAddReaction?.let { addReaction ->
+        MessageActionItem(label = nativeString("Add reaction")) {
+          menuExpanded = false
+          addReaction()
+        }
+      }
       if (text.isNotBlank()) {
         onToggleListen?.let { toggleListen ->
           MessageActionItem(label = if (listenActive) nativeString("Stop") else nativeString("Listen")) {

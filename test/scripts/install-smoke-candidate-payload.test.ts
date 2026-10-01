@@ -1,6 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -96,6 +104,29 @@ function verifyOptions(payloadDir: string, manifestSha256: string, sourceArchive
 }
 
 describe("install smoke candidate payload", () => {
+  it("inlines archived policy without executing candidate code or reading mutable sources", async () => {
+    const fixture = createFixture();
+    const scripts = path.join(fixture.root, "candidate-root/scripts");
+    const marker = path.join(fixture.root, "executed");
+    writeFileSync(
+      path.join(scripts, "install.sh"),
+      '#!/bin/bash\nsource "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"\necho install\n',
+    );
+    writeFileSync(path.join(scripts, "install-policy.sh"), `touch '${marker}'\n`);
+    createTarball(fixture.archivePath, fixture.root, ["candidate-root"]);
+    writeFileSync(path.join(scripts, "install-policy.sh"), "mutable source must not be used\n");
+    await sealInstallSmokeCandidatePayload({
+      ...IDENTITY,
+      archivePath: fixture.archivePath,
+      outputDir: fixture.payloadDir,
+      packageDir: fixture.packageDir,
+    });
+    expect(existsSync(marker)).toBe(false);
+    expect(readFileSync(path.join(fixture.payloadDir, "install.sh"), "utf8")).toBe(
+      `#!/bin/bash\ntouch '${marker}'\necho install\n`,
+    );
+  });
+
   it("seals source installers and package bytes into a fully bound payload", async () => {
     const fixture = await sealFixture();
     const verified = await verifyInstallSmokeCandidatePayload(
@@ -136,6 +167,25 @@ describe("install smoke candidate payload", () => {
     expect(readFileSync(path.join(fixture.payloadDir, "install.sh"), "utf8")).toContain(
       "echo install",
     );
+  });
+
+  it("rejects a policy include backed by an archive symlink", async () => {
+    const fixture = createFixture();
+    const scripts = path.join(fixture.root, "candidate-root/scripts");
+    writeFileSync(
+      path.join(scripts, "install.sh"),
+      '#!/bin/bash\nsource "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"\n',
+    );
+    symlinkSync("install-target.sh", path.join(scripts, "install-policy.sh"));
+    createTarball(fixture.archivePath, fixture.root, ["candidate-root"]);
+    await expect(
+      sealInstallSmokeCandidatePayload({
+        ...IDENTITY,
+        archivePath: fixture.archivePath,
+        outputDir: fixture.payloadDir,
+        packageDir: fixture.packageDir,
+      }),
+    ).rejects.toThrow("scripts/install-policy.sh must be a regular file");
   });
 
   it("rejects tampering with the final payload file after sealing", async () => {

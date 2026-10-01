@@ -4,6 +4,20 @@ import Foundation
 import OpenClawProtocol
 import OSLog
 
+public enum RealtimeTalkRecovery {
+    private static let stableSessionSeconds: TimeInterval = 30
+    private static let restartDelaysNanoseconds: [UInt64] = [500_000_000, 2_000_000_000]
+
+    public static func restartAttempt(previousRapidRestarts: Int, activeDuration: TimeInterval) -> Int {
+        activeDuration >= self.stableSessionSeconds ? 1 : previousRapidRestarts + 1
+    }
+
+    public static func restartDelayNanoseconds(attempt: Int) -> UInt64? {
+        guard attempt > 0, attempt <= self.restartDelaysNanoseconds.count else { return nil }
+        return self.restartDelaysNanoseconds[attempt - 1]
+    }
+}
+
 public struct RealtimeTalkAudioFrame: Sendable {
     public let data: Data
     public let timestampMs: Double

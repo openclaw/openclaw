@@ -5,7 +5,7 @@ import {
   WorkerMachineOptionsSchema,
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
-import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
+import { validateProviderSettings } from "../../config/provider-settings.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -25,7 +25,7 @@ export function requireWorkerProfile(
   value: unknown,
   serviceError: (code: "invalid_profile", message: string) => Error,
 ): WorkerProfile {
-  const error = validateCloudWorkerProfileSettings(value);
+  const error = validateProviderSettings(value, "Worker profile");
   if (error) {
     throw serviceError("invalid_profile", error);
   }

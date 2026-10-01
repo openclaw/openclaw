@@ -21,6 +21,15 @@ export function registerBackupCommand(program: Command) {
     .command("create")
     .description("Write a backup archive for config, credentials, sessions, and workspaces")
     .option("--output <path>", "Archive path or destination directory")
+    .option("--to <location>", "Upload the verified archive to a storage location")
+    .option(
+      "--claim-namespace",
+      "Deliberately take over the backup namespace for this installation",
+    )
+    .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
+    .option("--keep-daily <n>", "Retain the newest backup in N daily UTC buckets")
+    .option("--keep-weekly <n>", "Retain the newest backup in N weekly UTC buckets")
+    .option("--keep-monthly <n>", "Retain the newest backup in N monthly UTC buckets")
     .option("--json", "Output JSON", false)
     .option("--dry-run", "Print the backup plan without writing the archive", false)
     .option("--verify", "Verify the archive after writing it", false)
@@ -60,6 +69,8 @@ export function registerBackupCommand(program: Command) {
   backup
     .command("verify <archive>")
     .description("Validate a backup archive and its embedded manifest")
+    .option("--from <location>", "Read a backup key or latest from a storage location")
+    .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
     .option("--json", "Output JSON", false)
     .addHelpText(
       "after",
@@ -77,14 +88,24 @@ export function registerBackupCommand(program: Command) {
     )
     .action(async (archive, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { backupVerifyCommand } = await import("../../commands/backup-verify.js");
-        await backupVerifyCommand(defaultRuntime, { ...opts, archive });
+        if (opts.from !== undefined) {
+          const { backupRemoteVerifyCommand } = await import("../../commands/backup-remote.js");
+          await backupRemoteVerifyCommand(defaultRuntime, { ...opts, archive });
+        } else {
+          if (opts.namespace) {
+            throw new Error("--namespace requires --from <location>.");
+          }
+          const { backupVerifyCommand } = await import("../../commands/backup-verify.js");
+          await backupVerifyCommand(defaultRuntime, { ...opts, archive });
+        }
       });
     });
 
   backup
     .command("restore <archive>")
     .description("Restore a verified backup archive to a fresh staging directory")
+    .option("--from <location>", "Read a backup key or latest from a storage location")
+    .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
     .requiredOption("--target <dir>", "Fresh target directory; non-empty directories are refused")
     .option("--json", "Output JSON", false)
     .addHelpText(
@@ -103,8 +124,44 @@ export function registerBackupCommand(program: Command) {
     )
     .action(async (archive, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { backupRestoreCommand } = await import("../../commands/backup-restore.js");
-        await backupRestoreCommand(defaultRuntime, { ...opts, archive });
+        if (opts.from !== undefined) {
+          const { backupRemoteRestoreCommand } = await import("../../commands/backup-remote.js");
+          await backupRemoteRestoreCommand(defaultRuntime, { ...opts, archive });
+        } else {
+          if (opts.namespace) {
+            throw new Error("--namespace requires --from <location>.");
+          }
+          const { backupRestoreCommand } = await import("../../commands/backup-restore.js");
+          await backupRestoreCommand(defaultRuntime, { ...opts, archive });
+        }
+      });
+    });
+
+  backup
+    .command("list")
+    .description("List archives in a storage location")
+    .requiredOption("--from <location>", "Storage location name")
+    .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { backupListCommand } = await import("../../commands/backup-remote.js");
+        await backupListCommand(defaultRuntime, opts);
+      });
+    });
+
+  backup
+    .command("record")
+    .description("Record an external backup job outcome")
+    .requiredOption("--status <status>", "ok or failed")
+    .requiredOption("--target <label>", "External backup target label")
+    .option("--bytes <n>", "Backup size in bytes")
+    .option("--error <text>", "Failure details")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { backupRecordCommand } = await import("../../commands/backup-record.js");
+        await backupRecordCommand(defaultRuntime, opts);
       });
     });
 
@@ -117,8 +174,18 @@ function registerBackupScheduleCommands(backup: Command): void {
   addGatewayClientOptions(
     backup
       .command("enable")
-      .description("Provision a Gateway automation for scheduled Git backups")
-      .requiredOption("--repository <path>", "Git backup repository directory")
+      .description("Provision a Gateway automation for offsite or Git backups")
+      .option("--repository <path>", "Git backup repository directory")
+      .option("--to <location>", "Storage location for offsite archive backups")
+      .option(
+        "--claim-namespace",
+        "Deliberately take over the backup namespace on each scheduled run",
+      )
+      .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
+      .option("--no-include-workspace", "Exclude workspace directories from offsite archives")
+      .option("--keep-daily <n>", "Retain the newest backup in N daily UTC buckets")
+      .option("--keep-weekly <n>", "Retain the newest backup in N weekly UTC buckets")
+      .option("--keep-monthly <n>", "Retain the newest backup in N monthly UTC buckets")
       .option("--every <duration>", "Backup interval", "24h")
       .option("--push", "Push the current branch to origin after each backup", false)
       .option("--exclude-secrets", "Omit credential-bearing database tables", false)
@@ -140,7 +207,9 @@ function registerBackupScheduleCommands(backup: Command): void {
   addGatewayClientOptions(
     backup
       .command("disable")
-      .description("Remove the scheduled Git backup automation")
+      .description("Remove both scheduled backup modes, or the selected mode")
+      .option("--offsite", "Disable only offsite archive backups", false)
+      .option("--git", "Disable only Git backups", false)
       .action(async (opts) => {
         await runCommandWithRuntime(defaultRuntime, async () => {
           const { backupDisableCommand } = await import("../../commands/backup-schedule.js");
