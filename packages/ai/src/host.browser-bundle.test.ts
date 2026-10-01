@@ -22,6 +22,7 @@ type BrowserHostModule = {
     };
   };
   getDefaultAiTransportHost(): unknown;
+  getAiTransportHost(): { resolveSecretSentinel(value: string): string };
   runWithAiTransportHost<T>(host: unknown, run: () => T): T;
 };
 
@@ -180,4 +181,216 @@ it("keeps the default transport host usable in browser bundles", async () => {
     delegatedEvents.push(event);
   }
   expect(delegatedEvents).toEqual([{ type: "done", reason: "stop", message: final }]);
+
+  browserHost.configureAiTransportHost({
+    resolveSecretSentinel: () => "custom-old",
+  });
+  const customIteratorHosts: string[] = [];
+  let resolveCustomResult!: (message: typeof final) => void;
+  const customResult = new Promise<typeof final>((resolve) => {
+    resolveCustomResult = resolve;
+  });
+  const customSource = {
+    push() {},
+    end() {},
+    async result() {
+      return customResult;
+    },
+    async *[Symbol.asyncIterator]() {
+      customIteratorHosts.push(
+        browserHost.getAiTransportHost().resolveSecretSentinel("custom-iterator"),
+      );
+      yield { type: "done", reason: "stop", message: final };
+      resolveCustomResult(final);
+    },
+  };
+  const customRegistry = browserHost.createApiRegistry();
+  customRegistry.registerApiProvider({
+    api: "browser-custom-test",
+    stream: () => customSource,
+    streamSimple: () => customSource,
+  });
+  const customStream = browserHost
+    .createLlmRuntime(customRegistry)
+    .stream(
+      { api: "browser-custom-test", provider: "fixture", id: "browser-custom" },
+      { messages: [] },
+    );
+  await expect(customStream.result()).resolves.toBe(final);
+  expect(customIteratorHosts).toEqual(["custom-old"]);
+  browserHost.configureAiTransportHost({
+    resolveSecretSentinel: () => "custom-new",
+  });
+  const customEvents = [];
+  for await (const event of customStream) {
+    customEvents.push(event);
+  }
+  expect(customEvents).toEqual([{ type: "done", reason: "stop", message: final }]);
+  const replayedCustomEvents = [];
+  for await (const event of customStream) {
+    replayedCustomEvents.push(event);
+  }
+  expect(replayedCustomEvents).toEqual([{ type: "done", reason: "stop", message: final }]);
+  expect(customIteratorHosts).toEqual(["custom-old"]);
+
+  let releaseLiveDrain!: () => void;
+  const liveDrainGate = new Promise<void>((resolve) => {
+    releaseLiveDrain = resolve;
+  });
+  let releaseLiveResult!: () => void;
+  const liveResultGate = new Promise<void>((resolve) => {
+    releaseLiveResult = resolve;
+  });
+  const liveSource = {
+    push() {},
+    end() {},
+    async result() {
+      await liveResultGate;
+      return final;
+    },
+    async *[Symbol.asyncIterator]() {
+      yield { type: "start", partial: final };
+      await liveDrainGate;
+      yield { type: "done", reason: "stop", message: final };
+    },
+  };
+  const liveRegistry = browserHost.createApiRegistry();
+  liveRegistry.registerApiProvider({
+    api: "browser-live-custom-test",
+    stream: () => liveSource,
+    streamSimple: () => liveSource,
+  });
+  const liveStream = browserHost
+    .createLlmRuntime(liveRegistry)
+    .stream(
+      { api: "browser-live-custom-test", provider: "fixture", id: "browser-live-custom" },
+      { messages: [] },
+    );
+  const liveResult = liveStream.result();
+  releaseLiveResult();
+  const liveIterator = liveStream[Symbol.asyncIterator]();
+  await expect(liveIterator.next()).resolves.toEqual({
+    done: false,
+    value: { type: "start", partial: final },
+  });
+  const cancelledLiveIterator = liveStream[Symbol.asyncIterator]();
+  await expect(cancelledLiveIterator.next()).resolves.toEqual({
+    done: false,
+    value: { type: "start", partial: final },
+  });
+  const cancelledLiveRead = cancelledLiveIterator.next();
+  await cancelledLiveIterator.return?.();
+  await expect(cancelledLiveRead).resolves.toEqual({ done: true, value: undefined });
+  expect(() => browserHost.configureAiTransportHost({})).toThrow(
+    "Cannot replace the AI transport host while browser provider work is pending",
+  );
+  releaseLiveDrain();
+  await expect(liveIterator.next()).resolves.toEqual({
+    done: false,
+    value: { type: "done", reason: "stop", message: final },
+  });
+  await expect(liveIterator.next()).resolves.toEqual({ done: true, value: undefined });
+  await expect(liveResult).resolves.toBe(final);
+  browserHost.configureAiTransportHost({});
+
+  let releaseSharedIterator!: () => void;
+  const sharedIteratorGate = new Promise<void>((resolve) => {
+    releaseSharedIterator = resolve;
+  });
+  const sharedIterator = (async function* () {
+    yield { type: "start" as const, partial: final };
+    await sharedIteratorGate;
+    yield { type: "done" as const, reason: "stop" as const, message: final };
+  })();
+  let sharedIteratorCalls = 0;
+  const sharedSource = {
+    push() {},
+    end() {},
+    async result() {
+      return final;
+    },
+    [Symbol.asyncIterator]() {
+      sharedIteratorCalls += 1;
+      return sharedIterator;
+    },
+  };
+  const sharedRegistry = browserHost.createApiRegistry();
+  sharedRegistry.registerApiProvider({
+    api: "browser-shared-custom-test",
+    stream: () => sharedSource,
+    streamSimple: () => sharedSource,
+  });
+  const sharedStream = browserHost
+    .createLlmRuntime(sharedRegistry)
+    .stream(
+      { api: "browser-shared-custom-test", provider: "fixture", id: "browser-shared-custom" },
+      { messages: [] },
+    );
+  const liveSharedIterator = sharedStream[Symbol.asyncIterator]();
+  const sharedResult = sharedStream.result();
+  expect(sharedIteratorCalls).toBe(1);
+  await expect(liveSharedIterator.next()).resolves.toEqual({
+    done: false,
+    value: { type: "start", partial: final },
+  });
+  await expect(sharedResult).resolves.toBe(final);
+  expect(() => browserHost.configureAiTransportHost({})).toThrow(
+    "Cannot replace the AI transport host while browser provider work is pending",
+  );
+  releaseSharedIterator();
+  await expect(liveSharedIterator.next()).resolves.toEqual({
+    done: false,
+    value: { type: "done", reason: "stop", message: final },
+  });
+  await expect(liveSharedIterator.next()).resolves.toEqual({ done: true, value: undefined });
+  expect(sharedIteratorCalls).toBe(1);
+  browserHost.configureAiTransportHost({});
+  const replayedSharedEvents = [];
+  for await (const event of sharedStream) {
+    replayedSharedEvents.push(event);
+  }
+  expect(replayedSharedEvents).toEqual([
+    { type: "start", partial: final },
+    { type: "done", reason: "stop", message: final },
+  ]);
+
+  let releaseFailedResult!: () => void;
+  const failedResultGate = new Promise<void>((resolve) => {
+    releaseFailedResult = resolve;
+  });
+  const iteratorError = new Error("custom iterator failed");
+  const failedSource = {
+    push() {},
+    end() {},
+    async result() {
+      await failedResultGate;
+      return final;
+    },
+    [Symbol.asyncIterator](): AsyncIterator<unknown> {
+      throw iteratorError;
+    },
+  };
+  const failedRegistry = browserHost.createApiRegistry();
+  failedRegistry.registerApiProvider({
+    api: "browser-failed-custom-test",
+    stream: () => failedSource,
+    streamSimple: () => failedSource,
+  });
+  const failedStream = browserHost
+    .createLlmRuntime(failedRegistry)
+    .stream(
+      { api: "browser-failed-custom-test", provider: "fixture", id: "browser-failed-custom" },
+      { messages: [] },
+    );
+  await expect(failedStream[Symbol.asyncIterator]().next()).rejects.toMatchObject({
+    message: "Stream iteration failed",
+    cause: iteratorError,
+  });
+  const failedResult = failedStream.result();
+  expect(() => browserHost.configureAiTransportHost({})).toThrow(
+    "Cannot replace the AI transport host while browser provider work is pending",
+  );
+  releaseFailedResult();
+  await expect(failedResult).resolves.toBe(final);
+  browserHost.configureAiTransportHost({});
 });

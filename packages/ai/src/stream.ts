@@ -1,6 +1,7 @@
 import type {
   Api,
   AssistantMessage,
+  AssistantMessageEvent,
   AssistantMessageEventStreamContract,
   Context,
   Model,
@@ -79,68 +80,113 @@ function retainUnscopedStreamLifetime(
   });
   void runWithHost(() => lifetime);
   let released = false;
-  const release = () => {
-    if (!released) {
+  let resultSettled = false;
+  let bufferSettled = false;
+  const releaseIfSettled = () => {
+    if (!released && resultSettled && bufferSettled) {
       released = true;
       releaseLifetime();
     }
   };
+  const push = stream.push.bind(stream);
+  const end = stream.end.bind(stream);
   const result = stream.result.bind(stream);
+  const iterate = stream[Symbol.asyncIterator].bind(stream);
+  const bufferedEvents: AssistantMessageEvent[] = [];
+  const bufferWaiters = new Set<() => void>();
+  let bufferError: Error | undefined;
   let resultPromise: ReturnType<typeof result> | undefined;
+  const wrapIterationError = (error: unknown) =>
+    new Error("Stream iteration failed", { cause: error });
+  const notifyBufferWaiters = () => {
+    for (const resolve of bufferWaiters) {
+      resolve();
+    }
+    bufferWaiters.clear();
+  };
   const observeResult = () => {
     if (!resultPromise) {
+      let providerResult: ReturnType<typeof result>;
       try {
-        resultPromise = result();
+        providerResult = runWithHost(result);
       } catch (error) {
-        resultPromise = Promise.reject(new Error("Stream result failed", { cause: error }));
+        providerResult = Promise.reject(new Error("Stream result failed", { cause: error }));
       }
-      void resultPromise.then(release, release);
+      void providerResult.then(
+        () => {
+          resultSettled = true;
+          releaseIfSettled();
+        },
+        () => {
+          resultSettled = true;
+          releaseIfSettled();
+        },
+      );
+      resultPromise = providerResult;
     }
     return resultPromise;
   };
-  const iterate = stream[Symbol.asyncIterator].bind(stream);
+  void (async () => {
+    try {
+      const iterator = runWithHost(iterate);
+      while (true) {
+        const next = await runWithHost(() => iterator.next());
+        if (next.done) {
+          return;
+        }
+        bufferedEvents.push(next.value);
+        notifyBufferWaiters();
+      }
+    } catch (error) {
+      bufferError = wrapIterationError(error);
+    } finally {
+      bufferSettled = true;
+      notifyBufferWaiters();
+      void observeResult().catch(() => {});
+      releaseIfSettled();
+    }
+  })();
   return {
-    push: stream.push.bind(stream),
-    end: stream.end.bind(stream),
+    push: (event) => runWithHost(() => push(event)),
+    end: (message) => runWithHost(() => end(message)),
     result: observeResult,
     [Symbol.asyncIterator]() {
-      const iterator = iterate();
-      const finish = iterator.return?.bind(iterator);
-      const fail = iterator.throw?.bind(iterator);
+      let index = 0;
+      let done = false;
+      const next = async (): Promise<IteratorResult<AssistantMessageEvent>> => {
+        if (done) {
+          return { done: true, value: undefined };
+        }
+        if (index < bufferedEvents.length) {
+          const value = bufferedEvents[index];
+          if (value === undefined) {
+            throw new Error("Buffered stream event is missing");
+          }
+          index += 1;
+          return { done: false, value };
+        }
+        if (bufferSettled) {
+          if (bufferError) {
+            throw bufferError;
+          }
+          done = true;
+          return { done: true, value: undefined };
+        }
+        await new Promise<void>((resolve) => {
+          bufferWaiters.add(resolve);
+        });
+        return next();
+      };
       return {
         [Symbol.asyncIterator]() {
           return this;
         },
-        async next(...args) {
-          try {
-            const next = await iterator.next(...args);
-            if (next.done) {
-              void observeResult();
-            }
-            return next;
-          } catch (error) {
-            void observeResult();
-            throw error;
-          }
-        },
+        next,
         async return(value?: unknown) {
-          try {
-            return finish ? await finish(value) : { done: true as const, value };
-          } finally {
-            void observeResult();
-          }
+          done = true;
+          notifyBufferWaiters();
+          return { done: true as const, value };
         },
-        ...(fail
-          ? {
-              async throw(error?: unknown) {
-                try {
-                  return await fail(error);
-                } finally {
-                  void observeResult();
-                }
-              },
-            }
-          : {}),
       };
     },
   };
@@ -198,7 +244,7 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
       void runWithStreamHost(() => completion);
     }
     return !completion && !supportsScopedAiTransportHosts()
-      ? retainUnscopedStreamLifetime(bound, runWithStreamHost)
+      ? retainUnscopedStreamLifetime(started, runWithStreamHost)
       : bound;
   };
   function resolveApiProvider(api: Api) {
