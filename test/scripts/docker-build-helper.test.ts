@@ -477,10 +477,14 @@ function writeUpgradeSurvivorStopPolicy(workDir: string, timeoutMs = 330_000): s
   writeFileSync(
     policyPath,
     [
-      'if (process.argv.length !== 3 || process.argv[2] !== "stop-timeout-ms") {',
+      'if (process.argv.length !== 3 || process.argv[2] !== "stop-context") {',
       '  throw new Error("Unexpected supervisor policy request");',
       "}",
-      "process.stdout.write(" + JSON.stringify(String(timeoutMs)) + ");",
+      "process.stdout.write(" +
+        JSON.stringify(
+          JSON.stringify({ stopTimeoutMs: timeoutMs, killMode: "control-group", controlGroup: "" }),
+        ) +
+        ");",
     ].join("\n"),
   );
   return policyPath;

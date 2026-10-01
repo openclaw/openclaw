@@ -481,7 +481,22 @@ export function registerMacRuntimeMaterializationTests() {
               verified!.productInode,
             );
           }
-          expect(snapshot(fixture.destination)).toEqual(
+          const published = snapshot(fixture.destination);
+          const ownerMarker = "lib/node_modules/openclaw/openclaw-install-owner.json";
+          expect(published.find(({ path: name }) => name === ownerMarker)).toMatchObject({
+            path: ownerMarker,
+            kind: "file",
+            mode: 0o644,
+          });
+          expect(
+            JSON.parse(readFileSync(path.join(fixture.destination, ownerMarker), "utf8")),
+          ).toEqual({
+            schemaVersion: 1,
+            owner: "macos-app",
+            displayName: "OpenClaw.app",
+            updateHint: "Update OpenClaw.app to update this Gateway.",
+          });
+          expect(published.filter(({ path: name }) => name !== ownerMarker)).toEqual(
             before.filter(
               ({ path: name }) =>
                 name !== "lib/node_modules/openclaw/foreign.node" &&

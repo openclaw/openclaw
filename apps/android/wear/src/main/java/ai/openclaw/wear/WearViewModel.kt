@@ -2049,11 +2049,7 @@ internal fun reconcileWearStreamSnapshot(
   if (snapshot.isNullOrEmpty()) return live
   val merged =
     if (liveComplete) {
-      when {
-        live.startsWith(snapshot) -> live
-        snapshot.startsWith(live) -> snapshot
-        else -> live
-      }
+      if (snapshot.startsWith(live)) snapshot else live
     } else {
       if (snapshot.startsWith(live)) {
         snapshot

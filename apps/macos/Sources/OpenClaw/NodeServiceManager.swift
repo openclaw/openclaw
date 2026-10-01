@@ -30,6 +30,27 @@ enum NodeServiceManager {
             fileManager: .default)
     }
 
+    static func installedServiceCLI(
+        profile: AppProfile = .current) -> GatewayLaunchAgentManager.InstalledServiceCLI?
+    {
+        guard !self.skipUnderProfile(profile, action: "inspect") else { return nil }
+        let directory = OpenClawPaths.stateDirURL.appendingPathComponent("service-env", isDirectory: true)
+        let environmentFile = directory.appendingPathComponent("\(nodeLaunchdLabel).env")
+        let wrapper = directory.appendingPathComponent("\(nodeLaunchdLabel)-env-wrapper.sh")
+        guard let cli = GatewayLaunchAgentManager.captureServiceCLI(
+            plist: self.launchdPlistURL,
+            environmentFile: environmentFile,
+            environmentWrapper: wrapper,
+            subcommand: "node")
+        else { return nil }
+        if cli.usesGeneratedEnvironment {
+            guard FileManager.default.isReadableFile(atPath: environmentFile.path),
+                  FileManager.default.isReadableFile(atPath: wrapper.path)
+            else { return nil }
+        }
+        return cli
+    }
+
     static func waitUntilRunning(profile: AppProfile = .current) async -> Bool {
         if self.skipUnderProfile(profile, action: "status poll") { return false }
         guard let arguments = self.launchdProgramArguments(profile: profile), !arguments.isEmpty else { return false }
@@ -119,9 +140,29 @@ extension NodeServiceManager {
         #if DEBUG
         self.testingServiceCommandCalls.append(args)
         #endif
-        let command = await self.serviceCommand(args)
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        let command: [String]
+        let env: [String: String]
+        if BundledRuntime.isBundledApp {
+            guard let cli = self.installedServiceCLI() else {
+                return CommandResult(
+                    success: false,
+                    message: "Could not read the node service runtime. Check the node LaunchAgent and retry.",
+                    parsed: nil)
+            }
+            command = AppProfile.current.localCLICommand(
+                prefix: cli.prefix, arguments: ["node"] + self.withJsonFlag(args))
+            env = GatewayLaunchAgentManager.daemonEnvironment(
+                runtime: nil,
+                installedCLI: cli,
+                environment: ProcessInfo.processInfo.environment,
+                profile: .current,
+                searchPaths: CommandResolver.preferredPaths())
+        } else {
+            command = await self.serviceCommand(args)
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+            env = environment
+        }
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
         let parsed = JSONObjectExtractionSupport.extract(from: response.stdout)
             ?? JSONObjectExtractionSupport.extract(from: response.stderr)

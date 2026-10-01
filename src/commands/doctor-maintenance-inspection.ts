@@ -6,8 +6,10 @@ import { hasGatewayServiceStopUnsafeError } from "../daemon/service-inspection-e
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import { readStateLeaseProcessOwnerStatus } from "../infra/state-lease-process-owner.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
@@ -16,7 +18,38 @@ import {
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
+
+/** Observe the selected installation without bootstrapping it or inheriting a discovery view. */
+export async function readDoctorGatewayOwnerLease(
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+): Promise<GatewayOwnerLeaseIdentity | undefined> {
+  const options = { env: { ...env }, path: resolveOpenClawStateSqlitePath(env) };
+  const reply = await withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(
+      options,
+      { type: "doctor.gatewayOwnerLease.read" },
+      { current: true, signal },
+    ),
+  );
+  signal.throwIfAborted();
+  if (!reply) {
+    return undefined;
+  }
+  if (!reply.ok || reply.type !== "doctor.gatewayOwnerLease.read") {
+    throw new Error("Unexpected Doctor Gateway owner lease read result");
+  }
+  // The recorded process may have exited while the reader and its private snapshot settled.
+  return reply.lease
+    ? { ...reply.lease, state: readStateLeaseProcessOwnerStatus(reply.lease) }
+    : undefined;
+}
 
 /** Admission has not opened repair writers; deferral cannot authorize any later work. */
 export function classifyDoctorMaintenanceRefusal(error: unknown): DoctorMaintenanceRefusal {

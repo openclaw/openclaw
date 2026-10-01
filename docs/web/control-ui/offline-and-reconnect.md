@@ -30,8 +30,10 @@ the paired device token retained from that connection, and present that same
 credential again. After that connection, OpenClaw keeps a small agent roster, the
 session list without live run state, and custom groups in browser storage. Recent
 transcripts use the existing chat cache. On reload, the shell, sidebar, and cached
-conversation can appear while the Gateway is still connecting. Live state replaces
-the cached roster on connect, and chat requests changes from its saved transcript cursor.
+conversation can appear while the Gateway is still connecting. Agent pickers and
+the agent directory wait for a live roster from the Gateway; stored agent lists
+cannot establish the current role's discovery permissions. Live state replaces
+the cached session roster on connect, and chat requests changes from its saved transcript cursor.
 The first chat request waits up to 300 ms after connecting for the stored transcript,
 then falls back to live history if it is not ready. A stored transcript belongs to its selected
 agent; switching agents while it loads cannot display or save it under the new agent.
@@ -145,6 +147,8 @@ save clears the previous error.
 Page and sidebar refreshes that fail because the Gateway is suspending, restarting, starting,
 or unreachable show no inline error: the footer connection indicator owns that state. Each panel
 keeps its last data and refreshes automatically once the Gateway accepts work again.
+Agent pickers and the agent directory clear their roster while reconnecting and
+wait for a fresh authorized list, including when the same user's role has changed.
 Established conversation names remain visible in the browser tab and chat headings,
 including split views, while reconnecting to the same Gateway and account. Other refresh
 failures remain visible inline with their message and are retried automatically when the Gateway

@@ -613,6 +613,7 @@ describe("update-cli", () => {
 
   it.each([
     { signal: "SIGINT", phase: "package suspension" },
+    { signal: "SIGINT", phase: "service pre-stop inspection" },
     { signal: "SIGBREAK", phase: "Git schema preflight" },
   ] as const)(
     "restores Windows Scheduled Task autostart on $signal during $phase",
@@ -676,9 +677,22 @@ describe("update-cli", () => {
           return true;
         },
       );
-      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+      if (phase === "service pre-stop inspection") {
+        serviceLoaded.mockResolvedValue(true);
+        serviceReadRuntime.mockImplementation(async () => {
+          if (taskSuspended) {
+            await waitForSignal();
+          }
+          return { status: "running", pid: gatewayFixturePid };
+        });
+      } else {
+        serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+      }
 
-      const updatePromise = updateCommand({ yes: true, restart: false });
+      const updatePromise = updateCommand({
+        yes: true,
+        restart: phase === "service pre-stop inspection",
+      });
       try {
         await Promise.race([
           entered.promise,
@@ -705,7 +719,7 @@ describe("update-cli", () => {
         await updatePromise;
         expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
         expect(serviceStop).not.toHaveBeenCalled();
-        expect(Boolean(packageInstallCommandCall())).toBe(phase === "package suspension");
+        expect(Boolean(packageInstallCommandCall())).toBe(phase !== "Git schema preflight");
         expect(gitMutation).not.toHaveBeenCalled();
         expect(freshRestartCalls()).toEqual([]);
         expect(listUpdateRuns({ limit: 1 })).toMatchObject([

@@ -1,10 +1,14 @@
 // Verifies simple-completion model selection preserves provider, model, and profile refs.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
-import { resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase } from "./simple-completion-runtime.js";
+import {
+  acquireSimpleCompletionModelForAgent,
+  resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase,
+} from "./simple-completion-runtime.js";
+import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 function resolveSimpleCompletionSelectionForAgent(
   params: Parameters<typeof resolveSimpleCompletionSelectionForAgentBase>[0],
@@ -148,30 +152,33 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     },
   );
 
-  it("uses the default utility model only for utility completions", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          utilityModel: "openai/gpt-5.4-mini",
+  it.each([true, "required"] as const)(
+    "uses the default utility model for utility mode %s",
+    (useUtilityModel) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            utilityModel: "openai/gpt-5.4-mini",
+          },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const utilitySelection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({
-        cfg,
-        agentId: "main",
-        useUtilityModel: true,
-      }),
-    );
-    const normalSelection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
-    );
+      const utilitySelection = requireSelection(
+        resolveSimpleCompletionSelectionForAgent({
+          cfg,
+          agentId: "main",
+          useUtilityModel,
+        }),
+      );
+      const normalSelection = requireSelection(
+        resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
+      );
 
-    expect(utilitySelection).toMatchObject({ provider: "openai", modelId: "gpt-5.4-mini" });
-    expect(normalSelection).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4-6" });
-  });
+      expect(utilitySelection).toMatchObject({ provider: "openai", modelId: "gpt-5.4-mini" });
+      expect(normalSelection).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4-6" });
+    },
+  );
 
   it("prefers the per-agent utility model and keeps explicit operation overrides highest", () => {
     const cfg = {
@@ -228,6 +235,61 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       }),
     );
     expect(selection).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4-6" });
+  });
+
+  it.each([
+    { label: "disabled", utilityModel: "" },
+    { label: "unavailable", utilityModel: undefined },
+    { label: "invalid", utilityModel: "/" },
+    { label: "invalid override", utilityModel: "fixture/utility", modelRef: "/" },
+  ])(
+    "does not prepare the primary when required utility routing is $label",
+    async ({ utilityModel, modelRef }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "fixture/primary", utilityModel },
+        },
+      };
+      expect(
+        resolveSimpleCompletionSelectionForAgentBase({
+          cfg,
+          agentId: "main",
+          modelRef,
+          useUtilityModel: "required",
+          manifestPlugins: [],
+        }),
+      ).toBeNull();
+
+      const modelResolver = vi.fn<SimpleCompletionModelResolver>();
+      await expect(
+        acquireSimpleCompletionModelForAgent({
+          cfg,
+          agentId: "main",
+          modelRef,
+          useUtilityModel: "required",
+          modelResolver,
+        }),
+      ).resolves.toEqual({ error: "No model configured for agent main." });
+      expect(modelResolver).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows an explicit utility operation model when required utility routing is disabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: "fixture/primary", utilityModel: "" },
+      },
+    };
+    expect(
+      resolveSimpleCompletionSelectionForAgentBase({
+        cfg,
+        agentId: "main",
+        modelRef: "fixture/operation",
+        useUtilityModel: "required",
+      }),
+    ).toMatchObject({ provider: "fixture", modelId: "operation" });
   });
 
   it("keeps trailing auth profile for credential lookup", () => {

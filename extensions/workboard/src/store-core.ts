@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
-  WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardDeleteResult,
   WorkboardLink,
@@ -9,16 +8,9 @@ import type {
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardCard,
-  WorkboardCardStore,
-  WorkboardKeyedStore,
-  WorkboardSubscriptionStore,
-  WorkboardWriteAuthority,
-} from "./persistence-types.js";
+import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
+import { WorkboardBoardStore } from "./store-boards.js";
 import {
   assertCanMutateClaimedCard,
   cardBoardId,
@@ -40,8 +32,6 @@ import {
 } from "./store-compensation.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
 import type {
-  WorkboardBoardInput,
-  WorkboardBoardSummary,
   WorkboardCardPatch,
   WorkboardCommentInput,
   WorkboardLinkInput,
@@ -56,8 +46,6 @@ import {
   metadataIsEmpty,
   normalizeAutomation,
   normalizeBoardId,
-  normalizeBoardIdRequired,
-  normalizeBoardMetadata,
   normalizeBoundedString,
   normalizeExecution,
   normalizeLabels,
@@ -74,7 +62,6 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { readCards } from "./store-read.js";
-import { WorkboardStoreRuntime } from "./store-runtime.js";
 
 type WorkboardMutationJournalEntry = {
   before?: WorkboardCard;
@@ -83,35 +70,9 @@ type WorkboardMutationJournalEntry = {
 
 const WORKBOARD_CAS_ATTEMPTS = 3;
 
-export class WorkboardCoreStore extends WorkboardStoreRuntime {
+export class WorkboardCoreStore extends WorkboardBoardStore {
   private lastNotificationSequence = 0;
   private compensationJournal?: WorkboardMutationJournalEntry[];
-  protected readonly store: WorkboardCardStore;
-  protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
-  protected readonly subscriptionStore: WorkboardSubscriptionStore;
-  protected readonly attachmentStore: WorkboardKeyedStore<PersistedWorkboardAttachment>;
-
-  constructor(
-    store: WorkboardCardStore,
-    stores: {
-      boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
-      subscriptions: WorkboardSubscriptionStore;
-      attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
-      ready?: Promise<number>;
-      dataVersion?: () => number | Promise<number>;
-      close?: () => void | Promise<void>;
-      runWithWriteAuthority?: WorkboardWriteAuthority;
-    },
-  ) {
-    super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
-    this.store = this.trackCardStore(store);
-    this.boardStore = this.track(stores.boards);
-    this.subscriptionStore = {
-      ...this.track(stores.subscriptions, { notifyChanges: false }),
-      entries: (options) => this.runOperation(() => stores.subscriptions.entries(options)),
-    };
-    this.attachmentStore = this.track(stores.attachments, { notifyChanges: false });
-  }
 
   protected async withCardCompensation<T>(run: () => Promise<T>): Promise<T> {
     if (this.compensationJournal) {
@@ -281,98 +242,6 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
   async list(options: WorkboardListOptions = {}): Promise<WorkboardCard[]> {
     const boardId = normalizeBoardId(options.boardId);
     return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
-  }
-
-  async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
-    const boards = new Map<string, WorkboardBoardSummary>();
-    for (const entry of await this.boardStore.entries()) {
-      if (entry.value?.version !== 1 || !entry.value.board?.id) {
-        continue;
-      }
-      const board = entry.value.board;
-      boards.set(board.id, {
-        id: board.id,
-        ...(board.name ? { name: board.name } : {}),
-        ...(board.description ? { description: board.description } : {}),
-        ...(board.icon ? { icon: board.icon } : {}),
-        ...(board.color ? { color: board.color } : {}),
-        ...(board.automationJobId ? { automationJobId: board.automationJobId } : {}),
-        ...(board.defaultWorkspace ? { defaultWorkspace: board.defaultWorkspace } : {}),
-        ...(board.orchestration ? { orchestration: board.orchestration } : {}),
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
-        updatedAt: board.updatedAt,
-        ...(board.archivedAt ? { archivedAt: board.archivedAt } : {}),
-      });
-    }
-    if (!boards.has("default")) {
-      boards.set("default", {
-        id: "default",
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
-      });
-    }
-    const cardAggregates = await this.store.listBoardAggregates();
-    for (const aggregate of cardAggregates) {
-      const boardId = aggregate.boardId;
-      const summary =
-        boards.get(boardId) ??
-        ({
-          id: boardId,
-          total: 0,
-          active: 0,
-          archived: 0,
-          byStatus: {},
-        } satisfies WorkboardBoardSummary);
-      summary.total += aggregate.total;
-      summary.archived += aggregate.archived;
-      summary.active += aggregate.total - aggregate.archived;
-      summary.byStatus[aggregate.status] =
-        (summary.byStatus[aggregate.status] ?? 0) + aggregate.total;
-      summary.updatedAt = Math.max(summary.updatedAt ?? 0, aggregate.updatedAt);
-      boards.set(boardId, summary);
-    }
-    return {
-      boards: [...boards.values()].toSorted((a, b) =>
-        a.id === "default" ? -1 : b.id === "default" ? 1 : a.id.localeCompare(b.id),
-      ),
-    };
-  }
-
-  async upsertBoard(input: WorkboardBoardInput): Promise<WorkboardBoardMetadata> {
-    return await this.enqueueMutation(async () => {
-      const id = normalizeBoardIdRequired(input.id);
-      const existing = await this.boardStore.lookup(id);
-      const board = normalizeBoardMetadata({ ...input, id }, existing?.board);
-      await this.boardStore.register(id, { version: 1, board });
-      return board;
-    });
-  }
-
-  async archiveBoard(id: unknown, archived: unknown = true): Promise<WorkboardBoardMetadata> {
-    return await this.upsertBoard({ id, archived });
-  }
-
-  async deleteBoard(id: unknown): Promise<{ deleted: boolean }> {
-    return await this.enqueueMutation(async () => {
-      const boardId = normalizeBoardIdRequired(id);
-      if (boardId === "default") {
-        throw new Error("default board cannot be deleted.");
-      }
-      if (await this.store.hasCards(boardId)) {
-        throw new Error("board still has cards; archive it or move/delete the cards first.");
-      }
-      for (const entry of await this.subscriptionStore.entries({ boardId })) {
-        if (entry.value?.version === 1 && entry.value.subscription?.boardId === boardId) {
-          await this.subscriptionStore.delete(entry.key);
-        }
-      }
-      return { deleted: await this.boardStore.delete(boardId) };
-    });
   }
 
   async stats(input: WorkboardListOptions = {}, now = Date.now()): Promise<WorkboardStatsResult> {
@@ -613,6 +482,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
         throw new Error("sessionKey is required.");
       }
       const boardId = normalizeBoardId(input.boardId) ?? "default";
+      await this.assertCardsBoard(boardId);
       const matches = (await readCards(this.store, { kind: "session", sessionKey }))
         .filter((card) => cardSessionKey(card) === sessionKey)
         .toSorted((left, right) => right.updatedAt - left.updatedAt);

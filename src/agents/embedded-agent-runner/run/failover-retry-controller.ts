@@ -7,13 +7,13 @@ import {
   markInlineProviderApiKeyFailure,
 } from "../../auth-profiles.js";
 import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-materializations.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import {
   FailoverError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";

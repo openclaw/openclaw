@@ -10,6 +10,7 @@ import {
   setPluginToolMeta,
   type PluginToolMcpMeta,
 } from "../plugins/tool-metadata.js";
+import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   buildSafeToolName,
   compareMcpCatalogTools,
@@ -392,8 +393,6 @@ export async function materializeBundleMcpToolsForRun(params: {
     disposal ??= (async () => {
       // Failure to release the lease cannot strand this view's private runtime.
       try {
-        // Keep lifecycle imports out of read-only tool metadata loading.
-        const { releaseSessionMcpRuntime } = await import("./agent-bundle-mcp-manager-api.js");
         await releaseSessionMcpRuntime({ runtime, releaseLease });
       } finally {
         await params.disposeRuntime?.();

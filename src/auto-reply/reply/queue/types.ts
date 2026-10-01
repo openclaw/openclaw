@@ -3,7 +3,7 @@ import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema
 import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
-import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
+import type { CliSessionBindingFacts } from "../../../agents/cli-runner/session-binding.types.js";
 import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,

@@ -50,7 +50,7 @@ tracked defaults unchanged.
 
 ## Release Workflow
 
-1. Run the manual **Android Store Release** GitHub Action from `main`. No input parameters are required. The upload uses the `android-store-release` environment and freezes the commit selected at dispatch, even if `main` advances while the run is queued.
+1. Run the manual **Android Store Release** GitHub Action from `main` with its default `release` operation. The upload uses the `android-store-release` environment and freezes the commit selected at dispatch, even if `main` advances while the run is queued. The `internal` operation and daily schedule use the same release owner with the differences described below.
 2. The workflow derives the Gateway version from the root `package.json`, selects the Android revision from source refs and current public releases, and chooses the next sequential phone/Wear codes above the uploaded codes and pinned floor. It refuses a version regression, an exhausted revision or native code range, and uploaded new-format codes whose source refs are missing.
 3. Planning identifies the public releases in `production` and `wear:production`. OpenAI generates separate phone and Wear notes from changes since those releases. Internal uploads do not advance the public baseline. Staged, halted, or ambiguous public releases stop preparation.
 4. The workflow saves the plan and generated notes for the selected clean source commit. Fastlane and Gradle consume those artifacts at runtime. No tracked release files, preparation commits, or follow-up PRs are needed.
@@ -65,6 +65,59 @@ plan. It opens a temporary Play edit to inspect both artifact inventories and
 aborts that edit before returning. It never uploads or commits a Play edit.
 Each run checks live state; build numbers and store codes do not come from dates
 or workflow IDs. Both new codes exceed every previously observed uploaded code.
+
+### Daily Internal testing
+
+The **Android Store Release** workflow also supports `operation=internal` and a
+daily **7:00 AM Pacific** schedule. The schedule uses `America/Los_Angeles`, so
+the local time stays the same through daylight saving changes. Scheduled runs
+select the latest `main` commit when triggered and preserve that source through
+the release. Manual and scheduled uploads share the `android-release` concurrency
+group with ordinary store releases.
+
+Internal distributions retain the same live version planning, generated phone
+and Wear notes, signing, artifact validation, atomic upload, and immutable
+source-ref recording. They publish only to `internal` and `wear:internal`, skip
+screenshot capture and its emulator/image tooling, and leave the store listing
+metadata and images unchanged. Internal distributions omit
+`changesNotSentForReview` so Play handles review automatically, and disable
+Fastlane's review-setting fallback. Ordinary store releases retain their
+configured review settings; production promotion remains manual.
+
+Google Play can also submit changes already staged in Play Console when an API
+edit commits. Resolve unrelated pending store changes before running an internal
+distribution or enabling its daily schedule; skipping listing uploads does not
+isolate those staged changes. See Google's
+[concurrency guidance](https://developers.google.com/android-publisher/concurrency-considerations).
+
+To configure unattended runs:
+
+1. Create the `android-internal` GitHub environment, restrict deployment to
+   `main`, and allow unattended jobs without required reviewers or wait timers.
+2. Make `GH_APP_PRIVATE_KEY`, `MATCH_PASSWORD`, `OPENAI_API_KEY`, and
+   `GOOGLE_PLAY_JSON_KEY_DATA` available to that environment through environment,
+   repository, or organization secrets. Use the same signing identity and Google
+   Play application as the ordinary store release.
+3. Configure the Google Play Internal testing audience for the app in Play
+   Console. The workflow distributes to the existing tracks; it does not manage
+   tester membership.
+4. From `main`, run **Android Store Release** with `operation=internal` and verify
+   that the phone and Wear builds reach their Internal testing tracks.
+5. Set the repository variable `ANDROID_INTERNAL_ENABLED=true` to enable daily
+   runs. Set it to `false` to pause them. Manual `internal` runs do not depend on
+   this flag.
+
+The local equivalent, from a clean `main` matching `origin/main`, is:
+
+```bash
+pnpm android:release:upload -- --destination internal
+```
+
+Omitting `--destination` keeps the ordinary `play-store` path, including
+screenshots and listing updates. Both paths retain the saved plan, notes, and
+signed artifacts for the same failure investigation and recovery process.
+
+### Gateway APK publication and upload recovery
 
 For a regular final or correction OpenClaw release whose tagged Android pin
 matches the stable train, `OpenClaw Release Publish` dispatches **Android APK

@@ -334,24 +334,12 @@ export function handleMessageEnd(
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
     if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
       return flushBlockReplyBufferResult
-        .then(() => {
-          const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
-            reason: "message_end",
-          });
-          if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-            return onBlockReplyFlushResult;
-          }
-          return undefined;
-        })
-        .finally(() => {
-          finalizeMessageEnd();
-        });
+        .then(() => ctx.params.onBlockReplyFlush?.({ reason: "message_end" }))
+        .finally(finalizeMessageEnd);
     }
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush({ reason: "message_end" });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.finally(() => {
-        finalizeMessageEnd();
-      });
+      return onBlockReplyFlushResult.finally(finalizeMessageEnd);
     }
   }
 

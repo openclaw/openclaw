@@ -2,7 +2,6 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   getEnvApiKey,
   resolveProviderContext,
-  type AssistantMessage,
   type Context,
   type Model,
   type ProviderCallStreamOptions,
@@ -23,6 +22,7 @@ import {
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  buildAssistantMessage,
   buildGuardedModelFetch,
   consumeGoogleGenerateContentStream,
   projectGoogleMessages,
@@ -119,8 +119,6 @@ const GOOGLE_SSE_EVENT_BOUNDARY_RE = /(?:\r\n|\r(?!\n)|\n){2}/u;
 // Compare Google-owned publisher resources without changing outbound request paths.
 const GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX =
   /^(?:projects\/[^/]+\/locations\/[^/]+\/)?publishers\/google\/models\//u;
-
-type MutableAssistantOutput = AssistantMessage & { api: CanonicalGoogleTransportApi };
 
 const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
@@ -987,16 +985,12 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
     const options = rawOptions as GoogleTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: MutableAssistantOutput = {
-        role: "assistant",
+      const output = buildAssistantMessage({
+        model: { api: kind, provider: model.provider, id: model.id },
         content: [],
-        api: kind,
-        provider: model.provider,
-        model: model.id,
         usage: createEmptyTransportUsage(),
         stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      });
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
         const guardedFetch = buildGuardedModelFetch(canonicalModel);

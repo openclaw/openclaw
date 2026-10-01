@@ -696,6 +696,13 @@ Missing receipt storage refuses execution without creating tables. Synchronous
 message-action and message-source guards retain their existing current-read
 owner; these finite awaited checks do not replace those later effect guards.
 
+Doctor awaits quarantined Cron rows through the shared-state read worker. The
+existing query order and payload decoder remain with the Cron store; captured
+source ownership, inherited snapshots, schema errors, and missing-database
+behavior come from the existing reader. Observing quarantine never creates or
+migrates storage. Quarantine writes and Doctor repair transactions retain their
+existing owners; this read cut changes no stored representation or retention.
+
 iMessage outbound receipt recovery reads the external Messages SQLite database
 through the shared worker broker. Its plugin owns the read-only GUID queries;
 each recovery operation retains its read-only connection through polling and

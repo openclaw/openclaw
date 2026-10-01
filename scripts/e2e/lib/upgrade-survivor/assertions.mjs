@@ -5,7 +5,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../../lib/upgrade-survivor-policy.mjs";
+import {
+  UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
+  usesStructuredToolSearchAtBaseline,
+} from "../../../lib/upgrade-survivor-policy.mjs";
 import {
   inspectNpmPackageTarball,
   validatePrepublishPluginRegistryArtifact,
@@ -499,13 +502,15 @@ function assertConfigSurvived() {
   // Frozen recipes without coverage receipts predate this migration specimen.
   if (coverage && acceptsIntent(coverage, "tool-search")) {
     const toolSearch = config.tools?.toolSearch;
-    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    const legacyBaseline =
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline" &&
+      !usesStructuredToolSearchAtBaseline(coverage.baselineVersion);
     assert(
-      toolSearch?.mode === (baseline ? "code" : "tools"),
+      toolSearch?.mode === (legacyBaseline ? "code" : "tools"),
       "Tool Search mode was not preserved or migrated",
     );
     assert(toolSearch.enabled !== false, "Tool Search was disabled during migration");
-    if (baseline) {
+    if (legacyBaseline) {
       assert(toolSearch.codeTimeoutMs === 5000, "Tool Search legacy timeout specimen changed");
     } else {
       assert(

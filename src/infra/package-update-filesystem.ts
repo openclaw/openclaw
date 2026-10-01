@@ -6,7 +6,7 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { formatErrorMessage, hasErrnoCode, isErrno } from "./errors.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
@@ -15,12 +15,16 @@ import {
   packageLauncherDifferences,
 } from "./package-update-integrity.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
+import { retryAsync } from "./retry.js";
 import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 
 export const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 const log = createSubsystemLogger("update/package-launchers");
 
-function assertPackagePathIdentity(filePath: string, expected: BigIntStats | undefined): void {
+export function assertPackagePathIdentity(
+  filePath: string,
+  expected: BigIntStats | undefined,
+): void {
   let current: BigIntStats | undefined;
   try {
     current = fsSync.lstatSync(filePath, { bigint: true, throwIfNoEntry: false });
@@ -112,6 +116,68 @@ export async function activateStagedNpmPackageRoot(
     destination,
     process.platform === "win32" ? "junction" : undefined,
   );
+}
+
+export async function backupNpmPackageRoot(
+  source: string,
+  destination: string,
+  assertCaller: (() => void) | undefined,
+  warnings: string[],
+): Promise<void> {
+  if (process.platform !== "win32") {
+    await fs.rename(source, destination);
+    return;
+  }
+  const assertCurrent = retainMutationAuthority(assertCaller ?? (() => {}));
+  const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
+  const parent = path.dirname(source);
+  const parentIdentity = fsSync.lstatSync(parent, { bigint: true });
+  let renameFailure: unknown;
+  let attempts = 0;
+  try {
+    await retryAsync(
+      async () => {
+        renameFailure = undefined;
+        assertCurrent();
+        assertPackagePathIdentity(parent, parentIdentity);
+        assertPackagePathIdentity(source, sourceIdentity);
+        assertPackagePathIdentity(destination, undefined);
+        attempts++;
+        try {
+          await fs.rename(source, destination);
+        } catch (error) {
+          renameFailure = error;
+          throw error;
+        }
+      },
+      {
+        // Windows AV/indexer handles can block directory renames for a minute.
+        // These referenced waits total 57.75 seconds; never copy/delete the live tree.
+        attempts: 16,
+        minDelayMs: 250,
+        maxDelayMs: 5_000,
+        shouldRetry: (error) =>
+          error === renameFailure &&
+          ["EPERM", "EBUSY", "EACCES"].some((code) => hasErrnoCode(error, code)),
+        onRetry: ({ err, attempt, maxAttempts, delayMs }) => {
+          warnings.push(
+            `Windows package backup rename ${source} -> ${destination} failed: ${formatErrorMessage(err)}; retry ${attempt + 1}/${maxAttempts} in ${delayMs}ms.`,
+          );
+        },
+      },
+    );
+  } catch (error) {
+    if (error !== renameFailure) {
+      throw error;
+    }
+    throw Object.assign(
+      new Error(
+        `Windows package backup rename failed after ${attempts} attempts: ${source} -> ${destination}: ${formatErrorMessage(error)}. Close processes holding this installation and check its permissions before retrying.`,
+        { cause: error },
+      ),
+      { code: isErrno(error) ? error.code : undefined },
+    );
+  }
 }
 
 export function removePackagePath(

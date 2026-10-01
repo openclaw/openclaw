@@ -5,6 +5,7 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js"
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
@@ -133,6 +134,26 @@ describe("session transcript reader marker projection", () => {
         expect.objectContaining({ __openclaw: expect.objectContaining({ id: "after" }) }),
       ]),
     );
+  });
+
+  test("reads a bounded ended window without successor turns after same-ID reset", async () => {
+    const boundaryId = "ended-boundary";
+    const scope = await writeTranscript("ended-window", [
+      message("prior-user", "remember this"),
+      message("prior-assistant", "retained answer", "assistant"),
+      reset(boundaryId),
+      message("successor-user", "new session content"),
+    ]);
+    const source = createResetBoundaryTranscriptSource(scope, boundaryId);
+    if (!source.available) {
+      throw new Error("expected available ended transcript source");
+    }
+
+    const result = await source.readTail({ maxMessages: 10, maxBytes: 2_048 });
+
+    expect(messageIds([...result.messages])).toEqual(["prior-user", "prior-assistant"]);
+    expect(result.totalMessages).toBe(2);
+    expect(result.truncated).toBe(false);
   });
 
   test.each([

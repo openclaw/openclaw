@@ -110,7 +110,7 @@ type CodexPromptSnapshotApi = {
     config?: Record<string, unknown>;
     promptText?: string;
     developerInstructionAdditions?: string;
-    turnScopedDeveloperInstructions?: string;
+    personaInstructions?: string;
   }) => {
     developerInstructions: string;
     parentLocalInstructions: string | null;
@@ -242,7 +242,7 @@ const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   },
 ] as const;
 
-const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
+const CODEX_WORKSPACE_PERSONA_FILES = [
   {
     path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
     content: "<IDENTITY.md contents will be here>",
@@ -274,17 +274,12 @@ const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
   .join("\n")
   .trim();
 
-const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS = [
+const CODEX_WORKSPACE_PERSONA_INSTRUCTIONS = [
   "## OpenClaw Agent Soul",
   "",
   "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
   "",
-  ...CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
-    `### ${file.path}`,
-    "",
-    file.content,
-    "",
-  ]),
+  ...CODEX_WORKSPACE_PERSONA_FILES.flatMap((file) => [`### ${file.path}`, "", file.content, ""]),
 ]
   .join("\n")
   .trim();
@@ -930,7 +925,7 @@ function renderScenarioSnapshot(
       appServer,
       config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
       promptText: codexTurnPromptText,
-      turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
+      personaInstructions: CODEX_WORKSPACE_PERSONA_INSTRUCTIONS,
     }),
   );
   const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
@@ -967,8 +962,9 @@ function renderScenarioSnapshot(
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
-        simulatedWorkspaceParentLocalInstructionFiles:
-          CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
+        simulatedWorkspaceParentLocalInstructionFiles: CODEX_WORKSPACE_PERSONA_FILES.map(
+          (file) => file.path,
+        ),
       }),
     ),
     "",

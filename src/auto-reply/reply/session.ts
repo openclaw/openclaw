@@ -40,7 +40,6 @@ import { sessionEntryForkedFromParent } from "../../config/sessions/session-entr
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import type { SessionResetBoundaryRequest } from "../../config/sessions/session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
@@ -130,9 +129,11 @@ import {
   resolveSessionDeliveryRoute,
 } from "./session-delivery.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+import { projectSessionEntryLifecycleCarry } from "./session-entry-lifecycle-carry.js";
 import {
-  buildSessionEndHookPayload,
   buildSessionStartHookPayload,
+  createReplySessionResetBoundary,
+  emitReplySessionEndHook,
   resolveExplicitSessionEndReason,
   resolveStaleSessionEndReason,
 } from "./session-hooks.js";
@@ -909,11 +910,9 @@ async function initSessionStateAttemptLocked(
     sessionStartedAt: isNewSession
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
-    lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
-    agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
+    ...projectSessionEntryLifecycleCarry({ entry, baseEntry, isSystemEvent, now }),
     systemSent,
     abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
-    pinnedAt: entry?.pinnedAt,
     usageFamilyKey,
     usageFamilySessionIds,
     previousSessionId: baseEntry?.previousSessionId,
@@ -999,14 +998,13 @@ async function initSessionStateAttemptLocked(
     // snapshot through /new; the next turn must rebuild the visible skill list.
     sessionEntry.skillsSnapshot = undefined;
   }
-  const continuityReason =
-    previousSessionEndReason === "idle" || previousSessionEndReason === "daily"
-      ? previousSessionEndReason
-      : "reset";
-  const resetBoundary: SessionResetBoundaryRequest | undefined = previousSessionEntry
-    ? resetTriggered
-      ? { context: "clear", reason: resolveExplicitSessionEndReason(matchedResetTriggerLower) }
-      : { context: "preserve-tail", reason: continuityReason }
+  const resetBoundary = previousSessionEntry
+    ? createReplySessionResetBoundary({
+        cwd: resolveAgentWorkspaceDir(cfg, agentId),
+        explicitReason: resolveExplicitSessionEndReason(matchedResetTriggerLower),
+        previousReason: previousSessionEndReason,
+        resetTriggered,
+      })
     : undefined;
   const resetBoundaryAppended = resetBoundary !== undefined;
   let previousSessionMemory: SessionMemoryTranscript | undefined;
@@ -1054,9 +1052,7 @@ async function initSessionStateAttemptLocked(
         warn: (message) => log.warn(message),
       });
     },
-    ...(resetBoundary
-      ? { resetBoundary: { ...resetBoundary, cwd: resolveAgentWorkspaceDir(cfg, agentId) } }
-      : {}),
+    ...(resetBoundary ? { resetBoundary } : {}),
     beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
       if (!previousSessionEntry || !currentEntry) {
         return;
@@ -1230,18 +1226,18 @@ async function initSessionStateAttemptLocked(
       // skips this id even when no `session_end` plugin is currently attached.
       forgetActiveSessionForShutdown(previousSessionEntry.sessionId);
       if (hookRunner.hasHooks("session_end")) {
-        const payload = buildSessionEndHookPayload({
+        emitReplySessionEndHook({
+          hookRunner,
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
           agentId,
+          storePath,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
+          resetBoundaryId: resetBoundary?.boundaryId,
         });
-        void runWithGatewayIndependentRootWorkContinuation(async () => {
-          await hookRunner.runSessionEnd(payload.event, payload.context);
-        }, "hooks:session-end").catch(() => {});
       }
     }
 

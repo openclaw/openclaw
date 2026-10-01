@@ -38,8 +38,13 @@ import {
   type MemoryForgetLineageResult,
 } from "./memory-entry-origins-task.js";
 import { listMemoryEntryOrigins } from "./memory-entry-origins.js";
+import {
+  PROMOTION_MARKER,
+  referencesSession,
+  scrubMemoryContent,
+} from "./memory-forget-content.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
-import { planMemoryIndex, referencesSession } from "./memory-forget-index-sources.js";
+import { planMemoryIndex } from "./memory-forget-index-sources.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryForgetWorker } from "./memory-forget-worker.js";
 import {
@@ -61,70 +66,6 @@ type MemoryRewrite = {
   remove: boolean;
   expectedContent: string;
 };
-const PROMOTION_MARKER = /^\s*<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->\s*$/u;
-const LINEAGE_MARKER = /^\s*<!--\s*openclaw-memory-lineage:[^\n]*?-->\s*$/u;
-
-function scrubMemoryContent(params: {
-  content: string;
-  entryKeys: ReadonlySet<string>;
-  sessionIds: ReadonlySet<string>;
-  corpusSnippets: ReadonlySet<string>;
-  agentId: string;
-}): { content: string; removedEntries: number; removedLines: number } {
-  // Preserve surviving line endings so unrelated artifacts do not enter the purge plan.
-  const lines = params.content.split("\n");
-  const corpusSnippets = [...params.corpusSnippets];
-  let removedEntries = 0;
-  let removedLines = 0;
-  for (let index = 0; index < lines.length; index += 1) {
-    const markerKey = PROMOTION_MARKER.exec(lines[index] ?? "")?.[1]?.trim();
-    if (markerKey && params.entryKeys.has(markerKey)) {
-      const start = index > 0 && LINEAGE_MARKER.test(lines[index - 1] ?? "") ? index - 1 : index;
-      let end = index + 1;
-      if (end < lines.length && !PROMOTION_MARKER.test(lines[end] ?? "")) {
-        end += 1;
-        while (end < lines.length && /^\s+\S/u.test(lines[end] ?? "")) {
-          end += 1;
-        }
-      }
-      lines.splice(start, end - start);
-      removedEntries += 1;
-      index = start - 1;
-      continue;
-    }
-    if (corpusSnippets.some((snippet) => lines[index]?.includes(snippet))) {
-      lines.splice(index, 1);
-      removedLines += 1;
-      index -= 1;
-      continue;
-    }
-    if (!referencesSession(lines[index] ?? "", params.agentId, params.sessionIds)) {
-      continue;
-    }
-    const heading = /^(#{1,6})\s/u.exec(lines[index] ?? "");
-    const rowIndent = /^(\s*)[-*+]\s/u.exec(lines[index] ?? "")?.[1]?.length;
-    if (!heading && !/\bSession ID:/iu.test(lines[index] ?? "")) {
-      continue;
-    }
-    let end = index + 1;
-    while (end < lines.length) {
-      const nextHeading = /^(#{1,6})\s/u.exec(lines[end] ?? "");
-      if (
-        (rowIndent !== undefined && (lines[end] ?? "").search(/\S/u) <= rowIndent) ||
-        (nextHeading && (!heading || nextHeading[1]!.length <= heading[1]!.length)) ||
-        /\bSession ID:/iu.test(lines[end] ?? "")
-      ) {
-        break;
-      }
-      end += 1;
-    }
-    lines.splice(index, end - index);
-    removedEntries += 1;
-    index -= 1;
-  }
-  return { content: lines.join("\n"), removedEntries, removedLines };
-}
-
 type MemoryForgetParams = {
   cfg: OpenClawConfig;
   agentId: string;
@@ -410,16 +351,20 @@ async function forgetWorkspaceMemory(
   const changedPaths = new Set(
     [...memoryRewrites, ...corpusRewrites].map((rewrite) => rewrite.relativePath),
   );
-  const indexPlan = await planMemoryIndex({
-    agentId: params.agentId,
-    changedPaths,
-    removedPaths: new Set(
-      corpusRewrites.filter((rewrite) => rewrite.remove).map((rewrite) => rewrite.relativePath),
-    ),
-    sessionIds,
-    excludedSessionIds,
-    matchesMemory: (content) => scrub(content).content !== content,
-  });
+  const indexPlan = await planMemoryIndex(
+    {
+      agentId: params.agentId,
+      changedPaths,
+      removedPaths: new Set(
+        corpusRewrites.filter((rewrite) => rewrite.remove).map((rewrite) => rewrite.relativePath),
+      ),
+      sessionIds,
+      excludedSessionIds,
+      entryKeys,
+      corpusSnippets,
+    },
+    context.databaseOptions,
+  );
   const report: MemoryForgetReport = {
     agentId: params.agentId,
     dryRun: params.dryRun === true,

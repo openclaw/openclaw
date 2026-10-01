@@ -3,9 +3,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createContext, createSessionsHarness } from "../../test-helpers/app-sidebar.ts";
+import { createContext } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createTestSessionCapability } from "../sessions/session-capability.test-support.ts";
 import { rosterActivityStore } from "./roster-activity-store.ts";
 
 function snapshot(preview: string, hasMore = false): SessionsListResult {
@@ -34,8 +35,21 @@ function fixture() {
               ok: true,
               payload: { subscribed: true },
             });
-          } else if (request.method === "sessions.list") {
+          } else if (request.method === "sessions.list" && request.params.archived === "all") {
             requests.push(request);
+          } else if (
+            request.method === "sessions.list" ||
+            request.method === "sessions.groups.list"
+          ) {
+            protocol.handleResponse({
+              type: "res",
+              id: request.id,
+              ok: true,
+              payload:
+                request.method === "sessions.list"
+                  ? { ...snapshot(""), sessions: [], count: 0 }
+                  : { names: [], sectionOrder: [] },
+            });
           } else {
             throw new Error(`Unexpected RPC: ${request.method}`);
           }
@@ -57,7 +71,8 @@ function fixture() {
     lastError: null,
     lastErrorCode: null,
   });
-  const context = createContext(source.gateway, createSessionsHarness("main", []).sessions, {
+  const sessions = createTestSessionCapability(source.gateway);
+  const context = createContext(source.gateway, sessions, {
     agents: [{ id: "main" }],
     defaultId: "main",
     mainKey: "main",
@@ -87,6 +102,7 @@ function fixture() {
       });
     },
     close() {
+      sessions.dispose();
       protocol.flush(new Error("fixture closed"));
     },
   };
@@ -156,11 +172,10 @@ it("coalesces repeated invalidations behind one correlated roster request", asyn
       await vi.advanceTimersByTimeAsync(1_000);
     }
     expect(f.requests).toHaveLength(1);
-    f.respond(0, "Stale page", true);
-    await vi.advanceTimersByTimeAsync(0);
+    f.respond(0, "Held window", true);
+    await vi.advanceTimersByTimeAsync(15_000);
     expect(f.requests).toHaveLength(2);
     expect(f.requests[1]?.params.offset).toBeUndefined();
-    expect(f.store.snapshot.result).toBeNull();
     f.respond(1, "Fresh window");
     await vi.advanceTimersByTimeAsync(0);
     expect(f.store.snapshot.cards[0]?.preview).toBe("Fresh window");
@@ -171,7 +186,7 @@ it("coalesces repeated invalidations behind one correlated roster request", asyn
   }
 });
 
-it("revokes pagination immediately while the replacement debounce is pending", async () => {
+it("keeps the bounded window without pagination while a replacement is pending", async () => {
   vi.useFakeTimers();
   const f = fixture();
   const detach = f.store.subscribe(() => {});
@@ -203,7 +218,7 @@ it("absorbs a newer debounce when the queued window starts", async () => {
     await vi.advanceTimersByTimeAsync(5_000);
     f.invalidate();
     f.respond(0, "Old window", true);
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(15_000);
     expect(f.requests).toHaveLength(2);
     f.respond(1, "Latest window");
     await vi.advanceTimersByTimeAsync(5_000);
@@ -216,7 +231,7 @@ it("absorbs a newer debounce when the queued window starts", async () => {
   }
 });
 
-it("retains raw ownership across filter round trips and never continues revoked pagination", async () => {
+it("keeps concurrent filter windows separate through out-of-order replies", async () => {
   vi.useFakeTimers();
   const f = fixture();
   const detach = f.store.subscribe(() => {});
@@ -226,15 +241,18 @@ it("retains raw ownership across filter round trips and never continues revoked 
       f.store.setInvolvingMe(involvingMe);
       await vi.advanceTimersByTimeAsync(0);
     }
-    expect(f.requests).toHaveLength(1);
-    f.respond(0, "Old filter", true);
-    await vi.advanceTimersByTimeAsync(0);
     expect(f.requests).toHaveLength(2);
     expect(f.requests[1]?.params).toMatchObject({ involvingMe: true, limit: 100, archived: "all" });
-    expect(f.requests[1]?.params.offset).toBeUndefined();
-    f.respond(1, "Current filter");
+    f.respond(1, "Superseded involvement window");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.requests).toHaveLength(3);
+    expect(f.requests[2]?.params).toMatchObject({ involvingMe: true, limit: 100, archived: "all" });
+    f.respond(2, "Current filter");
+    await vi.advanceTimersByTimeAsync(0);
+    f.respond(0, "Old filter", true);
     await vi.advanceTimersByTimeAsync(0);
     expect(f.store.snapshot.cards[0]?.preview).toBe("Current filter");
+    expect(f.requests).toHaveLength(3);
   } finally {
     detach();
     f.close();
@@ -300,7 +318,7 @@ it("defers initial and event-driven roster loads while the document is hidden", 
 });
 
 it.each([false, true])(
-  "retains a same-client raw request through reconnect (detached: %s)",
+  "rejects a late same-client reply across reconnect (detached: %s)",
   async (detached) => {
     vi.useFakeTimers();
     const f = fixture();
@@ -316,14 +334,14 @@ it.each([false, true])(
         detach = f.store.subscribe(() => {});
       }
       await vi.advanceTimersByTimeAsync(0);
-      expect(f.requests).toHaveLength(1);
-      f.respond(0, "Old connection", true);
-      await vi.advanceTimersByTimeAsync(0);
       expect(f.requests).toHaveLength(2);
       expect(f.requests[1]?.params.offset).toBeUndefined();
       f.respond(1, "Current connection");
       await vi.advanceTimersByTimeAsync(0);
+      f.respond(0, "Old connection", true);
+      await vi.advanceTimersByTimeAsync(0);
       expect(f.store.snapshot.cards[0]?.preview).toBe("Current connection");
+      expect(f.requests).toHaveLength(2);
     } finally {
       detach();
       f.close();
@@ -360,7 +378,7 @@ it.each([false, true])(
       if (!replyHidden) {
         expect(f.requests).toHaveLength(1);
         f.respond(0, "Revoked page", true);
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(15_000);
       }
       expect(f.requests).toHaveLength(2);
       expect(f.requests[1]?.params.offset).toBeUndefined();

@@ -75,8 +75,6 @@ export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
 export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
 export let handlePortError: LibraryExports["handlePortError"];
 export let loadConfig: LibraryExports["loadConfig"];
-/** @deprecated Use SQLite-backed session APIs. Scheduled for removal after 2026-10-12. */
-export let loadSessionStore: LibraryExports["loadSessionStore"];
 export let monitorWebChannel: LibraryExports["monitorWebChannel"];
 export let normalizeE164: LibraryExports["normalizeE164"];
 export let PortInUseError: LibraryExports["PortInUseError"];
@@ -85,8 +83,6 @@ export let resolveSessionKey: LibraryExports["resolveSessionKey"];
 export let resolveStorePath: LibraryExports["resolveStorePath"];
 export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
 export let runExec: LibraryExports["runExec"];
-/** @deprecated Use SQLite-backed session APIs. Scheduled for removal after 2026-10-12. */
-export let saveSessionStore: LibraryExports["saveSessionStore"];
 export let waitForever: LibraryExports["waitForever"];
 
 async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
@@ -123,7 +119,6 @@ if (!isMain) {
     getReplyFromConfig,
     handlePortError,
     loadConfig,
-    loadSessionStore,
     monitorWebChannel,
     normalizeE164,
     PortInUseError,
@@ -132,7 +127,6 @@ if (!isMain) {
     resolveStorePath,
     runCommandWithTimeout,
     runExec,
-    saveSessionStore,
     waitForever,
   } = await import("./library.js"));
 }

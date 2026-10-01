@@ -22,10 +22,7 @@ function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
   if (!Array.isArray(extra) || extra.length === 0) {
     return base;
   }
-  if (!Array.isArray(base)) {
-    return uniqueStrings(["*", ...extra]);
-  }
-  if (base.length === 0) {
+  if (!Array.isArray(base) || base.length === 0) {
     return uniqueStrings(["*", ...extra]);
   }
   return uniqueStrings([...base, ...extra]);

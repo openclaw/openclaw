@@ -23,13 +23,12 @@ import {
   CronJobsStoreChangedError,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
-  loadCronQuarantinedJobs,
   loadCronStore,
   resolveCronStorePath,
   saveCronJobsStore,
-  saveCronQuarantinedJobs,
   saveCronStore,
 } from "./store.js";
+import { makeStore } from "./store.test-support.js";
 import { cronStoreKey } from "./store/key.js";
 import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
 import type { CronStoreFile } from "./types.js";
@@ -59,30 +58,7 @@ function resolveLegacyCronQuarantinePath(storePath: string): string {
   return storePath.replace(/\.json$/, "-quarantine.json");
 }
 
-type FixtureStore = { version: 1; jobs: [CronStoreFile["jobs"][number]] };
-
-function makeStore(jobId: string, enabled: boolean): FixtureStore {
-  const now = Date.now();
-  return {
-    version: 1,
-    jobs: [
-      {
-        id: jobId,
-        name: `Job ${jobId}`,
-        enabled,
-        createdAtMs: now,
-        updatedAtMs: now,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: `tick-${jobId}` },
-        state: {},
-      },
-    ],
-  };
-}
-
-function makeAuthorityStore(jobId: string): FixtureStore {
+function makeAuthorityStore(jobId: string) {
   const store = makeStore(jobId, true);
   const job = store.jobs[0];
   job.owner = {
@@ -416,74 +392,6 @@ describe("cron store", () => {
       jobs: Array<Record<string, unknown>>;
     };
     expect(preserved.jobs[0]?.raw).toBe("keep-me");
-  });
-
-  it("stores quarantined jobs in SQLite and preserves the first recovery timestamp", async () => {
-    const { storePath } = await makeStorePath();
-    const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
-    const entry = { sourceIndex: 0, reason: "missing-schedule", job: { id: "same-row" } };
-
-    saveCronQuarantinedJobs({ storePath, nowMs: 100, entries: [entry] });
-    saveCronQuarantinedJobs({ storePath, nowMs: 200, entries: [entry] });
-
-    expect(loadCronQuarantinedJobs(storePath)).toEqual([{ ...entry, quarantinedAtMs: 100 }]);
-    await expectPathMissing(quarantinePath);
-  });
-
-  it("rolls back quarantine records when the cron row update cannot commit", async () => {
-    const { storePath } = await makeStorePath();
-    const store = makeStore("atomic-quarantine-job", true);
-    await saveCronStore(storePath, store);
-    const database = openOpenClawStateDatabase().db;
-    database.exec(
-      "CREATE TRIGGER fail_cron_quarantine_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
-    );
-    try {
-      await expect(
-        saveCronJobsStore(storePath, store, {
-          quarantine: {
-            nowMs: 123,
-            entries: [{ sourceIndex: 0, reason: "invalid-schedule", job: { id: "bad-row" } }],
-          },
-        }),
-      ).rejects.toThrow("cron update rejected");
-      expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
-      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
-        "atomic-quarantine-job",
-      ]);
-    } finally {
-      database.exec("DROP TRIGGER fail_cron_quarantine_update");
-    }
-  });
-
-  it("rolls back quarantine deletion when the restored cron row cannot commit", async () => {
-    const { storePath } = await makeStorePath();
-    const store = makeStore("atomic-recovery-job", true);
-    await saveCronStore(storePath, store);
-    const entry = {
-      sourceIndex: 0,
-      reason: "invalid-schedule" as const,
-      job: { id: "atomic-recovery-job" },
-    };
-    saveCronQuarantinedJobs({ storePath, nowMs: 123, entries: [entry] });
-    const database = openOpenClawStateDatabase().db;
-    database.exec(
-      "CREATE TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
-    );
-    try {
-      await expect(
-        saveCronJobsStore(storePath, store, { deleteQuarantineEntries: [entry] }),
-      ).rejects.toThrow("cron recovery rejected");
-      expect(loadCronQuarantinedJobs(storePath)).toEqual([{ ...entry, quarantinedAtMs: 123 }]);
-      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
-        "atomic-recovery-job",
-      ]);
-    } finally {
-      database.exec("DROP TRIGGER fail_cron_recovery_update");
-    }
-
-    await saveCronJobsStore(storePath, store, { deleteQuarantineEntries: [entry] });
-    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
   });
 
   it("runs post-commit hooks only after the cron write commits", async () => {

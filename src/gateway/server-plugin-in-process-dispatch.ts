@@ -118,7 +118,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   };
 }
 
-async function withInProcessGatewayDispatch<T>(
+export async function withInProcessGatewayDispatch<T>(
   method: string,
   params: unknown,
   options: DispatchGatewayMethodInProcessOptions | undefined,

@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
+  type SystemAgentOperation,
 } from "../../system-agent/operation-types.js";
 import {
   executeSystemAgentOperation,
@@ -18,7 +19,6 @@ import {
   SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
   secretStoreNameForConfigPath,
-  type SystemAgentOperation,
 } from "../../system-agent/operations.js";
 import {
   hashSystemAgentOperation,

@@ -639,6 +639,9 @@ function createCapturedBrowserRuntime(
     gateway: {
       isAvailable: async () => true,
       request: async (_method: string, params: Record<string, unknown>) => await request(params),
+      async readSessionFacts() {
+        throw new Error("Unexpected session facts request");
+      },
     },
     system: {
       runCommandWithTimeout: async () => ({ code: 0, stdout: "BlackHole 2ch", stderr: "" }),

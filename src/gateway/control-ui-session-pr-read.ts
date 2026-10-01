@@ -150,14 +150,18 @@ export async function prepareControlUiSessionPrRead(params: {
       if (!requested.ok) {
         return undefined;
       }
-      if (getSessionRowProjection() !== projection || projection.needsMembershipPreparation()) {
+      if (getSessionRowProjection() !== projection) {
         return undefined;
       }
       const query = { key: sessionKey, agentId: requested.agentId };
       const selected = projection.capture(query);
+      // Exact reads prepare this session; unrelated pending membership must not hide it.
       if (
         !selected?.entry ||
         !projection.isCurrent(selected) ||
+        (isIncognitoSessionKey(selected.key)
+          ? projection.needsMembershipPreparation()
+          : projection.sharingTargetState(query).status !== "ready") ||
         createSessionListEntryFilter({ cfg, client })?.(selected.key, selected.entry) === false
       ) {
         return undefined;

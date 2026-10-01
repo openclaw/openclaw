@@ -121,8 +121,10 @@ export async function startOrResumeThread(
         throwIfAborted,
       });
       // Managed requests own a parent-local carrier. Only uncovered connections
-      // put the catalog in native thread state; recompute after route changes.
-      params.skillsInstructions = params.inferenceRoute ? undefined : input.skillsInstructions;
+      // put refreshable instructions in native thread state; recompute after route changes.
+      params.refreshableInstructions = params.inferenceRoute
+        ? undefined
+        : input.refreshableInstructions;
       return context;
     };
     const releaseRetainedThread = (
@@ -179,7 +181,7 @@ export async function startOrResumeThread(
           dynamicTools: params.dynamicTools,
           appServer: params.appServer,
           developerInstructions: params.developerInstructions,
-          skillsInstructions: params.skillsInstructions,
+          refreshableInstructions: params.refreshableInstructions,
           config,
           nativeCodeModeEnabled: params.nativeCodeModeEnabled,
           nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,

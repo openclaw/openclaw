@@ -147,7 +147,7 @@ export function createWorkboardTools(params: {
       name: "workboard_create",
       label: "Workboard Create",
       description:
-        "Create a Workboard card, optionally with parent dependencies, tenant, skills, workspace, and idempotency key.",
+        "Create a Workboard card, optionally with parent dependencies, tenant, skills, workspace, and idempotency key. Sessions boards do not hold cards; use workboard_sessions_board_read/update/move for them.",
       parameters: strictObject({
         title: Type.String({ description: "Card title." }),
         notes: Type.Optional(Type.String({ description: "Card notes or acceptance criteria." })),
