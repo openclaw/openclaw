@@ -1,21 +1,17 @@
 // WhatsApp web auto-reply media delivery behavior.
 import fs from "node:fs/promises";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
   createWebInboundDeliverySpies,
-  installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
+  monitorWebChannel,
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
 import type { WebInboundCallbackMessage } from "./inbound.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
-
-installWebAutoReplyTestHomeHooks();
-
-let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
 describe("web auto-reply media delivery", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
@@ -26,10 +22,6 @@ describe("web auto-reply media delivery", () => {
   type SendComposingMock = ReturnType<typeof vi.fn<WebInboundPlatform["sendComposing"]>>;
   const SMALL_MEDIA_CAP_MB = 0.1;
   const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
-
-  beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
-  });
 
   async function setupSingleInboundMessage(params: {
     resolverValue: { text: string; mediaUrl: string };
@@ -228,7 +220,8 @@ describe("web auto-reply media delivery", () => {
           });
           expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
           const payload = imagePayloadAt(sendMedia, beforeCalls);
-          expect(payload.image.length).toBeGreaterThan(0);
+          expect(payload.image).toEqual(fmt.image);
+          expect(payload.caption).toBe("hi");
           expect(payload.image.length).toBeLessThanOrEqual(1024 * 1024);
           expect(payload.mimetype).toBe(fmt.mime);
         }

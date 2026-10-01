@@ -152,6 +152,9 @@ describe("web monitor inbox metadata cache", () => {
         expect(baileysCache.baileysGroupMetaCache.get("123@g.us")?.value.participants).toEqual([]);
       });
 
+      await expect(
+        baileysCache.socketOptions.cachedGroupMetadata("123@g.us"),
+      ).resolves.toBeUndefined();
       await listener.sendMessage("123@g.us", "recovered @15551234567");
 
       expect(sock.groupMetadata).toHaveBeenCalledOnce();

@@ -121,6 +121,7 @@ describe("whatsapp channel action helpers", () => {
           reactionLevel: "ack",
           allowFrom: ["*"],
           accounts: {
+            default: {},
             work: {
               reactionLevel: "minimal",
             },
@@ -143,6 +144,7 @@ describe("whatsapp channel action helpers", () => {
           reactionLevel: "ack",
           allowFrom: ["*"],
           accounts: {
+            default: {},
             work: {
               enabled: false,
               reactionLevel: "minimal",

@@ -1,33 +1,33 @@
 // WhatsApp web auto-reply routing behavior.
 import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
+import {
+  deliveryContextFromSession,
+  getSessionEntry,
+  normalizeSessionDeliveryState,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { describe, expect, it, vi } from "vitest";
+import {
+  dispatchReplyFromConfigForTest,
+  installWebAutoReplyUnitTestHooks,
+  makeSessionStore,
+} from "./auto-reply.test-harness.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
-const runChannelInboundEventMock = vi.hoisted(() =>
-  vi.fn(async () => ({ dispatched: false }) as never),
-);
-
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
-    "openclaw/plugin-sdk/channel-inbound",
-  );
-  return {
-    ...actual,
-    runChannelInboundEvent: runChannelInboundEventMock,
-  };
-});
-
 vi.mock("./auto-reply/monitor/last-route.js", async () => {
   const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
     "./auto-reply/monitor/last-route.js",
   );
   return {
     ...actual,
-    updateLastRouteInBackground: (...args: unknown[]) => updateLastRouteInBackgroundMock(...args),
+    updateLastRouteInBackground: (
+      params: Parameters<typeof actual.updateLastRouteInBackground>[0],
+    ) => {
+      updateLastRouteInBackgroundMock(params);
+      return actual.updateLastRouteInBackground(params);
+    },
   };
 });
 
@@ -63,6 +63,7 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
       typeof createWebOnMessageHandler
     >[0]["replyResolver"],
     replyLogger,
+    dispatchReplyFromConfig: dispatchReplyFromConfigForTest,
   });
 
   return { handler, backgroundTasks };
@@ -113,17 +114,34 @@ function buildInboundMessage(params: {
 describe("web auto-reply routing", () => {
   installWebAutoReplyUnitTestHooks();
 
-  beforeEach(() => {
-    updateLastRouteInBackgroundMock.mockClear();
-    runChannelInboundEventMock.mockClear();
-  });
-
   it("updates last-route for direct chats without senderE164", async () => {
     const now = Date.now();
     const mainSessionKey = "agent:main:main";
     const store = await makeSessionStore({
-      [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
+      [mainSessionKey]: {
+        sessionId: "sid",
+        updatedAt: now - 1,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "whatsapp", to: "+3000", accountId: "default" },
+          origin: {
+            provider: "whatsapp",
+            surface: "whatsapp",
+            to: "+3000",
+            accountId: "default",
+          },
+        }),
+      },
     });
+
+    expect(
+      deliveryContextFromSession(
+        getSessionEntry({
+          agentId: "main",
+          storePath: store.storePath,
+          sessionKey: mainSessionKey,
+        }),
+      ),
+    ).toEqual({ channel: "whatsapp", to: "+3000", accountId: "default" });
 
     const cfg = makeCfg(store.storePath);
     const { handler, backgroundTasks } = createHandlerForTest({
@@ -188,7 +206,18 @@ describe("web auto-reply routing", () => {
       Timestamp: now,
     });
 
-    await store.cleanup();
+    expect(
+      getSessionEntry({
+        agentId: "main",
+        storePath: store.storePath,
+        sessionKey: mainSessionKey,
+      }),
+    ).toMatchObject({
+      delivery: {
+        kind: "external",
+        context: { channel: "whatsapp", to: "+1000", accountId: "default" },
+      },
+    });
   });
 
   it("updates last-route for group chats with account id", async () => {
@@ -261,6 +290,24 @@ describe("web auto-reply routing", () => {
       OriginatingTo: "123@g.us",
     });
 
-    await store.cleanup();
+    expect(
+      getSessionEntry({
+        agentId: "main",
+        storePath: store.storePath,
+        sessionKey: `${groupSessionKey}:thread:whatsapp-account-work`,
+      }),
+    ).toMatchObject({
+      delivery: {
+        kind: "external",
+        context: { channel: "whatsapp", to: "123@g.us", accountId: "work" },
+      },
+    });
+    const unscopedEntry = getSessionEntry({
+      agentId: "main",
+      storePath: store.storePath,
+      sessionKey: groupSessionKey,
+    });
+    expect(unscopedEntry).toMatchObject({ sessionId: "sid" });
+    expect(deliveryContextFromSession(unscopedEntry)).toBeUndefined();
   });
 });

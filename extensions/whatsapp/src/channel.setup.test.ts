@@ -10,7 +10,7 @@ import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import { finalizeWhatsAppSetup } from "./setup-finalize.js";
 import {
   createWhatsAppAllowlistModeInput,
-  expectWhatsAppDefaultAccountAccessNote,
+  expectWhatsAppAccountAccessNote,
   createWhatsAppOwnerAllowlistHarness,
   createWhatsAppPersonalPhoneHarness,
   expectWhatsAppAllowlistModeSetup,
@@ -255,7 +255,7 @@ describe("whatsapp setup wizard", () => {
     expect(result.cfg.channels?.whatsapp?.allowFrom).toBeUndefined();
     expect(result.cfg.channels?.whatsapp?.accounts?.default?.dmPolicy).toBe("open");
     expect(result.cfg.channels?.whatsapp?.accounts?.default?.allowFrom).toEqual(["*"]);
-    expectWhatsAppDefaultAccountAccessNote(harness);
+    expectWhatsAppAccountAccessNote(harness, "default");
   });
 
   it("updates an existing mixed-case default-account key during setup", async () => {

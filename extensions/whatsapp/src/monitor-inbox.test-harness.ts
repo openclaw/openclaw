@@ -126,35 +126,6 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
 });
 
 const inboundRuntimeMocks = vi.hoisted(() => {
-  const wrapperKeys = [
-    "ephemeralMessage",
-    "viewOnceMessage",
-    "viewOnceMessageV2",
-    "viewOnceMessageV2Extension",
-    "documentWithCaptionMessage",
-  ] as const;
-
-  function normalizeMessageContent(message: unknown): unknown {
-    let current = message;
-    while (current && typeof current === "object") {
-      const record = current as Record<string, unknown>;
-      const wrapper = wrapperKeys
-        .map((key) => record[key])
-        .find(
-          (candidate): candidate is { message: unknown } =>
-            Boolean(candidate) &&
-            typeof candidate === "object" &&
-            "message" in (candidate as Record<string, unknown>) &&
-            Boolean((candidate as { message?: unknown }).message),
-        );
-      if (!wrapper) {
-        break;
-      }
-      current = wrapper.message;
-    }
-    return current;
-  }
-
   async function* fakeMediaStream() {
     yield Buffer.from("fake-media-data");
   }
@@ -164,13 +135,6 @@ const inboundRuntimeMocks = vi.hoisted(() => {
     isJidGroup: vi.fn((jid: string | undefined | null) =>
       typeof jid === "string" ? jid.endsWith("@g.us") : false,
     ),
-    normalizeMessageContent: vi.fn(normalizeMessageContent),
-    saveMediaBuffer: vi.fn().mockResolvedValue({
-      id: "mid",
-      path: "/tmp/mid",
-      size: 1,
-      contentType: "image/jpeg",
-    }),
   };
 });
 
@@ -213,9 +177,11 @@ function createMockSock(): MockSock {
   };
 }
 
-vi.mock("./inbound/runtime-api.js", () => {
+vi.mock("./inbound/runtime-api.js", async () => {
+  const { normalizeMessageContent } = await vi.importActual<typeof import("baileys")>("baileys");
   return {
     DisconnectReason: { loggedOut: 401 },
+    normalizeMessageContent,
     ...inboundRuntimeMocks,
   };
 });

@@ -9,7 +9,6 @@ import {
   sendWebDirectInboundAndCollectSessionKeys,
 } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
-  installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
@@ -18,8 +17,6 @@ import {
 } from "./auto-reply.test-harness.js";
 import { maybeBroadcastMessage } from "./auto-reply/monitor/broadcast.js";
 import { createTestWebAudioInboundMessage } from "./inbound/test-message.test-helper.js";
-
-installWebAutoReplyTestHomeHooks();
 
 describe("broadcast groups", () => {
   installWebAutoReplyUnitTestHooks();

@@ -52,22 +52,26 @@ const cases: PromptCase[] = [
 describe.each([
   {
     name: "group",
-    resolve: (entries: Entries | undefined, targetId: string | null) =>
+    resolve: (entries: Entries | undefined, targetId?: string | null, omitTarget?: boolean) =>
       resolveWhatsAppGroupSystemPrompt({
         accountConfig: entries ? { groups: entries } : undefined,
-        groupId: targetId,
+        ...(omitTarget ? {} : { groupId: targetId }),
       }),
   },
   {
     name: "direct",
-    resolve: (entries: Entries | undefined, targetId: string | null) =>
+    resolve: (entries: Entries | undefined, targetId?: string | null, omitTarget?: boolean) =>
       resolveWhatsAppDirectSystemPrompt({
         accountConfig: entries ? { direct: entries } : undefined,
-        peerId: targetId,
+        ...(omitTarget ? {} : { peerId: targetId }),
       }),
   },
 ])("WhatsApp $name system prompts", ({ resolve }) => {
   it.each(cases)("$name", ({ entries, targetId, expected }) => {
     expect(resolve(entries, targetId)).toBe(expected);
+    if (targetId === null) {
+      expect(resolve(entries, undefined)).toBeUndefined();
+      expect(resolve(entries, undefined, true)).toBeUndefined();
+    }
   });
 });

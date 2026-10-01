@@ -3,6 +3,7 @@ export {
   createAccountPolicyInheritanceCases,
   validateTestChannelConfig,
 } from "./test-helpers/channel-config.js";
+export { createChannelTurnTestMocks } from "./test-helpers/channel-turn.js";
 export { createDirectoryTestRuntime, expectDirectorySurface } from "./test-helpers/directory.js";
 export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directory-ids.js";
 export {

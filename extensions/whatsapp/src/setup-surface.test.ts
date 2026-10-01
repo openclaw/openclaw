@@ -19,7 +19,7 @@ import {
   expectWhatsAppOpenPolicySetup,
   expectWhatsAppOwnerAllowlistSetup,
   expectWhatsAppPersonalPhoneSetup,
-  expectWhatsAppWorkAccountAccessNote,
+  expectWhatsAppAccountAccessNote,
   expectWhatsAppWorkAccountOpenAccess,
 } from "./setup-test-helpers.js";
 
@@ -152,7 +152,7 @@ describe("whatsapp setup wizard", () => {
     );
 
     expectWhatsAppWorkAccountOpenAccess(named.cfg);
-    expectWhatsAppWorkAccountAccessNote(harness);
+    expectWhatsAppAccountAccessNote(harness, "work");
   });
 
   it("labels the selected named account in setup status even when not linked", async () => {
@@ -249,7 +249,7 @@ describe("whatsapp setup wizard", () => {
     );
 
     expectWhatsAppWorkAccountOpenAccess(result.cfg);
-    expectWhatsAppWorkAccountAccessNote(harness);
+    expectWhatsAppAccountAccessNote(harness, "work");
   });
 
   it("enables allowlist self-chat mode for personal-phone setup", async () => {

@@ -1,30 +1,30 @@
 // Whatsapp tests cover auto reply.web auto reply.connection and logging plugin behavior.
-import "./test-helpers.js";
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import { getActiveWebListener } from "./active-listener.js";
-import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
-import { resolveOAuthDir } from "./auth-store.runtime.js";
+// Preserve mock setup before modules that capture runtime getters.
+// oxfmt-ignore
 import {
   createWebInboundDeliverySpies,
   createMockWebListener,
   createScriptedWebListenerFactory,
   createWebListenerFactoryCapture,
   getLastWebAutoReplySessionSocket,
-  installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
+  monitorWebChannel,
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
   setLoadConfigMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { getActiveWebListener } from "./active-listener.js";
+import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
+import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   createWhatsAppReplyTransportContext,
   deliverWebReply,
@@ -52,8 +52,6 @@ const deliveryQueueMocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
   drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
 }));
-
-installWebAutoReplyTestHomeHooks();
 
 function requireOnMessage(
   value: unknown,
@@ -103,11 +101,6 @@ async function waitForScriptedListeners(
 
 describe("web auto-reply connection", () => {
   installWebAutoReplyUnitTestHooks();
-
-  let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
-  beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
-  });
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
     const d = new Date("2025-01-01T00:00:00.000Z");
@@ -439,56 +432,6 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("treats status 440 as non-retryable and stops without retrying", async () => {
-    const sleep = vi.fn(async () => {});
-    const scripted = createScriptedWebListenerFactory();
-    const { runtime, controller, run } = startWebAutoReplyMonitor({
-      monitorWebChannelFn: monitorWebChannel as never,
-      listenerFactory: scripted.listenerFactory,
-      sleep,
-      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
-    });
-
-    await vi.waitFor(
-      () => {
-        expect(scripted.getListenerCount()).toBe(1);
-      },
-      { timeout: 250, interval: 2 },
-    );
-    scripted.resolveClose(0, {
-      status: 440,
-      isLoggedOut: false,
-      error: "Unknown Stream Errored (conflict)",
-    });
-
-    const completedQuickly = await Promise.race([
-      run.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 60);
-      }),
-    ]);
-
-    if (!completedQuickly) {
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 250, interval: 2 },
-      );
-      controller.abort();
-      scripted.resolveClose(1, { status: 499, isLoggedOut: false, error: "aborted" });
-      await run;
-    }
-
-    expect(completedQuickly).toBe(true);
-    expect(scripted.getListenerCount()).toBe(1);
-    expect(sleep).not.toHaveBeenCalled();
-    expectErrorContaining(runtime.error, "status 440");
-    expectErrorContaining(runtime.error, "session conflict");
-    expectErrorContaining(runtime.error, "openclaw channels logout --channel whatsapp");
-    expectErrorContaining(runtime.error, "Stopping web monitoring");
-  });
-
   it.each([
     {
       status: 440,
@@ -531,7 +474,7 @@ describe("web auto-reply connection", () => {
       const sleep = vi.fn(async () => {});
       const statuses: Array<Partial<WebChannelStatus>> = [];
       const scripted = createScriptedWebListenerFactory();
-      const { run } = startWebAutoReplyMonitor({
+      const { runtime, run } = startWebAutoReplyMonitor({
         monitorWebChannelFn: monitorWebChannel as never,
         listenerFactory: scripted.listenerFactory,
         sleep,
@@ -566,6 +509,12 @@ describe("web auto-reply connection", () => {
       expect(finalStatus?.connected).toBe(false);
       expect(finalStatus?.healthState).toBe(healthState);
       expect(finalStatus?.lifecycle).toBe("blocked");
+      if (status === 440) {
+        expectErrorContaining(runtime.error, "status 440");
+        expectErrorContaining(runtime.error, "session conflict");
+        expectErrorContaining(runtime.error, "openclaw channels logout --channel whatsapp");
+        expectErrorContaining(runtime.error, "Stopping web monitoring");
+      }
     },
   );
 
@@ -920,7 +869,7 @@ describe("web auto-reply connection", () => {
 
   it("emits heartbeat logs with connection metadata", async () => {
     vi.useFakeTimers();
-    const logPath = `/tmp/openclaw-heartbeat-${crypto.randomUUID()}.log`;
+    const logPath = path.join(process.env.HOME!, "whatsapp-heartbeat.log");
     setLoggerOverride({ level: "trace", file: logPath });
 
     const runtime = createRuntimeSpies();
@@ -950,7 +899,7 @@ describe("web auto-reply connection", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     controller.abort();
     await vi.runAllTimersAsync();
-    await run.catch(() => {});
+    await expect(run).resolves.toBeUndefined();
     vi.useRealTimers();
 
     let content = "";
@@ -964,7 +913,7 @@ describe("web auto-reply connection", () => {
   });
 
   it("logs outbound replies to file", async () => {
-    const logPath = `/tmp/openclaw-log-test-${crypto.randomUUID()}.log`;
+    const logPath = path.join(process.env.HOME!, "whatsapp-outbound.log");
     setLoggerOverride({ level: "trace", file: logPath });
     const spies = createWebInboundDeliverySpies();
     const msg = createTestWebInboundMessage({

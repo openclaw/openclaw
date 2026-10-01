@@ -1,11 +1,13 @@
 // Whatsapp tests cover action runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleWhatsAppAction, whatsAppActionRuntime } from "./action-runtime.js";
 
 const originalWhatsAppActionRuntime = { ...whatsAppActionRuntime };
-const sendReactionWhatsApp = vi.fn(async () => undefined);
+const sendReactionWhatsApp = vi.fn<typeof whatsAppActionRuntime.sendReactionWhatsApp>(
+  async () => undefined,
+);
 
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
@@ -51,6 +53,10 @@ describe("handleWhatsAppAction", () => {
     Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime, {
       sendReactionWhatsApp,
     });
+  });
+
+  afterEach(() => {
+    Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime);
   });
 
   it("adds reactions", async () => {

@@ -1,54 +1,33 @@
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  dispatchChannelInboundTurn,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  addTestHook,
+  createChannelTurnTestMocks,
+  createEmptyPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+  type PluginHookRegistration,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 // Whatsapp tests cover inbound dispatch plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import { loadWebMedia } from "../../media.js";
 import { deliverWebReply } from "../deliver-reply.js";
 
+type ChannelTurnTestMocks = Awaited<ReturnType<typeof createChannelTurnTestMocks>>;
+type CapturedDispatchParams = Parameters<ChannelTurnTestMocks["dispatchAgentReplyMock"]>[0];
+type CapturedReplyPayload = Parameters<CapturedDispatchParams["dispatcherOptions"]["deliver"]>[0];
+
 let capturedDispatchParams: unknown;
+let channelTurnTestMocks: ChannelTurnTestMocks | undefined;
+let dispatchAgentReplyMock: ChannelTurnTestMocks["dispatchAgentReplyMock"];
+let deliverInboundReplyWithMessageSendContextMock: ChannelTurnTestMocks["deliverInboundReplyWithMessageSendContextMock"];
 
-type CapturedReplyPayload = {
-  text?: string;
-  isReasoning?: boolean;
-  isCompactionNotice?: boolean;
-  isError?: boolean;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  replyToId?: string | null;
-};
-
-type CapturedDispatchParams = {
-  ctx?: unknown;
-  dispatcherOptions?: {
-    deliver?: (
-      payload: CapturedReplyPayload,
-      info: { kind: "tool" | "block" | "final" },
-    ) => Promise<unknown>;
-    onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => Promise<void> | void;
-    onSettled?: () => unknown;
-  };
-  replyOptions?: {
-    disableBlockStreaming?: boolean;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    suppressTyping?: boolean;
-  };
-};
-
-const {
-  dispatchReplyWithBufferedBlockDispatcherMock,
-  deliverInboundReplyWithMessageSendContextMock,
-  readAgentRunTerminalOutcomeMock,
-  sourceReplyDeliveryModeContexts,
-} = vi.hoisted(() => ({
-  dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: CapturedDispatchParams) => {
-    capturedDispatchParams = params;
-    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-  }),
-  deliverInboundReplyWithMessageSendContextMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(
-    async () => null,
-  ),
+const { readAgentRunTerminalOutcomeMock, sourceReplyDeliveryModeContexts } = vi.hoisted(() => ({
   readAgentRunTerminalOutcomeMock: vi.fn(),
   sourceReplyDeliveryModeContexts: [] as unknown[],
 }));
@@ -65,66 +44,22 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
   return {
     ...actual,
-    deliverInboundReplyWithMessageSendContext: deliverInboundReplyWithMessageSendContextMock,
-    resolveChannelMessageSourceReplyDeliveryMode: (params: {
-      cfg: {
-        messages?: {
-          visibleReplies?: "automatic" | "message_tool";
-          groupChat?: { visibleReplies?: "automatic" | "message_tool" };
-        };
-      };
-      ctx: {
-        ChatType?: string;
-        CommandSource?: "native" | "text";
-        CommandAuthorized?: boolean;
-      };
-    }) => {
+    resolveChannelMessageSourceReplyDeliveryMode: (
+      params: Parameters<typeof actual.resolveChannelMessageSourceReplyDeliveryMode>[0],
+    ) => {
       sourceReplyDeliveryModeContexts.push(params.ctx);
-      return params.ctx.CommandSource === "native" ||
-        (params.ctx.CommandSource === "text" && params.ctx.CommandAuthorized === true)
-        ? "automatic"
-        : (params.cfg.messages?.groupChat?.visibleReplies ??
-              params.cfg.messages?.visibleReplies) === "automatic"
-          ? "automatic"
-          : "message_tool_only";
+      return actual.resolveChannelMessageSourceReplyDeliveryMode(params);
     },
   };
 });
 
-vi.mock("./runtime-api.js", async () => {
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
   return {
-    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherMock,
+    ...actual,
     getAgentScopedMediaLocalRoots: () => [],
-    jidToE164: (value: string) => {
-      const phone = value.split("@")[0]?.replace(/[^\d]/g, "");
-      return phone ? `+${phone}` : null;
-    },
     logVerbose: () => {},
-    resolveChunkMode: () => "length",
-    resolveIdentityNamePrefix: (cfg: {
-      agents?: { list?: Array<{ id?: string; default?: boolean; identity?: { name?: string } }> };
-    }) => {
-      const agent = cfg.agents?.list?.find((entry) => entry.default) ?? cfg.agents?.list?.[0];
-      const name = agent?.identity?.name?.trim();
-      return name ? `[${name}]` : undefined;
-    },
     resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
-    resolveMarkdownTableMode: () => undefined,
-    resolveSendableOutboundReplyParts: (payload: {
-      text?: string;
-      mediaUrls?: string[];
-      mediaUrl?: string;
-    }) => {
-      const urls = [
-        ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-        ...(payload.mediaUrl ? [payload.mediaUrl] : []),
-      ];
-      return {
-        text: payload.text ?? "",
-        hasMedia: urls.length > 0,
-      };
-    },
-    resolveTextChunkLimit: () => 4000,
     shouldLogVerbose: () => false,
   };
 });
@@ -468,7 +403,7 @@ type BufferedReplyParams = Parameters<typeof createWhatsAppReplyPlan>[0];
 type BufferedReplyOverrides = Partial<Omit<BufferedReplyParams, "context" | "transport">> & {
   context?: Partial<BufferedReplyParams["context"]>;
   msg?: TestMsg;
-  cancelAfterPrepare?: (payload: CapturedReplyPayload) => boolean;
+  cancelMessageSending?: (content: string) => boolean;
 };
 
 function finalizedContext(
@@ -539,7 +474,19 @@ function makePreparedInbound(msg: TestMsg): BufferedReplyParams["inbound"] {
 }
 
 async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
-  const { cancelAfterPrepare, msg = makeMsg(), ...paramOverrides } = overrides;
+  const { cancelMessageSending, msg = makeMsg(), ...paramOverrides } = overrides;
+  if (cancelMessageSending) {
+    const registry = createEmptyPluginRegistry();
+    addTestHook({
+      registry,
+      pluginId: "whatsapp-reply-test",
+      hookName: "message_sending",
+      handler: ((event: { content: string }) => ({
+        cancel: cancelMessageSending(event.content),
+      })) as PluginHookRegistration["handler"],
+    });
+    initializeGlobalHookRunner(registry);
+  }
   const params: BufferedReplyParams = {
     cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
     connectionId: "conn",
@@ -554,91 +501,30 @@ async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
     transport: buildWhatsAppInboundTransportContext(msg),
   };
 
-  return runWhatsAppReplyPlan(
-    {
-      ...params,
-      ...paramOverrides,
-      context: finalizedContext({ ...params.context, ...paramOverrides.context }),
-    },
-    { cancelAfterPrepare },
-  );
+  return runWhatsAppReplyPlan({
+    ...params,
+    ...paramOverrides,
+    context: finalizedContext({ ...params.context, ...paramOverrides.context }),
+  });
 }
 
-async function runWhatsAppReplyPlan(
-  params: BufferedReplyParams,
-  options: Pick<BufferedReplyOverrides, "cancelAfterPrepare"> = {},
-): Promise<boolean> {
+async function runWhatsAppReplyPlan(params: BufferedReplyParams): Promise<boolean> {
   const plan = createWhatsAppReplyPlan(params);
-  const dispatchResult = await dispatchReplyWithBufferedBlockDispatcherMock({
-    ctx: params.context,
-    dispatcherOptions: {
-      ...plan.dispatcherOptions,
-      deliver: async (payload, info) => {
-        // The dispatcher fixture retains null as the explicit no-native-reply sentinel.
-        const deliveryInput = payload as unknown as Parameters<typeof plan.delivery.deliver>[0];
-        const prepared = plan.delivery.preparePayload
-          ? await plan.delivery.preparePayload(deliveryInput, info)
-          : deliveryInput;
-        if (prepared === null) {
-          const result = {
-            visibleReplySent: false,
-            suppression: { reason: "no_visible_payload" as const },
-          };
-          await plan.delivery.onDelivered?.(deliveryInput, info, result);
-          return result;
-        }
-        const durable =
-          typeof plan.delivery.durable === "function"
-            ? await plan.delivery.durable(prepared, info)
-            : plan.delivery.durable;
-        if (durable) {
-          const outcome = requireRecord(
-            await deliverInboundReplyWithMessageSendContextMock({
-              cfg: params.cfg,
-              channel: "whatsapp",
-              accountId: params.route.accountId,
-              agentId: params.route.agentId,
-              ctxPayload: params.context,
-              payload: prepared,
-              info,
-              ...durable,
-            }),
-            "durable outcome",
-          );
-          if (outcome.status === "failed") {
-            const error = outcome.error;
-            if (outcome.sentBeforeError === true && error && typeof error === "object") {
-              Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
-            }
-            plan.delivery.onError?.(error, info);
-            throw error;
-          }
-          if (outcome.status === "handled_visible" || outcome.status === "handled_no_send") {
-            const result = outcome.delivery as Awaited<ReturnType<typeof plan.delivery.deliver>>;
-            await plan.delivery.onDelivered?.(prepared, info, result);
-            return result;
-          }
-        }
-        if (options.cancelAfterPrepare?.(prepared)) {
-          const result = {
-            visibleReplySent: false,
-            suppression: { reason: "cancelled_by_message_sending_hook" as const },
-          };
-          await plan.delivery.onDelivered?.(prepared, info, result);
-          return result;
-        }
-        const result = await plan.delivery.deliver(prepared, info);
-        if (result?.finalization) {
-          void result.finalization.catch(() => undefined);
-        }
-        await plan.delivery.onDelivered?.(prepared, info, result);
-        return result;
-      },
-      onError: plan.delivery.onError,
-    },
+  const result = await dispatchChannelInboundTurn({
+    cfg: params.cfg,
+    channel: "whatsapp",
+    accountId: params.route.accountId,
+    route: params.route,
+    ctxPayload: params.context,
+    dispatcherOptions: plan.dispatcherOptions,
+    delivery: plan.delivery,
     replyOptions: plan.replyOptions,
+    replyResolver: plan.replyResolver,
   });
-  return plan.finalize(dispatchResult);
+  if (!result.dispatched) {
+    throw new Error("expected WhatsApp reply dispatch");
+  }
+  return plan.finalize(result.dispatchResult);
 }
 
 const DEFERRED_TOOL_MEDIA = {
@@ -670,25 +556,20 @@ async function dispatchDeferredMediaReplacement(
 }> {
   let finalization: Promise<unknown> | undefined;
   let replacement: PromiseSettledResult<unknown> | undefined;
-  dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-    async (params: CapturedDispatchParams) => {
-      capturedDispatchParams = params;
-      const deliver = requireCapturedDeliver(params);
-      const deferred = requireRecord(
-        await deliver({ ...DEFERRED_TOOL_MEDIA, mediaUrls: media.deferred }, { kind: "tool" }),
-        "deferred media result",
-      );
-      finalization = deferred.finalization as Promise<unknown>;
-      [replacement] = await Promise.allSettled([
-        deliver(
-          { ...CAPTIONED_MEDIA_REPLACEMENT, mediaUrls: media.replacement },
-          { kind: "block" },
-        ),
-      ]);
-      await params.dispatcherOptions?.onSettled?.();
-      return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
-    },
-  );
+  dispatchAgentReplyMock.mockImplementationOnce(async (params: CapturedDispatchParams) => {
+    capturedDispatchParams = params;
+    const deliver = requireCapturedDeliver(params);
+    const deferred = requireRecord(
+      await deliver({ ...DEFERRED_TOOL_MEDIA, mediaUrls: media.deferred }, { kind: "tool" }),
+      "deferred media result",
+    );
+    finalization = deferred.finalization as Promise<unknown>;
+    [replacement] = await Promise.allSettled([
+      deliver({ ...CAPTIONED_MEDIA_REPLACEMENT, mediaUrls: media.replacement }, { kind: "block" }),
+    ]);
+    await params.dispatcherOptions?.onSettled?.();
+    return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
+  });
 
   await dispatchBufferedReply(overrides);
   if (!finalization || !replacement) {
@@ -697,13 +578,28 @@ async function dispatchDeferredMediaReplacement(
   return { finalization, replacement };
 }
 
+afterEach(() => {
+  try {
+    channelTurnTestMocks?.restore();
+  } finally {
+    channelTurnTestMocks = undefined;
+    resetGlobalHookRunner();
+  }
+});
+
 describe("whatsapp inbound dispatch", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     capturedDispatchParams = undefined;
     sourceReplyDeliveryModeContexts.length = 0;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
+    channelTurnTestMocks = await createChannelTurnTestMocks();
+    ({ dispatchAgentReplyMock, deliverInboundReplyWithMessageSendContextMock } =
+      channelTurnTestMocks);
+    channelTurnTestMocks.recordInboundSessionMock.mockResolvedValue(undefined);
+    dispatchAgentReplyMock.mockImplementation(async (params: CapturedDispatchParams) => {
+      capturedDispatchParams = params;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
     readAgentRunTerminalOutcomeMock.mockReset().mockReturnValue(undefined);
-    deliverInboundReplyWithMessageSendContextMock.mockReset();
     deliverInboundReplyWithMessageSendContextMock.mockResolvedValue({
       status: "unsupported",
       reason: "missing_outbound_handler",
@@ -998,7 +894,7 @@ describe("whatsapp inbound dispatch", () => {
   it("retains the full approved batch when its partial replacement is cancelled", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const { finalization, replacement } = await dispatchDeferredMediaReplacement(
-      { deliverReply, cancelAfterPrepare: (payload) => payload.text === "captioned replacement" },
+      { deliverReply, cancelMessageSending: (content) => content === "captioned replacement" },
       { deferred: ["/tmp/a.jpg", "/tmp/b.jpg"], replacement: ["/tmp/a.jpg"] },
     );
 
@@ -1128,7 +1024,7 @@ describe("whatsapp inbound dispatch", () => {
 
   it("does not defer or send a tool batch vetoed by the sending hook", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    await dispatchBufferedReply({ deliverReply, cancelAfterPrepare: () => true });
+    await dispatchBufferedReply({ deliverReply, cancelMessageSending: () => true });
     const deliver = requireCapturedDeliver(capturedDispatchParams as CapturedDispatchParams);
     await expect(
       deliver({ mediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"] }, { kind: "tool" }),
@@ -1242,7 +1138,8 @@ describe("whatsapp inbound dispatch", () => {
     },
     {
       name: "preserves explicit null reply targets",
-      payload: { text: "final payload", replyToId: null },
+      // Exercise an untyped caller's explicit null reply target.
+      payload: { text: "final payload", replyToId: null as never },
       expectedReplyToId: null,
     },
   ] satisfies Array<{
@@ -1404,26 +1301,24 @@ describe("whatsapp inbound dispatch", () => {
   it("flushes deferred media through the settled delivery hook", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     let settledResult: unknown;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        const deliver = params.dispatcherOptions?.deliver;
-        if (!deliver) {
-          throw new Error("expected captured deliver callback");
-        }
-        const onSettled = params.dispatcherOptions?.onSettled;
-        const deferred = await deliver(
-          { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
-          { kind: "tool" },
-        );
-        expect(deferred).toMatchObject({ visibleReplySent: false });
-        settledResult = await onSettled?.();
-        return {
-          queuedFinal: false,
-          counts: { tool: 1, block: 0, final: 0 },
-        };
-      },
-    );
+    dispatchAgentReplyMock.mockImplementationOnce(async (params: CapturedDispatchParams) => {
+      capturedDispatchParams = params;
+      const deliver = params.dispatcherOptions?.deliver;
+      if (!deliver) {
+        throw new Error("expected captured deliver callback");
+      }
+      const onSettled = params.dispatcherOptions?.onSettled;
+      const deferred = await deliver(
+        { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
+        { kind: "tool" },
+      );
+      expect(deferred).toMatchObject({ visibleReplySent: false });
+      settledResult = await onSettled?.();
+      return {
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      };
+    });
 
     await expect(
       dispatchBufferedReply({
@@ -1445,77 +1340,90 @@ describe("whatsapp inbound dispatch", () => {
     let firstSettlement: Promise<{ status: "resolved"; value: unknown } | { status: "rejected" }>;
     let secondSettlement: Promise<{ status: "resolved" } | { status: "rejected"; error: unknown }>;
     let thirdSettlement: Promise<{ status: "resolved" } | { status: "rejected"; error: unknown }>;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        const deliver = params.dispatcherOptions?.deliver;
-        if (!deliver) {
-          throw new Error("expected captured deliver callback");
-        }
-        const onSettled = params.dispatcherOptions?.onSettled;
-        const first = requireRecord(
-          await deliver({ text: "first image", mediaUrls: ["/tmp/first.jpg"] }, { kind: "tool" }),
-          "first deferred media result",
-        );
-        const second = requireRecord(
-          await deliver({ text: "second image", mediaUrls: ["/tmp/second.jpg"] }, { kind: "tool" }),
-          "second deferred media result",
-        );
-        const third = requireRecord(
-          await deliver({ text: "third image", mediaUrls: ["/tmp/third.jpg"] }, { kind: "tool" }),
-          "third deferred media result",
-        );
-        firstSettlement = (first.finalization as Promise<unknown>).then(
-          (value) => ({ status: "resolved" as const, value }),
-          () => ({ status: "rejected" as const }),
-        );
-        secondSettlement = (second.finalization as Promise<unknown>).then(
-          () => ({ status: "resolved" as const }),
-          (settlementError: unknown) => ({
-            status: "rejected" as const,
-            error: settlementError,
-          }),
-        );
-        thirdSettlement = (third.finalization as Promise<unknown>).then(
-          () => ({ status: "resolved" as const }),
-          (settlementError: unknown) => ({
-            status: "rejected" as const,
-            error: settlementError,
-          }),
-        );
+    dispatchAgentReplyMock.mockImplementationOnce(async (params: CapturedDispatchParams) => {
+      capturedDispatchParams = params;
+      const deliver = params.dispatcherOptions?.deliver;
+      if (!deliver) {
+        throw new Error("expected captured deliver callback");
+      }
+      const onSettled = params.dispatcherOptions?.onSettled;
+      const first = requireRecord(
+        await deliver({ text: "first image", mediaUrls: ["/tmp/first.jpg"] }, { kind: "tool" }),
+        "first deferred media result",
+      );
+      const second = requireRecord(
+        await deliver({ text: "second image", mediaUrls: ["/tmp/second.jpg"] }, { kind: "tool" }),
+        "second deferred media result",
+      );
+      const third = requireRecord(
+        await deliver({ text: "third image", mediaUrls: ["/tmp/third.jpg"] }, { kind: "tool" }),
+        "third deferred media result",
+      );
+      firstSettlement = (first.finalization as Promise<unknown>).then(
+        (value) => ({ status: "resolved" as const, value }),
+        () => ({ status: "rejected" as const }),
+      );
+      secondSettlement = (second.finalization as Promise<unknown>).then(
+        () => ({ status: "resolved" as const }),
+        (settlementError: unknown) => ({
+          status: "rejected" as const,
+          error: settlementError,
+        }),
+      );
+      thirdSettlement = (third.finalization as Promise<unknown>).then(
+        () => ({ status: "resolved" as const }),
+        (settlementError: unknown) => ({
+          status: "rejected" as const,
+          error: settlementError,
+        }),
+      );
+      try {
         await onSettled?.();
-        return {
-          queuedFinal: false,
-          counts: { tool: 3, block: 0, final: 0 },
-        };
-      },
-    );
+      } catch (flushError) {
+        // The coalescer leaves rejected payloads unmarked. Core's later error
+        // observer separately records the earlier visible reply for the turn.
+        expect(error).not.toHaveProperty("sentBeforeError");
+        expect(error).not.toHaveProperty("visibleReplySent");
+        const thirdResult = await thirdSettlement;
+        if (thirdResult.status === "rejected") {
+          expect(thirdResult.error).not.toHaveProperty("sentBeforeError");
+          expect(thirdResult.error).not.toHaveProperty("visibleReplySent");
+        }
+        throw flushError;
+      }
+      return {
+        queuedFinal: false,
+        counts: { tool: 3, block: 0, final: 0 },
+      };
+    });
 
     await expect(dispatchBufferedReply({ deliverReply })).rejects.toMatchObject({
       sentBeforeError: true,
       visibleReplySent: true,
       cause: error,
     });
-    expect(error).not.toHaveProperty("sentBeforeError");
-    expect(error).not.toHaveProperty("visibleReplySent");
+    expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
     await expect(firstSettlement!).resolves.toMatchObject({
       status: "resolved",
       value: { visibleReplySent: true },
     });
-    await expect(secondSettlement!).resolves.toEqual({ status: "rejected", error });
+    const second = await secondSettlement!;
+    expect(second.status).toBe("rejected");
+    if (second.status === "rejected") {
+      expect(second.error).toBe(error);
+    }
     const third = await thirdSettlement!;
     expect(third).toMatchObject({
       status: "rejected",
-      error: { cause: error },
+      error: { message: "deferred WhatsApp media delivery was not attempted" },
     });
     if (third.status === "rejected") {
-      expect(third.error).not.toHaveProperty("sentBeforeError");
-      expect(third.error).not.toHaveProperty("visibleReplySent");
+      expect((third.error as Error).cause).toBe(error);
     }
     expect(deliverReply).toHaveBeenCalledTimes(2);
   });
 
-  it("marks downstream failures visible after deferred media flushes", async () => {
+  it("preserves earlier media visibility when the dispatcher reports a later failure", async () => {
     const error = new Error("durable text failed");
     deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
       status: "failed",
@@ -1531,10 +1439,8 @@ describe("whatsapp inbound dispatch", () => {
     await expect(
       deliver?.({ text: "tool image", mediaUrls: ["/tmp/generated.jpg"] }, { kind: "tool" }),
     ).resolves.toMatchObject({ visibleReplySent: false });
-    await expect(deliver?.({ text: "final text" }, { kind: "final" })).rejects.toMatchObject({
-      sentBeforeError: true,
-      visibleReplySent: true,
-    });
+    await expect(deliver?.({ text: "final text" }, { kind: "final" })).rejects.toBe(error);
+    await getCapturedOnError()?.(error, { kind: "final" });
     expect(error).toMatchObject({
       sentBeforeError: true,
       visibleReplySent: true,
@@ -1675,17 +1581,29 @@ describe("whatsapp inbound dispatch", () => {
     expect(getCapturedReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
   });
 
-  it("defaults WhatsApp group replies to message-tool-only and disables source streaming", async () => {
-    await dispatchBufferedReply({
-      context: { Body: "hi", ChatType: "group" },
-      msg: makeMsg({ admission: groupAdmission("120363000000000000@g.us") }),
-    });
+  it.each([
+    { visibleReplies: undefined, expected: "automatic", suppress: false },
+    { visibleReplies: "automatic", expected: "automatic", suppress: false },
+    { visibleReplies: "message_tool", expected: "message_tool_only", suppress: true },
+  ] as const)(
+    "uses $expected for WhatsApp group visibleReplies=$visibleReplies",
+    async ({ visibleReplies, expected, suppress }) => {
+      await dispatchBufferedReply({
+        cfg: {
+          channels: { whatsapp: { streaming: { block: { enabled: true } } } },
+          messages: { groupChat: { visibleReplies } },
+        },
+        context: { Body: "hi", ChatType: "group" },
+        msg: makeMsg({ admission: groupAdmission("120363000000000000@g.us") }),
+      });
 
-    expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      disableBlockStreaming: true,
-    });
-  });
+      expect(getCapturedReplyOptions()).toMatchObject({
+        sourceReplyDeliveryMode: expected,
+        disableBlockStreaming: suppress,
+        suppressTyping: suppress,
+      });
+    },
+  );
 
   it("delivers authorized WhatsApp group text slash command replies visibly", async () => {
     const context = finalizedContext({
@@ -1714,23 +1632,6 @@ describe("whatsapp inbound dispatch", () => {
     expect(sourceReplyDeliveryModeContexts).toEqual([context]);
   });
 
-  it("honors automatic visible replies for WhatsApp groups", async () => {
-    await dispatchBufferedReply({
-      cfg: {
-        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
-        messages: { groupChat: { visibleReplies: "automatic" } },
-      } as never,
-      context: { Body: "hi", ChatType: "group" },
-      msg: makeMsg({ admission: groupAdmission("120363000000000000@g.us") }),
-    });
-
-    expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
-      sourceReplyDeliveryMode: "automatic",
-      disableBlockStreaming: false,
-      suppressTyping: false,
-    });
-  });
-
   it.each([
     {
       name: "suppresses typing for message-tool-only group chat without mention",
@@ -1753,6 +1654,10 @@ describe("whatsapp inbound dispatch", () => {
   ])("$name", async ({ chatType, wasMentioned, expected }) => {
     const isGroup = chatType === "group";
     await dispatchBufferedReply({
+      cfg: {
+        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+      },
       context: {
         Body: wasMentioned ? "@bot hi" : "hi",
         ChatType: chatType,
@@ -1771,13 +1676,11 @@ describe("whatsapp inbound dispatch", () => {
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        await params.dispatcherOptions?.deliver?.({ text: "partial block" }, { kind: "block" });
-        return { queuedFinal: false, counts: { tool: 0, block: 1, final: 0 } };
-      },
-    );
+    dispatchAgentReplyMock.mockImplementationOnce(async (params: CapturedDispatchParams) => {
+      capturedDispatchParams = params;
+      await params.dispatcherOptions?.deliver?.({ text: "partial block" }, { kind: "block" });
+      return { queuedFinal: false, counts: { tool: 0, block: 1, final: 0 } };
+    });
 
     await expect(
       dispatchBufferedReply({
@@ -1790,16 +1693,14 @@ describe("whatsapp inbound dispatch", () => {
 
   it("returns success when shared dispatch observes message-tool delivery", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-          observedReplyDelivery: true,
-        };
-      },
-    );
+    dispatchAgentReplyMock.mockImplementationOnce(async (params: CapturedDispatchParams) => {
+      capturedDispatchParams = params;
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        observedReplyDelivery: true,
+      };
+    });
 
     await expect(
       dispatchBufferedReply({
@@ -1824,16 +1725,14 @@ describe("whatsapp inbound dispatch", () => {
       restoreInitial: vi.fn(async () => undefined),
     };
     readAgentRunTerminalOutcomeMock.mockReturnValueOnce("failed");
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        await params.dispatcherOptions?.deliver?.({ text: "visible failure" }, { kind: "final" });
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 1 },
-        };
-      },
-    );
+    dispatchAgentReplyMock.mockImplementationOnce(async (params: CapturedDispatchParams) => {
+      capturedDispatchParams = params;
+      await params.dispatcherOptions?.deliver?.({ text: "visible failure" }, { kind: "final" });
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    });
 
     await expect(
       dispatchBufferedReply({
@@ -1861,13 +1760,11 @@ describe("whatsapp inbound dispatch", () => {
       error: vi.fn(),
       debug: vi.fn(),
     } as unknown as BufferedReplyParams["replyLogger"];
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        await params.dispatcherOptions?.deliver?.({ text: "final text" }, { kind: "final" });
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
+    dispatchAgentReplyMock.mockImplementationOnce(async (params: CapturedDispatchParams) => {
+      capturedDispatchParams = params;
+      await params.dispatcherOptions?.deliver?.({ text: "final text" }, { kind: "final" });
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
+    });
 
     await expect(
       dispatchBufferedReply({

@@ -122,63 +122,50 @@ describe("createWebSendApi", () => {
     });
   }
 
-  it("uses sendOptions fileName for outbound documents", async () => {
-    const payload = Buffer.from("pdf");
-    await api.sendMessage("+1555", "doc", payload, "application/pdf", { fileName: "invoice.pdf" });
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      document: payload,
+  for (const { name, bytes, caption, mime, options, fileName } of [
+    {
+      name: "uses sendOptions fileName for outbound documents",
+      bytes: "pdf",
+      caption: "doc",
+      mime: "application/pdf",
+      options: { fileName: "invoice.pdf" },
       fileName: "invoice.pdf",
+    },
+    {
+      name: "falls back to a MIME-aware document filename when fileName is absent",
+      bytes: "pdf",
       caption: "doc",
-      mimetype: "application/pdf",
-    });
-    expect(recordChannelActivity).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      accountId: "main",
-      direction: "outbound",
-    });
-  });
-
-  it("falls back to a MIME-aware document filename when fileName is absent", async () => {
-    const payload = Buffer.from("pdf");
-    await api.sendMessage("+1555", "doc", payload, "application/pdf");
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      document: payload,
+      mime: "application/pdf",
       fileName: "file.pdf",
+    },
+    {
+      name: "keeps the plain default document filename when MIME has no extension mapping",
+      bytes: "unknown",
       caption: "doc",
-      mimetype: "application/pdf",
-    });
-  });
-
-  it("keeps the plain default document filename when MIME has no extension mapping", async () => {
-    const payload = Buffer.from("unknown");
-    await api.sendMessage("+1555", "doc", payload, "application/x-custom");
-
-    expectSendContentFields(0, {
-      document: payload,
+      mime: "application/x-custom",
       fileName: "file",
-      caption: "doc",
-      mimetype: "application/x-custom",
-    });
-  });
-
-  it("uses MIME-aware filename fallback for forced visual documents", async () => {
-    const payload = Buffer.from("img");
-    await api.sendMessage("+1555", "promo", payload, "image/png", {
-      asDocument: true,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      "1555@s.whatsapp.net",
-      expect.objectContaining({
+    },
+    {
+      name: "uses MIME-aware filename fallback for forced visual documents",
+      bytes: "img",
+      caption: "promo",
+      mime: "image/png",
+      options: { asDocument: true },
+      fileName: "file.png",
+    },
+  ]) {
+    it(name, async () => {
+      const payload = Buffer.from(bytes);
+      await api.sendMessage("+1555", caption, payload, mime, options);
+      expect(sendMessage).toHaveBeenCalledExactlyOnceWith("1555@s.whatsapp.net", {
         document: payload,
-        fileName: "file.png",
-        caption: "promo",
-        mimetype: "image/png",
-      }),
-    );
-  });
+        fileName,
+        caption,
+        mimetype: mime,
+      });
+      expectOutboundActivityOnce();
+    });
+  }
 
   it("does not force audio media onto the document branch", async () => {
     const payload = Buffer.from("aud");

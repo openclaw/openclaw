@@ -1,4 +1,5 @@
 // WhatsApp monitor inbox media and session behavior.
+import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   getSock,
@@ -36,6 +37,55 @@ describe("web monitor inbox", () => {
       expect(message[key]).toEqual(value);
     }
   }
+
+  it("materializes readable media from a quoted edited image", async () => {
+    const { onMessage, listener, sock } = await runSingleUpsertAndCapture({
+      type: "notify",
+      messages: [
+        {
+          key: { id: "med1", fromMe: false, remoteJid: "888@s.whatsapp.net" },
+          message: {
+            extendedTextMessage: {
+              text: "reply",
+              contextInfo: {
+                stanzaId: "quoted-image",
+                participant: "111@s.whatsapp.net",
+                quotedMessage: {
+                  editedMessage: {
+                    message: { imageMessage: { mimetype: "image/jpeg" } },
+                  },
+                },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_100,
+        },
+      ],
+    });
+
+    try {
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("reply");
+      const media = onMessage.mock.calls[0]?.[0]?.payload.media;
+      expect(media).toMatchObject({
+        kind: "image",
+        path: expect.any(String),
+        type: "image/jpeg",
+      });
+      await expect(readFile(media.path, "utf8")).resolves.toBe("fake-media-data");
+      expect(sock.readMessages).toHaveBeenCalledWith([
+        {
+          remoteJid: "888@s.whatsapp.net",
+          id: "med1",
+          participant: undefined,
+          fromMe: false,
+        },
+      ]);
+      expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+    } finally {
+      await listener.close();
+    }
+  });
 
   it("socket session resolves onClose when the socket closes", async () => {
     const listener = await openMonitor(vi.fn());
