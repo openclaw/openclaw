@@ -1,11 +1,7 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import {
-  deriveContextPromptTokens,
-  hasNonzeroUsage,
-  normalizeUsage,
-  type UsageLike,
-} from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { withRecentSessionTranscriptActiveEventsInSnapshot } from "./session-accessor.sqlite-active-events.js";
 import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
@@ -68,25 +64,25 @@ function readTranscriptAccountingSnapshot(
   visit((event) => {
     eventCount += 1;
     hasLeafControl ||= isSessionTranscriptLeafControl(event);
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
+    const record = asOptionalRecord(event);
+    if (!record) {
       return;
     }
-    const record = event as { message?: unknown; type?: unknown; usage?: UsageLike };
-    const message =
-      record.message && typeof record.message === "object" && !Array.isArray(record.message)
-        ? (record.message as AgentMessage & { api?: unknown; usage?: UsageLike })
-        : undefined;
+    const messageRecord = asOptionalRecord(record.message);
+    // SAFETY: Stored message payloads use the AgentMessage serialization contract.
+    const message = messageRecord as AgentMessage | undefined;
     if (scanUsage) {
-      const rawUsage = message?.usage ?? record.usage;
+      const rawUsage = messageRecord?.usage ?? record.usage;
+      const usageFields = asOptionalRecord(rawUsage);
       if (
         record.type === "compaction" ||
         record.type === "reset" ||
-        (message?.api === "cli" && rawUsage && rawUsage.contextUsage === undefined)
+        (messageRecord?.api === "cli" && rawUsage && usageFields?.contextUsage === undefined)
       ) {
         scanUsage = false;
         trailingMessages.length = 0;
       } else {
-        const usage = normalizeUsage(rawUsage);
+        const usage = normalizeUsage(usageFields);
         if (usage && isUnavailableContextBarrier(usage)) {
           scanUsage = false;
           trailingMessages.length = 0;
@@ -103,13 +99,10 @@ function readTranscriptAccountingSnapshot(
         boundaryFound = true;
         scanTaint = false;
       } else {
-        const metadata = (message as { __openclaw?: unknown })["__openclaw"];
-        if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
-          const openClaw = metadata as { resultContentSource?: unknown; turnTainted?: unknown };
-          if (openClaw.turnTainted === true || openClaw.resultContentSource === "network") {
-            tainted = true;
-            scanTaint = false;
-          }
+        const metadata = asOptionalRecord(messageRecord?.["__openclaw"]);
+        if (metadata?.turnTainted === true || metadata?.resultContentSource === "network") {
+          tainted = true;
+          scanTaint = false;
         }
       }
     }
