@@ -388,29 +388,13 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
   for (const retiredPath of TIER_EVAL_RETIRED_ROOT_PATHS) {
     stripped = deleteRetiredPath(raw, retiredPath) || stripped;
   }
-  const secrets = getRecord(raw.secrets);
-  const providers = getRecord(secrets?.providers);
-  if (providers) {
-    for (const provider of Object.values(providers)) {
-      const entry = getRecord(provider);
-      if (entry) {
-        stripped =
-          Object.hasOwn(entry, "allowInsecurePath") ||
-          Object.hasOwn(entry, "allowSymlinkCommand") ||
-          stripped;
-        delete entry.allowInsecurePath;
-        delete entry.allowSymlinkCommand;
-      }
+  for (const owner of [
+    ...Object.values(getRecord(getRecord(raw.secrets)?.providers) ?? {}),
+    getRecord(getRecord(raw.security)?.installPolicy)?.exec,
+  ]) {
+    for (const key of ["allowInsecurePath", "allowSymlinkCommand"]) {
+      stripped = deleteRetiredPath(owner, [key]) || stripped;
     }
-  }
-  const installExec = getRecord(getRecord(getRecord(raw.security)?.installPolicy)?.exec);
-  if (installExec) {
-    stripped =
-      Object.hasOwn(installExec, "allowInsecurePath") ||
-      Object.hasOwn(installExec, "allowSymlinkCommand") ||
-      stripped;
-    delete installExec.allowInsecurePath;
-    delete installExec.allowSymlinkCommand;
   }
   if (stripped || changes.length > initialChangeCount) {
     changes.push(
