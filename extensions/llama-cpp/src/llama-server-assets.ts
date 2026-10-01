@@ -2,9 +2,9 @@ import path from "node:path";
 import type { ArchiveExtractLimits } from "openclaw/plugin-sdk/archive";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 
-export const LLAMA_SERVER_RELEASE = "b10809";
-export const LLAMA_SERVER_BUILD = 10_809;
-export const LLAMA_SERVER_COMMIT = "5266f24da75dc449bd56cbed7addb9c8e4a6a73e";
+export const LLAMA_SERVER_RELEASE = "b11146";
+export const LLAMA_SERVER_BUILD = 11_146;
+export const LLAMA_SERVER_COMMIT = "7fe450e19305b828c199d602c23a8337aaa1f03b";
 
 type RegularFileAliases = ReadonlyArray<readonly [source: string, aliases: readonly string[]]>;
 
@@ -35,27 +35,27 @@ const CUDA_ARCHIVE_LIMITS = {
 // These basenames are authenticated by the adjacent release checksum. Archive-provided
 // links are ignored; update this manifest together with each pinned llama.cpp release.
 const MACOS_ALIASES = [
-  ["libggml-rpc.0.23.0.dylib", ["libggml-rpc.0.dylib", "libggml-rpc.dylib"]],
-  ["libllama.0.4.0.dylib", ["libllama.0.dylib", "libllama.dylib"]],
-  ["libmtmd.0.4.0.dylib", ["libmtmd.0.dylib", "libmtmd.dylib"]],
-  ["libggml.0.23.0.dylib", ["libggml.0.dylib", "libggml.dylib"]],
-  ["libggml-base.0.23.0.dylib", ["libggml-base.0.dylib", "libggml-base.dylib"]],
-  ["libggml-blas.0.23.0.dylib", ["libggml-blas.0.dylib", "libggml-blas.dylib"]],
-  ["libllama-common.0.4.0.dylib", ["libllama-common.0.dylib", "libllama-common.dylib"]],
-  ["libggml-cpu.0.23.0.dylib", ["libggml-cpu.0.dylib", "libggml-cpu.dylib"]],
+  ["libggml-rpc.0.25.1.dylib", ["libggml-rpc.0.dylib", "libggml-rpc.dylib"]],
+  ["libllama.0.5.0.dylib", ["libllama.0.dylib", "libllama.dylib"]],
+  ["libmtmd.0.5.0.dylib", ["libmtmd.0.dylib", "libmtmd.dylib"]],
+  ["libggml.0.25.1.dylib", ["libggml.0.dylib", "libggml.dylib"]],
+  ["libggml-base.0.25.1.dylib", ["libggml-base.0.dylib", "libggml-base.dylib"]],
+  ["libggml-blas.0.25.1.dylib", ["libggml-blas.0.dylib", "libggml-blas.dylib"]],
+  ["libllama-common.0.5.0.dylib", ["libllama-common.0.dylib", "libllama-common.dylib"]],
+  ["libggml-cpu.0.25.1.dylib", ["libggml-cpu.0.dylib", "libggml-cpu.dylib"]],
 ] as const satisfies RegularFileAliases;
 
 const MACOS_METAL_ALIASES = [
   ...MACOS_ALIASES,
-  ["libggml-metal.0.23.0.dylib", ["libggml-metal.0.dylib", "libggml-metal.dylib"]],
+  ["libggml-metal.0.25.1.dylib", ["libggml-metal.0.dylib", "libggml-metal.dylib"]],
 ] as const satisfies RegularFileAliases;
 
 const LINUX_ALIASES = [
-  ["libllama.so.0.4.0", ["libllama.so.0", "libllama.so"]],
-  ["libggml.so.0.23.0", ["libggml.so.0", "libggml.so"]],
-  ["libmtmd.so.0.4.0", ["libmtmd.so.0", "libmtmd.so"]],
-  ["libggml-base.so.0.23.0", ["libggml-base.so.0", "libggml-base.so"]],
-  ["libllama-common.so.0.4.0", ["libllama-common.so.0", "libllama-common.so"]],
+  ["libllama.so.0.5.0", ["libllama.so.0", "libllama.so"]],
+  ["libggml.so.0.25.1", ["libggml.so.0", "libggml.so"]],
+  ["libmtmd.so.0.5.0", ["libmtmd.so.0", "libmtmd.so"]],
+  ["libggml-base.so.0.25.1", ["libggml-base.so.0", "libggml-base.so"]],
+  ["libllama-common.so.0.5.0", ["libllama-common.so.0", "libllama-common.so"]],
 ] as const satisfies RegularFileAliases;
 
 const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
@@ -66,7 +66,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "tar.gz",
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-arm64.tar.gz`,
-    sha256: "7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2",
+    sha256: "1ad3f9eff80edb9dbef4259ad564d1720612ef7eea48fa4afed0e54f5f3d5711",
     executable: "llama-server",
     regularFileAliases: MACOS_METAL_ALIASES,
   },
@@ -77,7 +77,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "tar.gz",
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-x64.tar.gz`,
-    sha256: "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
+    sha256: "305f0e3a17d2c01eb205cd0a62128357f1ec3b55329cb084d94e5ec0115d7a3b",
     executable: "llama-server",
     regularFileAliases: MACOS_ALIASES,
   },
@@ -88,7 +88,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "tar.gz",
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-arm64.tar.gz`,
-    sha256: "f2b7333971e1b7b42e9268bfdbfa30f5f56e2897156084d2251385df94aec358",
+    sha256: "4aeda6fe68831547e49b7fa87607383ca5352b3d72ca5f70d52ed265f58c131f",
     executable: "llama-server",
     regularFileAliases: LINUX_ALIASES,
   },
@@ -99,7 +99,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "tar.gz",
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-x64.tar.gz`,
-    sha256: "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941",
+    sha256: "c150306eb16b5ab696f76a8bdf810c35fd98a24e82158742e6fa28f420ff8410",
     executable: "llama-server",
     regularFileAliases: LINUX_ALIASES,
   },
@@ -110,7 +110,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "zip",
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cuda-12.4-x64.zip`,
-    sha256: "c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9",
+    sha256: "3c806a6ceccc3dae1c743ceb1a1fb2cce5b76f40bfbd4c6b7b8afb6ef45a5807",
     executable: "llama-server.exe",
     regularFileAliases: [],
     limits: CUDA_ARCHIVE_LIMITS,
@@ -133,7 +133,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "zip",
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-arm64.zip`,
-    sha256: "c1058fe5764a687275c8d20d6bbc1454e787cdbb8ebb8c37a2f959f2b144dc77",
+    sha256: "1727d241f3bf6d27360e984e851cf013928fd655bf89f8628e70da027f377b7d",
     executable: "llama-server.exe",
     regularFileAliases: [],
   },
@@ -144,7 +144,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "zip",
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-x64.zip`,
-    sha256: "9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5",
+    sha256: "14cf1303ca9ac3abd94816850532f9f9a69ac66fbaca3776fc6f9061c2fac1d1",
     executable: "llama-server.exe",
     regularFileAliases: [],
   },

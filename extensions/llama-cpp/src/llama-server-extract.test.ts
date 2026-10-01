@@ -245,24 +245,24 @@ describe("llama-server asset alias manifests", () => {
     expect(
       selectLlamaServerAsset("darwin", "arm64").regularFileAliases.map(([source]) => source),
     ).toStrictEqual([
-      "libggml-rpc.0.23.0.dylib",
-      "libllama.0.4.0.dylib",
-      "libmtmd.0.4.0.dylib",
-      "libggml.0.23.0.dylib",
-      "libggml-base.0.23.0.dylib",
-      "libggml-blas.0.23.0.dylib",
-      "libllama-common.0.4.0.dylib",
-      "libggml-cpu.0.23.0.dylib",
-      "libggml-metal.0.23.0.dylib",
+      "libggml-rpc.0.25.1.dylib",
+      "libllama.0.5.0.dylib",
+      "libmtmd.0.5.0.dylib",
+      "libggml.0.25.1.dylib",
+      "libggml-base.0.25.1.dylib",
+      "libggml-blas.0.25.1.dylib",
+      "libllama-common.0.5.0.dylib",
+      "libggml-cpu.0.25.1.dylib",
+      "libggml-metal.0.25.1.dylib",
     ]);
     expect(
       selectLlamaServerAsset("linux", "x64").regularFileAliases.map(([source]) => source),
     ).toStrictEqual([
-      "libllama.so.0.4.0",
-      "libggml.so.0.23.0",
-      "libmtmd.so.0.4.0",
-      "libggml-base.so.0.23.0",
-      "libllama-common.so.0.4.0",
+      "libllama.so.0.5.0",
+      "libggml.so.0.25.1",
+      "libmtmd.so.0.5.0",
+      "libggml-base.so.0.25.1",
+      "libllama-common.so.0.5.0",
     ]);
   });
 });
