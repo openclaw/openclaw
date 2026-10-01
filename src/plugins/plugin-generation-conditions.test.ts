@@ -11,6 +11,9 @@ import { PluginInstance } from "./plugin-instance.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const nativeRequire = createRequire(import.meta.url);
+// The CI pin predates openclaw/bun#57. Remove this gate when that pin advances.
+const lacksNativeModuleSync =
+  Reflect.get(process, "revision") === "17c9ecf9eb4aa0b60ae1a2c9f28c1b6dc0f4c8ac";
 const instances: PluginInstance[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -35,11 +38,13 @@ function load(rootDir: string, entry: string, standalone = false) {
 }
 
 describe("captured module conditions", () => {
-  it.each(
-    ["#selected", "condition-owner/selected"].flatMap((specifier) =>
-      ["import", "require"].map((mode) => ({ specifier, mode })),
-    ),
-  )(
+  it
+    .skipIf(lacksNativeModuleSync)
+    .each(
+      ["#selected", "condition-owner/selected"].flatMap((specifier) =>
+        ["import", "require"].map((mode) => ({ specifier, mode })),
+      ),
+    )(
     "preserves native module-sync selection for selective $mode $specifier",
     ({ specifier, mode }) => {
       const root = temp.make("plugin-native-conditions-");
@@ -149,7 +154,7 @@ describe("captured module conditions", () => {
     },
   );
 
-  it.each(["import", "require"])(
+  it.skipIf(lacksNativeModuleSync).each(["import", "require"])(
     "retains a missing selected conditional target for %s",
     async (mode) => {
       const root = temp.make("plugin-missing-conditional-target-");
