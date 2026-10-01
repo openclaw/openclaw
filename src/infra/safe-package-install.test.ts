@@ -1,9 +1,45 @@
 // Covers script-free npm install args and environment.
 import fsSync from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
+
+const require = createRequire(import.meta.url);
+const npmPackageRoot = path.dirname(require.resolve("npm/package.json"));
+
+function withWindowsNpmToolchain<T>(dir: string, run: (nodeDir: string) => T): T {
+  const nodeDir = path.join(dir, "node-toolchain");
+  const nodeExecutable = path.join(nodeDir, "node.exe");
+  fsSync.mkdirSync(path.join(nodeDir, "node_modules"), { recursive: true });
+  if (process.platform === "win32") {
+    try {
+      fsSync.linkSync(process.execPath, nodeExecutable);
+    } catch {
+      fsSync.copyFileSync(process.execPath, nodeExecutable);
+    }
+  } else {
+    fsSync.symlinkSync(process.execPath, nodeExecutable);
+  }
+  fsSync.symlinkSync(npmPackageRoot, path.join(nodeDir, "node_modules", "npm"), "junction");
+
+  const originalExecPath = Object.getOwnPropertyDescriptor(process, "execPath");
+  Object.defineProperty(process, "execPath", {
+    configurable: true,
+    enumerable: true,
+    value: nodeExecutable,
+    writable: true,
+  });
+  try {
+    return withMockedWindowsPlatform(() => run(nodeDir));
+  } finally {
+    if (originalExecPath) {
+      Object.defineProperty(process, "execPath", originalExecPath);
+    }
+  }
+}
 
 describe("safe npm install helpers", () => {
   it("builds script-free npm install args", () => {
@@ -124,6 +160,55 @@ describe("safe npm install helpers", () => {
       expect(env.npm_config_allow_remote).toBe("all");
     });
   });
+
+  it.each([
+    {
+      name: "unset",
+      npmrc: "",
+      expectedGit: "all",
+      expectedRemote: "all",
+    },
+    {
+      name: "explicit Git",
+      npmrc: '"allow-git"=none\n',
+      expectedGit: undefined,
+      expectedRemote: "all",
+    },
+    {
+      name: "explicit remote",
+      npmrc: "'allow-remote'=root\n",
+      expectedGit: "all",
+      expectedRemote: undefined,
+    },
+  ])(
+    "preserves Windows npm source policy when $name",
+    async ({ npmrc, expectedGit, expectedRemote }) => {
+      await withTempDir("openclaw-windows-npm-source-policy-", async (dir) => {
+        const home = path.join(dir, "home");
+        const userconfig = path.join(dir, "user.npmrc");
+        const globalconfig = path.join(dir, "global.npmrc");
+        fsSync.mkdirSync(home, { recursive: true });
+        fsSync.writeFileSync(userconfig, npmrc, "utf-8");
+        fsSync.writeFileSync(globalconfig, "", "utf-8");
+
+        withWindowsNpmToolchain(dir, (nodeDir) => {
+          const env = createSafeNpmInstallEnv(
+            {
+              HOME: home,
+              NPM_CONFIG_GLOBALCONFIG: globalconfig,
+              NPM_CONFIG_USERCONFIG: userconfig,
+              PATH: nodeDir,
+              PATHEXT: ".EXE;.CMD",
+            },
+            { npmConfigCwd: dir },
+          );
+
+          expect(env.npm_config_allow_git).toBe(expectedGit);
+          expect(env.npm_config_allow_remote).toBe(expectedRemote);
+        });
+      });
+    },
+  );
 
   it("preserves quoted dependency-source restrictions from npmrc", async () => {
     await withTempDir("openclaw-npm-source-policy-", async (dir) => {

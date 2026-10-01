@@ -1,10 +1,11 @@
 // Builds npm environment overrides for safe project-local installs.
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveSafeChildProcessInvocation } from "../process/windows-command.js";
 import { resolveNpmCommand } from "./npm-command.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
@@ -111,6 +112,35 @@ function createNpmConfigPathProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
   return probeEnv;
 }
 
+function runNpmConfigProbe(params: {
+  args: readonly string[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+}): string {
+  const invocation = resolveSafeChildProcessInvocation({
+    argv: resolveNpmCommand(params.args),
+    cwd: params.cwd,
+    env: params.env,
+  });
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: params.cwd,
+    encoding: "utf-8",
+    env: params.env,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: params.timeoutMs,
+    windowsHide: invocation.windowsHide,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`npm config probe exited with status ${result.status ?? "unknown"}`);
+  }
+  return result.stdout;
+}
+
 function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope): string | null {
   const scopedGlobalConfig = resolveScopedGlobalNpmrc(scope);
   if (scopedGlobalConfig) {
@@ -132,16 +162,14 @@ function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope):
   if (NPM_GLOBAL_CONFIG_PATH_CACHE.has(cacheKey)) {
     return NPM_GLOBAL_CONFIG_PATH_CACHE.get(cacheKey) ?? null;
   }
-  const [command, ...args] = resolveNpmCommand(["config", "get", "globalconfig"]);
   try {
-    const raw = execFileSync(command, args, {
-      encoding: "utf-8",
+    const raw = runNpmConfigProbe({
+      args: ["config", "get", "globalconfig"],
       env: {
         ...createNpmConfigPathProbeEnv(env),
         ...(scope.npmConfigPrefix ? { npm_config_prefix: scope.npmConfigPrefix } : {}),
       },
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 2_000,
+      timeoutMs: 2_000,
     }).trim();
     const resolved = raw && raw !== "null" && raw !== "undefined" ? raw : null;
     NPM_GLOBAL_CONFIG_PATH_CACHE.set(cacheKey, resolved);
@@ -250,23 +278,17 @@ export function findExplicitNpmConfigKeys(
     return found;
   }
 
-  const command = resolveNpmCommand([
-    "config",
-    "list",
-    "--location=project",
-    "--json=false",
-    "--long=false",
-  ]);
+  const cwd = scope.npmConfigCwd?.trim() || tryProcessCwd() || undefined;
+  const probeEnv = {
+    ...createNpmConfigPathProbeEnv(env),
+    ...(scope.npmConfigPrefix ? { npm_config_prefix: scope.npmConfigPrefix } : {}),
+  };
   try {
-    const raw = execFileSync(command[0], command.slice(1), {
-      cwd: scope.npmConfigCwd?.trim() || tryProcessCwd() || undefined,
-      encoding: "utf-8",
-      env: {
-        ...createNpmConfigPathProbeEnv(env),
-        ...(scope.npmConfigPrefix ? { npm_config_prefix: scope.npmConfigPrefix } : {}),
-      },
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
+    const raw = runNpmConfigProbe({
+      args: ["config", "list", "--location=project", "--json=false", "--long=false"],
+      cwd,
+      env: probeEnv,
+      timeoutMs: 5_000,
     });
     const installConfig = raw.split(/^; "publishConfig" from /mu, 1)[0] ?? raw;
     for (const key of remaining) {
