@@ -127,6 +127,8 @@ struct TalkMLXSpeechSynthesizerTests {
 
         _ = try await self.collectSynthesis(synthesizer, text: "replacement")
         _ = try? await staleConsumption.value
+        // The stall timeout abandons its read; it must not keep running against the retired helper.
+        try await TestWait.state("abandoned stale read") { await stale.activeEventReads == 0 }
         _ = try await self.collectSynthesis(synthesizer, text: "reuse replacement")
 
         #expect(await factory.callCount == 2)
@@ -746,6 +748,7 @@ private actor TestMLXTransport: MLXTTSTransport {
     let mode: Mode
     private(set) var sent: [MLXTTSRequest] = []
     private(set) var closeCount = 0
+    private(set) var activeEventReads = 0
     private let closedSignal = AsyncTestSignal()
     private var events: [MLXTTSEvent] = [.ready]
     private var closed = false
@@ -831,11 +834,15 @@ private actor TestMLXTransport: MLXTTSTransport {
     }
 
     func nextEvent() async throws -> MLXTTSEvent {
+        self.activeEventReads += 1
+        defer { self.activeEventReads -= 1 }
         if self.events.isEmpty {
             self.pendingEventRead = true
         }
         while self.events.isEmpty {
-            if self.closed {
+            // Like the process transport's stream read, a cancelled read stops waiting.
+            // Stall timeouts cancel and abandon reads; spinning here outlives the test.
+            if self.closed || Task.isCancelled {
                 throw TestMLXTransportError.closed
             }
             await Task.yield()

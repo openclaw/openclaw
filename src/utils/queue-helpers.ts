@@ -81,18 +81,6 @@ function buildQueueSummaryLine(text: string, limit = 160): string {
     : `${truncateUtf16Safe(cleaned, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
-/** Run optional duplicate detection before an item enters a queue. */
-export function shouldSkipQueueItem<T>(params: {
-  item: T;
-  items: T[];
-  dedupe?: (item: T, items: T[]) => boolean;
-}): boolean {
-  if (!params.dedupe) {
-    return false;
-  }
-  return params.dedupe(params.item, params.items);
-}
-
 /** Count identities that are still pending in the queue, excluding active deliveries. */
 export function countPendingQueueItems<T>(items: readonly T[], inFlight?: ReadonlySet<T>): number {
   if (!inFlight || inFlight.size === 0) {
