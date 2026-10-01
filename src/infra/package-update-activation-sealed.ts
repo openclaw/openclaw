@@ -13,15 +13,18 @@ import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
-import { isSupportedNodeVersion } from "./runtime-guard.js";
+import { isCurrentRuntimeSupported, isSupportedNodeVersion } from "./runtime-guard.js";
 
 try {
   if (
     process.platform === "win32" ||
-    !isSupportedNodeVersion(process.versions.node) ||
-    process.versions.bun
+    (process.versions.bun
+      ? !(await isCurrentRuntimeSupported())
+      : !isSupportedNodeVersion(process.versions.node))
   ) {
-    throw new Error("Package publication recovery requires supported external Node on POSIX.");
+    throw new Error(
+      "Package publication recovery requires supported external Node or Bun on POSIX.",
+    );
   }
   const anchor = process.argv[3];
   const operationId = process.argv[5];
@@ -35,7 +38,7 @@ try {
     (action !== "status" && action !== "repair" && action !== "retire")
   ) {
     throw new Error(
-      "Usage: node recovery.mjs --anchor absolute-path --operation operation-id status|repair|retire",
+      "Usage: <node|bun> recovery.mjs --anchor absolute-path --operation operation-id status|repair|retire",
     );
   }
   const helper = fileURLToPath(import.meta.url);

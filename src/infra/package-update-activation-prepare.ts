@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
+import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
@@ -23,6 +24,7 @@ import {
   resolvePackageActivationAnchor,
   encodePackageActivationLauncher,
 } from "./package-update-activation-journal.js";
+import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
 import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
 import {
   createPackageIntegrityReader,
@@ -96,21 +98,39 @@ export async function preparePackageActivationJournal(
   if (fs.realpathSync(parent) !== parent || fs.realpathSync(params.binDir) !== params.binDir) {
     throw new Error("Package publication recovery requires canonical installation parents.");
   }
-  const node = fs.realpathSync(params.options.nodeRunner);
+  const runtime = params.options.runtime;
+  const node = fs.realpathSync(runtime.path);
+  const assertRuntime = () => {
+    if (node !== runtime.path || packageActivationRuntimeIdentity(node) !== runtime.identity) {
+      throw new Error("The selected package recovery executable changed after runtime preflight.");
+    }
+  };
+  assertRuntime();
   for (const root of [params.liveRoot, params.stageRoot, anchor]) {
     if (node === root || node.startsWith(`${root}${path.sep}`)) {
       throw new Error("Recovery requires an external Node executable.");
     }
   }
-  const version = spawnSync(node, ["--version"], {
-    env: {},
-    encoding: "utf8",
-    timeout: 5000,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (version.status !== 0 || !isSupportedNodeVersion(version.stdout.trim().replace(/^v/u, ""))) {
-    throw new Error("Recovery requires a supported external Node executable.");
+  if (runtime.kind === "bun") {
+    const info = await resolveBunRuntimeInfo(node, undefined, {});
+    if (info.status !== "supported") {
+      throw new Error("Recovery requires a supported external Bun executable.", {
+        cause: info.status === "probe-failed" ? info.error : undefined,
+      });
+    }
+  } else {
+    const version = spawnSync(node, ["--version"], {
+      env: {},
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (version.status !== 0 || !isSupportedNodeVersion(version.stdout.trim().replace(/^v/u, ""))) {
+      throw new Error("Recovery requires a supported external Node executable.");
+    }
   }
+  assertCurrent();
+  assertRuntime();
   const reader = createPackageIntegrityReader();
   const candidate = await reader.tree(params.stageRoot);
   const launchers = [];
@@ -170,6 +190,7 @@ export async function preparePackageActivationJournal(
   // Preflight the sealed helper before creating any blocking recovery artifact.
   const helperBytes = readPackageActivationRuntime();
   assertCurrent();
+  assertRuntime();
   // These objects remain inside the existing stage cleanup owner's prefix
   // until the stable slot records their exact identities. A failed replacement
   // cannot create blocking artifacts over the prior completion receipt.
@@ -184,7 +205,13 @@ export async function preparePackageActivationJournal(
     ? path.join(stagedControl, "recovery.mjs")
     : `${stagedAnchor}.recovery.mjs`;
   assertCurrent();
-  fs.writeFileSync(stagedHelper, helperBytes, { flag: "wx", mode: 0o600, flush: true });
+  const helperFd = fs.openSync(stagedHelper, "wx", 0o600);
+  try {
+    fs.writeFileSync(helperFd, helperBytes);
+    fs.fsyncSync(helperFd);
+  } finally {
+    fs.closeSync(helperFd);
+  }
   // The durable journal may refer to these staged objects immediately after
   // its CAS. Persist their contents and names before handing cleanup custody off.
   for (const directory of new Set([
