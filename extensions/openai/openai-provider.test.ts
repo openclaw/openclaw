@@ -1448,6 +1448,31 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it.each([["text"], undefined])(
+    "repairs stale GPT-6.1 Sol Codex catalog input capabilities: %s",
+    (input) => {
+      const provider = buildOpenAIProvider();
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "openai",
+          modelId: "gpt-6.1-sol",
+          model: {
+            provider: "openai",
+            id: "gpt-6.1-sol",
+            name: "GPT-6.1 Sol",
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            input,
+          },
+        } as never),
+      ).toMatchObject({
+        id: "gpt-6.1-sol",
+        api: "openai-chatgpt-responses",
+        input: ["text", "image"],
+      });
+    },
+  );
+
   it("upgrades catalog Completions metadata but preserves authored official adapters", () => {
     const provider = buildOpenAIProvider();
     const transport = {
@@ -2351,6 +2376,7 @@ describe("buildOpenAIProvider", () => {
   });
 
   it.each([
+    { modelId: "gpt-6.1-sol", contextWindow: 8_192 },
     { modelId: "gpt-5.4", contextWindow: 1_050_000 },
     { modelId: "gpt-5.4-pro", contextWindow: 1_050_000 },
     { modelId: "gpt-5.4-mini", contextWindow: 400_000 },

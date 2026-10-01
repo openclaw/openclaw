@@ -14,14 +14,15 @@ function levelIds(params: {
 }
 
 describe("OpenAI thinking route provenance", () => {
-  it.each(["openclaw", "codex", "auto"])(
-    "offers Astra's supported efforts on the %s runtime",
-    (runtime) => {
-      expect(
-        resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", runtime).levels.map((level) => level.id),
-      ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
-    },
-  );
+  it.each(
+    ["gpt-6-astra", "gpt-6.1-sol"].flatMap((modelId) =>
+      ["openclaw", "codex", "auto"].map((runtime) => ({ modelId, runtime })),
+    ),
+  )("offers $modelId supported efforts on the $runtime runtime", ({ modelId, runtime }) => {
+    expect(
+      resolveUnifiedOpenAIThinkingProfile(modelId, runtime).levels.map((level) => level.id),
+    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+  });
 
   it.each(["openclaw", "codex", "auto"])(
     "retains Astra Ultra with scalar API metadata on the %s runtime",
