@@ -545,6 +545,7 @@ function isAndroidBuildTimeI18nMigration(changedPaths, generatedPaths, sourcePat
   const retiredLookup =
     "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt";
   const owners = [
+    ".github/workflows/native-app-locale-refresh.yml",
     "apps/.i18n/native-source.json",
     "apps/android/app/build.gradle.kts",
     "scripts/android-app-i18n.ts",

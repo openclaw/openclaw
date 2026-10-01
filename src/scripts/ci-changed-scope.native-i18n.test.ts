@@ -126,6 +126,7 @@ describe("native i18n changed scope", () => {
   it("admits the Android projection retirement only with its complete input migration", () => {
     const migration = [
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
+      ".github/workflows/native-app-locale-refresh.yml",
       "apps/.i18n/native-source.json",
       "apps/android/app/build.gradle.kts",
       "scripts/android-app-i18n.ts",
