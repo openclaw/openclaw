@@ -1324,7 +1324,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/sessions/session-manager-static-notes.test.ts",
   "src/agents/sessions/session-manager.fork-rebase.test.ts",
   "src/agents/sessions/session-manager.persistence-compat.test.ts",
-  "src/agents/sessions/session-manager.user-idempotency.test.ts",
   "src/agents/sessions/settings-storage.test.ts",
   "src/agents/sessions/tools/bash-termination.test.ts",
   "src/agents/sessions/tools/bash.test.ts",
