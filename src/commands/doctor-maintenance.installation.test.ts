@@ -43,7 +43,7 @@ import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
-  gatewayPid: 4200,
+  gatewayPid: Math.max(process.pid, process.ppid, 1) + 1,
   resident: vi.fn<() => { pid: number } | undefined>(),
   activeRoot: "",
   runtimePath: "",
