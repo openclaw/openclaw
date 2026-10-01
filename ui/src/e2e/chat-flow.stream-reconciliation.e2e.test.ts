@@ -190,12 +190,15 @@ suite.define(() => {
           if (order !== "after hydration") {
             await persist();
           }
-          await gateway.resolveDeferred("chat.startup", {
+          const hydratedHistory = {
             messages: historyMessages,
             inFlightRun,
             sessionInfo,
             thinkingLevel: null,
-          });
+          };
+          // Persisted messages can supersede startup, so replacement reads need the committed snapshot.
+          await gateway.setMethodResponse("chat.history", hydratedHistory);
+          await gateway.resolveDeferred("chat.startup", hydratedHistory);
           await page.waitForFunction(() => {
             const pane = document.querySelector<HTMLElement & { state?: { chatLoading: boolean } }>(
               "openclaw-chat-pane",
@@ -203,6 +206,9 @@ suite.define(() => {
             return pane?.state?.chatLoading === false;
           });
           await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
+          if (steer) {
+            await page.getByText("Check the follow-up.", { exact: true }).waitFor();
+          }
           if (order !== "before hydration") {
             await persist();
           }
