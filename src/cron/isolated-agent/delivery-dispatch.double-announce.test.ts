@@ -755,28 +755,55 @@ describe("dispatchCronDelivery", () => {
     },
   );
 
-  it.each([
-    {
-      name: "active child times out",
-      activeDescendants: 1,
-      error: "cron child-session handoff timed out before producing a final assistant payload",
+  it.each(
+    [true, false].flatMap((deliveryRequested) => [
+      {
+        name: "active child times out",
+        deliveryRequested,
+        activeDescendants: 1,
+        error: "cron child-session handoff timed out before producing a final assistant payload",
+      },
+      {
+        name: "completed child has no output",
+        deliveryRequested,
+        activeDescendants: 0,
+        error: "cron child-session handoff completed without a final assistant payload",
+      },
+    ]),
+  )(
+    "fails an accepted spawn-only handoff when $name (delivery requested: $deliveryRequested)",
+    async ({ deliveryRequested, activeDescendants, error }) => {
+      vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(activeDescendants > 0);
+      const params = emptyParams(true);
+      params.deliveryRequested = deliveryRequested;
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(state).toMatchObject({
+        disposition: { kind: "error", error },
+        delivered: false,
+        deliveryAttempted: true,
+      });
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     },
-    {
-      name: "completed child has no output",
-      activeDescendants: 0,
-      error: "cron child-session handoff completed without a final assistant payload",
-    },
-  ])("fails an accepted spawn-only handoff when $name", async ({ activeDescendants, error }) => {
-    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(activeDescendants > 0);
+  );
+
+  it("records a no-delivery spawn-only handoff's child result without sending it", async () => {
+    const childReply = "[blocked] Unable to execute the command: no shell tool.";
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(childReply);
     const params = emptyParams(true);
+    params.deliveryRequested = false;
 
     const state = await dispatchCronDelivery(params);
 
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledOnce();
     expect(state).toMatchObject({
-      disposition: { kind: "error", error },
-      delivered: false,
-      deliveryAttempted: true,
+      outputText: childReply,
+      summary: childReply,
+      deliveryState: { status: "not-requested" },
     });
+    expect(state.disposition).toBeUndefined();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 

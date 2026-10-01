@@ -695,6 +695,14 @@ export async function dispatchCronDelivery(
         return buildDeliveryState(finalizedTextResult);
       }
     }
+  } else if (
+    !params.deliveryRequested &&
+    params.spawnOnlyHandoff &&
+    !requiresCurrentSessionCompletion
+  ) {
+    // Cron cannot resume a parent that only handed off, so the run settles by its children
+    // here instead of reporting ok while their result is dropped.
+    return buildDeliveryState((await finalizeTextDelivery()) ?? undefined);
   }
 
   return buildDeliveryState();
