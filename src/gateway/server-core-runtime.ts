@@ -193,6 +193,7 @@ export async function startGatewayCoreRuntime(input: {
             refreshPresence: runtime.publishPresence,
             resetEventLoopHealth: readinessEventLoopHealth.reset,
             logHealth,
+            clients,
             dedupe,
             chatAbortControllers,
             chatQueuedTurns,
