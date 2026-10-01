@@ -792,7 +792,7 @@ describe("trailing source progress at runtime settlement", () => {
     maxTokens: 8_000,
   };
   // Native-async calls run while the provider streams; each settles before the next fragment.
-  type ModelCall = { tools?: Array<"progress" | "read">; async?: boolean };
+  type ModelCall = { tools?: Array<"progress" | "read">; async?: true };
 
   async function settleRealLoop(calls: ModelCall[]) {
     const sessionManager = {};
@@ -872,18 +872,17 @@ describe("trailing source progress at runtime settlement", () => {
         const toolCalls: ToolCall[] = (call.tools ?? []).map((name, index) => ({
           type: "toolCall",
           id: `${name}-${callIndex}-${index}`,
-          ...(name === "progress"
-            ? {
-                name: "message",
-                arguments: {
+          name: name === "progress" ? "message" : "read",
+          arguments:
+            name === "progress"
+              ? {
                   action: "send",
                   final: false,
                   target: "channel:source",
                   message: "Started the run, I will report back.",
-                },
-              }
-            : { name: "read", arguments: {} }),
-          ...(call.async ? { async: true as const } : {}),
+                }
+              : {},
+          async: call.async,
         }));
         const message = makeAssistantMessageFixture({
           api: testModel.api,
