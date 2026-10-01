@@ -176,8 +176,13 @@ describe("credential prompt dispatch boundary", () => {
       );
       // A Vitest timeout aborts the context signal, so a stuck wait still reaches `finally`.
       const testAborted = new Promise<never>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.addEventListener(
+          "abort",
+          () => reject(new Error("test aborted", { cause: signal.reason })),
+          { once: true },
+        );
       });
+      testAborted.catch(() => {});
       try {
         await Promise.race([
           producerCalled.promise,
