@@ -224,13 +224,9 @@ it("restores the destination board's saved people filter when boards change whil
     if (method === "workboard.cards.list") {
       return {
         cards: [],
-        boards: [page.board, boardB].map((board) => ({
-          ...board,
-          total: 0,
-          active: 0,
-          archived: 0,
-          byStatus: {},
-        })),
+        boards: [page.board, boardB].map((board) =>
+          Object.assign({ total: 0, active: 0, archived: 0, byStatus: {} }, board),
+        ),
       };
     }
     if (method === "workboard.sessionsBoard.read") {
