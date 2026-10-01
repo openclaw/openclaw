@@ -309,7 +309,7 @@ export function completeEmbeddedAttemptResult(
   const completeLastProgress = <T extends { sourceReplyFinal?: boolean }>(sends: T[]): T[] => {
     const index = sends.findLastIndex((send) => send.sourceReplyFinal === false);
     return progressIsReply && index >= 0
-      ? sends.with(index, { ...sends[index], sourceReplyFinal: true })
+      ? sends.with(index, Object.assign({}, sends[index], { sourceReplyFinal: true }))
       : sends;
   };
   const messagingToolSourceReplyPayloads = completeLastProgress(
