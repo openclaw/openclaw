@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { defineLegacyConfigMigration, getRecord } from "../../../config/legacy.shared.js";
-import { normalizeTalkSection } from "../../../config/talk.js";
+import { normalizeTalkRealtimeConfig, normalizeTalkSection } from "../../../config/talk.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 
 function buildLegacyRealtimeTalkCompat(
@@ -75,9 +75,10 @@ function prepareVoiceCallTalkInheritance(raw: Record<string, unknown>) {
   if (!source || (raw.talk !== undefined && !isRecord(raw.talk))) {
     return undefined;
   }
-  const inherited = normalizeTalkSection({
-    realtime: { provider: source.provider, providers: source.providers },
-  } as OpenClawConfig["talk"])?.realtime;
+  const inherited = normalizeTalkRealtimeConfig({
+    provider: source.provider,
+    providers: source.providers,
+  });
   if (!inherited) {
     return undefined;
   }
