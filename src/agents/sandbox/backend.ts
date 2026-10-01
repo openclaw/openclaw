@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
@@ -63,14 +64,7 @@ type SandboxBackendRegistrationGeneration = {
 // Only explicit overrides need process-wide generations. Built-in defaults stay
 // module-local so repeated imports neither retain old graphs nor replace overrides.
 function getSandboxBackendFactories(): Map<SandboxBackendId, SandboxBackendRegistrationGeneration> {
-  const globalStore = globalThis as typeof globalThis & {
-    [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<
-      SandboxBackendId,
-      SandboxBackendRegistrationGeneration
-    >;
-  };
-  globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY] ??= new Map();
-  return globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY];
+  return resolveGlobalMap(SANDBOX_BACKEND_FACTORIES_STATE_KEY);
 }
 
 function normalizeSandboxBackendId(id: string): SandboxBackendId {

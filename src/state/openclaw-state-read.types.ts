@@ -276,7 +276,6 @@ export type OpenClawStateReadResult =
       type: "tui.lastSession.read";
       row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
     }
-  | { type: "tui.lastSession.retiredPointers"; stateKeys: string[] }
   | ReadResult<ChannelIngressReadReply>
   | {
       type: "agentDeletionJournal.status";

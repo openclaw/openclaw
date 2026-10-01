@@ -42,7 +42,7 @@ Codex review and manual compaction turns reject same-turn steering. When a runti
 
 On Codex installs without native hook admission, another person's message queues as a follow-up instead of steering the active turn when native sub-agent spawning is available. If the thread's policy already disables native spawning, including ChatGPT token sharing and report-only delegation, other people can still steer the running turn.
 
-Once an OpenClaw turn has finished or handed off, new prompts wait for the next turn even while cleanup is still running. Retries and compaction within the current turn can still receive steering.
+Once an OpenClaw turn has finished or handed off, new prompts wait for the next turn even while cleanup is still running. Retries and compaction within the current turn can still receive steering. When a model request fails while a steered message is still waiting, that message does not take over the turn: OpenClaw retries or falls back for the original message, and the steered message runs as its own turn afterwards.
 
 ## Tool launch boundaries
 

@@ -36,6 +36,7 @@ import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-fa
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { chunkFormatFilesForCommand } from "./lib/format-command-batches.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
@@ -785,15 +786,9 @@ export function createChangedCheckPlan(
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   broadAudits.add(add("coercion helper declaration guard", ["check:coercion-helpers"]));
   add("dependency pin guard", ["deps:pins:check"]);
-  if (result.paths.length > 0) {
-    lintChecks.add(
-      add("format changed files", [
-        "format:check",
-        "--no-error-on-unmatched-pattern",
-        "--",
-        ...result.paths,
-      ]),
-    );
+  const formatPrefix = ["format:check", "--no-error-on-unmatched-pattern", "--"];
+  for (const files of chunkFormatFilesForCommand(result.paths, formatPrefix)) {
+    lintChecks.add(add("format changed files", [...formatPrefix, ...files]));
   }
   const npmLockGuardCommand = createNpmLockGuardCommand(result.paths);
   if (npmLockGuardCommand) {

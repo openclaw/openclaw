@@ -61,12 +61,8 @@ type OllamaWebSearchAttempt = {
 };
 
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
-  try {
-    const parsed = new URL(baseUrl);
-    return parsed.protocol === "https:" && parsed.hostname === "ollama.com";
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(baseUrl);
+  return parsed?.protocol === "https:" && parsed.hostname === "ollama.com";
 }
 
 function normalizeOllamaWebSearchApiKey(value: unknown): string | undefined {

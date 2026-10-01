@@ -3,14 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as configMachineState from "../state/config-machine-state-write.js";
 import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
-import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { executeSharedStateCommand } from "../state/openclaw-state-worker-runtime.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   buildTuiLastSessionScopeKey,
@@ -20,6 +23,7 @@ import {
   resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
+import { clearRetiredTuiPointers } from "./tui-last-session.kernel.js";
 
 const tempDirs: string[] = [];
 
@@ -36,10 +40,13 @@ afterEach(async () => {
 });
 
 describe("tui last session state", () => {
-  it("returns no remembered session without creating state on a fresh install", async () => {
+  it("reads and clears remembered sessions without creating state on a fresh install", async () => {
     const stateDir = await makeTempStateDir();
 
     await expect(readTuiLastSessionKey({ scopeKey: "missing", stateDir })).resolves.toBeNull();
+    await expect(
+      clearTuiLastSessionPointers({ sessionKeys: new Set(["agent:main:retired"]), stateDir }),
+    ).resolves.toBe(0);
     await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -250,25 +257,19 @@ describe("tui last session state", () => {
       sessionKey: "agent:main:retired",
       stateDir,
     });
-    const read = stateRead.executeExistingOpenClawStateRead;
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const update = configMachineState.updateConfigMachineState;
     const replaceAfterScan = vi
-      .spyOn(stateRead, "executeExistingOpenClawStateRead")
-      .mockImplementationOnce(async (...args) => {
-        const result = await read(...args);
-        await writeTuiLastSessionKey({
-          scopeKey: "terminal",
-          sessionKey: "agent:main:live",
-          stateDir,
-        });
-        return result;
+      .spyOn(configMachineState, "updateConfigMachineState")
+      .mockImplementationOnce((stateKey, mutate, selectedOptions) => {
+        configMachineState.writeConfigMachineState(stateKey, "agent:main:live", selectedOptions);
+        return update(stateKey, mutate, selectedOptions);
       });
 
     try {
       expect(
-        await clearTuiLastSessionPointers({
-          stateDir,
-          sessionKeys: new Set(["agent:main:retired"]),
-        }),
+        clearRetiredTuiPointers(new Set(["agent:main:retired"]), options, () => database),
       ).toBe(0);
       expect(replaceAfterScan).toHaveBeenCalledOnce();
       await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
@@ -277,6 +278,30 @@ describe("tui last session state", () => {
     } finally {
       replaceAfterScan.mockRestore();
     }
+  });
+
+  it("returns zero without requesting a writer when no restore pointer matches", async () => {
+    const stateDir = await makeTempStateDir();
+    await writeTuiLastSessionKey({ scopeKey: "terminal", sessionKey: "agent:main:live", stateDir });
+    const context = captureOpenClawStateWorkerContext({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const open = vi.fn(() => {
+      throw new Error("Writer admission refused");
+    });
+    expect(
+      runWithSqliteWorkerStateContext(context, () =>
+        executeSharedStateCommand(
+          { type: "tui.lastSession.clear", input: { retiredSessionKeys: ["agent:main:retired"] } },
+          { databasePath: context.admission.databasePath },
+          open,
+        ),
+      ),
+    ).toBe(0);
+    expect(open).not.toHaveBeenCalled();
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
+      "agent:main:live",
+    );
   });
 });
 
