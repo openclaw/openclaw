@@ -49,7 +49,11 @@ jobs:
           package=.artifacts/published-driver-package/openclaw-candidate.tgz
           artifacts=.artifacts/published-driver-update
           mkdir -p "$artifacts"
-          printf '%s  %s\n' "$CANDIDATE_SHA256" "$package" | sha256sum --check --strict
+          actual_sha256=$(sha256sum "$package")
+          if [ "${actual_sha256%% *}" != "$CANDIDATE_SHA256" ]; then
+            echo '::error title=Candidate checksum mismatch::Downloaded candidate package does not match its expected SHA-256.'
+            exit 1
+          fi
           remaining=$((CELL_DEADLINE_EPOCH_SECONDS - $(date +%s)))
           if [ "$remaining" -le 0 ]; then
             echo '::error title=Published-driver cell timed out::Candidate preparation exhausted the cell budget.'
