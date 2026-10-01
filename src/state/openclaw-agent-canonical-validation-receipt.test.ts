@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -12,6 +13,28 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+
+it("revalidates legacy Linux birth-time receipts without changing the schema", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const database = openOpenClawAgentDatabase(options);
+    const file = statSync(database.path, { bigint: true });
+    const legacyBirthtime = file.birthtimeNs.toString();
+    database.db
+      .prepare("UPDATE session_key_contract SET canonical_ready = ? WHERE id = 1")
+      .run(JSON.stringify([1, "main", `${file.dev}:${file.ino}`, legacyBirthtime]));
+    const version = database.db.prepare("PRAGMA user_version").get();
+    const schema = database.db.prepare("PRAGMA schema_version").get();
+
+    expect(hasPersistedOpenClawAgentCanonicalValidation(database)).toBe(
+      process.platform !== "linux" || legacyBirthtime === "0",
+    );
+    runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+    expect(hasPersistedOpenClawAgentCanonicalValidation(database)).toBe(true);
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual(version);
+    expect(database.db.prepare("PRAGMA schema_version").get()).toEqual(schema);
+  });
+});
 
 it("lazily records nullable generation proof at the same schema version and rolls back first use", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

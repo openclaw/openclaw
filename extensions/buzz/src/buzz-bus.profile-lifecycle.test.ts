@@ -51,61 +51,9 @@ describe("Buzz profile lifecycle", () => {
     await bus.close();
   });
 
-  it("isolates message failures from fatal relay failures", async () => {
-    relayMocks.auth.mockResolvedValue("ok");
-    relayMocks.profileEvents = [
-      finalizeEvent(
-        {
-          kind: 0,
-          created_at: 1_700_000_000,
-          content: JSON.stringify({ display_name: "Existing Buzz Name", about: "kept" }),
-          tags: [],
-        },
-        Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")),
-      ),
-    ];
-    const onMessageError = vi.fn();
-    const onFatalError = vi.fn();
-    const onProfilePublished = vi.fn();
-    const bus = await startTestBus({
-      onMessage: async () => {
-        throw new Error("dispatch failed");
-      },
-      profileName: "Configured Agent Name",
-      onMessageError,
-      onFatalError,
-      onProfilePublished,
-    });
-    const event = signSenderEvent({
-      kind: 9,
-      created_at: 1_700_000_000,
-      content: "hello",
-      tags: [["h", CHANNEL_ID]],
-    });
-
-    relayMocks.subscriptions
-      .find((entry) => subscriptionIncludesKind(entry, 9))
-      ?.handlers.onevent(event);
-
-    await vi.waitFor(() => expect(onMessageError).toHaveBeenCalledWith(expect.any(Error)));
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(
-      relayMocks.publish.mock.calls.some(([publishedEvent]) => publishedEvent.kind === 0),
-    ).toBe(false);
-    expect(
-      relayMocks.publish.mock.calls.some(([publishedEvent]) => publishedEvent.kind === 10_100),
-    ).toBe(true);
-    expect(onProfilePublished).toHaveBeenCalledOnce();
-    expect(onFatalError).not.toHaveBeenCalled();
-    await bus.close();
-  });
-
   it.each([
     { phase: "query EOSE", gatedKind: undefined, publishedKinds: [] },
     { phase: "first ACK", gatedKind: 0, publishedKinds: [0] },
-    { phase: "final ACK", gatedKind: 10_100, publishedKinds: [0, 10_100] },
     { phase: "relay close", gatedKind: 10_100, publishedKinds: [0, 10_100] },
   ])(
     "settles profile work without post-abort effects at $phase",

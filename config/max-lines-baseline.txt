@@ -307,7 +307,6 @@ src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/subagents/spawn/subagent-spawn.test.ts
 src/agents/system-prompt.ts
-src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
 src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
@@ -356,7 +355,6 @@ src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
 src/auto-reply/status.test.ts
 src/channels/plugins/bundled.shape-guard.test.ts
-src/channels/plugins/message-actions.security.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
 src/channels/plugins/setup-wizard-helpers.test.ts
@@ -445,7 +443,6 @@ src/fleet/backup.runtime.ts
 src/fleet/service.runtime.ts
 src/flows/channel-setup.test.ts
 src/flows/channel-setup.ts
-src/flows/doctor-core-checks.runtime.test.ts
 src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
 src/flows/model-picker.ts
@@ -547,7 +544,6 @@ src/infra/run-node.test.ts
 src/infra/session-cost-usage.test.ts
 src/infra/state-migrations.doctor.ts
 src/infra/state-migrations.session-store.ts
-src/infra/state-migrations.storage.ts
 src/infra/state-migrations.test.ts
 src/infra/update-global.ts
 src/infra/update-managed-service-handoff.ts
@@ -603,7 +599,6 @@ src/plugins/loader.registration.test-utils.ts
 src/plugins/loader.test-harness.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/marketplace.ts
-src/plugins/official-external-plugin-catalog.test.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts

@@ -31,6 +31,7 @@ export function createPackageSwapResults(
     exitCode,
     stdoutTail,
     stderrTail,
+    ...(warnings.length > 0 ? { warnings: [...warnings] } : {}),
     ...(exitCode !== 0
       ? {
           failureFacts: integrityFailures.length
@@ -52,7 +53,6 @@ export function createPackageSwapResults(
             kind: "recoverable-maintenance" as const,
             message: warnings.join("\n"),
           },
-          warnings: [...warnings],
         }
       : {}),
   });

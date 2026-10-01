@@ -209,18 +209,18 @@ describe("retired runtime config migrations", () => {
     );
   });
 
-  it("preserves backend entries while pruning emptied named descendants", () => {
-    const path = "agents.defaults.cliBackends";
+  it("preserves agent entries while pruning emptied named descendants", () => {
+    const path = "agents.entries";
     const result = applyAll(
       configWithPath(path, {
-        keep: { reliability: { outputLimits: { maxChars: 1 }, enabled: true } },
-        prune: { reliability: { outputLimits: { maxChars: 1 } } },
+        keep: { contextPruning: { softTrim: { maxChars: 1 }, mode: "cache-ttl" } },
+        prune: { contextPruning: { softTrim: { maxChars: 1 } } },
         malformed: null,
       }),
     );
     expect(result.raw).toEqual(
       configWithPath(path, {
-        keep: { reliability: { enabled: true } },
+        keep: { contextPruning: { mode: "cache-ttl" } },
         prune: {},
         malformed: null,
       }),
@@ -554,6 +554,29 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   ["tools.exec", { mode: "deny", security: "full", ask: "off" }, { mode: "deny" }],
   ["session", { idleMinutes: 45 }, { reset: { mode: "idle", idleMinutes: 45 } }],
   ["session", { idleMinutes: 45, reset: { idleMinutes: 90 } }, { reset: { idleMinutes: 90 } }],
+  ["session.maintenance", { pruneDays: 7, pruneAfter: false }, { pruneAfter: false }],
+  [
+    "session.resetByType",
+    { dm: { mode: "idle" }, direct: { mode: "daily" } },
+    { direct: { mode: "daily" } },
+  ],
+  [
+    "channels.discord",
+    {
+      voice: { realtime: { voice: "alloy", speakerVoice: "marin" } },
+      accounts: {
+        work: { voice: { realtime: { voice: "cedar", enabled: true } } },
+        malformed: null,
+      },
+    },
+    {
+      voice: { realtime: { speakerVoice: "marin" } },
+      accounts: {
+        work: { voice: { realtime: { speakerVoice: "cedar", enabled: true } } },
+        malformed: null,
+      },
+    },
+  ],
   [
     "channels.signal",
     { httpHost: "::1", httpPort: 9090 },
@@ -583,11 +606,6 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   ],
   ["mcp.servers.docs", { cwd: "/canonical", workingDirectory: "/legacy" }, { cwd: "/canonical" }],
   ["nodeHost.mcp.servers.local", { workingDirectory: "/node" }, { cwd: "/node" }],
-  [
-    "agents.defaults.cliBackends.custom",
-    { sessionArg: "--session" },
-    { sessionArgs: ["--session", "{sessionId}"] },
-  ],
   ["", { web: { enabled: false } }, { channels: { whatsapp: { enabled: false } } }],
   ["discovery.wideArea", { enabled: true, domain: "example.test" }, { domain: "example.test" }],
 ])("migrates %s: %j", (path, raw, expected) => {

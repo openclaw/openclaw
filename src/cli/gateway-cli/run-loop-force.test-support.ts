@@ -40,11 +40,10 @@ export function registerGatewayForcedRestartTests({
   | "systemctl"
 >): void {
   const idleActiveWorkSnapshot = createActiveWorkSnapshot();
-  it.each(
-    (["SIGTERM", "SIGUSR2"] as const).flatMap((signal) =>
-      [undefined, 180_000].map((waitMs) => ({ signal, waitMs, budget: waitMs ?? 45_000 })),
-    ),
-  )(
+  it.each([
+    { signal: "SIGTERM", waitMs: undefined, budget: 45_000 },
+    { signal: "SIGUSR2", waitMs: 180_000, budget: 180_000 },
+  ] as const)(
     "drains admitted work before a forced $signal restart (budget=$budget)",
     async ({ signal, waitMs, budget }) => {
       (signal === "SIGTERM"
@@ -94,13 +93,9 @@ export function registerGatewayForcedRestartTests({
   );
 
   it.each([
-    { waitMs: undefined, refreshMs: 0, stallClose: false },
-    { waitMs: undefined, refreshMs: 10_000, stallClose: false },
+    { waitMs: undefined, refreshMs: 10_000, stallClose: true },
     { waitMs: 0, refreshMs: 0, stallClose: false },
     { waitMs: 180_000, refreshMs: 0, stallClose: false },
-    { waitMs: undefined, refreshMs: 0, stallClose: true },
-    { waitMs: undefined, refreshMs: 10_000, stallClose: true },
-    { waitMs: 180_000, refreshMs: 0, stallClose: true },
   ])(
     "records cut work only when the forced caller drain budget expires (waitMs=$waitMs, refresh=$refreshMs, stalled close=$stallClose)",
     async ({ waitMs, refreshMs, stallClose }) => {

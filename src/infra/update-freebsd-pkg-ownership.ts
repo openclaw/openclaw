@@ -8,7 +8,6 @@ import { runCommandBuffered } from "../process/exec.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { isPathInside } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
-import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 export const PKG_INSPECTION_TIMEOUT_MS = 30_000;
 
@@ -55,19 +54,6 @@ export type FreeBsdPkgOwnershipInspection = {
   assertUnowned: (root: string | null | undefined) => Promise<void>;
   assertEntryUnowned: (file: string) => Promise<void>;
 };
-
-/** Recheck the package and all affected launcher entries before replacement. */
-export async function assertFreeBsdPackageReplacementUnowned(
-  root: string,
-  launchers: readonly { destination: string }[],
-  timeoutMs = UPDATE_RUNNER_TIMEOUT_MS,
-): Promise<void> {
-  const inspection = createFreeBsdPkgOwnershipInspection(timeoutMs);
-  await inspection.assertUnowned(root);
-  for (const launcher of launchers) {
-    await inspection.assertEntryUnowned(launcher.destination);
-  }
-}
 
 async function readPkgFiles(timeoutMs: number): Promise<string[]> {
   // -N prevents the base-system pkg launcher from bootstrapping. Pin the builtin

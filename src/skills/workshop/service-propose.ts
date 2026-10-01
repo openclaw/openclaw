@@ -172,14 +172,14 @@ export async function proposeUpdateSkill(
     agentId: input.agentId,
     config: input.config,
   });
-  const captured = {
+  const request = {
     ...input,
     env: store.env,
     supportFiles: structuredClone(input.supportFiles),
     origin: structuredClone(input.origin),
     eventActor: structuredClone(input.eventActor),
+    composePatch: structuredClone(input.composePatch),
   };
-  const request = { ...captured, composePatch: structuredClone(captured.composePatch) };
   const skillName = normalizeRequired(request.skillName, "Skill name");
   const config = resolveSkillWorkshopConfig(request.config);
   const agentId = requireWorkshopAgentId(request.agentId);

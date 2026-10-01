@@ -85,6 +85,13 @@ registry. Configured session stores and retained legacy databases are also check
 If a configured database still needs a schema migration after `--fix`, Doctor reports
 its path and exits non-zero instead of printing `Doctor complete`.
 
+Before an agent schema migration, Doctor checks database integrity in a read-only
+child process. Long checks print a progress line every 10 seconds with the database
+size, elapsed time, and current phase. Ctrl+C or SIGTERM records the interruption,
+cancels the inspection, and waits for admitted repairs and cleanup before exiting.
+An interrupted check does not authorize the next schema migration; rerun Doctor
+to finish. Pre-migration backups remain available.
+
 `openclaw doctor --session-sqlite <mode>` provides targeted inspection,
 import, validation, and SQLite maintenance. Legacy `sessions.json` files are
 migration sources. Hot transcript JSONL files are imported and archived after

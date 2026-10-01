@@ -164,6 +164,10 @@ export type CronRuntimeMutationInputs = {
     jobIds: string[];
     policy: CronReservationReleasePolicy;
   };
+  "cron.markDeliveryStarted": {
+    storeKey: string;
+    handle: CronRunReceiptHandle;
+  };
   "cron.finishReceipt": {
     storeKey: string;
     terminal: CronReceiptTerminal;

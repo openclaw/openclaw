@@ -273,6 +273,37 @@ describe("openai completions DSML", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
+  it.each(["__proto__", "constructor", "text"])(
+    "preserves literal DSML parameter name %s as an own scalar argument",
+    async (name) => {
+      const model = createDeepSeekCompletionsModel();
+      const output = createAssistantOutput(model);
+      const content =
+        '<|DSML|tool_calls><|DSML|invoke name="echo">' +
+        `<|DSML|parameter name="${name}" string="true">first value</|DSML|parameter>` +
+        `<|DSML|parameter name="${name}" string="true">scalar value</|DSML|parameter>` +
+        "</|DSML|invoke></|DSML|tool_calls>";
+
+      await processCompletionsStream(
+        streamChunks([makeCompletionsChunk({ content }, "stop")]),
+        output,
+        model,
+        { push() {} },
+      );
+
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toHaveLength(1);
+      const call = output.content.find((block) => block.type === "toolCall");
+      expect(call).toMatchObject({ type: "toolCall", name: "echo" });
+      expect(call?.arguments).toStrictEqual({ [name]: "scalar value" });
+      expect(Object.getOwnPropertyDescriptor(call?.arguments, name)).toMatchObject({
+        value: "scalar value",
+        enumerable: true,
+      });
+      expect(Object.getPrototypeOf(call?.arguments)).toBe(Object.prototype);
+    },
+  );
+
   it("rejects an oversized DeepSeek DSML block when the crossing chunk contains its close", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);

@@ -250,7 +250,7 @@ export function buildSidebarSessionNavigationState(input: {
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
-      hasComposerDraft: input.hasSessionDraft(row.key),
+      hasComposerDraft: row.incognito !== true && input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),

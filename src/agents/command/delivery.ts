@@ -147,21 +147,22 @@ function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDel
   const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes, {
     includeHookEffect: true,
   });
+  const status = {
+    requested: true,
+    attempted: true,
+    status: send.status,
+  } as const;
   switch (send.status) {
     case "sent":
       return {
-        requested: true,
-        attempted: true,
-        status: "sent",
+        ...status,
         succeeded: true,
         resultCount: send.results.length,
         ...(payloadOutcomes ? { payloadOutcomes } : {}),
       };
     case "suppressed":
       return {
-        requested: true,
-        attempted: true,
-        status: "suppressed",
+        ...status,
         succeeded: true,
         reason: send.reason,
         resultCount: 0,
@@ -169,9 +170,7 @@ function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDel
       };
     case "partial_failed":
       return {
-        requested: true,
-        attempted: true,
-        status: "partial_failed",
+        ...status,
         succeeded: "partial",
         error: true,
         errorMessage: formatErrorMessage(send.error),
@@ -181,9 +180,7 @@ function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDel
       };
     case "failed":
       return {
-        requested: true,
-        attempted: true,
-        status: "failed",
+        ...status,
         succeeded: false,
         error: true,
         errorMessage: formatErrorMessage(send.error),

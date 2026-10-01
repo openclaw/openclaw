@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardSessionShortcutDeliveryTests {
     @Test(arguments: [("o", UInt16(31)), ("a", UInt16(0))], ["body", "composer"])
@@ -66,7 +66,7 @@ struct DashboardSessionShortcutDeliveryTests {
         if !window.performKeyEquivalent(with: event) {
             window.sendEvent(event)
         }
-        try await DashboardTestWait.state("\(chord.key) delivery to \(target)") {
+        try await TestWait.state("\(chord.key) delivery to \(target)") {
             try await !self.keyEvents(in: controller.webView).isEmpty
         }
         let observed = try await self.keyEvents(in: controller.webView)

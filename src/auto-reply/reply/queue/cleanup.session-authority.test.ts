@@ -1,12 +1,22 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  setCommandLaneConcurrency,
+} from "../../../process/command-queue.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createQueueSettings,
   createQueueTestRun,
   installQueueRuntimeErrorSilencer,
 } from "../queue.test-helpers.js";
-import { clearSessionQueues, prepareSessionFollowupCleanup } from "./cleanup.js";
+import {
+  clearSessionLifecycleQueues,
+  clearSessionQueues,
+  hasSessionLifecycleQueueWork,
+  prepareSessionFollowupCleanup,
+} from "./cleanup.js";
 import { kickFollowupDrainIfIdle } from "./drain.js";
 import { enqueueFollowupRun } from "./enqueue.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
@@ -42,6 +52,79 @@ function prepare(assertCurrent = () => {}) {
 }
 
 describe("session-owned pending followup cleanup", () => {
+  it.each([alias, undefined])(
+    "matches queued work by agent and key with sessionId=%s",
+    async (sessionId) => {
+      const sharedKey = "global";
+      const lane = "session:global";
+      const owned = [
+        source("current"),
+        source("older", "older-session"),
+        source("retargeted"),
+      ] as const;
+      owned[2].item.admissionSessionId = "next-session";
+      const foreign = source("research");
+      foreign.item.run.agentId = "research";
+      for (const run of [...owned, foreign]) {
+        run.item.run.sessionKey = sharedKey;
+        enqueueFollowupRun(sharedKey, run.item, createQueueSettings(), "none", undefined, false);
+      }
+      setCommandLaneConcurrency(lane, 0);
+      const commands = [alias, "older-session", "next-session"].map((id) =>
+        enqueueCommandInLane(lane, async () => id, {
+          sessionTarget: { agentId: "main", sessionKey: sharedKey, sessionId: id },
+        }),
+      );
+      commands.push(
+        enqueueCommandInLane(lane, async () => "research", {
+          sessionTarget: { agentId: "research", sessionKey: sharedKey, sessionId: alias },
+        }),
+        enqueueCommandInLane(lane, async () => "untagged"),
+      );
+      const settled = Promise.allSettled(commands);
+      const target = { keys: [sharedKey], agentId: "main", sessionKey: sharedKey, sessionId };
+      try {
+        expect.soft(hasSessionLifecycleQueueWork(target)).toBe(true);
+        const cleared = clearSessionLifecycleQueues({ ...target, assertCurrent: () => {} });
+        expect(cleared).toMatchObject({
+          followupCleared: sessionId === undefined ? 3 : 1,
+          laneCleared: sessionId === undefined ? 3 : 1,
+        });
+        expect(FOLLOWUP_QUEUES.get(sharedKey)?.items).toEqual(
+          sessionId === undefined ? [foreign.item] : [owned[1].item, owned[2].item, foreign.item],
+        );
+        expect(hasSessionLifecycleQueueWork(target)).toBe(false);
+        expect(foreign.settled).not.toHaveBeenCalled();
+        setCommandLaneConcurrency(lane, 1);
+        expect((await settled).map((result) => result.status)).toEqual(
+          sessionId === undefined
+            ? ["rejected", "rejected", "rejected", "fulfilled", "fulfilled"]
+            : ["rejected", "fulfilled", "fulfilled", "fulfilled", "fulfilled"],
+        );
+      } finally {
+        clearSessionQueues([sharedKey]);
+        clearCommandLane(lane);
+        setCommandLaneConcurrency(lane, 1);
+        await settled;
+      }
+    },
+  );
+
+  it("all-incarnation capture follows session and admission retargeting of the same source", () => {
+    const original = source("retargeted");
+    enqueueFollowupRun(key, original.item, createQueueSettings(), "none", undefined, false);
+    const cleanup = prepareSessionFollowupCleanup({
+      keys,
+      agentId: "main",
+      sessionKey: key,
+      assertCurrent: () => {},
+    });
+    original.item.run.sessionId = "next-session";
+    original.item.admissionSessionId = "next-admission";
+    expect(cleanup()).toBe(1);
+    expect(original.settled).toHaveBeenCalledOnce();
+  });
+
   it("does not treat an absent producer agent as the default agent", () => {
     const original = source("pending admission");
     original.item.run.agentId = "";
@@ -107,7 +190,7 @@ describe("session-owned pending followup cleanup", () => {
     expect(injecting.steerPending.settle).not.toHaveBeenCalled();
   });
 
-  it.each(["agent", "key", "admission", "run-object", "new-source"] as const)(
+  it.each(["agent", "key", "session", "admission", "run-object", "new-source"] as const)(
     "does not adopt a changed %s after preparation",
     (change) => {
       const original = source("original");
@@ -120,6 +203,8 @@ describe("session-owned pending followup cleanup", () => {
         original.item.run.agentId = "other";
       } else if (change === "key") {
         original.item.run.sessionKey = "agent:main:other";
+      } else if (change === "session") {
+        original.item.run.sessionId = "successor-session";
       } else if (change === "admission") {
         original.item.admissionSessionId = "successor-session";
       } else if (change === "run-object") {

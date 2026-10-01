@@ -24,16 +24,12 @@ import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
-import type { ContextUsage } from "../usage.js";
+import type { NormalizedUsage } from "../usage.js";
 
-type TranscriptUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-  contextUsage?: ContextUsage;
-};
+type TranscriptUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total" | "contextUsage"
+>;
 
 type TextTurnTranscriptContext = {
   inputProvenance?: InputProvenance;
