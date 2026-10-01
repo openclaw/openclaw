@@ -12,10 +12,8 @@ import {
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.test-support.js";
 import {
   records,
   requesterWakeDriver,
@@ -192,12 +190,16 @@ describe("completed requester delivery replay fence", () => {
     const release = createDeferred();
     const reported = createDeferred();
     const runWake = driver.controller.runRequesterSettleWake;
-    driver.controller.runRequesterSettleWake = (entry, run) =>
-      runWake(entry, async () => {
-        admitted.resolve(undefined);
-        await release.promise;
-        return run();
-      });
+    driver.controller.runRequesterSettleWake = (entry, run, isCurrent) =>
+      runWake(
+        entry,
+        async () => {
+          admitted.resolve(undefined);
+          await release.promise;
+          return run();
+        },
+        isCurrent,
+      );
     driver.controller.options.runSubagentAnnounceFlow = vi.fn<
       typeof driver.controller.options.runSubagentAnnounceFlow
     >(async (params) => {

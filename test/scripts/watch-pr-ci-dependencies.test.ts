@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from 
 import { join, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { watchPrCiDependencyOptions } from "../../scripts/lib/watch-pr-ci-dependencies.mjs";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -207,7 +208,7 @@ console.log("fallback and local resolution OK");
     delete env[name];
   }
   const run = () =>
-    spawnSync(process.execPath, [join(checkout, "scripts/watch-pr-ci.mjs")], {
+    spawnSync(requireNodeTool("node"), [join(checkout, "scripts/watch-pr-ci.mjs")], {
       cwd: root,
       encoding: "utf8",
       timeout: 10_000,

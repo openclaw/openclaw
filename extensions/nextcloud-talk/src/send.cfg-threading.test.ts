@@ -5,7 +5,8 @@ import {
   expectProvidedCfgSkipsRuntimeLoad,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig as CoreConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as sendRuntime from "./send.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -26,7 +27,7 @@ vi.mock("./send.runtime.js", () => {
     convertMarkdownTables: hoisted.convertMarkdownTables,
     fetchWithSsrFGuard: hoisted.mockFetchGuard,
     generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
-    getNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
+    getOptionalNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
     requireRuntimeConfig: (cfg: unknown, context: string) => {
       if (cfg) {
         return cfg;
@@ -154,9 +155,10 @@ describe("nextcloud-talk send cfg threading", () => {
 
   it("preserves cfg and receipts without an initialized runtime", async () => {
     const cfg = { source: "provided" } as const;
-    hoisted.record.mockImplementation(() => {
-      throw new Error("Nextcloud Talk runtime not initialized");
-    });
+    const runtime = vi
+      .spyOn(sendRuntime, "getOptionalNextcloudTalkRuntime")
+      .mockReturnValueOnce(null);
+    onTestFinished(() => runtime.mockRestore());
     mockNextcloudMessageResponse(12345, 1_706_000_000);
 
     const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
@@ -165,11 +167,7 @@ describe("nextcloud-talk send cfg threading", () => {
     });
 
     expectProvidedMessageCfgThreading(cfg);
-    expect(hoisted.record).toHaveBeenCalledWith({
-      channel: "nextcloud-talk",
-      accountId: "default",
-      direction: "outbound",
-    });
+    expect(hoisted.record).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       messageId: "12345",

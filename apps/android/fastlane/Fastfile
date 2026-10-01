@@ -295,7 +295,7 @@ def fastlane_boolean_env(name, default:)
   UI.user_error!("#{name} must be true/false, yes/no, on/off, or 1/0.")
 end
 
-def upload_play_builds_atomically!(phone_artifact_path:, wear_artifact_path:, version_metadata:, upload_metadata:, upload_images:, upload_screenshots:)
+def upload_play_builds_atomically!(phone_artifact_path:, wear_artifact_path:, version_metadata:, upload_metadata:, upload_images:, upload_screenshots:, destination:)
   phone_notes = render_android_release_notes!(version_metadata, "phone")
   wear_notes = render_android_release_notes!(version_metadata, "wear")
   previous_supply_config = Supply.config
@@ -303,8 +303,9 @@ def upload_play_builds_atomically!(phone_artifact_path:, wear_artifact_path:, ve
   begin
     Supply.config = {
       ack_bundle_installation_warning: fastlane_boolean_env("ACK_BUNDLE_INSTALLATION_WARNING", default: false),
-      changes_not_sent_for_review: fastlane_boolean_env("SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW", default: false),
-      rescue_changes_not_sent_for_review: fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)
+      # Play rejects this parameter for automatic internal review; nil omits it, false still sends it.
+      changes_not_sent_for_review: destination == "internal" ? nil : fastlane_boolean_env("SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW", default: false),
+      rescue_changes_not_sent_for_review: destination != "internal" && fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)
     }
     client = Supply::Client.make_from_config(params: play_auth_options.merge(timeout: (ENV["SUPPLY_TIMEOUT"] || "300").to_i))
     client.begin_edit(package_name: play_package_name)
@@ -526,7 +527,7 @@ def upload_play_store_metadata!(version_metadata)
   end
 end
 
-def upload_play_store_build!(version_metadata, upload_metadata: false, upload_images: false, upload_screenshots: false)
+def upload_play_store_build!(version_metadata, upload_metadata: false, upload_images: false, upload_screenshots: false, destination: "play-store")
   mobile_release_ref_command("preflight")
   ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1" if upload_screenshots
   validate_android_screenshots!
@@ -543,7 +544,8 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
     version_metadata: version_metadata,
     upload_metadata: upload_metadata,
     upload_images: upload_images,
-    upload_screenshots: upload_screenshots
+    upload_screenshots: upload_screenshots,
+    destination: destination
   )
 
   unless play_validate_only?
@@ -630,16 +632,26 @@ platform :android do
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
   end
 
-  desc "Upload Android metadata, archive release artifacts, then upload the Play AAB"
-  lane :release_upload do
+  desc "Build and upload Android phone and Wear bundles, with store assets for play-store releases"
+  lane :release_upload do |options|
+    destination = options.fetch(:destination, "play-store").to_s
+    UI.user_error!("Android release destination must be play-store or internal.") unless %w(play-store internal).include?(destination)
+    internal = destination == "internal"
+    if internal
+      ENV["GOOGLE_PLAY_TRACK"] = "internal"
+      ENV["GOOGLE_PLAY_RELEASE_STATUS"] = "completed"
+      %w(METADATA SCREENSHOTS IMAGES).each { |kind| ENV["SUPPLY_UPLOAD_#{kind}"] = "0" }
+    end
     sync_android_versioning!
     version_metadata = read_android_version_metadata
     validate_android_release_preflight!(version_metadata)
-    screenshots
-    ENV["SUPPLY_UPLOAD_METADATA"] = "1"
-    ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
+    unless internal
+      screenshots
+      ENV["SUPPLY_UPLOAD_METADATA"] = "1"
+      ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
+    end
     build_release_artifacts!
-    upload_play_store_build!(version_metadata, upload_metadata: true, upload_screenshots: true)
+    upload_play_store_build!(version_metadata, upload_metadata: !internal, upload_screenshots: !internal, destination: destination)
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
     UI.important("Production promotion remains manual in Google Play Console.")
   end

@@ -1,16 +1,14 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   appendTranscriptEventSync,
   appendTranscriptMessage,
@@ -45,20 +43,18 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-cache-");
 
 beforeEach(() => {
   parseSessionEntryCalls.mockClear();
 });
 
 afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   vi.useRealTimers();
 });
 
 function createSessionScope(label: string) {
-  const stateDir = tempDirs.make(`openclaw-entry-cache-${label}-`);
+  const stateDir = sessionDirs.make();
   return {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },

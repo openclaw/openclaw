@@ -5,7 +5,6 @@ import type {
 } from "../../sessions/index.js";
 import { isSessionContextMetadataEntry } from "../../sessions/session-manager-codec.js";
 import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OrphanRepairSessionManager = {
   getLeafEntry: () => SessionManagerEntry | undefined;
@@ -104,7 +103,6 @@ export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
   preserveLeaf: boolean;
-  trigger: EmbeddedRunAttemptParams["trigger"];
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
   if (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) {
@@ -112,7 +110,6 @@ export function resolveOrphanRepairPlan(params: {
   }
   const merge = mergeOrphanedTrailingUserPrompt({
     prompt: params.prompt,
-    trigger: params.trigger,
     leafMessage: candidate.messageEntry.message,
   });
   return {

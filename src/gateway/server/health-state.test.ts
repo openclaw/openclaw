@@ -1,4 +1,5 @@
 // Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {

@@ -15,6 +15,7 @@ import { waitForSessionTranscriptProjection } from "../../config/sessions/sessio
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
@@ -497,13 +498,17 @@ it.each([
   },
 );
 
-it.each([false, true])("keeps model reads non-persisting (incognito=%s)", async (incognito) => {
+it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (incognito) => {
   await withOpenClawTestState({ label: "model-readonly" }, async (state) => {
     const scope = {
       agentId: "main",
       sessionId: "readonly",
-      sessionKey: incognito ? "agent:main:dashboard:incognito-readonly" : "agent:main:readonly",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      sessionKey:
+        incognito === true ? "agent:main:dashboard:incognito-readonly" : "agent:main:readonly",
+      storePath:
+        incognito === "path"
+          ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+          : path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     expect(SessionManager.openModelContext(scope).buildSessionContext().messages).toEqual([]);
     expect(

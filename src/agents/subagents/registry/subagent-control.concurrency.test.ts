@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
+import * as lifecycleAdmission from "../../../sessions/session-lifecycle-admission.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
@@ -261,6 +262,19 @@ it.each([
     if (phase === "queued") {
       await blockerEntered.promise;
     }
+    const mutationQueued = createDeferred();
+    if (phase === "queued") {
+      const mutate = lifecycleAdmission.runExclusiveSessionLifecycleMutation;
+      vi.spyOn(lifecycleAdmission, "runExclusiveSessionLifecycleMutation").mockImplementation(
+        (params) => {
+          const operation = mutate(params);
+          if ("scope" in params && params.scope === storePath && params.prepare) {
+            mutationQueued.resolve();
+          }
+          return operation;
+        },
+      );
+    }
     const readEntered = createDeferred();
     const releaseRead = createDeferred();
     const failure = new AggregateError([new Error("read cleanup failed")], "cancel read failed");
@@ -298,9 +312,12 @@ it.each([
       settled = true;
     });
     try {
-      if (phase === "accepted") {
-        await interrupted.promise;
-      }
+      await Promise.race([
+        phase === "accepted" ? interrupted.promise : mutationQueued.promise,
+        pending.then(() => {
+          throw new Error("Cancellation never reached its selected lifecycle phase.");
+        }),
+      ]);
       needsRead = true;
       releaseBlocker.resolve();
       admission.release();
@@ -314,7 +331,7 @@ it.each([
       expect(aborted).toHaveBeenCalledTimes(phase === "accepted" ? 1 : 0);
       expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
       if (terminal) {
-        expect(markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
+        expect(await markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
         expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
       }
       releaseRead.resolve();

@@ -1,10 +1,10 @@
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
+import { asFiniteNumber as readFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { clamp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  clamp,
   formatToolError,
   isCapabilityEnabledForHost,
   parseParams,
-  readFiniteNumber,
   type RunCommand,
 } from "./command-utils.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";

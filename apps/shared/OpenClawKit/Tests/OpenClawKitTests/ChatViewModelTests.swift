@@ -377,7 +377,7 @@ private func makeViewModel(
     waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
     acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
     swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
-    listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
+    listChildSessionsHook: (@Sendable (String) async throws -> OpenClawChatChildSessionsResult)? = nil,
     listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
@@ -782,7 +782,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         (@Sendable (String, Int) async -> OpenClawChatRunObservation)?
     private let acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)?
     private let swarmEnabledHook: (@Sendable (String) async throws -> Bool)?
-    private let listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])?
+    private let listChildSessionsHook: (@Sendable (String) async throws -> OpenClawChatChildSessionsResult)?
     private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
     private let getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)?
     private let resolveQuestionHook: (@Sendable (String, [String: [String]], [String]?) async throws
@@ -827,7 +827,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
         acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
         swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
-        listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
+        listChildSessionsHook: (@Sendable (String) async throws -> OpenClawChatChildSessionsResult)? = nil,
         listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
         getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)? = nil,
         resolveQuestionHook: (@Sendable (String, [String: [String]], [String]?) async throws -> QuestionAnswers)? = nil,
@@ -1010,8 +1010,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         try await self.swarmEnabledHook?(sessionKey) ?? false
     }
 
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
-        try await self.listChildSessionsHook?(parentKey) ?? []
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
+        try await self.listChildSessionsHook?(parentKey) ?? OpenClawChatChildSessionsResult(rows: [], isComplete: true)
     }
 
     func listSessions(
@@ -1237,7 +1237,6 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func listQuestions() async throws -> [QuestionRecord] {
         try await self.listQuestionsHook?() ?? []
     }
-
 
     func getQuestion(id: String) async throws -> QuestionRecord {
         guard let getQuestionHook else {
@@ -1670,9 +1669,19 @@ struct ChatViewModelTests {
 
     @Test(arguments: [false, true])
     func `route replacement invalidates a stale known-absent capability`(sequenceGap: Bool) async throws {
+        let capabilityPhase = AsyncCounter()
+        let capabilityGate = SessionSubscribeGate()
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
-            progressCardStoreAvailable: false)
+            advertisedMethodHook: { method in
+                guard method == "progressCard.get" else { return nil }
+                switch await capabilityPhase.current() {
+                case 0: return false
+                case 1: await capabilityGate.wait()
+                default: break
+                }
+                return true
+            })
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         try await waitUntil("progress card capability resolves unavailable") {
             await MainActor.run { vm.progressCardStoreAvailable == false }
@@ -1685,7 +1694,10 @@ struct ChatViewModelTests {
 
         // A replacement route may be a different Gateway; the stale known-absent
         // value must not authorize the legacy path against a dual-emitting one.
+        // Hold its capability reply until the unknown-capability assertions finish.
+        _ = await capabilityPhase.increment()
         await MainActor.run { vm.handleTransportEvent(sequenceGap ? .seqGap : .routeChanged) }
+        await capabilityGate.waitUntilBlocked()
         #expect(await MainActor.run { vm.progressCardStoreAvailable } == nil)
 
         await MainActor.run {
@@ -1694,6 +1706,8 @@ struct ChatViewModelTests {
         }
         #expect(await MainActor.run { vm.progressCard?.steps?.first?.step } ==
             (sequenceGap ? "Old gateway step" : nil))
+        _ = await capabilityPhase.increment()
+        await capabilityGate.release()
     }
 
     @Test func `legacy plan is ignored when progress card store is available`() async throws {
@@ -2395,7 +2409,7 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(
             historyResponses: [],
             swarmEnabledHook: { _ in try await script.next() },
-            listChildSessionsHook: { _ in [swarmChild] })
+            listChildSessionsHook: { _ in OpenClawChatChildSessionsResult(rows: [swarmChild], isComplete: true) })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.refreshSwarmCapability()
@@ -2421,7 +2435,7 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(
             historyResponses: [],
             swarmEnabledHook: { _ in try await script.next() },
-            listChildSessionsHook: { _ in [swarmChild] })
+            listChildSessionsHook: { _ in OpenClawChatChildSessionsResult(rows: [swarmChild], isComplete: true) })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.refreshSwarmCapability()
@@ -2461,7 +2475,7 @@ struct ChatViewModelTests {
         #expect(!viewModel.swarmEnabled)
     }
 
-    @Test @MainActor func `fresh Swarm lease rechecks capability before paging`() async {
+    @Test @MainActor func `Swarm preserves partial children and rechecks capability before paging`() async {
         let script = SwarmCapabilityScript([.value(true), .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
         child.parentSessionKey = "main"
@@ -2471,12 +2485,13 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(
             historyResponses: [],
             swarmEnabledHook: { _ in try await script.next() },
-            listChildSessionsHook: { _ in [swarmChild] })
+            listChildSessionsHook: { _ in OpenClawChatChildSessionsResult(rows: [swarmChild], isComplete: false) })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.refreshSwarmCapability()
         #expect(viewModel.swarmEnabled)
-        #expect(!viewModel.swarmSessions.isEmpty)
+        #expect(viewModel.swarmSessions.map(\.key) == ["agent:main:child"])
+        #expect(viewModel.activeSwarmGroups.first?.running == 1)
 
         await viewModel.refreshSwarmCapability()
         #expect(!viewModel.swarmEnabled)
@@ -2493,7 +2508,7 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(
             historyResponses: [],
             swarmEnabledHook: { _ in try await script.next() },
-            listChildSessionsHook: { _ in [swarmChild] })
+            listChildSessionsHook: { _ in OpenClawChatChildSessionsResult(rows: [swarmChild], isComplete: true) })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.refreshSwarmCapability()
@@ -2642,7 +2657,7 @@ struct ChatViewModelTests {
         let requests = viewModel.pendingQuestionAttentionRequests
         let summary = ChatSessionSidebarModel.attentionSummary(
             requests: requests + [requests[0]],
-            sessions: [.placeholder(key: sessionKey)], mainSessionKey: "agent:main:main",
+            sessions: [.init(key: sessionKey)], mainSessionKey: "agent:main:main",
             activeAgentID: "main", sessionRoutingContract: nil)
         #expect(summary?.oldest.id == "older")
         #expect(summary?.count == 5)
@@ -7239,6 +7254,56 @@ struct ChatViewModelTests {
         #expect(matches.0)
         #expect(!matches.1)
         #expect(!matches.2)
+    }
+
+    @Test(arguments: [
+        (
+            "agent:ops:catalog:fixture:node%3ADevBox:Thread%3AA",
+            "Agent:OPS:catalog:fixture:node%3ADevBox:Thread%3AA",
+            "agent:ops:catalog:fixture:node%3ADevBox:thread%3Aa"),
+        (
+            "agent:ops:matrix:channel:!Room:Example.Org",
+            "Agent:OPS:Matrix:Channel:!Room:Example.Org",
+            "agent:ops:matrix:channel:!room:example.org"),
+        (
+            "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
+            "Agent:OPS:Matrix:Channel:!Room:Example.Org:THREAD:$Event",
+            "agent:ops:matrix:channel:!Room:Example.Org:thread:$event"),
+        (
+            "agent:ops:signal:group:AbC123=",
+            "Agent:OPS:Signal:Group:AbC123=",
+            "agent:ops:signal:group:abc123="),
+        (
+            "agent:ops:signal:group:AbC123=:thread:xyz",
+            "Agent:OPS:Signal:Group:AbC123=:Thread:XyZ",
+            "agent:ops:signal:group:abc123=:thread:xyz"),
+    ]) @MainActor
+    func `session message events preserve opaque conversation identity`(
+        keys: (selected: String, alias: String, distinct: String)) async throws
+    {
+        let (_, vm) = await makeViewModel(
+            sessionKey: keys.selected,
+            activeAgentId: "ops",
+            historyResponses: [])
+        defer { vm.detachTransport() }
+
+        func deliver(sessionKey: String, text: String) throws {
+            let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
+                type: "event", event: "session.message",
+                payload: AnyCodable([
+                    "sessionKey": sessionKey,
+                    "agentId": "ops",
+                    "messageId": text,
+                    "message": chatTextMessage(role: "user", text: text, timestamp: 1).value,
+                ]))))
+            vm.handleTransportEvent(event)
+        }
+
+        try deliver(sessionKey: keys.distinct, text: "foreign conversation")
+        #expect(vm.messages.isEmpty)
+
+        try deliver(sessionKey: keys.alias, text: "selected conversation")
+        #expect(vm.messages.flatMap(\.content).compactMap(\.text) == ["selected conversation"])
     }
 
     @Test func `ignores agent main session message for different current main alias`() async throws {

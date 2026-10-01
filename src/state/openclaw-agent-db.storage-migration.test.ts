@@ -399,6 +399,13 @@ describe.each([21, 22])("agent schema %s storage cutover", (version) => {
           db.close();
           db = new DatabaseSync(pathname);
           const before = legacySnapshot(db);
+          // These entries have no cold fields: migration only adds their initial revision.
+          const expectedPreserved = {
+            ...before.preserved,
+            session_nodes: db
+              .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY rowid")
+              .all(),
+          };
           expect(
             db
               .prepare(
@@ -439,7 +446,8 @@ describe.each([21, 22])("agent schema %s storage cutover", (version) => {
           expect(reader.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
             schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
           });
-          expect(preservedRows(reader)).toEqual(before.preserved);
+          expect(preservedRows(reader)).toEqual(expectedPreserved);
+          expect(reader.prepare("SELECT * FROM session_entry_snapshots").all()).toEqual([]);
           const fts = reader.prepare("SELECT rowid, * FROM session_transcript_fts ORDER BY rowid");
           fts.setReadBigInts(true);
           expect(fts.all()).toEqual(before.fts);

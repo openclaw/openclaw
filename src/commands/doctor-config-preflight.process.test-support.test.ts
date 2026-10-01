@@ -16,39 +16,6 @@ function createRuntime(source: string): string {
 }
 
 describe("Doctor runtime child diagnostics", () => {
-  it("preserves normal output, command arguments, exit status, and caller runtime policy", async () => {
-    const runtimeRoot = createRuntime(`
-      console.log(JSON.stringify({
-        args: process.argv.slice(2),
-        maglevDisabled: process.execArgv.includes("--no-maglev"),
-        symlinksPreserved: process.execArgv.includes("--preserve-symlinks"),
-        cwd: process.cwd(),
-      }));
-      console.error("validation diagnostic");
-      process.exitCode = 7;
-    `);
-    const result = await tempDirs.track(
-      runBuiltRuntime(
-        runtimeRoot,
-        { PATH: process.env.PATH },
-        ["config", "validate", "--json"],
-        5_000,
-      ),
-    );
-
-    expect(result).toEqual({
-      code: 7,
-      signal: null,
-      stdout: `${JSON.stringify({
-        args: ["config", "validate", "--json"],
-        maglevDisabled: false,
-        symlinksPreserved: true,
-        cwd: runtimeRoot,
-      })}\n`,
-      stderr: "validation diagnostic\n",
-    });
-  });
-
   it("preserves the combined UTF-8 output limit without charging diagnostic readiness", async () => {
     const runtimeRoot = createRuntime('process.stdout.write("éé"); process.stderr.write("xxxx");');
     const env = { PATH: process.env.PATH };

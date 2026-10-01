@@ -1,4 +1,3 @@
-// Builds the root Commander program, context, help, hooks, and command registry.
 import process from "node:process";
 import { registerCoreCliCommands } from "./command-registry-core.js";
 import { createProgramContext, type ProgramContext } from "./context.js";

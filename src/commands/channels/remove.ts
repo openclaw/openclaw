@@ -1,4 +1,3 @@
-// Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyChannelAccountRemoval } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";

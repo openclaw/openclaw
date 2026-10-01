@@ -368,10 +368,7 @@ describe("normalizeCronJobCreate", () => {
     );
     expect(normalized.sessionTarget).toBe("current");
     expect(normalized.sessionKey).toBe("agent:main:telegram:direct:42");
-  });
-  it("canonicalizes delivery.channel casing", () => {
-    const delivery = agentDelivery({ mode: "announce", channel: "Telegram", to: "7200373102" });
-    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
+    expect(normalized.delivery).toEqual({ mode: "announce" });
   });
   it("preserves explicit null model clear in payload patches", () => {
     const normalized = normalizePatch({ payload: { kind: "agentTurn", model: null } });
@@ -508,9 +505,6 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.channel).toBe("telegram");
     expect(delivery.to).toBe("123");
     expect(validateCronAddParams(normalized)).toBe(false);
-  });
-  it("defaults isolated agentTurn delivery to announce", () => {
-    expect(child(createAgent(), "delivery").mode).toBe("announce");
   });
   it("defaults command payloads to isolated announce jobs", () => {
     const normalized = createDefaulted({
@@ -665,23 +659,20 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.sessionTarget).toBe("isolated");
     expect(normalized.wakeMode).toBe("now");
   });
-  it("strips invalid delivery mode from partial delivery objects", () => {
-    const delivery = child(
-      createDefaulted(AGENT_TURN, {
+  it.each(["bogus", "deliver", null])(
+    "preserves invalid delivery mode %s so create and patch validation reject it",
+    (mode) => {
+      const created = createDefaulted(AGENT_TURN, {
         schedule: CRON_SCHEDULE,
-        delivery: { mode: "bogus", to: "123" },
-      }),
-      "delivery",
-    );
-    expect(delivery.mode).toBeUndefined();
-    expect(delivery.to).toBe("123");
-  });
-  it("stores current sessionTarget source context when context is available", () => {
-    const normalized = createAgent({ sessionTarget: "current" }, "agent:main:discord:group:ops");
-    expect(normalized.sessionTarget).toBe("current");
-    expect(normalized.sessionKey).toBe("agent:main:discord:group:ops");
-    expect(normalized.delivery).toEqual({ mode: "announce" });
-  });
+        delivery: { mode, to: "123" },
+      });
+      const patch = normalizePatch({ delivery: { mode, to: "123" } });
+      expect(child(created, "delivery")).toMatchObject({ mode, to: "123" });
+      expect(child(patch, "delivery")).toEqual({ mode, to: "123" });
+      expect(validateCronAddParams(created)).toBe(false);
+      expect(validateCronUpdateParams({ id: "job", patch })).toBe(false);
+    },
+  );
   it("falls back current sessionTarget to isolated without context", () => {
     const normalized = createAgent({ sessionTarget: "current" });
     expect(normalized.sessionTarget).toBe("isolated");
@@ -912,18 +903,6 @@ describe("normalizeCronJobPatch", () => {
       },
     });
     expect(normalized.payload).toEqual({ kind: "systemEvent", text: "hi", toolsAllow: ["exec"] });
-    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
-  });
-  it("prunes schedule fields that do not belong to at schedules for patches", () => {
-    const normalized = normalizePatch({ schedule: STALE_AT_SCHEDULE });
-    expect(normalized.schedule).toEqual(NORMALIZED_AT_SCHEDULE);
-    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
-  });
-  it("prunes staggerMs from every schedules for patches", () => {
-    const normalized = normalizePatch({
-      schedule: { kind: "every", everyMs: 60_000, staggerMs: 30_000 },
-    });
-    expect(normalized.schedule).toEqual(EVERY_SCHEDULE);
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 });

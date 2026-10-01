@@ -277,6 +277,7 @@ describe("SQLite session row persistence", () => {
         skills: [{ name: "demo" }],
         skillFilter: ["demo"],
         resolvedSkills,
+        discoverySkills: resolvedSkills,
         version: 7,
       },
     };
@@ -294,12 +295,14 @@ describe("SQLite session row persistence", () => {
       expect(projectPublicSessionEntry(entry)).not.toHaveProperty(key);
       expect(projectPublicSessionEntryPatch(entry)).not.toHaveProperty(key);
     }
-    expect(persisted.skillsSnapshot).toEqual({
+    expect(persisted.skillsSnapshot).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", env, sessionKey })?.skillsSnapshot).toEqual({
       prompt: "compact skill prompt",
       skills: [{ name: "demo" }],
       skillFilter: ["demo"],
       version: 7,
     });
     expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
+    expect(entry.skillsSnapshot?.discoverySkills).toBe(resolvedSkills);
   });
 });

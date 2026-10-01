@@ -5,13 +5,13 @@ import type {
   OpenClawPluginNodeHostCommandAvailabilityContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { asFiniteNumber as readFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { clamp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   assertToolResult,
-  clamp,
   isCapabilityEnabledForHost,
   parseParams,
-  readFiniteNumber,
   type RunCommand,
 } from "./command-utils.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";
@@ -48,11 +48,7 @@ function encodeMedia(buffer: Buffer): string {
   if (buffer.byteLength > MAX_MEDIA_RAW_BYTES) {
     throw new Error("PAYLOAD_TOO_LARGE: camera payload exceeds the 25 MB base64 limit");
   }
-  const base64 = buffer.toString("base64");
-  if (Buffer.byteLength(base64, "ascii") > MAX_BASE64_BYTES) {
-    throw new Error("PAYLOAD_TOO_LARGE: camera payload exceeds the 25 MB base64 limit");
-  }
-  return base64;
+  return buffer.toString("base64");
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } | null {
@@ -156,12 +152,10 @@ export function createLinuxNodeCommands(
   const withTempFile = deps.withTempFile ?? defaultWithTempFile;
   const now = deps.now ?? (() => new Date());
 
-  const findTool = (name: "ffmpeg" | "notify-send", candidateEnv = env) =>
-    findExecutable(name, candidateEnv);
   const listVideoDevices =
     deps.listVideoDevices ??
     (async () => {
-      const ffmpeg = findTool("ffmpeg");
+      const ffmpeg = findExecutable("ffmpeg", env);
       return ffmpeg ? await listLinuxVideoDevices({ ffmpeg, runCommand }) : [];
     });
   const readMedia = async (filePath: string) => {
@@ -185,7 +179,7 @@ export function createLinuxNodeCommands(
     (context: OpenClawPluginNodeHostCommandAvailabilityContext) =>
       platform === "linux" &&
       isCapabilityEnabledForHost(context, capability) &&
-      findTool(tool, context.env) !== null;
+      findExecutable(tool, context.env) !== null;
   const resolveTool = (
     capability: keyof ResolvedLinuxNodePluginConfig,
     tool: "ffmpeg" | "notify-send",
@@ -193,7 +187,7 @@ export function createLinuxNodeCommands(
     unavailableCode: string,
   ) => {
     assertLinuxCapability(capability, disabledCode);
-    const executable = findTool(tool);
+    const executable = findExecutable(tool, env);
     if (!executable) {
       throw new Error(`${unavailableCode}: ${tool} not found`);
     }

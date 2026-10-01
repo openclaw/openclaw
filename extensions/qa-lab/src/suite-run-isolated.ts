@@ -12,6 +12,7 @@ import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import { mapQaSuiteWithConcurrency, resolveQaSuiteWorkerStartStaggerMs } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
+import { completeQaSuiteRun } from "./suite-run-completion.js";
 import { buildQaIsolatedScenarioWorkerParams } from "./suite-support.js";
 import type {
   QaSuiteResolvedRunContext,
@@ -332,34 +333,22 @@ export async function runQaFlowSuiteIsolated(
     throw new Error("QA suite completed without terminal result metadata");
   }
   const terminalFinishedAt = new Date();
-  const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
-    ...artifactParams,
-    finishedAt: terminalFinishedAt,
-    scenarios: terminalScenarios,
-    scenarioDefinitions: selectedScenarios,
-    recordedEvidence: recording.snapshot(),
-    transportArtifacts,
-    writeEvidenceFile: params?.writeEvidenceFile,
-  });
-  lab.setLatestReport({
-    outputPath: reportPath,
-    markdown: report,
-    generatedAt: terminalFinishedAt.toISOString(),
-  } satisfies QaLabLatestReport);
-  progress.complete([], terminalFinishedAt.toISOString());
-  const result = {
-    outputDir,
-    evidence,
-    evidencePath,
-    reportPath,
-    summaryPath,
-    report,
-    scenarios: terminalScenarios,
-    startedScenarioIds: selectedScenarios
+  const result = await completeQaSuiteRun(
+    {
+      ...artifactParams,
+      finishedAt: terminalFinishedAt,
+      scenarios: terminalScenarios,
+      scenarioDefinitions: selectedScenarios,
+      recordedEvidence: recording.snapshot(),
+      transportArtifacts,
+      writeEvidenceFile: params?.writeEvidenceFile,
+    },
+    lab,
+    progress,
+    selectedScenarios
       .filter((_scenario, index) => startedScenarioIndexes.has(index))
       .map((scenario) => scenario.id),
-    watchUrl: lab.baseUrl,
-  } satisfies QaSuiteResult;
+  );
   writeQaSuiteProgress(progressEnabled, "run complete");
   return result;
 }

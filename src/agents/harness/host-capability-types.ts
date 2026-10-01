@@ -36,6 +36,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Native delegation without person selection must remain unambiguous at admission. */
+  assertNativeSubagentSpawnAllowed?: () => void;
   /** Binds the actual native model; returns undefined only for runs without an operator source. */
   bindModelExecution?: AgentHarnessModelExecutionBinder;
   /** Retains the original source for already-admitted work beyond foreground completion. */
@@ -58,6 +60,10 @@ export type AgentHarnessHostCapabilities = Readonly<{
   annotateCurrentUserTurn?: (
     annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
   ) => Promise<void>;
+  /** Detached admitted originals before inline projection; file readers still enforce custody. */
+  resolveInputAttachmentMedia?: () => Promise<
+    readonly Readonly<import("../../media/media-facts.js").MediaFact>[]
+  >;
   /** Execution-only document paths after the harness confirms unsandboxed local placement. */
   prepareInputAttachments?: (request: {
     placement: "local-host";

@@ -4,6 +4,7 @@ import { connect, type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createDeferred } from "./promise.js";

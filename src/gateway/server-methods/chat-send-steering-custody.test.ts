@@ -38,12 +38,8 @@ import {
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  linkEmail,
-  setUserProfileRole,
-} from "../../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -68,6 +64,7 @@ describe("steering input custody", () => {
     "changed grant",
     "revoked grant",
     "same permissions across profiles",
+    "no native admission across profiles",
     "different scopes across profiles",
     "same role permissions across profiles",
     "different role session caps across profiles",
@@ -143,7 +140,7 @@ describe("steering input custody", () => {
         scenario === "same grant" ||
         scenario === "same permissions across profiles" ||
         scenario === "same role permissions across profiles";
-      const queued = scenario === "changed grant" || scenario.startsWith("different");
+      const queued = !accepted && scenario !== "revoked grant";
       const originalGrant = new AbortController();
       const incomingGrant = new AbortController();
       const client = (connId: string, controller: AbortController, grantId: string) => ({
@@ -364,6 +361,8 @@ describe("steering input custody", () => {
           kind: "embedded",
           runId: "original-backing-run",
           toolAuthorityFingerprint: fingerprint,
+          supportsCrossProfileSteering:
+            scenario !== "same grant" && scenario !== "no native admission across profiles",
           cancel: vi.fn(),
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
         });
@@ -454,6 +453,7 @@ describe("steering input custody", () => {
           expect(session.getSteeringMessages()).toEqual([]);
           expect(queueMessage).not.toHaveBeenCalled();
           if (queued) {
+            expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(profile.id);
             expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
             expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
               replyOptions: { messageInjectionDisposition: "rejected" },

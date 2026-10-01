@@ -138,7 +138,7 @@ async function requestModelListPage(
 
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = assertCodexModelListResponse(value);
-  const models = response.data.map((entry) => readCodexModel(entry));
+  const models = response.data.map(readCodexModel);
   const nextCursor = response.nextCursor ?? undefined;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
@@ -151,15 +151,14 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
       "Invalid Codex app-server model/list response: model id and name must be non-empty strings",
     );
   }
+  const displayName = normalizeOptionalString(value.displayName);
+  const description = normalizeOptionalString(value.description);
+  const defaultReasoningEffort = normalizeOptionalString(value.defaultReasoningEffort);
   return {
     id,
     model,
-    ...(normalizeOptionalString(value.displayName)
-      ? { displayName: normalizeOptionalString(value.displayName) }
-      : {}),
-    ...(normalizeOptionalString(value.description)
-      ? { description: normalizeOptionalString(value.description) }
-      : {}),
+    ...(displayName ? { displayName } : {}),
+    ...(description ? { description } : {}),
     hidden: value.hidden,
     isDefault: value.isDefault,
     inputModalities: value.inputModalities,
@@ -169,9 +168,7 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     supportedReasoningEfforts: normalizeUniqueTrimmedStringList(
       value.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
     ),
-    ...(normalizeOptionalString(value.defaultReasoningEffort)
-      ? { defaultReasoningEffort: normalizeOptionalString(value.defaultReasoningEffort) }
-      : {}),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(value.multiAgentVersion !== undefined
       ? { multiAgentVersion: value.multiAgentVersion }
       : {}),

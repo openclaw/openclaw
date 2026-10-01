@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type VolcengineTtsEncoding = "ogg_opus" | "mp3" | "pcm" | "wav";
 
@@ -39,10 +40,10 @@ type VolcengineTtsResponse = {
 function parseJsonObject(text: string, providerName: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!isRecord(parsed)) {
       throw new Error("expected JSON object");
     }
-    return parsed as Record<string, unknown>;
+    return parsed;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new Error(`${providerName} TTS: failed to parse response JSON: ${detail}`, {
@@ -52,10 +53,7 @@ function parseJsonObject(text: string, providerName: string): Record<string, unk
 }
 
 function toTtsResponse(parsed: Record<string, unknown>): VolcengineTtsResponse {
-  const header =
-    parsed.header && typeof parsed.header === "object" && !Array.isArray(parsed.header)
-      ? (parsed.header as Record<string, unknown>)
-      : undefined;
+  const header = asOptionalRecord(parsed.header);
   return {
     code:
       typeof parsed.code === "number"

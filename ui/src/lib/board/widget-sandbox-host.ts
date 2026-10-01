@@ -39,7 +39,6 @@ class WidgetDocumentError extends Error {
 
 /** Owns one trusted outer sandbox frame and its ticket-bound inner widget bridge. */
 export class BoardWidgetSandboxHost {
-  private options: BoardWidgetSandboxHostOptions;
   private active = true;
   private bridgeController: BoardWidgetBridgeController | null = null;
   private bridgeClient: BoardWidgetBridgeGatewayClient | undefined;
@@ -50,8 +49,7 @@ export class BoardWidgetSandboxHost {
   private requestGeneration = 0;
   private readonly pendingRequests = new Map<string, number>();
 
-  constructor(options: BoardWidgetSandboxHostOptions) {
-    this.options = options;
+  constructor(private options: BoardWidgetSandboxHostOptions) {
     this.documentHost = new WidgetSandboxHost(this.documentOptions());
   }
 
@@ -128,19 +126,15 @@ export class BoardWidgetSandboxHost {
     this.bridgeClient = undefined;
   }
 
-  accepts(event: MessageEvent): boolean {
-    return (
-      event.source === this.options.frame.contentWindow &&
-      event.origin === this.options.sandboxOrigin
-    );
-  }
-
   handleFrameError(): void {
     this.documentHost.handleFrameError();
   }
 
   handleMessage(event: MessageEvent): void {
-    if (!this.accepts(event)) {
+    if (
+      event.source !== this.options.frame.contentWindow ||
+      event.origin !== this.options.sandboxOrigin
+    ) {
       return;
     }
     this.documentHost.handleMessage(event);
@@ -328,19 +322,16 @@ export class BoardWidgetSandboxHost {
       },
       onRendered: options.onRendered ? () => this.options.onRendered?.() : undefined,
       onError: (error) => {
-        if (error instanceof WidgetRenderTimeoutError) {
+        if (error instanceof WidgetDocumentError && error.kind === "unauthorized") {
+          this.options.onUnauthorized(this.options.widget);
+        } else if (
+          error instanceof WidgetRenderTimeoutError ||
+          error instanceof WidgetDocumentError
+        ) {
           this.options.onError(error);
-          return;
+        } else {
+          this.options.onLoadFailed(this.options.widget);
         }
-        if (error instanceof WidgetDocumentError) {
-          if (error.kind === "unauthorized") {
-            this.options.onUnauthorized(this.options.widget);
-          } else {
-            this.options.onError(error);
-          }
-          return;
-        }
-        this.options.onLoadFailed(this.options.widget);
       },
       onReadyTimeout: () => {
         this.reset();

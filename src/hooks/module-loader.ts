@@ -21,12 +21,10 @@ export function resolveFunctionModuleExport<T extends GenericFunction>(params: {
   fallbackExportNames?: string[];
 }): T | undefined {
   const explicitExport = params.exportName?.trim();
-  if (explicitExport) {
-    const candidate = params.mod[explicitExport];
-    return typeof candidate === "function" ? (candidate as T) : undefined;
-  }
-  const fallbacks = params.fallbackExportNames ?? ["default"];
-  for (const exportName of fallbacks) {
+  const exportNames = explicitExport
+    ? [explicitExport]
+    : (params.fallbackExportNames ?? ["default"]);
+  for (const exportName of exportNames) {
     const candidate = params.mod[exportName];
     if (typeof candidate === "function") {
       return candidate as T;

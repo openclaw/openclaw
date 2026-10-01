@@ -34,7 +34,6 @@ import type {
   ResolvedSessionEntryAccessTarget,
   ResolvedSessionEntryStoreTarget,
   QualifiedSessionEntryAccessTarget,
-  CapturedSessionEntryReadSource,
   SessionEntryCandidateAccessScope,
   ResolvedSessionEntryCandidateTarget,
   ResolvedSessionEntryUpdateContext,
@@ -46,6 +45,7 @@ import type {
   SessionEntryPatchResult,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   normalizeStoreSessionKey,
   resolveSessionStoreEntryCore as resolveSessionEntryFromStore,
@@ -84,7 +84,6 @@ export {
   upsertSessionEntryCore,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.sqlite-entry.js";
-export { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 
 export { resolveSessionEntryFromStore, resolveSessionEntrySelection };
 
@@ -152,14 +151,8 @@ function findCanonicalSessionEntryMatch(
     ...scope,
     sessionKeys: candidateKeys,
     readOnly: options.readOnly !== false,
-    onReadSource: (source, physical) => {
-      readSource = physical
-        ? {
-            ...source,
-            databaseIdentity: physical.identity,
-            databaseBirthtime: physical.birthtime,
-          }
-        : undefined;
+    onReadSource: (source) => {
+      readSource = source;
     },
   })) {
     if (selected) {

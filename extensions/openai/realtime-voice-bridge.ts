@@ -41,8 +41,6 @@ const OPENAI_REALTIME_MAX_BUFFERED_AUDIO_BYTES = 1024 * 1024;
 const OPENAI_REALTIME_AUDIO_DROP_WARN_INTERVAL_MS = 5_000;
 
 export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements RealtimeVoiceBridge {
-  private static readonly DEFAULT_MODEL = OPENAI_REALTIME_DEFAULT_MODEL;
-
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
 
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
@@ -413,7 +411,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     | { url: string; headers: Record<string, string> }
     | Promise<{ url: string; headers: Record<string, string> }> {
     const cfg = this.config;
-    const model = cfg.model ?? OpenAIRealtimeBridge.DEFAULT_MODEL;
+    const model = cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
     if (cfg.azureEndpoint && cfg.azureDeployment) {
       const apiKey = requireOpenAIRealtimeApiKey(cfg.apiKey);
       const base = cfg.azureEndpoint
@@ -566,7 +564,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     }
   }
 
-  private markSessionReady(connection: RealtimeVoiceSessionConnection): void {
+  protected onSessionUpdated(connection: RealtimeVoiceSessionConnection): void {
     if (!this.lifecycle.ready(connection)) {
       return;
     }
@@ -631,13 +629,10 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     this.config.onClose?.(terminalOutcome);
   }
 
-  protected sendEvent(event: unknown, detail?: string): void {
+  protected sendEvent(event: { type: string; [key: string]: unknown }, detail?: string): void {
     const ws = this.ws;
     if (ws?.readyState === WebSocket.OPEN) {
-      const type =
-        event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
-          ? (event as { type: string }).type
-          : "unknown";
+      const { type } = event;
       const payload = JSON.stringify(event);
       this.captureTransportEvent({
         url: this.connectionUrl,
@@ -670,10 +665,6 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
 
   protected isTransportOpen(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
-  }
-
-  protected onSessionUpdated(connection: RealtimeVoiceSessionConnection): void {
-    this.markSessionReady(connection);
   }
 
   protected rotateExpiredSession(): void {

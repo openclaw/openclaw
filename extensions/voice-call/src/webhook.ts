@@ -191,12 +191,10 @@ export class VoiceCallWebhookServer {
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
 
-  /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
   private readonly streamDisconnectGrace: StreamDisconnectGrace;
   // Revoke pending transcript replies before persistence has created a response guard.
   private readonly streamSpeechGenerations = new WeakMap<CallRecord, symbol>();
-  /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
   private replayResponses = new Map<string, CachedWebhookResponse>();
   private replayResponseCacheCalls = 0;
@@ -348,9 +346,6 @@ export class VoiceCallWebhookServer {
     return generation;
   }
 
-  /**
-   * Initialize media streaming with the selected realtime transcription provider.
-   */
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
     const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
@@ -438,7 +433,6 @@ export class VoiceCallWebhookServer {
 
         const generation = this.interruptStreamReply(providerCallId, streamSid);
 
-        // Create a speech event and process it through the manager
         const event: NormalizedEvent = {
           id: `stream-transcript-${Date.now()}`,
           type: "call.speech",
@@ -519,7 +513,6 @@ export class VoiceCallWebhookServer {
   }
 
   /**
-   * Start the webhook server.
    * Idempotent: returns immediately if the server is already listening.
    */
   async start(): Promise<string> {
@@ -554,7 +547,6 @@ export class VoiceCallWebhookServer {
         });
       });
 
-      // Handle WebSocket upgrades for realtime voice and media streams.
       if (this.realtimeHandler || this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
           if (this.realtimeHandler && this.isRealtimeWebSocketUpgrade(request)) {
@@ -592,7 +584,6 @@ export class VoiceCallWebhookServer {
         }
         resolve(url);
 
-        // Start the stale call reaper if configured
         this.stopStaleCallReaper = startStaleCallReaper({
           manager: this.manager,
           staleCallReaperSeconds: this.config.staleCallReaperSeconds,
@@ -1077,7 +1068,6 @@ export class VoiceCallWebhookServer {
   private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
     this.logger.info(`Auto-responding to inbound call ${callId} chars=${userMessage.length}`);
 
-    // Get the persisted call context for routing and response delivery.
     const call = this.manager.getCall(callId);
     if (!call) {
       this.logger.warn(`Call ${callId} not found for auto-response`);

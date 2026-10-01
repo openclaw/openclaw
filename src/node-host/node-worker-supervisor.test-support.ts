@@ -55,8 +55,10 @@ const onMessage = (message) => {
     typeof message !== "object" ||
     message === null ||
     Array.isArray(message) ||
-    Object.keys(message).some((key) => key !== "type" && key !== "lineageFds") ||
+    Object.keys(message).some((key) => key !== "type" && key !== "lineageFds" && key !== "nativeProcessOwner") ||
     message.type !== "openclaw-worker-start-v1" ||
+    (message.nativeProcessOwner !== undefined &&
+      (typeof message.nativeProcessOwner !== "string" || !message.nativeProcessOwner.startsWith("file:"))) ||
     (Object.hasOwn(message, "lineageFds") && (
       !Array.isArray(message.lineageFds) || message.lineageFds.length === 0 ||
       message.lineageFds.some((fd) => !Number.isSafeInteger(fd) || fd < 3)

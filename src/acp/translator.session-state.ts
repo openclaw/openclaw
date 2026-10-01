@@ -1,4 +1,3 @@
-/** Gateway-backed ACP session snapshots, controls, metadata, and usage updates. */
 import type { SessionInfo, SessionUpdate } from "@agentclientprotocol/sdk";
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";

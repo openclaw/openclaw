@@ -3,6 +3,7 @@ import path from "node:path";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import {
+  captureUpdateCommandExecutorAuthority,
   withDelegatedUpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
@@ -21,6 +22,7 @@ import {
 import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-command-service-maintenance.js";
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
@@ -28,13 +30,11 @@ import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
-import {
-  adoptCandidateManagedServiceStop,
-  stopSupervisedPredecessorGateway,
-} from "./update-candidate-predecessor-stop.js";
+import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -56,9 +56,10 @@ import {
   createManagedUpdateRequesterContinuationAuthority,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
-import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { adoptUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
+import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
@@ -263,6 +264,7 @@ async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
           ...input.opts,
           run: {
             runId: input.runId,
+            originalRecoveryCapture: input.originalRecoveryCapture,
             env: { ...process.env },
             executorFence: fence,
             ...(requesterAuthority ? { requesterAuthority } : {}),
@@ -356,6 +358,11 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         {
           inputHash: input.configInputHash,
           assertCurrent,
+          originalRecoveryCapture: {
+            runId: input.runId,
+            installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
+            ref: input.originalRecoveryCapture,
+          },
           ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
@@ -403,30 +410,21 @@ async function finalizeInput(
   };
   executorFence.assertCurrent();
   registerRun(run);
-  for (const step of input.bufferedSteps) {
-    executorFence.assertCurrent();
-    recordUpdateRunStep(run.runId, step, { env: run.env });
-  }
-  const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({
-    transferred: input.params.preManagedServiceStop,
-    shouldRestart: input.params.shouldRestart,
-    mode: input.params.result.mode,
-    windowsTaskAutoStartSuspended: input.windowsTaskAutoStartSuspended,
-    runId: run.runId,
-    ledger: { env: run.env },
-    root: input.params.result.root ?? input.params.root,
-    timeoutMs: input.params.updateStepTimeoutMs,
-    assertCurrent: () => {
+  if (input.bufferedSteps.length > 0) {
+    const env = cloneEnvWithPlatformSemantics(run.env ?? process.env);
+    const context = captureOpenClawStateWorkerContext({ env });
+    const requester = run.requesterAuthority;
+    const assertCurrent = () => {
       executorFence.assertCurrent();
-      if (run.requesterAuthority?.isCurrent() === false) {
+      if (requester?.isCurrent() === false) {
         throw new UpdateRequesterRevokedError();
       }
-    },
-    onStep: (step) => input.params.result.steps.push(step),
-  });
-  if (restartRequired) {
-    input.params.shouldRestart = true;
+    };
+    for (const step of input.bufferedSteps) {
+      await recordUpdateRunStepAsync(run.runId, step, { env, context, assertCurrent });
+    }
   }
+  const stopped = input.params.preManagedServiceStop;
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {
     throw new Error("Transferred Windows task suspension is missing its stopped service owner.");
   }
@@ -479,7 +477,10 @@ async function finalizeInput(
     exitCode = error.exitCode;
     automaticTriage = error.automaticTriage;
   } finally {
-    await windowsRecovery?.complete(result?.status === "ok");
+    await windowsRecovery?.complete(
+      result?.status === "ok" ||
+        (result?.recovery?.serviceRestartSafe === true && result.recovery.service === "healthy"),
+    );
   }
   executorFence.assertCurrent();
   return { run, result, exitCode, automaticTriage, candidateStartAttempted };
@@ -487,31 +488,18 @@ async function finalizeInput(
 
 void (async () => {
   const errors: unknown[] = [];
-  try {
-    await finalizeMigratedUpdate();
-  } catch (error) {
-    errors.push(error);
+  for (const finalize of [
+    finalizeMigratedUpdate,
+    finalizeActiveDebugProxyCaptures,
+    closeOpenClawStateDatabaseAsync,
+  ]) {
+    try {
+      await finalize();
+    } catch (error) {
+      errors.push(error);
+    }
   }
-  try {
-    await finalizeActiveDebugProxyCaptures();
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    await closeOpenClawStateDatabaseAsync();
-  } catch (error) {
-    errors.push(error);
-  }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw createSqliteLifecycleAggregateError(
-      errors,
-      "Update finalization and resource cleanup failed.",
-      errors[0],
-    );
-  }
+  throwSqliteLifecycleErrors(errors, "Update finalization and resource cleanup failed.");
 })().catch((error: unknown) => {
   process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);
   process.exitCode = 1;

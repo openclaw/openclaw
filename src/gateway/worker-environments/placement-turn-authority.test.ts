@@ -33,7 +33,11 @@ import {
   advancePlacementFixtureToActive,
   createPlacementTurnClaimFixtureOps,
 } from "./placement-test-fixtures.js";
-import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
+import {
+  isPlacementTurnToolAuthorized,
+  stagePlacementTurnClaimWorkerPublication,
+  stagePlacementTurnToolWorkerPublication,
+} from "./placement-turn-authority.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
 import {
   bindWorkerTurnOwner,
@@ -67,6 +71,38 @@ afterEach(async () => {
 function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
   return advancePlacementFixtureToActive(store, database, { ...SESSION, executionMode });
 }
+
+it("fences pending tool revocation and cannot revive grants after claim release", async () => {
+  const active = await advanceToActive();
+  const claim = await store.claimTurn({
+    ...SESSION,
+    claimId: "tool-publication",
+    runId: "tool-publication-run",
+    owner: placementTurnOwner(active),
+  });
+  const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
+  const grant = () =>
+    stagePlacementTurnToolWorkerPublication(identity, { claim, toolNames: ["sessions_send"] });
+  const authorized = () => isPlacementTurnToolAuthorized(identity, claim, "sessions_send");
+  grant().commit();
+  expect(authorized()).toBe(true);
+  expect(
+    isPlacementTurnToolAuthorized(
+      identity,
+      { ...claim, owner: { kind: "local" } },
+      "sessions_send",
+    ),
+  ).toBe(false);
+  const refused = stagePlacementTurnToolWorkerPublication(identity, { claim, toolNames: null });
+  expect(authorized()).toBe(false);
+  refused.rollback();
+  expect(authorized()).toBe(true);
+  const delayed = grant();
+  await store.releaseTurn(claim);
+  expect(authorized()).toBe(false);
+  delayed.commit();
+  expect(authorized()).toBe(false);
+});
 
 it.each([
   { settlement: "commit", replace: true },
@@ -637,7 +673,7 @@ it("shares claim revocation across facades while restart clearing leaves worker 
     expect(facade.clearLocalTurnClaimsAfterRestart()).toBe(1);
     expect(localAuthority.isCurrent()).toBe(false);
     expect(workerAuthority.isCurrent()).toBe(true);
-    facade.authorizeWorkerTurnTools(worker, ["sessions_send"]);
+    await facade.authorizeWorkerTurnTools(worker, ["sessions_send"]);
     expect(workerAuthority.isCurrent()).toBe(true);
     await facade.releaseTurn(worker);
     expect(workerAuthority.isCurrent()).toBe(false);

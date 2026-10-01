@@ -1,4 +1,3 @@
-/** Doctor checks for install/update security policy configuration and synthetic probes. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +13,6 @@ type InstallPolicyHealthOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-/** Builds doctor note lines for static install policy validation and optional deep probing. */
 async function collectInstallPolicyHealthLines(
   cfg: OpenClawConfig,
   options: InstallPolicyHealthOptions = {},
@@ -81,7 +79,6 @@ async function collectInstallPolicyHealthLines(
   }
 }
 
-/** Emits install policy health notes when policy validation finds configured coverage or errors. */
 export async function noteInstallPolicyHealth(
   cfg: OpenClawConfig,
   options: InstallPolicyHealthOptions = {},

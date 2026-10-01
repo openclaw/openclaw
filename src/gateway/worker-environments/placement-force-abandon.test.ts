@@ -56,9 +56,9 @@ describe("forced worker environment abandonment", () => {
     });
     store.markWorkspaceResultPending(claim);
     const binding = claim;
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "forced-send",
@@ -80,7 +80,7 @@ describe("forced worker environment abandonment", () => {
       turnClaim: { claimId: claim.claimId },
     });
     expect(
-      store.completeWorkerSessionToolOperation({
+      await store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "forced-send",
@@ -112,7 +112,7 @@ describe("forced worker environment abandonment", () => {
       runId: "reclaim-forced-missing-workspace",
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
-    store.recordStagedWorkspaceResult(
+    await store.recordStagedWorkspaceResult(
       claim,
       "refs/openclaw/worker-results/reclaim-forced-missing-workspace",
     );
@@ -139,7 +139,7 @@ describe("forced worker environment abandonment", () => {
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    store.beginWorkspaceReconciliation(owner, {
+    await store.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "b".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -174,7 +174,7 @@ describe("forced worker environment abandonment", () => {
     });
 
     expect(resolveWorkspace).not.toHaveBeenCalled();
-    expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([]);
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
   });
 
@@ -186,7 +186,7 @@ describe("forced worker environment abandonment", () => {
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    store.beginWorkspaceReconciliation(owner, {
+    await store.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "c".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -213,7 +213,7 @@ describe("forced worker environment abandonment", () => {
     }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
     expect(resolveWorkspace).toHaveBeenCalledTimes(2);
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "workspace temporarily unavailable" }),
@@ -228,7 +228,7 @@ describe("forced worker environment abandonment", () => {
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    store.beginWorkspaceReconciliation(owner, {
+    await store.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "d".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -240,7 +240,7 @@ describe("forced worker environment abandonment", () => {
       basePack: Buffer.alloc(0),
     });
     const onCleanupError = vi.fn();
-    vi.spyOn(store, "loadWorkspaceReconciliation").mockImplementation(() => {
+    vi.spyOn(store, "loadWorkspaceReconciliation").mockImplementation(async () => {
       throw new Error("journal temporarily unreadable");
     });
 
@@ -255,7 +255,7 @@ describe("forced worker environment abandonment", () => {
     }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
     expect(resolveWorkspace).not.toHaveBeenCalled();
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "journal temporarily unreadable" }),

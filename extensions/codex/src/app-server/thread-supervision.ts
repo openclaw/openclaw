@@ -7,7 +7,6 @@ import {
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
-  isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
@@ -46,7 +45,7 @@ import {
   codexThreadSandboxOrPermissions,
   resolveCodexThreadApprovalsReviewer,
 } from "./thread-requests.js";
-import { projectBoundedCodexThreadHistory } from "./transcript-mirror.js";
+import { projectBoundedCodexThreadHistory } from "./transcript-history-projection.js";
 
 type PendingSupervisionMaterializationParams = Omit<
   CodexThreadConfigurationOptions,
@@ -413,7 +412,7 @@ export async function materializePendingSupervisionBranch(
       }
     }
     const unsafeCleanup =
-      cleanup.remaining.length > 0 || isCodexAppServerUnsafeSubscriptionError(error);
+      cleanup.remaining.length > 0 || error instanceof CodexAppServerUnsafeSubscriptionError;
     if (unsafeCleanup) {
       await params.abandonClient();
     }
@@ -570,33 +569,25 @@ async function recoverPendingSupervisionArtifacts(
   }
   const cleanup = await cleanPendingSupervisionArtifacts(params.client, pending);
   const next = withPendingSupervisionCleanup(pending, cleanup.remaining);
-  if (cleanup.remaining.length > 0) {
-    if (cleanup.remaining.length !== pending.cleanupThreadIds.length) {
-      const updated = await params.bindingStore.mutate(params.bindingIdentity, {
-        kind: "patch-pending-supervision-branch",
-        expected: pending,
-        pending: next,
-      });
-      if (!updated) {
-        throw new CodexThreadBindingConflictError(
-          pending.sourceThreadId,
-          "recording supervised Codex cleanup recovery",
-        );
-      }
+  const incomplete = cleanup.remaining.length > 0;
+  if (!incomplete || cleanup.remaining.length !== pending.cleanupThreadIds.length) {
+    const updated = await params.bindingStore.mutate(params.bindingIdentity, {
+      kind: "patch-pending-supervision-branch",
+      expected: pending,
+      pending: next,
+    });
+    if (!updated) {
+      throw new CodexThreadBindingConflictError(
+        pending.sourceThreadId,
+        incomplete
+          ? "recording supervised Codex cleanup recovery"
+          : "recovering a supervised Codex branch",
+      );
     }
+  }
+  if (incomplete) {
     throw new Error(
       `Codex supervised branch cleanup must finish before retry: ${cleanup.remaining.join(", ")}`,
-    );
-  }
-  const updated = await params.bindingStore.mutate(params.bindingIdentity, {
-    kind: "patch-pending-supervision-branch",
-    expected: pending,
-    pending: next,
-  });
-  if (!updated) {
-    throw new CodexThreadBindingConflictError(
-      pending.sourceThreadId,
-      "recovering a supervised Codex branch",
     );
   }
   return next;

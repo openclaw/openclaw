@@ -1,11 +1,19 @@
-import { expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as terminalTable from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { buildStatusCommandReportLines } from "./status.command-report.js";
 
+const renderTable: typeof terminalTable.renderTable = ({ columns, rows }) =>
+  `table:${columns.map((column) => column.header).join("+")}:${rows.length} \n\t`;
+
+beforeEach(() => {
+  vi.spyOn(theme, "heading").mockImplementation((text) => `# ${String(text)}`);
+  vi.spyOn(theme, "muted").mockImplementation(String);
+  vi.spyOn(terminalTable, "renderTable").mockImplementation(renderTable);
+});
+afterEach(() => vi.restoreAllMocks());
+
 const params: Parameters<typeof buildStatusCommandReportLines>[0] = {
-  heading: (text) => `# ${text}`,
-  muted: (text) => text,
-  renderTable: ({ columns, rows }) =>
-    `table:${columns.map((column) => column.header).join("+")}:${rows.length} \n\t`,
   width: 120,
   overviewRows: [{ Item: "OS", Value: "macOS" }],
   pluginCompatibilityLines: ["plugin warning"],
@@ -45,16 +53,16 @@ it("renders the full report in section order and trims table output", async () =
 
 it("prepares empty-state messages before rendering and omits absent sections", async () => {
   const events: string[] = [];
+  vi.spyOn(theme, "muted").mockImplementation((text) => {
+    events.push(String(text));
+    return String(text);
+  });
+  vi.spyOn(terminalTable, "renderTable").mockImplementation((input) => {
+    events.push("table");
+    return renderTable(input);
+  });
   const lines = await buildStatusCommandReportLines({
     ...params,
-    muted: (text) => {
-      events.push(text);
-      return text;
-    },
-    renderTable: (input) => {
-      events.push("table");
-      return params.renderTable(input);
-    },
     pluginCompatibilityLines: [],
     pairingRecoveryLines: [],
     modelSelectionLines: [],

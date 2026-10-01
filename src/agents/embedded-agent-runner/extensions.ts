@@ -1,6 +1,3 @@
-/**
- * Builds extension factories available to embedded-agent runtime sessions.
- */
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -155,13 +152,6 @@ export function buildEmbeddedExtensionFactories(params: {
     });
     factories.push(compactionSafeguardExtension);
   }
-  factories.push(
-    buildAgentToolResultMiddlewareFactory(params.sessionManager, {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-    }),
-  );
+  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params));
   return factories;
 }

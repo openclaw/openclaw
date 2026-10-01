@@ -1,4 +1,3 @@
-// Builds deterministic compact treemaps for context file summaries.
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -131,19 +130,6 @@ function sanitizeLabel(value: string): string {
     .toUpperCase();
 }
 
-function truncateLabel(value: string, maxChars: number): string {
-  if (maxChars <= 0) {
-    return "";
-  }
-  if (value.length <= maxChars) {
-    return value;
-  }
-  if (maxChars <= 2) {
-    return value.slice(0, maxChars);
-  }
-  return value.slice(0, maxChars - 1);
-}
-
 function layoutBinary<T extends { value: number }>(
   rawItems: T[],
   bounds: Rect,
@@ -194,12 +180,7 @@ class PngCanvas {
   readonly data = Buffer.alloc(WIDTH * HEIGHT * 4);
 
   fill(color: Rgba): void {
-    for (let i = 0; i < this.data.length; i += 4) {
-      this.data[i] = color.r;
-      this.data[i + 1] = color.g;
-      this.data[i + 2] = color.b;
-      this.data[i + 3] = color.a;
-    }
+    this.rect({ x: 0, y: 0, width: WIDTH, height: HEIGHT }, color);
   }
 
   rect(rect: Rect, color: Rgba): void {
@@ -279,11 +260,15 @@ function drawLabel(
   if (maxChars < 4 || maxLines < 1) {
     return;
   }
-  const clipped = lines
-    .slice(0, maxLines)
-    .map((line) => truncateLabel(sanitizeLabel(line), maxChars));
-  clipped.forEach((line, index) => {
-    canvas.text(rect.x + 7, rect.y + 7 + index * lineHeight, line, color, scale);
+  lines.slice(0, maxLines).forEach((line, index) => {
+    const label = sanitizeLabel(line);
+    canvas.text(
+      rect.x + 7,
+      rect.y + 7 + index * lineHeight,
+      label.length > maxChars ? label.slice(0, maxChars - 1) : label,
+      color,
+      scale,
+    );
   });
 }
 

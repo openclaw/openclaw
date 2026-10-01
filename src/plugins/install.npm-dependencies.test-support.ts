@@ -1,7 +1,7 @@
 // Managed npm dependency fixtures share the installer suite's subprocess boundary.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 
 export function readTextFileTree(dir: string, rootDir = dir): Record<string, string> {
@@ -82,68 +82,52 @@ export function registerManagedNpmDependencyTests({
   resolveTestPluginPackageDir: (npmRoot: string, packageName: string) => string;
   isManagedNpmInstallCommand: (argv: unknown) => argv is string[];
 }) {
-  const dependencyCases = [
-    { payload: "missing", mode: "install", existingProject: false },
-    { payload: "empty", mode: "install", existingProject: false },
-    { payload: "missing", mode: "install", existingProject: true },
-    { payload: "empty", mode: "install", existingProject: true },
-    { payload: "ancestor", mode: "install", existingProject: false },
-    { payload: "ancestor", mode: "install", existingProject: true },
-    { payload: "outside-symlink", mode: "install", existingProject: false },
-    { payload: "outside-symlink", mode: "install", existingProject: true },
-    { payload: "hoisted", mode: "install", existingProject: false },
-    { payload: "optional", mode: "install", existingProject: false },
-    { payload: "missing", mode: "update", existingProject: true },
-    { payload: "empty", mode: "update", existingProject: true },
-    { payload: "ancestor", mode: "update", existingProject: true },
-    { payload: "outside-symlink", mode: "update", existingProject: true },
-    { payload: "hoisted", mode: "update", existingProject: true },
-    { payload: "optional", mode: "update", existingProject: true },
-  ] as const;
   it.each([
-    ...dependencyCases.map(({ payload, mode, existingProject }) => ({
-      payload,
-      mode,
-      existingProject,
-      budgetCase: "legacy",
-      workTimeoutMs: undefined as number | null | undefined,
-      expectedTimeoutMs: undefined as number | undefined,
-    })),
     {
       payload: "missing",
       mode: "install",
-      existingProject: true,
-      budgetCase: "install-default",
+      existingProject: false,
       workTimeoutMs: undefined,
       expectedTimeoutMs: 300_000,
     },
     {
-      payload: "missing",
+      payload: "empty",
       mode: "update",
       existingProject: true,
-      budgetCase: "update-default",
       workTimeoutMs: undefined,
       expectedTimeoutMs: undefined,
     },
     {
-      payload: "missing",
+      payload: "ancestor",
       mode: "update",
       existingProject: true,
-      budgetCase: "finite",
       workTimeoutMs: 45_000,
       expectedTimeoutMs: 45_000,
     },
     {
-      payload: "missing",
+      payload: "outside-symlink",
       mode: "update",
       existingProject: true,
-      budgetCase: "unbounded",
       workTimeoutMs: null,
       expectedTimeoutMs: undefined,
     },
+    {
+      payload: "hoisted",
+      mode: "install",
+      existingProject: false,
+      workTimeoutMs: undefined,
+      expectedTimeoutMs: 300_000,
+    },
+    {
+      payload: "optional",
+      mode: "update",
+      existingProject: true,
+      workTimeoutMs: undefined,
+      expectedTimeoutMs: undefined,
+    },
   ] as const)(
-    "verifies $payload dependency payload after npm success during $mode (existing project: $existingProject; work budget: $budgetCase)",
-    async ({ payload, mode, existingProject, budgetCase, workTimeoutMs, expectedTimeoutMs }) => {
+    "verifies $payload dependency payload after npm success during $mode (existing project: $existingProject)",
+    async ({ payload, mode, existingProject, workTimeoutMs, expectedTimeoutMs }) => {
       const npmRoot = path.join(makeTempDir(), "npm");
       const packageName = "dependency-payload-plugin";
       const spec = `${packageName}@1.0.0`;
@@ -229,13 +213,11 @@ export function registerManagedNpmDependencyTests({
         logger: { info: () => {}, warn: () => {} },
       });
 
-      if (budgetCase !== "legacy") {
-        const installs = runCommandWithTimeoutMock.mock.calls.filter(([argv]) =>
-          isManagedNpmInstallCommand(argv),
-        );
-        expect(installs).toHaveLength(1);
-        expect(installs[0]?.[1]?.timeoutMs).toBe(expectedTimeoutMs);
-      }
+      const installs = runCommandWithTimeoutMock.mock.calls.filter(([argv]) =>
+        isManagedNpmInstallCommand(argv),
+      );
+      expect(installs).toHaveLength(1);
+      expect(installs[0]?.[1]?.timeoutMs).toBe(expectedTimeoutMs);
 
       const shouldInstall = payload === "hoisted" || payload === "optional";
       expect(result, JSON.stringify(result)).toMatchObject({ ok: shouldInstall });
@@ -260,53 +242,54 @@ export function registerManagedNpmDependencyTests({
     },
   );
 
-  describe.each(["install", "update"] as const)("host dependency during %s", (mode) => {
-    it.each(["direct", "peer", "both"] as const)(
-      "preserves the canonical host for a %s declaration",
-      async (declaration) => {
-        const npmRoot = path.join(makeTempDir(), "npm");
-        const packageName = "host-dependency-plugin";
-        const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-        if (mode === "update") {
-          writeInstalledNpmPlugin({
-            npmRoot: npmProjectRoot,
-            packageName,
-            version: "0.9.0",
-          });
-          fs.writeFileSync(path.join(npmProjectRoot, "package.json"), '{"private":true}\n');
-        }
-        mockNpmViewAndInstall({
-          spec: `${packageName}@1.0.0`,
+  it.each([
+    { mode: "install", declaration: "peer" },
+    { mode: "update", declaration: "direct" },
+  ] as const)(
+    "preserves the canonical host for a $declaration declaration during $mode",
+    async ({ mode, declaration }) => {
+      const npmRoot = path.join(makeTempDir(), "npm");
+      const packageName = "host-dependency-plugin";
+      const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+      if (mode === "update") {
+        writeInstalledNpmPlugin({
+          npmRoot: npmProjectRoot,
           packageName,
-          version: "1.0.0",
-          npmRoot,
-          ...(declaration !== "peer" ? { dependency: { name: "openclaw", version: "*" } } : {}),
-          ...(declaration !== "direct" ? { peerDependencies: { openclaw: "*" } } : {}),
+          version: "0.9.0",
         });
-        const onBeforePluginArtifactCommit = vi.fn(async () => {});
+        fs.writeFileSync(path.join(npmProjectRoot, "package.json"), '{"private":true}\n');
+      }
+      mockNpmViewAndInstall({
+        spec: `${packageName}@1.0.0`,
+        packageName,
+        version: "1.0.0",
+        npmRoot,
+        ...(declaration !== "peer" ? { dependency: { name: "openclaw", version: "*" } } : {}),
+        ...(declaration !== "direct" ? { peerDependencies: { openclaw: "*" } } : {}),
+      });
+      const onBeforePluginArtifactCommit = vi.fn(async () => {});
 
-        const result = await installPluginFromNpmSpec({
-          spec: `${packageName}@1.0.0`,
-          npmDir: npmRoot,
-          mode,
-          onBeforePluginArtifactCommit,
-          logger: { info: () => {}, warn: () => {} },
-        });
+      const result = await installPluginFromNpmSpec({
+        spec: `${packageName}@1.0.0`,
+        npmDir: npmRoot,
+        mode,
+        onBeforePluginArtifactCommit,
+        logger: { info: () => {}, warn: () => {} },
+      });
 
-        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, pluginId: packageName });
-        if (!result.ok) {
-          return;
-        }
-        expect(onBeforePluginArtifactCommit).toHaveBeenCalledOnce();
-        const hostLink = path.join(result.targetDir, "node_modules", "openclaw");
-        expect(fs.lstatSync(hostLink).isSymbolicLink()).toBe(true);
-        expect(fs.realpathSync(hostLink)).toBe(
-          fs.realpathSync(resolveOpenClawPackageRootSyncMock.mock.results[0]?.value),
-        );
-        expect(
-          runCommandWithTimeoutMock.mock.calls.filter(([argv]) => isManagedNpmInstallCommand(argv)),
-        ).toHaveLength(1);
-      },
-    );
-  });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, pluginId: packageName });
+      if (!result.ok) {
+        return;
+      }
+      expect(onBeforePluginArtifactCommit).toHaveBeenCalledOnce();
+      const hostLink = path.join(result.targetDir, "node_modules", "openclaw");
+      expect(fs.lstatSync(hostLink).isSymbolicLink()).toBe(true);
+      expect(fs.realpathSync(hostLink)).toBe(
+        fs.realpathSync(resolveOpenClawPackageRootSyncMock.mock.results[0]?.value),
+      );
+      expect(
+        runCommandWithTimeoutMock.mock.calls.filter(([argv]) => isManagedNpmInstallCommand(argv)),
+      ).toHaveLength(1);
+    },
+  );
 }

@@ -23,6 +23,7 @@ import {
   readUserProfileEmailBindings,
 } from "./user-profile-identity.read.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
+import { setUserProfileRole } from "./user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureProfileForEmail,
@@ -30,7 +31,6 @@ import {
   getUserProfileListItem,
   getUserProfileRole,
   resolveUserProfileId,
-  setUserProfileRole,
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {

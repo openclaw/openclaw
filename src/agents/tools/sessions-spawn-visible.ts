@@ -4,16 +4,13 @@ import { Value } from "typebox/value";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionsDispatchResult } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
-import {
-  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
-  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
-  isSubagentSpawnDepthAllowed,
-} from "../../config/agent-limits.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { loadGatewayModelCatalogSnapshot } from "../../gateway/server-model-catalog.js";
@@ -35,7 +32,9 @@ import { findModelCatalogEntry } from "../model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../model-catalog-view.js";
 import type { ModelCatalogEntry } from "../model-catalog.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
+import { resolveSpawnAdmission } from "../spawn-plan.js";
+import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
+import type { SpawnedToolContext } from "../spawned-context.js";
 import {
   countActiveRunsForSession,
   registerSubagentRun,
@@ -55,7 +54,6 @@ import {
 } from "../subagents/spawn/subagent-spawn-plan.js";
 import { readRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
-import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import {
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
@@ -88,32 +86,38 @@ type VisibleChildModelCatalogLoader = (params: {
   | undefined
 >;
 
-export type VisibleSessionsSpawnDeps = {
+export type SessionsSpawnToolOptions = {
   callGateway?: InProcessGatewayCaller;
   registerRun?: typeof registerSubagentRun;
   countActiveRuns?: typeof countActiveRunsForSession;
   loadModelCatalog?: VisibleChildModelCatalogLoader;
-};
+  agentSessionKey?: string;
+  requesterTurnRunId?: string;
+  /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
+  completionOwnerKey?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  sandboxed?: boolean;
+  config?: OpenClawConfig;
+  /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
+  requesterAgentIdOverride?: string;
+  requesterRunId?: string;
+  swarmCollector?: boolean;
+  /** Backend-derived parent incarnation; never sourced from model arguments. */
+  expectedParentSessionId?: string;
+  signal?: AbortSignal;
+} & SpawnedToolContext;
 
-type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
-  SpawnedToolContext & {
-    onSpawnEffectsStart?: () => void;
-    assertActive?: () => void;
-    signal?: AbortSignal;
-    agentSessionKey?: string;
-    requesterTurnRunId?: string;
-    completionOwnerKey?: string;
-    agentChannel?: string;
-    agentAccountId?: string;
-    agentTo?: string;
-    agentThreadId?: string | number;
-    currentMessagingTarget?: string;
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    sandboxed?: boolean;
-    config?: OpenClawConfig;
-    requesterAgentIdOverride?: string;
-  };
+type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
+  onSpawnEffectsStart?: () => void;
+  assertActive?: () => void;
+};
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
@@ -325,14 +329,6 @@ export async function maybeSpawnVisibleSession(params: {
   });
   const maxDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  if (!isSubagentSpawnDepthAllowed(callerDepth, maxDepth)) {
-    return {
-      status: "forbidden",
-      error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxDepth})`,
-    };
-  }
-  const maxChildren =
-    cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
   if (params.requestedAgentId && !isValidAgentId(params.requestedAgentId)) {
     return {
       status: "error",
@@ -344,13 +340,6 @@ export async function maybeSpawnVisibleSession(params: {
     sessionKey: requesterKey,
     agentId: params.options?.requesterAgentIdOverride,
   });
-  const requireAgentId =
-    resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
-    cfg.agents?.defaults?.subagents?.requireAgentId ??
-    false;
-  if (requireAgentId && !params.requestedAgentId) {
-    return { status: "forbidden", error: "sessions_spawn requires agentId; use an allowed agent." };
-  }
   const targetAgentId = params.requestedAgentId
     ? normalizeAgentId(params.requestedAgentId)
     : requesterAgentId;
@@ -361,17 +350,20 @@ export async function maybeSpawnVisibleSession(params: {
         'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
     };
   }
-  const targetPolicy = resolveSubagentTargetPolicy({
-    requesterAgentId,
-    targetAgentId,
-    requestedAgentId: params.requestedAgentId,
-    allowAgents:
-      resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-      cfg.agents?.defaults?.subagents?.allowAgents,
-    configuredAgentIds: listAgentIds(cfg),
-  });
-  if (!targetPolicy.ok) {
-    return { status: "forbidden", error: targetPolicy.error };
+  const resolveAdmission = (pendingChildren = 0) =>
+    resolveSpawnAdmission({
+      cfg,
+      requesterSessionKey: requesterKey,
+      requesterAgentId,
+      targetAgentId,
+      requestedAgentId: params.requestedAgentId,
+      configuredAgentIds: listAgentIds(cfg),
+      additionalActiveChildren: pendingChildren,
+      countActiveRuns: params.options?.countActiveRuns,
+    });
+  const admission = resolveAdmission();
+  if (!admission.ok) {
+    return { status: "forbidden", error: admission.error };
   }
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
@@ -462,21 +454,10 @@ export async function maybeSpawnVisibleSession(params: {
   assertActive();
   const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
-    resolveAdmission: (pendingChildren) => {
-      const activeChildren =
-        (params.options?.countActiveRuns ?? countActiveRunsForSession)(requesterKey, {
-          collect: false,
-        }) + pendingChildren;
-      return activeChildren >= maxChildren
-        ? { ok: false as const, activeChildren }
-        : { ok: true as const };
-    },
+    resolveAdmission,
   });
   if (!reservation.ok) {
-    return {
-      status: "forbidden",
-      error: `sessions_spawn has reached max active children for this session (${reservation.activeChildren}/${maxChildren})`,
-    };
+    return { status: "forbidden", error: reservation.error };
   }
   // Successful admission reserves a child before Gateway work can start.
   params.options?.onSpawnEffectsStart?.();
@@ -573,6 +554,7 @@ export async function maybeSpawnVisibleSession(params: {
       maxSpawnDepth: maxDepth,
     });
     try {
+      const titleSource = placement && buildDashboardSessionTitleSource({ message: params.task });
       const createParams = {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
@@ -580,7 +562,7 @@ export async function maybeSpawnVisibleSession(params: {
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
         ...(resolvedThinkingLevel ? { thinkingLevel: resolvedThinkingLevel } : {}),
-        ...(placement ? { titleSource: params.task } : { task: taskMessage }),
+        ...(placement ? { titleSource } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0
             ? 0
@@ -681,8 +663,7 @@ export async function maybeSpawnVisibleSession(params: {
             ).response;
           },
           terminateRun: (runId) => terminateCloudRun(childSessionKey, runId),
-          assertActive:
-            params.options?.assertActive ?? (() => params.options?.signal?.throwIfAborted()),
+          assertActive,
           signal: params.options?.signal,
         })),
       };

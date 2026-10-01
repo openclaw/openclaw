@@ -1,4 +1,3 @@
-// ClawHub plugin discovery reads and strict remote response normalization.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import {

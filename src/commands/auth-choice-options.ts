@@ -102,7 +102,6 @@ export function formatAuthChoiceChoicesForCli(params?: {
   return uniqueStrings(values).join("|");
 }
 
-/** Build flat auth-choice options from core choices plus provider setup flows. */
 function buildAuthChoiceOptions(params: {
   assistantVisibleOnly?: boolean;
   detectedProviderIds?: ReadonlySet<string>;

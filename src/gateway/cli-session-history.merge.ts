@@ -143,7 +143,7 @@ function extractComparableText(
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
-    ...(stripResult.stripped && isClaudeCliImportedUserMessage(message, role)
+    ...(stripResult.stripped && isClaudeImport
       ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
       : {}),
     ...(normalized ? { text: normalized } : {}),
@@ -357,10 +357,11 @@ function findFirstTimestampCandidateInRange(
   return best;
 }
 
-function findMinimumOrderCursor(
+function findUnconsumedTimestampCursor(
   entries: ComparableHistoryMessage[],
   startCursor: number,
   minimumOrder: number,
+  consumed: Set<ComparableHistoryMessage>,
 ): number {
   let cursor = startCursor;
   let end = entries.length;
@@ -372,6 +373,13 @@ function findMinimumOrderCursor(
     } else {
       end = middle;
     }
+  }
+  while (cursor < entries.length) {
+    const candidate = entries[cursor];
+    if (candidate && candidate.order >= minimumOrder && !consumed.has(candidate)) {
+      break;
+    }
+    cursor += 1;
   }
   return cursor;
 }
@@ -402,30 +410,18 @@ function findTimestampMatch(
   // An alternate text view can impose a higher floor than this index owns.
   // Keep order-only skips local until a match commits that floor for this text.
   if (timestamp === undefined) {
-    let missingCursor = findMinimumOrderCursor(
+    const missingCursor = findUnconsumedTimestampCursor(
       summary.missingTimestamps,
       summary.missingTimestampCursor,
       minimumOrder,
+      consumed,
     );
-    let timestampedCursor = findMinimumOrderCursor(
+    const timestampedCursor = findUnconsumedTimestampCursor(
       summary.timestampedByOrder,
       summary.timestampedOrderCursor,
       minimumOrder,
+      consumed,
     );
-    while (missingCursor < summary.missingTimestamps.length) {
-      const candidate = summary.missingTimestamps[missingCursor];
-      if (candidate && candidate.order >= minimumOrder && !consumed.has(candidate)) {
-        break;
-      }
-      missingCursor += 1;
-    }
-    while (timestampedCursor < summary.timestampedByOrder.length) {
-      const candidate = summary.timestampedByOrder[timestampedCursor];
-      if (candidate && candidate.order >= minimumOrder && !consumed.has(candidate)) {
-        break;
-      }
-      timestampedCursor += 1;
-    }
     const missing = summary.missingTimestamps[missingCursor];
     const timestamped = summary.timestampedByOrder[timestampedCursor];
     const candidate =
@@ -466,20 +462,17 @@ function findTimestampMatch(
     }
     return timestamped;
   }
-  let missingCursor = findMinimumOrderCursor(
+  const missingCursor = findUnconsumedTimestampCursor(
     summary.missingTimestamps,
     summary.missingTimestampCursor,
     minimumOrder,
+    consumed,
   );
-  while (missingCursor < summary.missingTimestamps.length) {
-    const candidate = summary.missingTimestamps[missingCursor];
-    if (candidate && candidate.order >= minimumOrder && !consumed.has(candidate)) {
-      summary.missingTimestampCursor = missingCursor + 1;
-      return candidate;
-    }
-    missingCursor += 1;
+  const candidate = summary.missingTimestamps[missingCursor];
+  if (candidate) {
+    summary.missingTimestampCursor = missingCursor + 1;
   }
-  return undefined;
+  return candidate;
 }
 
 function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): void {

@@ -1,17 +1,14 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
-import {
-  loadWorkspaceSkills,
-  readWorkspaceSkillSources,
-} from "../loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-loader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
@@ -26,19 +23,10 @@ import {
 } from "./refresh.watcher.test-support.js";
 import { serveWorkspaceSkills } from "./workspace-worker.js";
 
-const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
-  createSkillsWatcherMock();
-vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
-vi.mock("./refresh-ancestor-native.js", () => ({
-  createNativeSkillsAncestorWatcher: nativeWatchMock,
-}));
-vi.mock("./refresh-content-native.js", () => ({
-  createNativeSkillsContentWatcher: nativeContentWatchMock,
-}));
-
-const { shouldUseNativeSkillsWatcher } = await import("./refresh-watch-transport.js");
-
-const fixture = useSkillsWatcherFixture();
+const observer = createSkillsWatcherMock();
+const { watchMock } = observer;
+vi.mock("@openclaw/fs-safe/watch", () => ({ watch: watchMock }));
+const fixture = useSkillsWatcherFixture(observer);
 let resolveReusableWorkspaceSkillSnapshot: typeof import("./session-snapshot.js").resolveReusableWorkspaceSkillSnapshot;
 let refresh: typeof import("./refresh.js");
 const releases: Array<() => void> = [];
@@ -50,7 +38,7 @@ afterEach(() => {
   resetGatewayWorkAdmission();
   releases.splice(0).forEach((release) => release());
   watchMock.mockClear();
-  createdWatchers.length = 0;
+  observer.subscriptions.length = 0;
 });
 
 it("retires remote subscriptions during Gateway drain and reacquires after runtime reset", async () => {
@@ -151,11 +139,16 @@ it("refreshes an existing session from host changes while retaining a healthy sn
   expect(edited.snapshot.prompt).toContain("Edited host instructions");
   expect(access.watchSkills).toHaveBeenCalledTimes(1);
   expect(access.loadSkills).toHaveBeenCalledTimes(2);
+  await observer.readyAll();
   expect(
-    watchMock.mock.calls.every(([, options]) =>
-      options.ignored(path.join(params.workspaceDir, "skills", "stale", "SKILL.md")),
+    observer.subscriptions.some((entry) =>
+      entry.options.scopes.some(
+        (scope) =>
+          path.resolve(entry.authority.rootDir, scope.path) ===
+          path.join(params.workspaceDir, "skills"),
+      ),
     ),
-  ).toBe(true);
+  ).toBe(false);
 });
 
 it("uses native preparation fallback after unavailable watching and cancels on watch:false", async () => {
@@ -214,210 +207,58 @@ it("restores snapshot reuse only on verified availability, without adding a cont
   expect(access.watchSkills).toHaveBeenCalledOnce();
 });
 
-it.each(["initial", "replacement"] as const)(
-  "carries an unchanged-content %s verification error through the worker into host preparation",
-  async (phase) => {
-    // Availability is certifiable through owned native handles or pathname polling.
-    vi.stubEnv("CHOKIDAR_USEPOLLING", String(!shouldUseNativeSkillsWatcher(false)));
-    const workspace = await fixture.createFixtureDirectory("watch-worker");
-    const root = path.join(workspace, "skills");
-    await writeSkill({
-      dir: path.join(root, "guide"),
-      name: "guide",
-      description: "Stable content",
-    });
-    expect(
-      loadWorkspaceSkills(workspace, { workspaceOnly: true }).map((entry) => entry.skill.name),
-    ).toEqual(["guide"]);
-    const input = new PassThrough();
-    const output = new PassThrough();
-    let wire = "";
-    output.on("data", (chunk: Buffer) => {
-      wire += chunk.toString();
-    });
-    const messages = () =>
-      wire
-        .split("\n")
-        .filter(Boolean)
-        .map((line): unknown => JSON.parse(line));
-    const task = serveWorkspaceSkills({
-      workspace,
-      home: workspace,
-      operation: "watch",
-      input,
-      output,
-    });
-    const outside = await fixture.createFixtureDirectory("worker-linked-skills");
-    const sourcePlan = {
-      ...resolveWorkspaceSkillSourcePlan(workspace, { workspaceOnly: true }),
-      allowSymlinkTargets: [outside],
-    };
-    input.write(`${JSON.stringify({ sourcePlan })}\n`);
-    try {
-      await vi.waitFor(() => {
-        expect(
-          watchMock.mock.calls.some(([watched]) => watched === root.replaceAll("\\", "/")),
-        ).toBe(true);
-      });
-      let active = watchForSkillRoot(root).watcher;
-      for (const watcher of createdWatchers) {
-        if (watcher !== active) {
-          watcher.emit("ready");
-        }
-      }
-      await Promise.resolve();
-      active.emit("ready");
-      let pending = watchForSkillRoot(root).watcher;
-      if (phase === "replacement") {
-        pending.emit("ready");
-        active = pending;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        const expanded = await fixture.createFixtureDirectory("watch-worker/skills/expanded");
-        active.emit("all", "addDir", expanded);
-        pending = watchForSkillRoot(root).watcher;
-        expect(pending).not.toBe(active);
-      }
-      const version = getSkillsSnapshotVersion(workspace);
-      pending.emit("error", Object.assign(new Error("verification read failed"), { code: "EIO" }));
-      expect(messages().filter((event) => event === "unavailable")).toEqual(["unavailable"]);
-      expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(version);
-      expect(active.closed).toBe(false);
-      expect(pending.closed).toBe(true);
-      const count = createdWatchers.length;
-      const messageCount = messages().length;
-      pending.emit("error", new Error("late verification error"));
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(createdWatchers).toHaveLength(count);
-      expect(messages()).toHaveLength(messageCount);
-      await writeSkill({
-        dir: path.join(outside, "linked"),
-        name: "linked",
-        description: "Outage discovery",
-      });
-      await fs.symlink(
-        outside,
-        path.join(root, "linked-root"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
-      await writeSkill({
-        dir: path.join(root, "guide"),
-        name: "guide",
-        description: "Changed during outage",
-      });
-      vi.useFakeTimers();
-      active.emit("all", "change", path.join(root, "guide", "SKILL.md"));
-      await vi.advanceTimersByTimeAsync(250);
-      vi.useRealTimers();
-      expect(messages().slice(messageCount)).toContain("change");
-      expect(messages()).not.toContain("available");
-      active.emit("all", "addDir", path.join(root, "expanded-again"));
-      const recovering = watchForSkillRoot(root).watcher;
-      expect(recovering).not.toBe(active);
-      recovering.emit("ready");
-      // Verified content still has deferred target discovery: the worker must
-      // acquire and verify the new symlink target before advertising availability.
-      expect(messages()).not.toContain("available");
-      await vi.waitFor(() => {
-        expect(
-          watchMock.mock.calls.some(([watched]) => watched === outside.replaceAll("\\", "/")),
-        ).toBe(true);
-      });
-      // Worker discovery reconciled with its config-less request. Prime the
-      // loader's matching symlink policy before coverage becomes available.
-      expect(
-        loadWorkspaceSkills(workspace, {
-          workspaceOnly: true,
-          config: { skills: { load: { allowSymlinkTargets: sourcePlan.allowSymlinkTargets } } },
-        }).map((entry) => entry.skill.name),
-      ).toContain("linked");
-      expect(messages()).not.toContain("available");
-      const outsideObserver = watchForSkillRoot(outside).watcher;
-      for (const watcher of createdWatchers) {
-        watcher.emit("ready");
-      }
-      await waitForSkillsWatcherTurn();
-      expect(watchForSkillRoot(outside).watcher).not.toBe(outsideObserver);
-      expect(watchForSkillRoot(outside).watcher.closed).toBe(false);
-      expect(messages().filter((event) => event === "available")).toEqual(["available"]);
-      const restoredCount = messages().length;
-      await writeSkill({
-        dir: path.join(outside, "linked"),
-        name: "linked",
-        description: "Changed after recovered coverage",
-      });
-      vi.useFakeTimers();
-      watchForSkillRoot(outside).watcher.emit(
-        "all",
-        "change",
-        path.join(outside, "linked", "SKILL.md"),
-      );
-      await vi.advanceTimersByTimeAsync(250);
-      vi.useRealTimers();
-      expect(messages().slice(restoredCount)).toContain("change");
-      watchForSkillRoot(root).watcher.emit("error", new Error("later observation failure"));
-      expect(messages().at(-1)).toBe("unavailable");
-    } finally {
-      input.end();
-      await task;
-      expect(createdWatchers.every((watcher) => watcher.closed)).toBe(true);
-      output.destroy();
-      await refresh.closeSkillsWatchers(true);
+it("carries observation unavailability and recovery through the worker wire and joins termination", async () => {
+  const workspace = await fixture.createFixtureDirectory("watch-worker");
+  await writeSkill({
+    dir: path.join(workspace, "skills/guide"),
+    name: "guide",
+    description: "Worker content",
+  });
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const messages: unknown[] = [];
+  output.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().trim().split("\n")) {
+      messages.push(JSON.parse(line));
     }
-
-    // Worker and Gateway own separate processes in production. Retire the worker
-    // before feeding its actual wire event into the host-side transport fixture.
-    const events = messages().filter(
-      (event): event is "change" | "unavailable" | "available" =>
-        event === "change" || event === "unavailable" || event === "available",
-    );
-    const failureIndex = events.indexOf("unavailable");
-    const availableIndex = events.indexOf("available");
-    expect(failureIndex).toBeGreaterThanOrEqual(0);
-    expect(availableIndex).toBeGreaterThan(failureIndex);
-    const { params, subscriptions, access, writes } = await remoteFixture();
-    let current = (await resolveReusableWorkspaceSkillSnapshot(params)).snapshot;
-    for (const event of events.slice(failureIndex, availableIndex)) {
-      subscriptions[0]!.emit(event);
-    }
-    for (const description of ["First later preparation", "Second later preparation"]) {
-      await writes(description);
-      current = (
-        await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: current })
-      ).snapshot;
-      expect(current.prompt).toContain(description);
-    }
-    const restoredVersion = getSkillsSnapshotVersion(params.workspaceDir);
-    subscriptions[0]!.emit(events[availableIndex]!);
-    const loads = access.loadSkills.mock.calls.length;
-    expect(
-      (await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: current }))
-        .snapshot,
-    ).toBe(current);
-    expect(access.loadSkills).toHaveBeenCalledTimes(loads);
-    expect(getSkillsSnapshotVersion(params.workspaceDir)).toBe(restoredVersion);
-    const nextChange = events.indexOf("change", availableIndex + 1);
-    expect(nextChange).toBeGreaterThan(availableIndex);
-    await writes("Post-recovery content");
-    subscriptions[0]!.emit(events[nextChange]!);
-    current = (
-      await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: current })
-    ).snapshot;
-    expect(current.prompt).toContain("Post-recovery content");
-    subscriptions[0]!.emit(events.at(-1)!);
-    await writes("Second outage content");
-    current = (
-      await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: current })
-    ).snapshot;
-    expect(current.prompt).toContain("Second outage content");
-    expect(access.watchSkills).toHaveBeenCalledOnce();
-    refresh.ensureSkillsWatcher({ ...params, config: { skills: { load: { watch: false } } } });
-    expect(subscriptions[0]!.signal.aborted).toBe(true);
-  },
-);
+  });
+  const task = serveWorkspaceSkills({
+    workspace,
+    home: workspace,
+    operation: "watch",
+    input,
+    output,
+  });
+  input.write(
+    JSON.stringify({
+      sourcePlan: resolveWorkspaceSkillSourcePlan(workspace, { workspaceOnly: true }),
+    }) + "\n",
+  );
+  await waitForSkillsWatcherTurn();
+  await observer.readyAll();
+  const original = observer.forRoot(path.join(workspace, "skills"));
+  original.fail(new Error("read failure"));
+  expect(messages).toContain("unavailable");
+  await original.close();
+  await waitForSkillsWatcherTurn();
+  await observer.readyAll();
+  expect(messages).toContain("available");
+  await writeSkill({
+    dir: path.join(workspace, "skills/guide"),
+    name: "guide",
+    description: "Later worker edit",
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  observer
+    .forRoot(path.join(workspace, "skills"))
+    .change(path.join(workspace, "skills/guide/SKILL.md"));
+  await vi.advanceTimersByTimeAsync(250);
+  expect(messages).toContain("change");
+  input.end();
+  await task;
+  expect(observer.subscriptions.every((entry) => entry.closed)).toBe(true);
+  output.destroy();
+});
 
 it("refreshes Gateway Workshop edits alongside the existing host subscription", async () => {
   const { params, gateway, access, subscriptions } = await remoteFixture();
@@ -432,10 +273,11 @@ it("refreshes Gateway Workshop edits alongside the existing host subscription", 
   const request = { ...params, config, agentId: "main" };
   const first = await resolveReusableWorkspaceSkillSnapshot(request);
   expect(first.snapshot.prompt).toContain("Original Workshop instructions");
+  await observer.readyAll();
   await write("Updated Workshop instructions");
-  vi.useFakeTimers();
-  const { watcher } = watchForSkillRoot(workshop);
-  watcher.emit("all", "change", path.join(workshop, "authored", "SKILL.md"));
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const watcher = observer.forRoot(workshop);
+  watcher.change(path.join(workshop, "authored", "SKILL.md"));
   await vi.advanceTimersByTimeAsync(250);
   vi.useRealTimers();
   const updated = await resolveReusableWorkspaceSkillSnapshot({
@@ -457,10 +299,9 @@ it("reacquires a closed transport and rejects late events after binding retireme
   const { params, gateway, subscriptions, access, release } = await remoteFixture();
   refresh.ensureSkillsWatcher(params);
   subscriptions[0]!.end();
-  await vi.waitFor(() => {
-    refresh.ensureSkillsWatcher(params);
-    expect(access.watchSkills).toHaveBeenCalledTimes(2);
-  });
+  await waitForSkillsWatcherTurn();
+  refresh.ensureSkillsWatcher(params);
+  expect(access.watchSkills).toHaveBeenCalledTimes(2);
   const version = getSkillsSnapshotVersion(gateway);
   subscriptions[0]!.emit("change");
   expect(getSkillsSnapshotVersion(gateway)).toBe(version);
@@ -470,4 +311,71 @@ it("reacquires a closed transport and rejects late events after binding retireme
   expect(getSkillsSnapshotVersion(gateway)).toBe(version);
   await refresh.closeSkillsWatchers();
   expect(() => refresh.ensureSkillsWatcher(params)).toThrow("Workspace access is stopped");
+});
+
+it("joins accepted stdout writes after retiring Skills observation", async () => {
+  const workspace = await fixture.createFixtureDirectory("skills-watch-stdout");
+  const input = new PassThrough();
+  const written = createDeferred();
+  const retired = createDeferred();
+  let blocked = true;
+  const callbacks: Array<(error?: Error | null) => void> = [];
+  const output = new Writable({
+    highWaterMark: 1,
+    write(_chunk, _encoding, callback) {
+      written.resolve();
+      if (blocked) {
+        callbacks.push(callback);
+      } else {
+        callback();
+      }
+    },
+  });
+  const originalClose = refresh.closeSkillsWatchers;
+  vi.spyOn(refresh, "closeSkillsWatchers").mockImplementation((...args) => {
+    const pending = originalClose(...args);
+    void pending.then(retired.resolve, retired.reject);
+    return pending;
+  });
+  const worker = serveWorkspaceSkills({
+    workspace,
+    home: workspace,
+    operation: "watch",
+    input,
+    output,
+  });
+  let finished = false;
+  void worker.then(
+    () => {
+      finished = true;
+    },
+    () => {
+      finished = true;
+    },
+  );
+  try {
+    input.write(
+      JSON.stringify({
+        sourcePlan: resolveWorkspaceSkillSourcePlan(workspace, { workspaceOnly: true }),
+      }) + "\n",
+    );
+    await written.promise;
+    expect(output.writableNeedDrain).toBe(true);
+    await observer.readyAll();
+    input.end();
+    await retired.promise;
+    await waitForSkillsWatcherTurn();
+    expect(observer.subscriptions.every((entry) => entry.closed)).toBe(true);
+    expect(finished).toBe(false);
+    blocked = false;
+    callbacks.splice(0).forEach((callback) => callback());
+    await worker;
+    expect(output.writableLength).toBe(0);
+  } finally {
+    blocked = false;
+    callbacks.splice(0).forEach((callback) => callback());
+    input.end();
+    await worker;
+    output.destroy();
+  }
 });

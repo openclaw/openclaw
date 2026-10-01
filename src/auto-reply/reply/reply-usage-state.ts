@@ -10,6 +10,14 @@ const MAX_REPLY_USAGE_STATE_ENTRIES = 1_024;
 
 const store = new Map<string, { snapshot: PluginHookReplyUsageState; expiresAt: number }>();
 
+function projectHookUsage(usage?: NormalizedUsage): PluginHookReplyUsageState["usage"] {
+  if (!usage) {
+    return undefined;
+  }
+  const { input, output, cacheRead, cacheWrite, total } = usage;
+  return { input, output, cacheRead, cacheWrite, total };
+}
+
 export function buildReplyUsageState(params: {
   config: OpenClawConfig;
   agentDir: string;
@@ -77,24 +85,8 @@ export function buildReplyUsageState(params: {
             promptTokens: params.promptTokens,
             usage: params.usage,
           }),
-    usage: params.usage
-      ? {
-          input: params.usage.input,
-          output: params.usage.output,
-          cacheRead: params.usage.cacheRead,
-          cacheWrite: params.usage.cacheWrite,
-          total: params.usage.total,
-        }
-      : undefined,
-    lastUsage: params.lastCallUsage
-      ? {
-          input: params.lastCallUsage.input,
-          output: params.lastCallUsage.output,
-          cacheRead: params.lastCallUsage.cacheRead,
-          cacheWrite: params.lastCallUsage.cacheWrite,
-          total: params.lastCallUsage.total,
-        }
-      : undefined,
+    usage: projectHookUsage(params.usage),
+    lastUsage: projectHookUsage(params.lastCallUsage),
   };
 }
 

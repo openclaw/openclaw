@@ -172,7 +172,6 @@ struct TalkGatewaySpeechClientTests {
             parsed: parsed,
             defaultProvider: "elevenlabs")
         #expect(routing.activeProvider == "xiaomi")
-        #expect(routing.executionMode == .native)
         #expect(routing.route == .gatewayTalkSpeak)
 
         let expectedAudio = Data([4, 5, 6])
@@ -188,7 +187,6 @@ struct TalkGatewaySpeechClientTests {
         manager._test_applyLoadedTalkConfig(parsed)
 
         #expect(manager._test_runtimeRoute() == .gatewayTalkSpeak)
-        #expect(manager._test_executionMode() == .native)
         #expect(!manager.gatewayTalkUsesRealtime)
         #expect(manager.gatewayTalkTransportLabel == "Native")
 
@@ -292,7 +290,6 @@ struct TalkGatewaySpeechClientTests {
             defaultProvider: "elevenlabs")
 
         #expect(routing.activeProvider == "openai")
-        #expect(routing.executionMode == .native)
         #expect(routing.route == .gatewayTalkSpeak)
     }
 
@@ -355,7 +352,6 @@ struct TalkGatewaySpeechClientTests {
             parsed: parsed,
             defaultProvider: "elevenlabs")
 
-        #expect(routing.executionMode == .realtimeRelay)
         #expect(routing.route == .realtimeRelay)
         #expect(!routing.route.usesGatewayTalkSpeak)
         #expect(routing.route.gatewayOwnsCredentials)

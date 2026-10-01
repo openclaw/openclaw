@@ -59,6 +59,10 @@ Two ways to start an ACP session:
 
 ### `sessions_spawn` parameters
 
+<ParamField path="user" type="string">
+  The person's requester_profile.id, required when several people have steered this turn.
+</ParamField>
+
 <ParamField path="task" type="string" required>
   Initial prompt sent to the ACP session.
 </ParamField>

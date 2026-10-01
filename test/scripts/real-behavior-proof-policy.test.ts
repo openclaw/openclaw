@@ -5,9 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   NEEDS_PR_CONTEXT_LABEL,
   PROOF_OVERRIDE_LABEL,
-  evaluateClawSweeperExactHeadProof,
   evaluatePullRequestContext,
-  hasClawSweeperExactHeadProof,
   isMaintainerTeamMember,
   labelsForPullRequestContext,
   readBoundedGitHubApiJson,
@@ -366,92 +364,6 @@ describe("real-behavior-proof-policy", () => {
       }).status,
     ).toBe("missing");
   });
-
-  it("accepts ClawSweeper pass verdict comments only for the exact PR head", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "clawsweeper[bot]",
-          type: "Bot",
-        },
-        performed_via_github_app: {
-          slug: "clawsweeper",
-        },
-        body: [
-          "Codex review: passed.",
-          "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-        ].join("\n"),
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
-    expect(
-      hasClawSweeperExactHeadProof({
-        pullRequest: {
-          ...pullRequest,
-          head: { sha: "d0215b2d67a45a783277fc7d2949ac4a30f63ec6" },
-        },
-        comments,
-      }),
-    ).toBe(false);
-  });
-
-  for (const { name, login, userType, expectedPassed } of [
-    {
-      name: "rejects forged ClawSweeper pass verdict markers from contributor comments",
-      login: "external-contributor",
-      userType: "User",
-      expectedPassed: false,
-    },
-    {
-      name: "accepts exact ClawSweeper bot pass verdict markers when GitHub omits the app source",
-      login: "clawsweeper[bot]",
-      userType: "Bot",
-      expectedPassed: true,
-    },
-    {
-      name: "accepts exact OpenClaw ClawSweeper bot pass verdict markers when GitHub omits the app source",
-      login: "openclaw-clawsweeper[bot]",
-      userType: "Bot",
-      expectedPassed: true,
-    },
-    {
-      name: "rejects bot-shaped pass verdict markers from other bot users",
-      login: "not-clawsweeper[bot]",
-      userType: "Bot",
-      expectedPassed: false,
-    },
-  ]) {
-    it(name, () => {
-      const pullRequest = {
-        number: 83581,
-        head: {
-          sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-        },
-      };
-      const comments = [
-        {
-          user: {
-            login,
-            type: userType,
-          },
-          body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-        },
-      ];
-
-      expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(expectedPassed);
-      expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(
-        expectedPassed,
-      );
-    });
-  }
 });
 
 describe("isMaintainerTeamMember", () => {

@@ -78,11 +78,7 @@ function alignToStep(value: number, step: number, direction: "ceil" | "floor" | 
     direction === "floor"
       ? floor
       : direction === "ceil"
-        ? remainder === 0n
-          ? truncated
-          : remainder > 0n
-            ? truncated + 1n
-            : truncated
+        ? truncated + (remainder > 0n ? 1n : 0n)
         : (dividend - floor * divisor) * 2n < divisor
           ? floor
           : floor + 1n;

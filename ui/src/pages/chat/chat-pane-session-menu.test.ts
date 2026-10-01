@@ -12,12 +12,12 @@ import { showToast } from "../../lib/toast.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -33,6 +33,80 @@ afterEach(() => {
 });
 
 describe("chat pane session menu boundary", () => {
+  it("keeps unchanged menu children settled and reads current callbacks after a header refresh", async () => {
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture({ state: { groups: ["Projects"] } }),
+    });
+    state.settings = loadSettings();
+    let session: GatewaySessionRow = {
+      key: state.sessionKey,
+      sessionId: "current",
+      kind: "direct",
+      label: "Current conversation",
+      sharingRole: "owner",
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    let workspace = createPaneHeaderWorkspaceFixture(state);
+    const draw = () => {
+      workspace = createPaneHeaderWorkspaceFixture(state);
+      render(pane.renderPaneHeader(workspace, session, false, undefined, false, null), container);
+    };
+    draw();
+    const menu = container.querySelector("openclaw-chat-header-session-menu")!;
+    await menu.updateComplete;
+    const items = [...menu.querySelectorAll("wa-dropdown-item")];
+    await Promise.all(items.map((item) => item.updateComplete));
+    await menu.updateComplete;
+    const updates = vi.spyOn(menu, "render");
+    const itemUpdates = items.map((item) => vi.spyOn(item, "requestUpdate"));
+    draw();
+    await menu.updateComplete;
+    expect(updates).not.toHaveBeenCalled();
+    expect(itemUpdates.every((spy) => spy.mock.calls.length === 0)).toBe(true);
+    menu.querySelector("wa-dropdown")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "quick:panels:session-files" } },
+      }),
+    );
+    expect(workspace.onToggleCollapsed).toHaveBeenCalledOnce();
+
+    state.settings = { ...state.settings };
+    session = { ...session };
+    draw();
+    await menu.updateComplete;
+    expect(updates).not.toHaveBeenCalled();
+
+    session = { ...session, label: "Updated conversation", pinned: true };
+    draw();
+    await menu.updateComplete;
+    expect(updates).toHaveBeenCalledOnce();
+    expect(menu.session.label).toBe("Updated conversation");
+    expect(menu.session.pinned).toBe(true);
+    state.settings = { ...state.settings, chatShowThinking: !state.settings.chatShowThinking };
+    draw();
+    await menu.updateComplete;
+    expect(updates).toHaveBeenCalledTimes(2);
+    expect(menu.querySelector('[value="view:reasoning"]')?.hasAttribute("checked")).toBe(
+      state.settings.chatShowThinking,
+    );
+    const action = vi.spyOn(pane, "handleHeaderSessionAction").mockResolvedValue(undefined);
+    menu
+      .querySelector("wa-dropdown")!
+      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "toggle-pin" } } }));
+    expect(action).toHaveBeenCalledWith({ kind: "toggle-pin" }, session);
+    expect(action.mock.calls[0]?.[1]).toBe(session);
+    state.applySettings = vi.fn();
+    menu.querySelector("wa-dropdown")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "view:tool-calls" } },
+      }),
+    );
+    expect(state.applySettings).toHaveBeenCalledWith({
+      chatShowToolCalls: !state.settings.chatShowToolCalls,
+    });
+  });
+
   it("keeps observed pane titles and renames with their conversations when agent selection changes", async () => {
     const primary: GatewaySessionRow = {
       key: "agent:main:dashboard:ledger",
@@ -85,7 +159,7 @@ describe("chat pane session menu boundary", () => {
         : undefined;
       render(
         pane.renderPaneHeader(
-          createSessionWorkspaceProps(pane.state),
+          createPaneHeaderWorkspaceFixture(pane.state),
           selectedChatSessionRow(pane.state),
           false,
           undefined,
@@ -151,7 +225,7 @@ describe("chat pane session menu boundary", () => {
     const draw = (session: GatewaySessionRow | undefined, catalog = false) => {
       render(
         pane.renderPaneHeader(
-          createSessionWorkspaceProps(state),
+          createPaneHeaderWorkspaceFixture(state),
           session,
           catalog,
           undefined,
@@ -199,7 +273,7 @@ describe("chat pane session menu boundary", () => {
       const container = document.body.appendChild(document.createElement("div"));
       render(
         pane.renderPaneHeader(
-          createSessionWorkspaceProps(state),
+          createPaneHeaderWorkspaceFixture(state),
           session,
           false,
           undefined,
@@ -304,7 +378,7 @@ describe("chat pane session menu boundary", () => {
 
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         session,
         false,
         undefined,

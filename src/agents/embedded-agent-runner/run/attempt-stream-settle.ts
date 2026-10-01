@@ -401,6 +401,7 @@ export async function settleEmbeddedAttemptStream(input: {
 }
 
 export async function prepareEmbeddedAttemptTransport(input: {
+  assertCronRootCurrent?: () => void;
   attempt: EmbeddedRunAttemptParams;
   session: AgentSession;
   settingsManager: SettingsManager;
@@ -423,10 +424,16 @@ export async function prepareEmbeddedAttemptTransport(input: {
 }) {
   const attempt = input.attempt;
   const session = input.session;
-  const assertRunCurrent = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedCurrent = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     input.abortSignal,
   );
+  const assertRunCurrent = input.assertCronRootCurrent
+    ? () => {
+        assertAdmittedCurrent?.();
+        input.assertCronRootCurrent?.();
+      }
+    : assertAdmittedCurrent;
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({

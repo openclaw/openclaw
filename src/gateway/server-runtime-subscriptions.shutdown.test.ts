@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -7,15 +7,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import * as sessionObserverModel from "./session-observer-model.js";
 
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
@@ -31,30 +26,9 @@ vi.mock("../audit/audit-recorder.js", () => ({
   }),
 }));
 
-function createParams(signal: AbortSignal): Parameters<typeof startGatewayEventSubscriptions>[0] {
-  const chatRunState = createChatRunState();
-  return {
-    scheduler: createTestGatewayScheduler(),
-    signal,
-    log: createSubsystemLogger("test/subscriptions-shutdown"),
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeHasSessionSubscribers: () => false,
-    nodeSendToSession: vi.fn(),
-    agentRunSeq: new Map(),
-    chatRunState,
-    toolEventRecipients: chatRunState.toolEventRecipients,
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map(),
-    restartRecoveryCandidates: new Map(),
-    refreshConnectedUserProfiles: vi.fn(),
-  };
-}
-
-it.each(["before startup", "before inherited connection drain"] as const)(
+it.for(["before startup", "before inherited connection drain"] as const)(
   "cancels auxiliary model work %s",
-  async (phase) => {
+  async (phase, { signal }) => {
     let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     const testState = await createOpenClawTestState({ scenario: "minimal" });
     const connectionWork = new GatewayConnectionWork();
@@ -64,6 +38,7 @@ it.each(["before startup", "before inherited connection drain"] as const)(
       agentId: target.agentId,
       sessionId: "shutdown-recap",
     };
+    const started = createDeferred();
     const finish = createDeferred();
     const prepared = vi.spyOn(sessionObserverModel, "defaultPrepareModel").mockResolvedValue({
       config: {},
@@ -76,6 +51,7 @@ it.each(["before startup", "before inherited connection drain"] as const)(
     });
     const complete = vi.spyOn(sessionObserverModel, "defaultCompleteModel").mockImplementation(() =>
       trackAsyncWork(async () => {
+        started.resolve();
         await finish.promise;
         return {
           text: "Finished.",
@@ -99,7 +75,11 @@ it.each(["before startup", "before inherited connection drain"] as const)(
       if (phase === "before startup") {
         connectionWork.beginClose();
       }
-      unsubs = startGatewayEventSubscriptions(createParams(connectionWork.signal));
+      unsubs = startGatewayEventSubscriptions({
+        ...createSubscriptionTestFixture().createParams(),
+        signal: connectionWork.signal,
+        log: createSubsystemLogger("test/subscriptions-shutdown"),
+      });
       if (phase === "before startup") {
         expect(unsubs.sessionActivitySummaries.ensure(target).state).toBe("unavailable");
         expect(prepared).not.toHaveBeenCalled();
@@ -107,7 +87,9 @@ it.each(["before startup", "before inherited connection drain"] as const)(
         return;
       }
       await connectionWork.track(() => unsubs!.sessionActivitySummaries.ensure(target));
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+      // ensure returns a projection before the real transcript worker reaches the model.
+      await withinTest(started.promise, signal);
+      expect(complete).toHaveBeenCalledOnce();
       const modelSignal = complete.mock.calls[0]![0].abortSignal!;
       let drained = false;
       draining = connectionWork.drain().then(() => {

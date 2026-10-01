@@ -20,6 +20,8 @@ export type SessionTranscriptSearchParams = {
   env?: NodeJS.ProcessEnv;
   limit?: number;
   query: string;
+  /** Interactive search completes the final word; tool queries retain exact terms. */
+  match?: "prefix";
   role?: "assistant" | "user";
   sessionId?: string;
   sessionKeys?: string[];

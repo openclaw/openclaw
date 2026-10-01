@@ -30,9 +30,6 @@ type CollectFileViolationsParams<Violation extends object> = {
   sourceRoots: string[];
 };
 
-/**
- * Converts repo-relative source roots into absolute paths.
- */
 export function resolveSourceRoots(repoRoot: string, relativeRoots: string[]) {
   return relativeRoots.map((root) => path.join(repoRoot, ...root.split("/").filter(Boolean)));
 }
@@ -41,9 +38,6 @@ export function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: st
   return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
 }
 
-/**
- * Recursively collects TypeScript files under a file or directory target.
- */
 export async function collectTypeScriptFiles(
   targetPath: string,
   options: CollectTypeScriptFilesOptions = {},
@@ -128,9 +122,6 @@ export async function collectTypeScriptFilesFromRoots(
   ).flat();
 }
 
-/**
- * Runs a guard's violation scanner across collected TypeScript source files.
- */
 export async function collectFileViolations<Violation extends object>(
   params: CollectFileViolationsParams<Violation>,
 ) {

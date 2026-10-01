@@ -3,8 +3,10 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
@@ -108,6 +110,7 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 }));
 
 describe("subagent registry archive behavior", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let settleRootWork: ReturnType<typeof observeRootWork>;
   let mod: typeof import("./subagent-registry.test-helpers.js");
   let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
@@ -249,11 +252,10 @@ describe("subagent registry archive behavior", () => {
       data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
     });
 
-    await vi.waitFor(() => {
-      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
-        execution: { status: "terminal", endedAt },
-        archiveAtMs: endedAt + 60_000,
-      });
+    await settleRootWork(true);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
+      execution: { status: "terminal", endedAt },
+      archiveAtMs: endedAt + 60_000,
     });
   });
 
@@ -379,7 +381,7 @@ describe("subagent registry archive behavior", () => {
       }
       return {};
     });
-    vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+    vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
     vi.mocked(resolveContextEngine).mockResolvedValue({
       info: { id: "test", name: "Test", version: "0.0.1" },
       ingest: async () => ({ ingested: false }),
@@ -454,7 +456,7 @@ describe("subagent registry archive behavior", () => {
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("retains cancellation evidence when the native retirement commit is rejected", async () => {
+  it("retains cancellation evidence when the retirement write is rejected", async () => {
     const now = Date.now();
     const runId = "run-killed-tombstone-retry";
     addCanonicalSubagentRunForTests({
@@ -478,21 +480,21 @@ describe("subagent registry archive behavior", () => {
     // The stopped execution no longer owns session effects, but its native row
     // still owns durable cancellation evidence until retirement commits.
     entry.execution.suppressSessionEffects = true;
-    const persist = registryState.persistSubagentRunsToDiskOrThrow;
-    persist(subagentRuns, [runId]);
-    let rejectedCommits = 0;
+    registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+    const persist = registryState.persistSubagentRunsToDiskAsyncOrThrow;
+    let rejectedWrites = 0;
     const writer = vi
-      .spyOn(registryState, "persistSubagentRunsToDiskOrThrow")
-      .mockImplementation((runs, changedRunIds) => {
-        if (changedRunIds?.includes(runId) && !runs.has(runId)) {
-          rejectedCommits += 1;
-          throw new Error("native retirement commit rejected");
+      .spyOn(registryState, "persistSubagentRunsToDiskAsyncOrThrow")
+      .mockImplementation(async (runs, changedRunIds, options) => {
+        if (changedRunIds.includes(runId) && options.retireRunIds?.includes(runId)) {
+          rejectedWrites += 1;
+          throw new Error("retirement write rejected");
         }
-        persist(runs, changedRunIds);
+        await persist(runs, changedRunIds, options);
       });
     try {
       await sweepAndSettleCleanup();
-      expect(rejectedCommits).toBe(1);
+      expect(rejectedWrites).toBe(1);
       expect(subagentRuns.get(runId)).toBe(entry);
       expect(entry).toMatchObject({
         endedReason: "subagent-killed",
@@ -610,7 +612,7 @@ describe("subagent registry archive behavior", () => {
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("directly kills a replacement run through its durable task ID", () => {
+  it("directly kills a replacement run through its durable task ID", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:replacement-direct-kill";
     addCanonicalSubagentRunForTests({
@@ -625,7 +627,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     expect(
-      mod.markSubagentRunTerminated({
+      await mod.markSubagentRunTerminated({
         runId: "run-after-replacement-direct-kill",
         reason: "manual kill",
       }),
@@ -904,23 +906,29 @@ describe("subagent registry archive behavior", () => {
   });
 
   it("does not traverse legacy attachment paths after steer restart", async () => {
-    const attachmentsRootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-replace-attachments-"),
-    );
+    const attachmentsRootDir = tempDirs.make("openclaw-replace-attachments-");
     const attachmentsDir = path.join(attachmentsRootDir, "old");
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
 
-    await mod.registerSubagentRun({
-      runId: "run-delete-attachments-old",
+    const runId = "run-delete-attachments-old";
+    addCanonicalSubagentRunForTests({
+      runId,
       childSessionKey: "agent:main:subagent:delete-attachments-old",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "replace attachments",
       cleanup: "delete",
+      createdAt: Date.now(),
+      execution: { status: "running" },
       attachmentsRootDir,
       attachmentsDir,
     });
+    registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+    const restored = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "legacy run");
+    expect(restored).toMatchObject({ attachmentsRootDir, attachmentsDir });
+    expect(restored.attachmentId).toBeUndefined();
+    subagentRuns.set(runId, restored);
 
     const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-attachments-old",

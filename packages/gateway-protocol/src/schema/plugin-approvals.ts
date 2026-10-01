@@ -53,6 +53,12 @@ export const PluginApprovalRequestParamsSchema = closedObject({
   ),
   toolName: Type.Optional(nullableMetadata(Type.String())),
   toolCallId: Type.Optional(nullableMetadata(Type.String())),
+  policySubject: Type.Optional(
+    closedObject({
+      pluginKey: NonEmptyString,
+      tool: Type.Optional(NonEmptyString),
+    }),
+  ),
   mcpTool: Type.Optional(
     closedObject({
       server: Type.String({ minLength: 1, pattern: "\\S" }),

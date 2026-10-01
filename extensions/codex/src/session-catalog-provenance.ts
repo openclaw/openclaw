@@ -48,7 +48,12 @@ export async function readCodexSessionMeta(
       autoClose: false,
       highWaterMark: SESSION_META_READ_CHUNK_BYTES,
     });
-    const reader = candidate.endsWith(".zst") ? input.pipe(createZstdDecompress()) : input;
+    const decoder = candidate.endsWith(".zst") ? createZstdDecompress() : undefined;
+    if (decoder) {
+      input.on("error", (error) => decoder.destroy(error));
+      input.pipe(decoder);
+    }
+    const reader = decoder ?? input;
     try {
       const chunks: Buffer[] = [];
       let bytesReadTotal = 0;

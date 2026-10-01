@@ -523,8 +523,8 @@ function trackActiveCase(owner: ActiveCase): void {
 
 function untrackActiveCase(owner: ActiveCase): void {
   activeCases.delete(owner);
-  if (activeCases.size === 0) {
-    removeParentSignalHandlers();
+  if (activeCases.size === 0 && !parentSignalShutdownStarted) {
+    removeInstalledParentSignalHandlers();
   }
 }
 
@@ -538,13 +538,6 @@ function installParentSignalHandlers(): void {
     parentSignalHandlers.set(signal, handler);
     process.on(signal, handler);
   }
-}
-
-function removeParentSignalHandlers(): void {
-  if (!parentSignalHandlersInstalled || parentSignalShutdownStarted) {
-    return;
-  }
-  removeInstalledParentSignalHandlers();
 }
 
 function removeInstalledParentSignalHandlers(): void {

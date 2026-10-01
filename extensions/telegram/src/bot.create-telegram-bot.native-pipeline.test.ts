@@ -5,11 +5,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {

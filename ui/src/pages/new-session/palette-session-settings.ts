@@ -346,23 +346,27 @@ export class PaletteSessionSettings {
                       ></span
                     ><span class="palette-session-settings__chevron">${icons.chevronRight}</span>
                   </button>
-                  <button
-                    class="palette-session-settings__row palette-session-settings__worktree"
-                    type="button"
-                    role="switch"
-                    aria-checked=${String(place.worktree)}
-                    aria-label=${t("newSession.checkoutWorktree")}
-                    title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.worktreeUnavailable") : nothing}
-                    ?disabled=${locked || place.remotePlacement || !place.worktreeAvailable()}
-                    @click=${() => {
-                      place.selectWorktree(!place.worktree);
-                      onChange();
-                    }}
-                  >
-                    <span class="palette-session-settings__icon">${icons.gitBranch}</span
-                    ><span>${t("newSession.checkoutWorktree")}</span
-                    ><span class="palette-session-settings__switch" aria-hidden="true"></span>
-                  </button>
+                  ${
+                    place.checkoutVisible && !place.remoteRepository
+                      ? html`<button
+                          class="palette-session-settings__row palette-session-settings__worktree"
+                          type="button"
+                          role="switch"
+                          aria-checked=${String(place.worktree)}
+                          aria-label=${t("newSession.checkoutWorktree")}
+                          title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
+                          ?disabled=${locked || place.remotePlacement}
+                          @click=${() => {
+                            place.selectWorktree(!place.worktree);
+                            onChange();
+                          }}
+                        >
+                          <span class="palette-session-settings__icon">${icons.gitBranch}</span
+                          ><span>${t("newSession.checkoutWorktree")}</span
+                          ><span class="palette-session-settings__switch" aria-hidden="true"></span>
+                        </button>`
+                      : nothing
+                  }
                 `
           }
           ${

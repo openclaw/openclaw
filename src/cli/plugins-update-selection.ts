@@ -1,4 +1,3 @@
-// Plugin and hook-pack update selectors for id and npm-spec command inputs.
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";

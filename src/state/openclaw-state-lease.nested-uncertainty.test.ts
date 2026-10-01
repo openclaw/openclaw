@@ -19,8 +19,11 @@ vi.mock("../infra/node-sqlite.js", () => ({
 vi.mock("./openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: fixture.forbiddenNative,
 }));
-vi.mock("./openclaw-state-lease-storage.js", () => ({
+vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
+  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenNative,
+}));
+vi.mock("./openclaw-state-lease-storage.js", () => ({
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
   verifyOpenClawStateLeaseOwnership: () => fixture.expiresAt,

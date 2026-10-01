@@ -19,7 +19,6 @@ import {
   type ResolvedIrcAccount,
 } from "./accounts.js";
 import { startIrcGatewayAccount } from "./gateway.js";
-import { setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
   setIrcAllowFrom,
@@ -33,13 +32,11 @@ import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorIrcProvider: vi.fn(),
-  sendMessageIrc: vi.fn(),
 }));
 
 vi.mock("./channel-runtime.js", () => {
   return {
     monitorIrcProvider: hoisted.monitorIrcProvider,
-    sendMessageIrc: hoisted.sendMessageIrc,
   };
 });
 
@@ -83,26 +80,6 @@ function buildAccount(): ResolvedIrcAccount {
     passwordSource: "none",
     config: {} as ResolvedIrcAccount["config"],
   };
-}
-
-function installIrcRuntime() {
-  setIrcRuntime({
-    logging: {
-      shouldLogVerbose: vi.fn(() => false),
-      getChildLogger: vi.fn(() => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      })),
-    },
-    channel: {
-      activity: {
-        record: vi.fn(),
-        get: vi.fn(),
-      },
-    },
-  } as never);
 }
 
 describe("irc setup", () => {
@@ -433,7 +410,6 @@ describe("irc setup", () => {
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
-    installIrcRuntime();
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
       startAccount: async (ctx) =>

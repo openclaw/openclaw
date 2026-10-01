@@ -243,29 +243,42 @@ describe("Mattermost server thread recovery through the post handler", () => {
     },
   );
 
-  it("rejects same-session lifecycle rotation and deletion while fetching", async () => {
-    const f = await setup("channel");
-    for (const remove of [false, true]) {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      beforeResponse = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const pending = f.recover(f.turn);
-      await entered.promise;
-      if (remove) {
-        await deleteSessionEntry({
-          agentId: "main",
-          storePath: f.monitor.cfg.session?.store,
-          sessionKey: f.sessionKey,
-        });
-      } else {
-        await f.rotate("stored-session", "rotated-generation");
+  it("rejects same-session rotation and deletion during recovered-history authorization", async () => {
+    const f = await setup("direct");
+    f.monitor.account.config.dmPolicy = "pairing";
+    // Hold authorization's deadline; the separate deadline case exercises real elapsed time.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    try {
+      for (const remove of [false, true]) {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        f.monitor.pairing.readAllowFromStore = async () => {
+          entered.resolve();
+          await release.promise;
+          return ["trusted"];
+        };
+        const pending = f.recover(f.turn);
+        try {
+          await entered.promise;
+          if (remove) {
+            await deleteSessionEntry({
+              agentId: "main",
+              storePath: f.monitor.cfg.session?.store,
+              sessionKey: f.sessionKey,
+            });
+          } else {
+            await f.rotate("stored-session", "rotated-generation");
+          }
+          release.resolve();
+          expect((await pending).current).toBe(false);
+          expect(f.histories.size).toBe(0);
+        } finally {
+          release.resolve();
+          await pending;
+        }
       }
-      release.resolve();
-      expect((await pending).current).toBe(false);
-      expect(f.histories.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

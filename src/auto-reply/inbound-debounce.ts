@@ -235,19 +235,21 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await runFlush(items);
   };
 
+  const untrackKeyTask = (key: string, settled: Promise<void>) => {
+    if (keyChains.get(key) === settled) {
+      keyChains.delete(key);
+      if (!buffers.has(key)) {
+        keyGenerations.delete(key);
+      }
+    }
+  };
+
   const enqueueKeyTask = (key: string, task: () => Promise<void>) => {
     const previous = keyChains.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(task);
     const settled = next.catch(() => undefined);
     keyChains.set(key, settled);
-    const cleanup = () => {
-      if (keyChains.get(key) === settled) {
-        keyChains.delete(key);
-        if (!buffers.has(key)) {
-          keyGenerations.delete(key);
-        }
-      }
-    };
+    const cleanup = () => untrackKeyTask(key, settled);
     settled.then(cleanup, cleanup);
     return next;
   };
@@ -257,12 +259,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     keyChains.set(key, settled);
     const cleanup = () => {
       resolveSettled();
-      if (keyChains.get(key) === settled) {
-        keyChains.delete(key);
-        if (!buffers.has(key)) {
-          keyGenerations.delete(key);
-        }
-      }
+      untrackKeyTask(key, settled);
     };
     let next: Promise<void>;
     try {
@@ -276,20 +273,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const enqueueReservedKeyTask = (key: string, task: () => Promise<void>) => {
-    let readyReleased = false;
     const { promise: ready, resolve: releaseReady } = createDeferredCore();
     return {
       task: enqueueKeyTask(key, async () => {
         await ready;
         await task();
       }),
-      release: () => {
-        if (readyReleased) {
-          return;
-        }
-        readyReleased = true;
-        releaseReady();
-      },
+      release: releaseReady,
     };
   };
 

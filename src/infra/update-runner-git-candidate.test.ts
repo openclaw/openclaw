@@ -9,8 +9,10 @@ import * as processExec from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import {
-  expectRuntime,
+  advanceFixtureRemote,
   expectNoGitRuntimeStagingPaths,
+  expectRuntime,
+  prepareDeletedTrackedRuntimeAsset,
   registerGitRuntimeStagingTests,
   registerGitRuntimeRestorationTests,
   runFixtureGit as git,
@@ -119,12 +121,7 @@ describe("Git candidate activation", () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
 
-  async function advanceRemote() {
-    await fs.writeFile(path.join(remote, "candidate.txt"), "candidate\n");
-    await git(remote, "add", ".");
-    await git(remote, "commit", "-m", "candidate");
-    return git(remote, "rev-parse", "HEAD");
-  }
+  const advanceRemote = () => advanceFixtureRemote(remote);
 
   function update(opts: Partial<UpdateRunnerOptions> = {}) {
     const { prepareGitExposure, runGitDoctor, ...overrides } = opts;
@@ -889,6 +886,7 @@ describe("Git candidate activation", () => {
       restoreSource: true,
       restoreRuntime: true,
       timeoutMs: undefined,
+      trackedRuntime: true,
     },
     { layout: "node_modules/.pnpm", restoreSource: false, restoreRuntime: true, timeoutMs: 5_000 },
     {
@@ -906,7 +904,15 @@ describe("Git candidate activation", () => {
     },
   ] as const)(
     "verifies $layout runtime recovery after activation failure (source restored: $restoreSource, runtime restored: $restoreRuntime)",
-    async ({ layout, restoreSource, restoreRuntime, timeoutMs }) => {
+    async (scenario) => {
+      const { layout, restoreSource, restoreRuntime, timeoutMs } = scenario;
+      let trackedAsset: string | undefined;
+      if ("trackedRuntime" in scenario) {
+        ({ beforeSha, asset: trackedAsset } = await prepareDeletedTrackedRuntimeAsset(
+          remote,
+          root,
+        ));
+      }
       virtualStoreLayout = layout;
       await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
       const originalCache = path.join(root, "node_modules", ".cache", "jiti", "original.cjs");
@@ -1022,7 +1028,7 @@ describe("Git candidate activation", () => {
         );
         return;
       }
-      await expectRuntime(root, beforeSha);
+      await expectRuntime(root, beforeSha, trackedAsset);
       expect(await fs.readFile(originalCache, "utf8")).toBe("original runtime cache");
     },
   );

@@ -24,11 +24,7 @@ function getProfileSuffix(profileId: string): string {
 }
 
 function isEmailLike(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return trimmed.includes("@") && trimmed.includes(".");
+  return value.includes("@") && value.includes(".");
 }
 
 /** Suggests a modern OAuth profile id for a legacy provider:default profile. */

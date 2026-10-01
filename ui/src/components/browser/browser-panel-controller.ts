@@ -236,9 +236,7 @@ export class BrowserPanelController implements ReactiveController {
         this.exitCaptureModes();
       }
       this.setState("activeTargetId", active?.id ?? null);
-      if (!this.urlDraftEditing) {
-        this.setState("urlDraft", active?.url ?? "");
-      }
+      this.syncUrlDraft(active?.url ?? "");
       if (active) {
         await this.refreshView(active.id, invocation.epoch);
       } else {
@@ -409,9 +407,7 @@ export class BrowserPanelController implements ReactiveController {
           ) {
             this.setState("activeTargetId", null);
             this.setState("view", null);
-            if (!this.urlDraftEditing) {
-              this.setState("urlDraft", "");
-            }
+            this.syncUrlDraft("");
           }
         }
         this.reportError(error);
@@ -509,9 +505,7 @@ export class BrowserPanelController implements ReactiveController {
         // The prior remote document changed while selection failed. Expose an
         // unavailable state instead of restoring a screenshot that no longer owns it.
         this.setState("activeTargetId", null);
-        if (!this.urlDraftEditing) {
-          this.setState("urlDraft", "");
-        }
+        this.syncUrlDraft("");
         return;
       }
       this.setState("activeTargetId", previous.targetId);

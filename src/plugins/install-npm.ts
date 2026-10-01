@@ -44,6 +44,7 @@ export async function installPluginFromNpmSpec(
     signal?: AbortSignal;
     expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
+    npmMetadata?: { spec: string; metadata: NpmSpecResolution };
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
   },
 ): Promise<InstallPluginResult> {
@@ -72,9 +73,13 @@ export async function installPluginFromNpmSpec(
     };
   }
 
-  const metadataResult = await withInstallActivity(logger, "resolve", () =>
-    resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
-  );
+  // A channel fallback changes the attempt's spec and must resolve its own metadata.
+  const metadataResult =
+    params.npmMetadata?.spec === spec
+      ? { ok: true as const, metadata: params.npmMetadata.metadata }
+      : await withInstallActivity(logger, "resolve", () =>
+          resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal }),
+        );
   if (!metadataResult.ok) {
     return {
       ok: false,

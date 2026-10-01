@@ -74,7 +74,11 @@ suite.define(() => {
       );
       expect(await gateway.getRequests("connect")).toHaveLength(0);
 
+      const retryHealthResponse = page.waitForResponse("**/healthz");
       await page.clock.runFor(1_000);
+      // The first probe's busy state can survive while the retry probe is still in flight.
+      // Finish its real response before advancing the virtual one-second abort deadline.
+      expect(await (await retryHealthResponse).finished()).toBeNull();
       const countdown = failure.locator(".login-gate__retry");
       await countdown.filter({ hasText: "Retrying in 2s…" }).waitFor();
       await page.clock.runFor(1_000);
@@ -392,7 +396,10 @@ suite.define(() => {
     const viewport = { height: 900, width: 1280 };
     const context = await suite.browser.newContext({
       viewport,
-      recordVideo: { dir: RECOVERY_ARTIFACT_DIR, size: viewport },
+      recordVideo:
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? { dir: RECOVERY_ARTIFACT_DIR, size: viewport }
+          : undefined,
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {

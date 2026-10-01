@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   admitReplyTurn,
@@ -39,12 +38,15 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "./main-session-restart-recovery-marking.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 
 it("keeps healthy stores recoverable when an earlier startup mark fails", async () => {
   await withOpenClawTestState({ label: "recovery-mark-failure" }, async (state) => {
@@ -250,7 +252,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
 });
 
 it("marks only the closing Gateway's exact active admissions", async () => {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-owner-"));
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const resolveGatewayContext = () => undefined;
   const otherGatewayContext = () => undefined;
@@ -288,15 +290,13 @@ it("marks only the closing Gateway's exact active admissions", async () => {
     ).toBeUndefined();
   } finally {
     admissions.forEach((admission) => admission.release());
-    closeOpenClawAgentDatabasesForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
 
 it.each(["release", "completed", "rotation"] as const)(
   "does not commit a restart mark when %s invalidates its owner after planning",
   async (change) => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-commit-"));
+    const stateDir = sessionDirs.make();
     const storePath = path.join(stateDir, "sessions.json");
     const sessionKey = "agent:main:closing";
     const sessionId = "closing";
@@ -359,14 +359,12 @@ it.each(["release", "completed", "rotation"] as const)(
     } finally {
       restoreSpy();
       admission?.release();
-      closeOpenClawAgentDatabasesForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   },
 );
 
 it("does not adopt an ambient Gateway when moving an unbound reply owner", async () => {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-adoption-"));
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:adopted";
   const sessionId = "adopted";
@@ -408,13 +406,11 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
     const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey] });
     operation.complete();
     await released;
-    closeOpenClawAgentDatabasesForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
 
 it("keeps another active session recoverable when one owner releases after batch planning", async () => {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-batch-"));
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const resolveGatewayContext = () => undefined;
   const admissions: SessionWorkAdmissionLease[] = [];
@@ -479,7 +475,5 @@ it("keeps another active session recoverable when one owner releases after batch
   } finally {
     restoreSpy();
     admissions.forEach((admission) => admission.release());
-    closeOpenClawAgentDatabasesForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
