@@ -96,7 +96,7 @@ const PROMPT_ONLY_RISKS = new Set<CommandRisk["kind"]>([
 ]);
 const NON_REUSABLE_RISKS = new Set<CommandRisk["kind"]>(["inline-eval"]);
 
-const UNANALYZABLE_RISKS = new Set<CommandRisk["kind"]>([
+const UNANALYZABLE_RISKS: ReadonlySet<string> = new Set<CommandRisk["kind"]>([
   "command-substitution",
   "dynamic-executable",
   "line-continuation",
@@ -112,15 +112,15 @@ const POWERSHELL_NAMES = new Set(["powershell", "pwsh"]);
 const WINDOWS_CMD_NAMES = new Set(["cmd", "cmd.exe"]);
 const POSITIONAL_CARRIER_BLOCKED_EXECUTABLES = new Set(["find", "xargs"]);
 const SHELL_WRAPPER_PRELUDE_REASON = "shell-env-assignment";
-const UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES = new Set<CommandExplanation["shapes"][number]>([
-  "background",
-  "if",
-  "for",
-  "while",
-  "case",
-  "subshell",
-  "group",
-]);
+const UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES: ReadonlySet<string> = new Set<
+  CommandExplanation["shapes"][number]
+>(["background", "if", "for", "while", "case", "subshell", "group"]);
+
+// Membership check only, for callers outside this module that want to name a
+// hasBlockingRisk() reason without re-deriving or duplicating this vocabulary.
+export function isCuratedUnbindableReason(reason: string): boolean {
+  return UNANALYZABLE_RISKS.has(reason) || UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES.has(reason);
+}
 
 function normalizePlanningPlatform(platform?: string | null): NodeJS.Platform | undefined {
   switch (platform) {
