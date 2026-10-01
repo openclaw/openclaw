@@ -16,6 +16,7 @@ import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { modelKey } from "../shared/model-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 
 export type SystemAgentConfiguredRoute = {
@@ -184,7 +185,12 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
     ...(configuredSelection.modelTarget ? { modelTarget: configuredSelection.modelTarget } : {}),
     sourceConfig: runConfig,
     runConfig: executionConfig,
-    modelLabel: `${selection.provider}/${selection.modelId}`,
+    // Use the canonical provider/model key so a model id that already carries
+    // its provider prefix (e.g. OpenRouter's `openrouter/auto`) is not rendered
+    // as `openrouter/openrouter/auto`. This keeps the route label identical to
+    // the config-written primary (upsertCanonicalModelConfigEntry also uses
+    // modelKey) and to the staged candidate ref, so setup activation matches.
+    modelLabel: modelKey(selection.provider, selection.modelId),
     provider: executionProvider,
     model: selection.modelId,
     agentDir: selection.agentDir,
