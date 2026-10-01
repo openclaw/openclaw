@@ -18,6 +18,7 @@ import {
   prepareUpdateCandidatePlugins,
 } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 async function writePlugin(directory: string, id: string, generation: string) {
   await fs.mkdir(directory, { recursive: true });
@@ -192,6 +193,7 @@ it.each([
       await fs.chmod(candidatePlugin, 0o777);
     }
     const candidateMode = outsideCandidate ? (await fs.stat(candidatePlugin)).mode : undefined;
+    await materializeUpdateCandidateStateWorker(candidateHost);
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
       candidateRoot: candidateHost,
@@ -359,6 +361,7 @@ it.each([false, true])(
           1,
         );
       closeOpenClawStateDatabaseByPath(path.join(stateDir, "state", "openclaw.sqlite"));
+      await materializeUpdateCandidateStateWorker(candidateHost);
       const rehearsal = await prepareUpdateCandidateRehearsal({
         config,
         stateDir,
