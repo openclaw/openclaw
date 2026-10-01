@@ -152,9 +152,12 @@ export async function generateBearerTokenFromIam(params: {
 
 export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
+  authMode?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ apiKey: string; expiresAt?: number } | undefined> {
-  if (params.apiKey !== MANTLE_IAM_TOKEN_MARKER) {
+  const isAmbientIamAuth =
+    params.apiKey === MANTLE_IAM_TOKEN_MARKER || params.authMode === "aws-sdk";
+  if (!isAmbientIamAuth) {
     return { apiKey: params.apiKey };
   }
   const now = Date.now();

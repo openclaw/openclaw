@@ -308,6 +308,68 @@ describe("bedrock mantle discovery", () => {
     );
   });
 
+  it("resolves Mantle runtime auth via ambient aws-sdk authMode without the IAM marker", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-api-key-aws-sdk-authmode"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    const resolved = await resolveMantleRuntimeBearerToken({
+      apiKey: "***",
+      authMode: "aws-sdk",
+      env: {
+        AWS_REGION: testRegion,
+      },
+      now: () => 9000,
+      tokenProviderFactory,
+    });
+    expect(resolved?.apiKey).toBe("bedrock-api-key-aws-sdk-authmode");
+    expect(resolved?.expiresAt).toBe(9000 + 7200_000);
+    expect(tokenProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the literal apiKey as-is when authMode is not aws-sdk and the IAM marker is absent", async () => {
+    const resolved = await resolveMantleRuntimeBearerToken({
+      apiKey: "literal-bearer-value", // pragma: allowlist secret
+      authMode: "api-key",
+      env: {
+        AWS_REGION: testRegion,
+      },
+    });
+    expect(resolved).toEqual({ apiKey: "literal-bearer-value" });
+  });
+
+  it("returns null for unsupported regions", async () => {
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+        AWS_REGION: "af-south-1",
+      },
+    });
+
+    expect(provider).toBeNull();
+  });
+
+  it("defaults to us-east-1 when no region is set", async () => {
+    const mockFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        modelDiscoveryResponse({ data: [{ id: "openai.gpt-oss-120b", object: "model" }] }),
+      );
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+      },
+      fetchFn: mockFetch,
+    });
+
+    expect(provider?.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://bedrock-mantle.us-east-1.api.aws/v1/models",
+      expect.any(Object),
+    );
+  });
+
   it.each([
     { state: "cached", now: 1801000, expiresAt: 7201000 },
     { state: "cold", now: 5000, expiresAt: 7205000 },
