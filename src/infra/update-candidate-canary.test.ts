@@ -619,6 +619,7 @@ describe("update candidate canary", () => {
       "candidate-gateway-startup",
     ]);
     expect(completed.map((step) => step.name)).toEqual(result.steps.map((step) => step.name));
+    expect(completed.at(-1)?.argv.filter((arg) => arg === "--update-canary")).toHaveLength(2);
     expect(completed.map((step) => step.argv.slice(1, 3))).toEqual([
       [],
       ["doctor", "--fix"],
@@ -634,7 +635,6 @@ describe("update candidate canary", () => {
       OPENCLAW_SKIP_CHANNELS: "1",
       OPENCLAW_SKIP_PROVIDERS: "1",
       OPENCLAW_NO_AUTO_UPDATE: "1",
-      OPENCLAW_UPDATE_CANARY_PROGRESS: "1",
       CUSTOM_PROVIDER_KEY: "synthetic-provider-credential",
     });
     for (const key of [

@@ -33,27 +33,35 @@ vi.mock("node:perf_hooks", async (importOriginal) => {
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
 
 describe("gateway startup trace", () => {
+  const originalArgv = process.argv;
   beforeEach(() => {
     eventLoopDelay.instances.length = 0;
     vi.clearAllMocks();
   });
 
   afterEach(() => {
+    process.argv = originalArgv;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
   it.each([
-    { updateCanary: false, support: undefined },
-    { updateCanary: true, support: undefined },
-    { updateCanary: false, support: "1" },
-    { updateCanary: true, support: "1" },
-    { updateCanary: true, support: "0" },
+    { updateCanary: false, markers: 2 },
+    { updateCanary: true, markers: 0 },
+    { updateCanary: true, markers: 1 },
+    { updateCanary: true, markers: 2 },
+    { updateCanary: true, markers: 3 },
   ])(
-    "reports completed Gateway milestones only to a supporting updater ($updateCanary, $support)",
-    async ({ updateCanary, support }) => {
+    "reports completed Gateway milestones only to a supporting updater ($updateCanary, $markers)",
+    async ({ updateCanary, markers }) => {
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
-      vi.stubEnv("OPENCLAW_UPDATE_CANARY_PROGRESS", support);
+      process.argv = [
+        "node",
+        "openclaw",
+        "gateway",
+        "run",
+        ...Array.from({ length: markers }, () => "--update-canary"),
+      ];
       const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
       const trace = createGatewayStartupTrace({ info: vi.fn() } as never, 0, updateCanary);
       trace.detail("state.schema-preflight", [["agents", 2]]);
@@ -73,7 +81,7 @@ describe("gateway startup trace", () => {
         .map(([line]) => String(line))
         .filter((line) => line.startsWith("openclaw-update-canary-progress: "));
       expect(progress).toEqual(
-        updateCanary && support === "1"
+        updateCanary && markers >= 2
           ? [
               "openclaw-update-canary-progress: config.snapshot\n",
               "openclaw-update-canary-progress: http.bound\n",

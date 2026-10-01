@@ -18,7 +18,7 @@ import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
-import { UPDATE_CANARY_PROGRESS_ENV } from "./update-candidate-canary-progress.js";
+import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
 import {
   observeUpdateCandidateStartup,
   waitForUpdateCandidateReadiness,
@@ -551,8 +551,7 @@ export async function validateUpdateCandidateCanary(params: {
     stepLogTail.length = 0;
     startBudget();
     remaining();
-    env[UPDATE_CANARY_PROGRESS_ENV] = "1";
-    const args = ["gateway", "run", "--update-canary", "--bind", "loopback"];
+    const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
     const startupProgress = observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
     const processExit = new AbortController();
     const running = launch(entry, [...args, "--port", String(port)], {

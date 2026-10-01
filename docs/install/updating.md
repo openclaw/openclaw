@@ -332,6 +332,9 @@ The activated Gateway retains your normal listener settings. Candidate startup
 progress is emitted only when the driving updater announces support, so older
 updaters, including 2026.9.5 and 2026.9.6, retain actual startup errors instead of
 mistaking a progress marker for the failure reason.
+The internal progress-capable launch repeats the existing `--update-canary`
+boolean marker; legacy launches contain it once. This is an internal
+updater-to-candidate contract, with no operator configuration setting.
 Startup failure reports retain the last meaningful stderr diagnostic and the end
 of bounded log lines, with secrets redacted. Canary progress markers do not
 replace the failure reason. The installed updater owns this reporting, so an
