@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { WatchEntry, WatchInvalidation } from "@openclaw/fs-safe/watch";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -21,6 +22,21 @@ let refresh: typeof import("./refresh.js");
 beforeEach(async () => {
   refresh = await import("./refresh.js");
 });
+
+function observeScan(
+  observed: ReturnType<typeof observer.forRoot>,
+  entries: WatchEntry[],
+  changes?: WatchInvalidation["changes"],
+) {
+  observed.options.onHealth?.({ ...observed.subscription.health(), state: "reconciling" });
+  for (const entry of entries) {
+    observed.options.exclude?.(entry);
+  }
+  if (changes) {
+    observed.dirty(changes);
+    observed.options.onHealth?.({ ...observed.subscription.health(), state: "ready" });
+  }
+}
 
 it("refreshes shared snapshots after native watch exhaustion until shutdown", async () => {
   const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
@@ -131,5 +147,83 @@ it("uses prepared plugin metadata to observe nested companion skills", async () 
     }
   } finally {
     roots.mockReturnValue([]);
+  }
+});
+
+it.each(["file", "directory"] as const)(
+  "retains an untouched %s kind across a partial watch scan",
+  async (kind) => {
+    const { getSkillsResourceVersion, getSkillsSourceVersion } = await import("./refresh-state.js");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    const workspaceDir = fixture.workspaceDir;
+    const root = path.join(workspaceDir, "skills");
+    refresh.ensureSkillsWatcher({ workspaceDir });
+    await observer.started();
+    const observed = observer.forRoot(root);
+    const relative = (name: string) =>
+      path.relative(observed.authority.rootDir, path.join(root, name));
+    const edited = relative("first/README.md");
+    const untouched = relative("second/README.md");
+    observeScan(observed, [
+      { path: edited, kind: "file" },
+      { path: untouched, kind },
+    ]);
+    await observer.readyAll();
+    const sourceVersion = getSkillsSourceVersion(workspaceDir);
+
+    // Native content hints visit only the affected directory, omitting its sibling.
+    observeScan(observed, [{ path: edited, kind: "file" }], [{ path: edited, type: "content" }]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
+    const resourceVersion = getSkillsResourceVersion(workspaceDir);
+
+    // A removed file stays supporting-only; replacing an empty directory does not.
+    observeScan(observed, kind === "file" ? [] : [{ path: untouched, kind: "file" }], [
+      { path: untouched, type: "structural" },
+    ]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(getSkillsResourceVersion(workspaceDir)).toBeGreaterThan(resourceVersion);
+    if (kind === "file") {
+      expect(getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
+    } else {
+      expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(sourceVersion);
+      const replacedVersion = getSkillsSourceVersion(workspaceDir);
+      observeScan(observed, [], [{ path: untouched, type: "structural" }]);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(getSkillsSourceVersion(workspaceDir)).toBe(replacedVersion);
+    }
+  },
+);
+
+it("keeps discovery conservative after partial scans exhaust the kind cache", async () => {
+  const { getSkillsSourceVersion } = await import("./refresh-state.js");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const workspaceDir = fixture.workspaceDir;
+  const root = path.join(workspaceDir, "skills");
+  refresh.ensureSkillsWatcher({ workspaceDir });
+  await observer.started();
+  const observed = observer.forRoot(root);
+  const relative = (name: string) =>
+    path.relative(observed.authority.rootDir, path.join(root, name));
+  const entries: WatchEntry[] = Array.from({ length: 4096 }, (_, index) => ({
+    path: relative(`supporting-${index}.md`),
+    kind: "file",
+  }));
+  observeScan(observed, entries);
+  await observer.readyAll();
+  const originalVersion = getSkillsSourceVersion(workspaceDir);
+  const removed = entries[0]!.path;
+  observeScan(observed, [], [{ path: removed, type: "structural" }]);
+  await vi.advanceTimersByTimeAsync(250);
+  expect(getSkillsSourceVersion(workspaceDir)).toBe(originalVersion);
+
+  const added = relative("one-more.md");
+  observeScan(observed, [{ path: added, kind: "file" }], []);
+  // A later small pass must not make the incomplete cumulative history authoritative.
+  for (const seen of [[{ path: removed, kind: "file" as const }], []]) {
+    const before = getSkillsSourceVersion(workspaceDir);
+    observeScan(observed, seen, [{ path: removed, type: "structural" }]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(before);
   }
 });

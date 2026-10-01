@@ -38,7 +38,6 @@ vi.mock("../../../daemon/systemd.js", () => ({
 
 vi.mock("../../daemon-runtime.js", () => ({
   DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
-  isGatewayDaemonRuntime: vi.fn(() => true),
 }));
 
 vi.mock("../../systemd-linger.js", () => ({

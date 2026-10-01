@@ -330,6 +330,9 @@ invalid output, OpenClaw saves deterministic heuristic notes instead. Model
 generation enhances the notes; it does not gate saving them. Notes include an
 overview, participants, decisions, action items, risks, and finally the transcript,
 so bounded readers see the notes before long transcripts.
+Gateway shutdown, restart, and capture-disable drainage save final heuristic notes
+without starting new model inference. You can regenerate model notes from the saved
+transcript with the tool's `summarize` action after the Gateway is available again.
 Participants come from speaker labels in first-appearance order, not model guesses.
 Summary JSON records `source` as `model` or `heuristic` and, for model notes, the
 model reference used.

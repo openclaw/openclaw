@@ -77,9 +77,7 @@ export async function withSubagentKillScope<T>(
   };
   const cancellationControl = {
     prepareRead: params.prepareRead,
-    assertCurrent: () => {
-      assertCurrent();
-    },
+    assertCurrent,
   };
   const selected = new Set<string>();
   const releaseSessions: Array<SubagentKillSession["release"]> = [];

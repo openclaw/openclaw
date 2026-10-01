@@ -21,6 +21,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   SubagentRegistryWriteError,
   publishSubagentRunPostimages,
+  replaceSubagentRunRecord,
   waitForPendingSubagentKillClaim,
 } from "./subagent-registry-persistence.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
@@ -352,7 +353,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       if (previousRunId !== nextRunId) {
         this.options.runs.delete(nextRunId);
       }
-      this.restoreRunRecord(entry, previous);
+      replaceSubagentRunRecord(entry, previous);
       if (previousRunId !== nextRunId) {
         this.options.runs.set(previousRunId, entry);
       }
@@ -428,7 +429,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     try {
       this.options.persistOrThrow(entry.runId);
     } catch (persistError) {
-      this.restoreRunRecord(entry, snapshot);
+      replaceSubagentRunRecord(entry, snapshot);
       throw persistError;
     }
     return true;
@@ -452,7 +453,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     try {
       this.options.persistOrThrow(entry.runId);
     } catch (persistError) {
-      this.restoreRunRecord(entry, snapshot);
+      replaceSubagentRunRecord(entry, snapshot);
       throw persistError;
     }
     return true;

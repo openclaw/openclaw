@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   SESSION_TOTAL_TOKENS_VERSION,
   setSessionRuntimeModel,
-  type CliSessionBinding,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -13,7 +12,7 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
-import { clearAllCliSessions, setCliSessionBinding } from "../cli-session.js";
+import { clearAllCliSessions } from "../cli-session.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
@@ -236,16 +235,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   );
 }
 
-type CliSessionForkStoreParams = {
-  agentId: string;
-  provider: string;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  expectedCliSessionId: string;
-  assertCommitAllowed?: () => void;
-};
-
 function isSameSessionLifecycleOwner(
   current: InternalSessionEntry,
   expected: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">,
@@ -254,85 +243,6 @@ function isSameSessionLifecycleOwner(
     current.sessionId === expected.sessionId &&
     current.lifecycleRevision === expected.lifecycleRevision &&
     current.activeWriterRunId === expected.activeWriterRunId
-  );
-}
-
-async function patchCliSessionForkBinding(
-  params: CliSessionForkStoreParams,
-  updateBinding: (binding: CliSessionBinding) => CliSessionBinding | undefined,
-): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedCliSessionId } = params;
-  const entry = sessionStore[sessionKey];
-  if (!entry || entry.cliSessionBindings?.[provider]?.sessionId !== expectedCliSessionId) {
-    return undefined;
-  }
-  let committed: SessionEntry | undefined;
-  await patchSessionEntryCore(
-    { agentId: params.agentId, storePath, sessionKey },
-    (currentEntry) => {
-      const currentBinding = currentEntry.cliSessionBindings?.[provider];
-      // A binding id can survive session rollover. Fork authority belongs to the exact lifecycle.
-      if (
-        !isSameSessionLifecycleOwner(currentEntry, entry) ||
-        currentBinding?.sessionId !== expectedCliSessionId
-      ) {
-        return null;
-      }
-      const nextBinding = updateBinding(currentBinding);
-      if (!nextBinding) {
-        return null;
-      }
-      const next = { ...currentEntry };
-      setCliSessionBinding(next, provider, nextBinding);
-      return next;
-    },
-    {
-      assertCommitAllowed: params.assertCommitAllowed,
-      onCommitted: (current) => {
-        // Only the commit edge proves this transition and owns cache publication.
-        committed = current;
-        sessionStore[sessionKey] = current;
-      },
-    },
-  );
-  return committed;
-}
-
-/** Clears the one-shot fork marker before the resumed CLI process starts. */
-export async function consumeCliSessionForkInStore(
-  params: CliSessionForkStoreParams,
-): Promise<SessionEntry | undefined> {
-  return await patchCliSessionForkBinding(params, (binding) => {
-    if (binding.forkNextResume !== true) {
-      return undefined;
-    }
-    const { forkNextResume: _forkNextResume, ...consumedBinding } = binding;
-    return consumedBinding;
-  });
-}
-
-/** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
-export async function restoreCliSessionForkInStore(
-  params: CliSessionForkStoreParams,
-): Promise<SessionEntry | undefined> {
-  return await patchCliSessionForkBinding(params, (binding) =>
-    binding.forkNextResume === true ? undefined : { ...binding, forkNextResume: true },
-  );
-}
-
-/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
-export async function persistCliSessionForkSuccessorInStore(
-  params: CliSessionForkStoreParams & {
-    successorCliSessionId: string;
-  },
-): Promise<SessionEntry | undefined> {
-  if (params.successorCliSessionId === params.expectedCliSessionId) {
-    return undefined;
-  }
-  return await patchCliSessionForkBinding(params, (binding) =>
-    binding.forkNextResume === true
-      ? undefined
-      : { ...binding, sessionId: params.successorCliSessionId, forceReuse: true },
   );
 }
 

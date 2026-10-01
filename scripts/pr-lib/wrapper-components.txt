@@ -1342,6 +1342,7 @@ src/state/openclaw-state-db-cache.ts
 src/state/openclaw-state-db-content-version.ts
 src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
+src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-existing-schema.ts
@@ -1394,6 +1395,7 @@ src/state/openclaw-state-lease-worker-owner.ts
 src/state/openclaw-state-lease-worker-storage.ts
 src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
+src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts

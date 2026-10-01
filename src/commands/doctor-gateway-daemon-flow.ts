@@ -40,7 +40,7 @@ import {
 import { isWSL } from "../infra/wsl.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
+import { gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
@@ -53,6 +53,7 @@ import {
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
+import { prepareGatewayServiceInstall } from "./gateway-service-setup.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
@@ -429,24 +430,16 @@ export async function maybeRepairGatewayDaemon(params: {
         return;
       }
       const port = resolveGatewayPort(params.cfg, process.env);
-      const plan = await buildGatewayInstallPlan({
-        env: selection.env,
+      const installation = await prepareGatewayServiceInstall({
+        service,
+        selection,
         port,
-        runtime: selection.runtime,
-        runtimeExplicit: selection.runtimeExplicit,
-        runtimePath: selection.runtimePath,
-        pinnedRuntimePath: selection.pinnedRuntimePath,
         existingCommand: serviceState.command,
         warn: (message, title) => note(message, title),
         config: params.cfg,
       });
       try {
-        await service.install({
-          env: process.env,
-          stdout: process.stdout,
-          ...plan,
-          runtimePinUpdate: selection.runtimePinUpdate,
-        });
+        await installation.install();
       } catch (err) {
         note(`Gateway service install failed: ${String(err)}`, "Gateway");
         note(gatewayInstallErrorHint(), "Gateway");

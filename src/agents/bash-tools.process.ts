@@ -34,7 +34,6 @@ import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
   deriveSessionName,
-  padProcessStatus,
   readEnvInt,
   sliceLogLines,
   truncateMiddle,
@@ -364,7 +363,7 @@ export function createProcessTool(
               : undefined;
           const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
           const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
-          return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
+          return `${s.sessionId} ${s.status.padEnd(9)} ${
             formatDurationCompact(s.runtimeMs) ?? "n/a"
           }${timeoutMarker}${marker} :: ${label}`;
         });

@@ -84,11 +84,11 @@ export function prepareOwnedBundleMcpDataDirs(params: {
  * OpenClaw `transport` shape directly.
  */
 export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
-  const next = { ...server } as Record<string, unknown>;
+  const next = { ...server };
   const rawTransport = next.transport;
   delete next.transport;
   if (typeof next.type === "string") {
-    return next as BundleMcpServerConfig;
+    return next;
   }
   if (typeof rawTransport === "string") {
     const mapped = OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE[rawTransport];
@@ -96,7 +96,7 @@ export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): Bundl
       next.type = mapped;
     }
   }
-  return next as BundleMcpServerConfig;
+  return next;
 }
 
 /** Loads enabled bundled MCP servers and overlays user config by server name. */
@@ -148,13 +148,13 @@ export function loadMergedBundleMcpConfig(params: {
         ...Object.fromEntries(
           Object.entries(enabledBundleMcp).map(([name, server]) => [
             name,
-            mapConfiguredServer(server as BundleMcpServerConfig, name),
+            mapConfiguredServer(server, name),
           ]),
         ),
         ...Object.fromEntries(
           Object.entries(enabledConfiguredMcp).map(([name, server]) => [
             name,
-            mapConfiguredServer(server as BundleMcpServerConfig, name),
+            mapConfiguredServer(server, name),
           ]),
         ),
       } satisfies BundleMcpConfig["mcpServers"],

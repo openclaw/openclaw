@@ -190,10 +190,19 @@ describe("update candidate canary", () => {
 
   it("keeps snapshot and validation source selection inside the candidate", async () => {
     stubHealthyGateway();
+    const warnings = ["Update checks could not inspect plugin esm-fixture: unsupported syntax."];
+    mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
+      createCanarySnapshotResult(options.input, databasePath, warnings),
+    );
     const servingRoot = path.join(root, "installed");
     const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
     const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3000), env });
     expect(result.status).toBe("ok");
+    expect(result.steps[0]?.warnings).toEqual(warnings);
+    expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
+      process.execPath,
+      path.join(root, "dist", "infra", "update-candidate-state.worker.js"),
+    ]);
     expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
     expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
     for (const call of mocks.spawn.mock.calls) {

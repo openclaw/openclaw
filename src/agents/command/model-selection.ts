@@ -69,9 +69,12 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
-import { normalizeAgentCommandModelRef, parseAgentCommandModelRef } from "./model-ref.js";
+import {
+  normalizeAgentCommandModelRef,
+  normalizeExplicitOverrideInput,
+  parseAgentCommandModelRef,
+} from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
-import { normalizeExplicitOverrideInput } from "./prepare.js";
 import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
@@ -453,19 +456,15 @@ export async function resolveEmbeddedModelSelection(params: {
       agentId: params.sessionAgentId,
       sessionKey: params.sessionKey,
     });
-    const authAliasLookupParams = params.pluginsEnabled
-      ? {
-          config: authConfig,
-          workspaceDir: params.workspaceDir,
-          ...(params.manifestMetadataSnapshot
-            ? { metadataSnapshot: params.manifestMetadataSnapshot }
-            : {}),
-        }
-      : {
-          config: authConfig,
-          workspaceDir: params.workspaceDir,
-          metadataSnapshot: { plugins: [] },
-        };
+    const authAliasLookupParams = {
+      config: authConfig,
+      workspaceDir: params.workspaceDir,
+      ...(params.pluginsEnabled
+        ? params.manifestMetadataSnapshot
+          ? { metadataSnapshot: params.manifestMetadataSnapshot }
+          : {}
+        : { metadataSnapshot: { plugins: [] } }),
+    };
     const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
       provider: providerForAuthProfileValidation,
       harnessRuntime: validationHarnessPolicy.runtime,

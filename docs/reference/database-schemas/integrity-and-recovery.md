@@ -135,7 +135,11 @@ including an empty session source with an empty pending-validation queue.
 Successful canonical validation records `session_key_contract.canonical_ready`
 in the final authorized batch transaction. This nullable `TEXT` column is added
 on first certification without changing the schema version. Its receipt binds
-the agent and physical file generation, including device, inode, and birth time.
+the agent and physical file generation, including device and inode. Creation time
+is included on platforms where Node distinguishes it from modification metadata.
+On Linux, Node can report change time as birth time, so database identity uses a
+stable unknown-creation value instead. Existing Linux receipts are recertified
+once through the same validation owner; no schema migration is needed.
 On later boots, unchanged empty and populated stores reuse that first proof and inspect
 the pending queue; ordinary canonical writes still mark changed rows for
 validation. Exact invalidation triggers remain required. Copies and replaced
@@ -447,7 +451,7 @@ Missing tools skip repair with a note. Insufficient space, active Gateway
 ownership, or failed pre-publication verification leave the previous store in
 place. An uncertain exchange stops activation and names the retained recovery
 path for inspection. No SQL schema migration is involved. The rewritten database
-has a new physical identity (device/inode/birthtime), so the next boot re-runs
+has a new physical identity (device/inode), so the next boot re-runs
 canonical validation once instead of reusing the original identity receipt.
 
 ## Troubleshooting

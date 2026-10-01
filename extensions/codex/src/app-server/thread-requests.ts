@@ -188,12 +188,12 @@ export function buildCodexThreadConfiguration(
       directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
     }),
     // Catalog-owned collaboration messages replace caller collaboration instructions
-    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so the skill
-    // catalog rides the thread developer carrier after the immutable generic policy.
+    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so refreshable
+    // workspace instructions ride the thread developer carrier after the immutable generic policy.
     developerInstructions: joinPresentSections(
       options.developerInstructions ??
         buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-      options.skillsInstructions,
+      options.refreshableInstructions,
     ),
   };
 }

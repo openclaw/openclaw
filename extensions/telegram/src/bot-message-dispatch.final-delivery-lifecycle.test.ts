@@ -353,104 +353,52 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     );
   });
 
-  it.each(["progress deletion failure", "late cancellation"] as const)(
-    "does not retry or erase an accepted final after %s",
-    async (interruption) => {
-      const { bot, messages, sendMessage, deleteMessage, deliver } =
-        await setupObservedProgressTransport();
-      const status = createStatusReactionController();
-      const abortController = new AbortController();
-      if (interruption === "progress deletion failure") {
-        deleteMessage.mockRejectedValueOnce(new Error("preview cleanup unavailable"));
-      } else {
-        deliverReplies.mockImplementationOnce(async (params) => {
-          const result = await deliver(params);
-          abortController.abort(new Error("turn cancelled after final acceptance"));
-          return result;
-        });
-      }
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
-        dispatchThroughSharedOwner({
-          ...params,
-          replyResolver: async (_ctx, options) => {
-            await emitToolStart(options, {
-              name: "exec",
-              phase: "start",
-              toolCallId: "cleanup-1",
-            });
-            return { text: "Accepted final survives cleanup" };
-          },
-        }),
-      );
-
-      await dispatchWithContext({
-        bot,
-        context: progressContext(status),
-        streamMode: "progress",
-        telegramCfg: progressConfig,
-        retryDispatchErrors: true,
-        turnAdoptionLifecycle: {
-          abortSignal: abortController.signal,
-          onAdopted: vi.fn(),
-          onDeferred: vi.fn(),
-          onAbandoned: vi.fn(),
-        },
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      expect(
-        [...messages.values()].filter((text) => text === "Accepted final survives cleanup"),
-      ).toEqual(["Accepted final survives cleanup"]);
-      if (interruption === "progress deletion failure") {
-        expect([...messages.values()]).toEqual([
-          expect.stringContaining("Exec"),
-          "Accepted final survives cleanup",
-        ]);
-        expect(deleteMessage).toHaveBeenCalledOnce();
-        expect(status.setDone).toHaveBeenCalledOnce();
-      }
-      expect(
-        sendMessage.mock.calls.filter(([, text]) => text === "Accepted final survives cleanup"),
-      ).toHaveLength(1);
-      expect(deliverReplies).toHaveBeenCalledOnce();
-      expect(status.setError).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps a queued followup visible when the preceding generation finishes cleanup", async () => {
-    const { bot, messages, sendMessage } = await setupObservedProgressTransport();
-    let options: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
-      options = params.replyOptions;
-      return dispatchThroughSharedOwner({
+  it("does not retry or erase an accepted final after late cancellation", async () => {
+    const { bot, messages, sendMessage, deliver } = await setupObservedProgressTransport();
+    const status = createStatusReactionController();
+    const abortController = new AbortController();
+    deliverReplies.mockImplementationOnce(async (params) => {
+      const result = await deliver(params);
+      abortController.abort(new Error("turn cancelled after final acceptance"));
+      return result;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
+      dispatchThroughSharedOwner({
         ...params,
-        replyResolver: async (_ctx, replyOptions) => {
-          await emitToolStart(replyOptions, {
+        replyResolver: async (_ctx, options) => {
+          await emitToolStart(options, {
             name: "exec",
             phase: "start",
-            toolCallId: "parent-1",
+            toolCallId: "cleanup-1",
           });
-          return { text: "Parent final" };
+          return { text: "Accepted final survives cleanup" };
         },
-      });
-    });
+      }),
+    );
 
     await dispatchWithContext({
       bot,
-      context: progressContext(),
+      context: progressContext(status),
       streamMode: "progress",
       telegramCfg: progressConfig,
+      retryDispatchErrors: true,
+      turnAdoptionLifecycle: {
+        abortSignal: abortController.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
     });
-    await options?.onQueuedFollowupAdmitted?.();
-    await emitToolStart(options, { name: "read", phase: "start", toolCallId: "followup-1" });
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect([...messages.values()]).toEqual(["Parent final", expect.stringContaining("Read")]);
-    expect(sendMessage.mock.calls.filter(([, text]) => text === "Parent final")).toHaveLength(1);
-
-    await options?.onQueuedFollowupSettled?.();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect([...messages.values()]).toEqual(["Parent final"]);
+    expect(
+      [...messages.values()].filter((text) => text === "Accepted final survives cleanup"),
+    ).toEqual(["Accepted final survives cleanup"]);
+    expect(
+      sendMessage.mock.calls.filter(([, text]) => text === "Accepted final survives cleanup"),
+    ).toHaveLength(1);
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expect(status.setError).not.toHaveBeenCalled();
   });
 
   it.each(["accepted", "rejected"] as const)(

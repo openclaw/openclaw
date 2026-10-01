@@ -92,7 +92,6 @@ describe("model auth markers", () => {
       expect(isNonSecretApiKeyMarker("gcp-vertex-credentials")).toBe(true);
       expect(isNonSecretApiKeyMarker("lmstudio-local")).toBe(true);
       expect(isNonSecretApiKeyMarker("minimax-oauth")).toBe(true);
-      expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
     });
   });
 

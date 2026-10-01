@@ -616,50 +616,13 @@ export async function promptDefaultModel(
     });
   };
 
-  if (
+  const offerCatalogBrowse =
     loadCatalog &&
     browseCatalogOnDemand &&
     allowKeep &&
-    (!preferredProvider || normalizeProviderId(resolved.provider) === preferredProvider)
-  ) {
-    const configuredLabel = await resolveConfiguredDisplayLabel();
-    const options: WizardSelectOption[] = [
-      {
-        value: KEEP_VALUE,
-        label: formatKeepCurrentModelLabel({ configuredRaw, configuredLabel, resolvedKey }),
-        hint:
-          configuredRaw && configuredRaw !== resolvedKey
-            ? t("wizard.model.resolvesTo", { value: resolvedKey })
-            : undefined,
-      },
-    ];
-    if (includeManual) {
-      options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
-    }
-    options.push({
-      value: BROWSE_VALUE,
-      label: t("wizard.model.browseAll"),
-      hint: t("wizard.model.loadsProviderCatalogs"),
-    });
+    (!preferredProvider || normalizeProviderId(resolved.provider) === preferredProvider);
 
-    const selection = await params.prompter.select({
-      message: params.message ?? t("wizard.model.defaultModel"),
-      options,
-      initialValue: KEEP_VALUE,
-      searchable: false,
-    });
-    if (selection === KEEP_VALUE) {
-      return {};
-    }
-    if (selection === MANUAL_VALUE) {
-      return promptManual(false);
-    }
-    if (selection !== BROWSE_VALUE) {
-      return { model: selection };
-    }
-  }
-
-  if (!loadCatalog) {
+  if (offerCatalogBrowse || !loadCatalog) {
     const configuredLabel = await resolveConfiguredDisplayLabel();
     const options: WizardSelectOption[] = [];
     if (allowKeep) {
@@ -675,7 +638,13 @@ export async function promptDefaultModel(
     if (includeManual) {
       options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
     }
-    if (configuredKey && !options.some((option) => option.value === configuredKey)) {
+    if (offerCatalogBrowse) {
+      options.push({
+        value: BROWSE_VALUE,
+        label: t("wizard.model.browseAll"),
+        hint: t("wizard.model.loadsProviderCatalogs"),
+      });
+    } else if (configuredKey && !options.some((option) => option.value === configuredKey)) {
       options.push({
         value: configuredKey,
         label: configuredKey,
@@ -697,7 +666,9 @@ export async function promptDefaultModel(
     if (selection === MANUAL_VALUE) {
       return promptManual(false);
     }
-    return { model: selection };
+    if (!offerCatalogBrowse || selection !== BROWSE_VALUE) {
+      return { model: selection };
+    }
   }
 
   const catalogProgress = params.prompter.progress(t("wizard.model.loadingModels"));
